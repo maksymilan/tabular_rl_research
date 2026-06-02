@@ -1,0 +1,43 @@
+{
+  "format_name": "static_task_memory",
+  "version": "0.1",
+  "memory_items": [
+    {
+      "id": "mem_001",
+      "type": "schema_fact",
+      "content": "users.user_id 可以连接 users 表的年龄信息与 orders 表的购买记录。",
+      "supporting_step_ids": ["step_001"],
+      "supporting_rows_or_columns": {
+        "tables": ["users", "orders"],
+        "columns": ["users.user_id", "orders.user_id"]
+      },
+      "confidence_or_check": "inspect_dataset 返回 users.user_id 和 orders.user_id，字段名一致且样例值均为 U 开头用户编号。",
+      "invalidating_condition": "如果后续检索发现 orders.user_id 不是用户编号或无法与 users.user_id 匹配，则该 memory 需要删除或更新。"
+    },
+    {
+      "id": "mem_002",
+      "type": "group_result",
+      "content": {
+        "group_by": "products.category",
+        "metric": "sum(orders.purchase_count)",
+        "result": [
+          {"category": "beauty", "value": 10},
+          {"category": "electronics", "value": 2}
+        ],
+        "best_group": "beauty"
+      },
+      "supporting_step_ids": ["step_004", "step_006", "step_007"],
+      "supporting_rows_or_columns": {
+        "tables": ["users", "orders", "products"],
+        "rows": {
+          "users": [3, 8, 19],
+          "orders": [101, 102, 205],
+          "products": [7, 12]
+        },
+        "columns": ["users.age", "users.user_id", "orders.product_id", "orders.purchase_count", "products.category"]
+      },
+      "confidence_or_check": "这些 rows 来自年龄过滤、订单检索和产品类别检索，beauty 的 purchase_count 汇总值最高。",
+      "invalidating_condition": "如果存在未检索到的 15-20 岁用户订单，或 purchase_count 不是兴趣度量，则需要重新计算。"
+    }
+  ]
+}

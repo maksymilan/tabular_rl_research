@@ -1,0 +1,69 @@
+{
+  "tool_name": "add_to_memory",
+  "version": "0.1",
+  "purpose": "将确认的重要事实、中间结果、表结构理解、计划或派生证据写入 Static Task Memory。",
+  "tool_call": {
+    "tool": "add_to_memory",
+    "arguments": {
+      "items": [
+        {
+          "type": "schema_fact",
+          "content": "users.age 可用于筛选目标年龄段用户，users.user_id 可连接 orders.user_id。",
+          "supporting_step_ids": ["step_001"],
+          "supporting_rows_or_columns": {
+            "tables": ["users", "orders"],
+            "columns": ["users.age", "users.user_id", "orders.user_id"]
+          },
+          "confidence_or_check": "inspect_dataset 返回了这些表和字段，字段名称与任务需求匹配。",
+          "invalidating_condition": "如果后续发现 users.user_id 和 orders.user_id 不是同一实体编号，则需要更新。"
+        },
+        {
+          "type": "plan",
+          "content": "先筛选 15-20 岁用户，再根据 user_id 查询订单，最后连接产品类别并统计偏好。",
+          "supporting_step_ids": ["step_001", "step_002"],
+          "supporting_rows_or_columns": {
+            "columns": ["users.age", "users.user_id", "orders.user_id", "orders.product_id", "products.category"]
+          },
+          "confidence_or_check": "这些列覆盖年龄筛选、用户订单连接和产品类别回答。",
+          "invalidating_condition": "如果 purchase_count 或订单记录不足以表示兴趣，则需要改用其他度量字段。"
+        }
+      ]
+    }
+  },
+  "tool_output": {
+    "task_memory": [
+      {
+        "id": "mem_001",
+        "type": "schema_fact",
+        "content": "users.age 可用于筛选目标年龄段用户，users.user_id 可连接 orders.user_id。",
+        "supporting_step_ids": ["step_001"],
+        "supporting_rows_or_columns": {
+          "tables": ["users", "orders"],
+          "columns": ["users.age", "users.user_id", "orders.user_id"]
+        },
+        "confidence_or_check": "inspect_dataset 返回了这些表和字段，字段名称与任务需求匹配。",
+        "invalidating_condition": "如果后续发现 users.user_id 和 orders.user_id 不是同一实体编号，则需要更新。"
+      },
+      {
+        "id": "mem_002",
+        "type": "plan",
+        "content": "先筛选 15-20 岁用户，再根据 user_id 查询订单，最后连接产品类别并统计偏好。",
+        "supporting_step_ids": ["step_001", "step_002"],
+        "supporting_rows_or_columns": {
+          "columns": ["users.age", "users.user_id", "orders.user_id", "orders.product_id", "products.category"]
+        },
+        "confidence_or_check": "这些列覆盖年龄筛选、用户订单连接和产品类别回答。",
+        "invalidating_condition": "如果 purchase_count 或订单记录不足以表示兴趣，则需要改用其他度量字段。"
+      }
+    ]
+  },
+  "state_delta": {
+    "static_task_memory_changed": true,
+    "added_memory_ids": ["mem_001", "mem_002"],
+    "dynamic_table_context_changed": false
+  },
+  "notes": [
+    "所有 memory 写入都必须带 supporting/check 字段。",
+    "cell-level、group-level、join-result-level 和 derived-fact-level 信息优先写入 memory。"
+  ]
+}

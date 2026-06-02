@@ -1,0 +1,60 @@
+{
+  "tool_name": "refine_memory",
+  "version": "0.1",
+  "purpose": "结构化整理 Static Task Memory，包括压缩、删除和更新已有 memory item。",
+  "tool_call": {
+    "tool": "refine_memory",
+    "arguments": {
+      "operations": [
+        {
+          "op": "compress",
+          "source_ids": ["mem_001", "mem_002"],
+          "new_item": {
+            "type": "schema_fact",
+            "content": "users.age 筛选目标年龄段，users.user_id -> orders.user_id -> orders.product_id -> products.product_id 可连接到 products.category。",
+            "supporting_step_ids": ["step_001", "step_002"],
+            "supporting_rows_or_columns": {
+              "columns": ["users.age", "users.user_id", "orders.user_id", "orders.product_id", "products.product_id", "products.category"]
+            },
+            "confidence_or_check": "inspect_dataset 和 retrieve_column_context 均返回了这些连接字段。",
+            "invalidating_condition": "如果任一连接字段无法实际匹配，则需要拆分并重新检索。"
+          }
+        },
+        {
+          "op": "remove",
+          "source_ids": ["mem_005"],
+          "reason": "payment_channel 与当前产品类别偏好问题无关。"
+        }
+      ]
+    }
+  },
+  "tool_output": {
+    "task_memory": [
+      {
+        "id": "mem_006",
+        "type": "schema_fact",
+        "content": "users.age 筛选目标年龄段，users.user_id -> orders.user_id -> orders.product_id -> products.product_id 可连接到 products.category。",
+        "supporting_step_ids": ["step_001", "step_002"],
+        "supporting_rows_or_columns": {
+          "columns": ["users.age", "users.user_id", "orders.user_id", "orders.product_id", "products.product_id", "products.category"]
+        },
+        "confidence_or_check": "inspect_dataset 和 retrieve_column_context 均返回了这些连接字段。",
+        "invalidating_condition": "如果任一连接字段无法实际匹配，则需要拆分并重新检索。"
+      }
+    ],
+    "refine_trace": [
+      {"op": "compress", "source_ids": ["mem_001", "mem_002"], "target_id": "mem_006"},
+      {"op": "remove", "source_ids": ["mem_005"]}
+    ]
+  },
+  "state_delta": {
+    "static_task_memory_changed": true,
+    "removed_memory_ids": ["mem_001", "mem_002", "mem_005"],
+    "added_memory_ids": ["mem_006"],
+    "dynamic_table_context_changed": false
+  },
+  "notes": [
+    "refine_memory 不应是自由改写工具，而应是结构化编辑动作。",
+    "第一版优先支持 compress 和 remove，update 可后续扩展。"
+  ]
+}

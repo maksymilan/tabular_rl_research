@@ -7,6 +7,16 @@ Current data pipeline intent:
 - Extract small, readable JSON samples into `data_sample/` for inspecting case structure and designing tool-use examples.
 - Keep full datasets out of git; `.gitignore` already ignores `/data`.
 
+Tool-use research design:
+- `tool_design/agent.md` summarizes the current Table Agent Harness design.
+- `tool_design/tool_usage.md` and `tool_design/tool_json_examples/` define the canonical tool output, intermediate state, memory, and example JSON formats for future tool design changes.
+- `tool_design/trajectory/` stores complete tool-use trajectories by question type, built from `data_sample/` examples.
+- The current design models table reasoning as dynamic table-context construction plus static task-memory maintenance.
+- First-pass tools include dataset inspection, column retrieval, row retrieval, context pruning, memory updates/refinement, and evidence-cited final answering.
+- Current priority is broad tool viability across task types; concrete reward optimization can be deferred and tracked as known defects.
+- Tool history should be recorded internally by the harness for duplicate-call checks and analysis, but not included in model-visible context by default.
+- Memory writes should carry supporting judgment/evidence fields so later use can avoid unsupported task-level hallucinations.
+
 Downloaded datasets:
 - `table-benchmark/tqabench` -> `data/tqabench`
 - `DongfuJiang/FeTaQA` -> `data/FeTaQA`

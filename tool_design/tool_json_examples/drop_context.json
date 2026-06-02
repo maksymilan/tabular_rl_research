@@ -1,0 +1,48 @@
+{
+  "tool_name": "drop_context",
+  "version": "0.1",
+  "purpose": "从当前 Dynamic Table Context 中删除无关行或低优先级列，压缩模型可见上下文。",
+  "tool_call": {
+    "tool": "drop_context",
+    "arguments": {
+      "drop_rows": {
+        "users": [8]
+      },
+      "drop_columns": [],
+      "reason": "该行虽然年龄在范围内，但后续订单检索没有找到对应购买记录，暂时不参与产品偏好统计。"
+    }
+  },
+  "tool_output": {
+    "current_table_context": {
+      "context_id": "ctx_005",
+      "tables": [
+        {
+          "table_name": "users",
+          "columns": ["user_id", "age"],
+          "rows": [3, 19],
+          "data": [
+            {"_row_id": 3, "user_id": "U003", "age": 16},
+            {"_row_id": 19, "user_id": "U019", "age": 18}
+          ],
+          "source_step_ids": ["step_004", "step_005"]
+        }
+      ]
+    },
+    "dropped": {
+      "rows": {"users": [8]},
+      "columns": []
+    }
+  },
+  "state_delta": {
+    "dynamic_table_context_changed": true,
+    "context_id_before": "ctx_004",
+    "context_id_after": "ctx_005",
+    "removed_rows": {"users": [8]},
+    "removed_columns": []
+  },
+  "notes": [
+    "删除行是常规压缩动作，删除列是低频动作。",
+    "删除后 Dynamic Table Context 仍应保持 selected_rows x selected_columns 的矩形视图。",
+    "drop_context 的奖励正确性后续再优化，目前先记录 reason 和 state_delta。"
+  ]
+}

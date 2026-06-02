@@ -1,0 +1,71 @@
+{
+  "tool_name": "retrieve_row_context",
+  "version": "0.1",
+  "mode": "extreme_value_select",
+  "purpose": "根据某个可排序列的最大值或最小值选择行，例如找票数最高的候选人行、价格最低的商品行、时间最新的记录行。",
+  "tool_call": {
+    "tool": "retrieve_row_context",
+    "arguments": {
+      "mode": "extreme_value_select",
+      "query": "winner candidate row",
+      "table_name": "results",
+      "target_column": "results.Votes",
+      "order": "max",
+      "top_k": 2,
+      "row_scope": {
+        "row_type": "candidate_result_rows",
+        "target_column_must_parse_as": "numeric"
+      },
+      "return_columns": ["results.Party_1", "results.Candidate", "results.Votes", "results.%"]
+    }
+  },
+  "tool_output": {
+    "matched_rows": {
+      "results": [1, 2]
+    },
+    "extreme_value_result": {
+      "target_column": "results.Votes",
+      "order": "max",
+      "selected_values": [
+        {"row": 1, "value": 1816101, "rank": 1},
+        {"row": 2, "value": 1811027, "rank": 2}
+      ],
+      "selected_rows": [1, 2],
+      "tie_policy": "return_all_ties_up_to_top_k",
+      "scope_summary": {
+        "row_type": "candidate_result_rows",
+        "candidate_rows_considered": 5,
+        "non_candidate_or_unparseable_rows_excluded": 3,
+        "note": "Detailed excluded rows are internal harness audit data, not default model-visible output."
+      }
+    },
+    "current_table_context": {
+      "context_id": "ctx_002",
+      "tables": [
+        {
+          "table_name": "results",
+          "columns": ["Party_1", "Candidate", "Votes", "%"],
+          "rows": [1, 2],
+          "data": [
+            {"_row_id": 1, "Party_1": "Republican", "Candidate": "James R. Thompson (incumbent)", "Votes": "1,816,101", "%": "49.44"},
+            {"_row_id": 2, "Party_1": "Democratic", "Candidate": "Adlai Stevenson III", "Votes": "1,811,027", "%": "49.30"}
+          ],
+          "source_step_ids": ["step_003"]
+        }
+      ]
+    }
+  },
+  "state_delta": {
+    "dynamic_table_context_changed": true,
+    "context_id_before": "ctx_001",
+    "context_id_after": "ctx_002",
+    "matched_rows": {"results": [1, 2]},
+    "static_task_memory_changed": false
+  },
+  "notes": [
+    "该模式不是纯语义匹配，而是语义目标 + 结构化最值选择。",
+    "row_scope 用于声明行选择范围，例如 candidate_result_rows，而不是要求模型提前知道所有汇总行名称。",
+    "详细 excluded_rows 应记录在内部 tool history 中；默认模型可见输出只给 scope_summary。",
+    "当存在并列最值时，tie_policy 应明确记录。"
+  ]
+}

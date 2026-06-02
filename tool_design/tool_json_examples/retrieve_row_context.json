@@ -1,0 +1,52 @@
+{
+  "tool_name": "retrieve_row_context",
+  "version": "0.1",
+  "purpose": "根据实体、条件、语义描述或最值选择检索相关行，并更新 Dynamic Table Context。",
+  "tool_call": {
+    "tool": "retrieve_row_context",
+    "arguments": {
+      "mode": "condition_filter",
+      "conditions": [
+        {"column": "users.age", "operator": ">=", "value": 15},
+        {"column": "users.age", "operator": "<=", "value": 20}
+      ],
+      "columns": ["users.user_id", "users.age"],
+      "top_k": 100
+    }
+  },
+  "tool_output": {
+    "matched_rows": {
+      "users": [3, 8, 19]
+    },
+    "current_table_context": {
+      "context_id": "ctx_003",
+      "tables": [
+        {
+          "table_name": "users",
+          "columns": ["user_id", "age"],
+          "rows": [3, 8, 19],
+          "data": [
+            {"_row_id": 3, "user_id": "U003", "age": 16},
+            {"_row_id": 8, "user_id": "U008", "age": 19},
+            {"_row_id": 19, "user_id": "U019", "age": 18}
+          ],
+          "source_step_ids": ["step_004"]
+        }
+      ]
+    }
+  },
+  "state_delta": {
+    "dynamic_table_context_changed": true,
+    "context_id_before": "ctx_002",
+    "context_id_after": "ctx_003",
+    "added_rows": {"users": [3, 8, 19]},
+    "static_task_memory_changed": false
+  },
+  "notes": [
+    "支持 mode: entity_match, condition_filter, semantic_match, extreme_value_select。",
+    "不能无目标随机扩展行；必须提供 query、conditions 或实体字段。",
+    "一次调用只表达一个行检索意图。多个独立证据目标应拆成多次 retrieve_row_context 调用。",
+    "query 是单次行检索的自然语言目标，不应写成复合计划。condition_filter 可以有多个 predicate，但它们应共同组成一个逻辑过滤条件。",
+    "extreme_value_select 用于选择某个可排序列的最大值或最小值所在行，例如按 Votes 最大值找到获胜候选人行。"
+  ]
+}

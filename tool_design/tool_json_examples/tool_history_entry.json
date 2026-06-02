@@ -1,0 +1,39 @@
+{
+  "format_name": "internal_tool_history_entry",
+  "version": "0.1",
+  "visibility": "internal_harness_only",
+  "entry": {
+    "step_id": "step_004",
+    "tool_name": "retrieve_row_context",
+    "normalized_arguments": {
+      "mode": "condition_filter",
+      "conditions": [
+        {"column": "users.age", "operator": ">=", "value": 15},
+        {"column": "users.age", "operator": "<=", "value": 20}
+      ],
+      "top_k": 100
+    },
+    "output_summary": {
+      "matched_row_count": 3,
+      "returned_tables": ["users"],
+      "returned_columns": ["user_id", "age"]
+    },
+    "returned_rows_or_columns": {
+      "rows": {"users": [3, 8, 19]},
+      "columns": ["users.user_id", "users.age"]
+    },
+    "state_delta": {
+      "dynamic_table_context_changed": true,
+      "memory_changed": false,
+      "context_id_before": "ctx_002",
+      "context_id_after": "ctx_003"
+    },
+    "duplicate_check": {
+      "is_exact_duplicate": false,
+      "most_similar_previous_step_id": null,
+      "argument_overlap": 0.0,
+      "output_overlap": 0.0
+    },
+    "turn_index": 4
+  }
+}

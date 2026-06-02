@@ -1,0 +1,40 @@
+{
+  "tool_name": "answer_from_context",
+  "version": "0.1",
+  "purpose": "基于当前 Dynamic Table Context 和 Static Task Memory 生成最终答案，并声明证据。",
+  "tool_call": {
+    "tool": "answer_from_context",
+    "arguments": {
+      "answer": "15-20 岁用户更偏好 beauty 类别。",
+      "evidence_rows": {
+        "users": [3, 19],
+        "orders": [101, 205],
+        "products": [7]
+      },
+      "evidence_columns": ["users.age", "users.user_id", "orders.user_id", "orders.product_id", "orders.purchase_count", "products.category"],
+      "supporting_memory_ids": ["mem_006", "mem_009"],
+      "reason": "当前记忆中的分组结果显示 beauty 类别的 purchase_count 汇总最高。"
+    }
+  },
+  "tool_output": {
+    "final_answer": "15-20 岁用户更偏好 beauty 类别。",
+    "evidence": {
+      "rows": {
+        "users": [3, 19],
+        "orders": [101, 205],
+        "products": [7]
+      },
+      "columns": ["users.age", "users.user_id", "orders.user_id", "orders.product_id", "orders.purchase_count", "products.category"],
+      "memory_ids": ["mem_006", "mem_009"]
+    }
+  },
+  "state_delta": {
+    "final_answer_submitted": true,
+    "dynamic_table_context_changed": false,
+    "static_task_memory_changed": false
+  },
+  "notes": [
+    "最终回答必须引用 evidence rows/columns 或 supporting memory。",
+    "如果答案依赖 derived/group/join result，应通过 memory_ids 指向对应 memory item。"
+  ]
+}

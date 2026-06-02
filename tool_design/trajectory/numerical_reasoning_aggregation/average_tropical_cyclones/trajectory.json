@@ -1,0 +1,208 @@
+{
+  "trajectory_id": "tablebench_average_tropical_cyclones",
+  "question_type": "NumericalReasoning/Aggregation",
+  "source_sample": {
+    "path": "data_sample/tablebench_sample.json",
+    "record_index": 0,
+    "dataset": "tablebench",
+    "record_id": "29ba53ce7ca43a979263ed36798f62a3"
+  },
+  "question": "What is the average number of tropical cyclones per season?",
+  "gold_answer": "10.6",
+  "initial_model_visible_state": {
+    "question": "What is the average number of tropical cyclones per season?",
+    "dataset_overview": {},
+    "static_task_memory": [],
+    "dynamic_table_context": {},
+    "context_budget": {
+      "max_rows_visible": 100,
+      "max_columns_visible": 12
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_001",
+      "tool_name": "inspect_dataset",
+      "tool_call": {
+        "tool": "inspect_dataset",
+        "arguments": {
+          "detail_level": "overview",
+          "num_sample_rows": 2
+        }
+      },
+      "tool_output": {
+        "dataset_overview": {
+          "tables": [
+            {
+              "table_name": "main_table",
+              "num_rows": 10,
+              "columns": ["season", "tropical lows", "tropical cyclones", "severe tropical cyclones", "strongest storm"],
+              "sample_rows": [
+                {"_row_id": 0, "season": "1990 - 91", "tropical lows": "10", "tropical cyclones": "10", "severe tropical cyclones": "7", "strongest storm": "marian"},
+                {"_row_id": 1, "season": "1991 - 92", "tropical lows": "11", "tropical cyclones": "10", "severe tropical cyclones": "9", "strongest storm": "jane - irna"}
+              ]
+            }
+          ]
+        }
+      },
+      "state_delta": {
+        "dataset_overview_changed": true,
+        "dynamic_table_context_changed": false,
+        "static_task_memory_changed": false
+      }
+    },
+    {
+      "step_id": "step_002",
+      "tool_name": "retrieve_column_context",
+      "tool_call": {
+        "tool": "retrieve_column_context",
+        "arguments": {
+          "request_reason": "需要计算每个 season 的 tropical cyclones 平均值。",
+          "requested_columns": [
+            {
+              "table_name": "main_table",
+              "column": "season",
+              "needed_info": ["sample_values"],
+              "reason": "确认每一行代表一个 season 记录"
+            },
+            {
+              "table_name": "main_table",
+              "column": "tropical cyclones",
+              "needed_info": ["sample_values", "numeric_statistics"],
+              "reason": "这是需要计算平均值的目标数值列"
+            }
+          ],
+          "sample_row_count": 2
+        }
+      },
+      "tool_output": {
+        "retrieved_columns": [
+          {"table_name": "main_table", "column": "season", "reason": "each row is one season"},
+          {"table_name": "main_table", "column": "tropical cyclones", "reason": "target metric to average"}
+        ],
+        "column_statistics": [
+          {
+            "table_name": "main_table",
+            "column": "tropical cyclones",
+            "semantic_type": "numeric",
+            "count": 10,
+            "non_null_count": 10,
+            "parse_coverage": 1.0,
+            "min": 3,
+            "max": 14,
+            "mean": 10.6,
+            "variance": 17.24,
+            "stddev": 4.152108
+          }
+        ],
+        "sample_row_policy": {
+          "type": "fixed_head",
+          "num_rows": 2,
+          "note": "Column retrieval only returns sample rows for column-level awareness."
+        },
+        "current_table_context": {
+          "context_id": "ctx_001",
+          "tables": [
+            {
+              "table_name": "main_table",
+              "columns": ["season", "tropical cyclones"],
+              "rows": [0, 1],
+              "data": [
+                {"_row_id": 0, "season": "1990 - 91", "tropical cyclones": "10"},
+                {"_row_id": 1, "season": "1991 - 92", "tropical cyclones": "10"}
+              ],
+              "source_step_ids": ["step_002"]
+            }
+          ]
+        }
+      },
+      "state_delta": {
+        "dynamic_table_context_changed": true,
+        "context_id_before": null,
+        "context_id_after": "ctx_001",
+        "added_columns": ["main_table.season", "main_table.tropical cyclones"],
+        "static_task_memory_changed": false
+      }
+    },
+    {
+      "step_id": "step_003",
+      "tool_name": "add_to_memory",
+      "tool_call": {
+        "tool": "add_to_memory",
+        "arguments": {
+          "items": [
+            {
+              "type": "group_result",
+              "content": {
+                "operation": "mean_from_column_statistics",
+                "column": "main_table.tropical cyclones",
+                "count": 10,
+                "mean": 10.6
+              },
+              "supporting_step_ids": ["step_002"],
+              "supporting_rows_or_columns": {
+                "columns": ["main_table.tropical cyclones"],
+                "row_filter": null
+              },
+              "confidence_or_check": "retrieve_column_context returned numeric_statistics with count=10, parse_coverage=1.0, and mean=10.6.",
+              "invalidating_condition": "If a row filter is needed, parse coverage changes, or the requested statistic is absent, call aggregate_column."
+            }
+          ]
+        }
+      },
+      "tool_output": {
+        "task_memory": [
+          {
+            "id": "mem_001",
+            "type": "group_result",
+            "content": {
+              "operation": "mean_from_column_statistics",
+              "column": "main_table.tropical cyclones",
+              "count": 10,
+              "mean": 10.6
+            },
+            "supporting_step_ids": ["step_002"],
+            "supporting_rows_or_columns": {
+              "columns": ["main_table.tropical cyclones"],
+              "row_filter": null
+            },
+            "confidence_or_check": "retrieve_column_context returned numeric_statistics with count=10, parse_coverage=1.0, and mean=10.6.",
+            "invalidating_condition": "If a row filter is needed, parse coverage changes, or the requested statistic is absent, call aggregate_column."
+          }
+        ]
+      },
+      "state_delta": {
+        "static_task_memory_changed": true,
+        "added_memory_ids": ["mem_001"],
+        "dynamic_table_context_changed": false
+      }
+    },
+    {
+      "step_id": "step_004",
+      "tool_name": "answer_from_context",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": "10.6",
+          "evidence_rows": {},
+          "evidence_columns": ["main_table.tropical cyclones"],
+          "supporting_memory_ids": ["mem_001"],
+          "reason": "The column statistics for tropical cyclones report mean=10.6 over 10 parsed season rows."
+        }
+      },
+      "tool_output": {
+        "final_answer": "10.6",
+        "evidence": {
+          "rows": {},
+          "columns": ["main_table.tropical cyclones"],
+          "memory_ids": ["mem_001"]
+        }
+      },
+      "state_delta": {
+        "final_answer_submitted": true,
+        "dynamic_table_context_changed": false,
+        "static_task_memory_changed": false
+      }
+    }
+  ]
+}
