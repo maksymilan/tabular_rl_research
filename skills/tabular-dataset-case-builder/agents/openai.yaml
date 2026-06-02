@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tabular Dataset Case Builder"
+  short_description: "Download and sample table QA datasets"
+  default_prompt: "Download configured table QA datasets, extract JSON samples, and record project notes."
