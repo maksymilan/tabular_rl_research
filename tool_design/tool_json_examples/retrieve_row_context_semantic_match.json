@@ -1,0 +1,64 @@
+{
+  "tool_name": "retrieve_row_context",
+  "version": "0.2",
+  "mode": "semantic_match",
+  "purpose": "根据自然语言查询在指定文本列上进行语义匹配，并将结果合并到 Dynamic Table Context。",
+  "tool_call": {
+    "tool": "retrieve_row_context",
+    "arguments": {
+      "mode": "semantic_match",
+      "table_name": "tickets",
+      "search_scope": "full_table",
+      "query": "用户想取消订阅",
+      "semantic_columns": ["tickets.subject", "tickets.description"],
+      "return_columns": ["tickets.ticket_id", "tickets.subject", "tickets.description"],
+      "top_k": 2
+    }
+  },
+  "tool_output": {
+    "matched_rows": {"tickets": [12, 31]},
+    "matched_row_count": {"tickets": 2},
+    "matched_set_statistics": [],
+    "visible_row_policy": {
+      "top_k": 2,
+      "matched_rows_total": 2,
+      "visible_rows_returned": 2,
+      "truncated": false
+    },
+    "semantic_match_result": {
+      "query": "用户想取消订阅",
+      "scores": [
+        {"row": 12, "score": 0.91},
+        {"row": 31, "score": 0.84}
+      ]
+    },
+    "current_table_context": {
+      "context_id": "ctx_001",
+      "tables": [
+        {
+          "table_name": "tickets",
+          "columns": ["ticket_id", "subject", "description"],
+          "rows": [12, 31],
+          "data": [
+            {"_row_id": 12, "ticket_id": "T012", "subject": "Cancel plan", "description": "Please stop my subscription."},
+            {"_row_id": 31, "ticket_id": "T031", "subject": "End membership", "description": "I no longer need the service."}
+          ],
+          "source_step_ids": ["step_001"]
+        }
+      ]
+    }
+  },
+  "state_delta": {
+    "dynamic_table_context_changed": true,
+    "context_id_before": "ctx_000",
+    "context_id_after": "ctx_001",
+    "added_rows": {"tickets": [12, 31]},
+    "added_columns": ["tickets.ticket_id", "tickets.subject", "tickets.description"],
+    "static_task_memory_changed": false
+  },
+  "notes": [
+    "semantic_match 只在模型指定的 semantic_columns 上执行。",
+    "adapter 返回匹配分数，但不生成任务结论或自然语言解释。",
+    "语义匹配能力应作为 adapter 能力单独评估。"
+  ]
+}

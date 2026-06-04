@@ -1,0 +1,71 @@
+{
+  "tool_name": "retrieve_row_context",
+  "version": "0.2",
+  "mode": "entity_match",
+  "purpose": "根据一个实体查询在指定实体列中匹配行，并将结果合并到 Dynamic Table Context。",
+  "tool_call": {
+    "tool": "retrieve_row_context",
+    "arguments": {
+      "mode": "entity_match",
+      "table_name": "users",
+      "search_scope": "full_table",
+      "query": "U003",
+      "entity_columns": ["users.user_id"],
+      "return_columns": ["users.user_id", "users.age"],
+      "top_k": 1
+    }
+  },
+  "tool_output": {
+    "matched_rows": {"users": [3]},
+    "matched_row_count": {"users": 1},
+    "matched_set_statistics": [
+      {
+        "table_name": "users",
+        "column": "age",
+        "scope": "all_matched_rows",
+        "count": 1,
+        "non_null_count": 1,
+        "sum": 16,
+        "mean": 16,
+        "min": 16,
+        "max": 16,
+        "variance": 0,
+        "stddev": 0,
+        "parse_coverage": 1.0
+      }
+    ],
+    "visible_row_policy": {
+      "top_k": 1,
+      "matched_rows_total": 1,
+      "visible_rows_returned": 1,
+      "truncated": false
+    },
+    "current_table_context": {
+      "context_id": "ctx_001",
+      "tables": [
+        {
+          "table_name": "users",
+          "columns": ["user_id", "age"],
+          "rows": [3],
+          "data": [
+            {"_row_id": 3, "user_id": "U003", "age": 16}
+          ],
+          "source_step_ids": ["step_001"]
+        }
+      ]
+    }
+  },
+  "state_delta": {
+    "dynamic_table_context_changed": true,
+    "context_id_before": "ctx_000",
+    "context_id_after": "ctx_001",
+    "added_rows": {"users": [3]},
+    "added_columns": ["users.user_id", "users.age"],
+    "static_task_memory_changed": false
+  },
+  "notes": [
+    "一次 entity_match 调用只表达一个实体检索意图。",
+    "query 是待匹配实体文本，entity_columns 是允许匹配的列。",
+    "adapter 只执行匹配，不自行生成实体类型或任务语义判断。"
+  ]
+}

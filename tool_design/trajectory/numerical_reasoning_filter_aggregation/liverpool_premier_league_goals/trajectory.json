@@ -1,0 +1,414 @@
+{
+  "trajectory_id": "tablebench_liverpool_premier_league_goals",
+  "question_type": "NumericalReasoning/FilterAggregation",
+  "source_sample": {
+    "path": "data_sample/tablebench_sample.json",
+    "record_index": 4,
+    "dataset": "tablebench",
+    "record_id": "b71bb2ae2d5e19e17c816355f55ec3d8"
+  },
+  "question": "What is the total number of goals scored by Liverpool in the Premier League?",
+  "dataset_gold_answer": "55",
+  "dataset_annotations": {
+    "evidence": {},
+    "label_assessment": {
+      "status": "conflict",
+      "reason": "The dataset label 55 sums Total.Goals, while the question asks for Premier League goals and the League.Goals sum is 41."
+    }
+  },
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "club_career_statistics",
+          "num_rows": 19,
+          "columns": [
+            {
+              "name": "Club",
+              "semantic_type": "text"
+            },
+            {
+              "name": "Season",
+              "semantic_type": "text"
+            },
+            {
+              "name": "League.Division",
+              "semantic_type": "text"
+            },
+            {
+              "name": "League.Apps",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "League.Goals",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "National Cup.Apps",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "National Cup.Goals",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "League Cup.Apps",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "League Cup.Goals",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "Europe.Apps",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "Europe.Goals",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "Total.Apps",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "Total.Goals",
+              "semantic_type": "numeric"
+            }
+          ]
+        }
+      ]
+    },
+    "static_task_memory": [],
+    "dynamic_table_context": {
+      "context_id": "ctx_000",
+      "tables": []
+    },
+    "context_budget": {
+      "max_rows_visible": 100,
+      "max_columns_visible": 12,
+      "current_rows_visible": 0,
+      "current_columns_visible": 0,
+      "estimated_tokens": 0
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_001",
+      "tool_name": "retrieve_row_context",
+      "tool_call": {
+        "tool": "retrieve_row_context",
+        "arguments": {
+          "mode": "condition_filter",
+          "table_name": "club_career_statistics",
+          "search_scope": "full_table",
+          "conditions": [
+            {
+              "column": "club_career_statistics.Club",
+              "operator": "=",
+              "value": "Liverpool"
+            },
+            {
+              "column": "club_career_statistics.League.Division",
+              "operator": "=",
+              "value": "Premier League"
+            }
+          ],
+          "return_columns": [
+            "club_career_statistics.Club",
+            "club_career_statistics.Season",
+            "club_career_statistics.League.Division",
+            "club_career_statistics.League.Goals"
+          ],
+          "top_k": 100
+        }
+      },
+      "tool_output": {
+        "matched_rows": {
+          "club_career_statistics": [
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ]
+        },
+        "matched_row_count": {
+          "club_career_statistics": 7
+        },
+        "matched_set_statistics": [
+          {
+            "table_name": "club_career_statistics",
+            "column": "League.Goals",
+            "scope": "all_matched_rows",
+            "count": 7,
+            "non_null_count": 7,
+            "sum": 41,
+            "mean": 5.857143,
+            "min": 2,
+            "max": 11,
+            "variance": 7.265306,
+            "stddev": 2.695423,
+            "parse_coverage": 1.0
+          }
+        ],
+        "visible_row_policy": {
+          "top_k": 100,
+          "matched_rows_total": 7,
+          "visible_rows_returned": 7,
+          "truncated": false
+        },
+        "current_table_context": {
+          "context_id": "ctx_001",
+          "tables": [
+            {
+              "table_name": "club_career_statistics",
+              "columns": [
+                "Club",
+                "Season",
+                "League.Division",
+                "League.Goals"
+              ],
+              "rows": [
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9
+              ],
+              "data": [
+                {
+                  "_row_id": 3,
+                  "Club": "Liverpool",
+                  "Season": "1992–93",
+                  "League.Division": "Premier League",
+                  "League.Goals": "4"
+                },
+                {
+                  "_row_id": 4,
+                  "Club": "Liverpool",
+                  "Season": "1993–94",
+                  "League.Division": "Premier League",
+                  "League.Goals": "2"
+                },
+                {
+                  "_row_id": 5,
+                  "Club": "Liverpool",
+                  "Season": "1994–95",
+                  "League.Division": "Premier League",
+                  "League.Goals": "7"
+                },
+                {
+                  "_row_id": 6,
+                  "Club": "Liverpool",
+                  "Season": "1995–96",
+                  "League.Division": "Premier League",
+                  "League.Goals": "6"
+                },
+                {
+                  "_row_id": 7,
+                  "Club": "Liverpool",
+                  "Season": "1996–97",
+                  "League.Division": "Premier League",
+                  "League.Goals": "7"
+                },
+                {
+                  "_row_id": 8,
+                  "Club": "Liverpool",
+                  "Season": "1997–98",
+                  "League.Division": "Premier League",
+                  "League.Goals": "11"
+                },
+                {
+                  "_row_id": 9,
+                  "Club": "Liverpool",
+                  "Season": "1998–99",
+                  "League.Division": "Premier League",
+                  "League.Goals": "4"
+                }
+              ],
+              "source_step_ids": [
+                "step_001"
+              ]
+            }
+          ]
+        }
+      },
+      "state_delta": {
+        "dynamic_table_context_changed": true,
+        "context_id_before": "ctx_000",
+        "context_id_after": "ctx_001",
+        "added_rows": {
+          "club_career_statistics": [
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ]
+        },
+        "added_columns": [
+          "club_career_statistics.Club",
+          "club_career_statistics.Season",
+          "club_career_statistics.League.Division",
+          "club_career_statistics.League.Goals"
+        ],
+        "static_task_memory_changed": false
+      }
+    },
+    {
+      "step_id": "step_002",
+      "tool_name": "add_to_memory",
+      "tool_call": {
+        "tool": "add_to_memory",
+        "arguments": {
+          "items": [
+            {
+              "type": "group_result",
+              "content": {
+                "operation": "sum_after_filter",
+                "column": "club_career_statistics.League.Goals",
+                "filter": "Club=Liverpool AND League.Division=Premier League",
+                "count": 7,
+                "sum": 41
+              },
+              "supporting_step_ids": [
+                "step_001"
+              ],
+              "supporting_rows_or_columns": {
+                "rows": {
+                  "club_career_statistics": [
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9
+                  ]
+                },
+                "columns": [
+                  "club_career_statistics.Club",
+                  "club_career_statistics.League.Division",
+                  "club_career_statistics.League.Goals"
+                ]
+              },
+              "confidence_or_check": "Step 001 filtered Liverpool Premier League rows and its automatic statistics report League.Goals sum=41.",
+              "invalidating_condition": "If the question intends goals across all competitions rather than league goals, use a different target column."
+            }
+          ]
+        }
+      },
+      "tool_output": {
+        "task_memory": [
+          {
+            "id": "mem_001",
+            "type": "group_result",
+            "content": {
+              "operation": "sum_after_filter",
+              "column": "club_career_statistics.League.Goals",
+              "filter": "Club=Liverpool AND League.Division=Premier League",
+              "count": 7,
+              "sum": 41
+            },
+            "supporting_step_ids": [
+              "step_001"
+            ],
+            "supporting_rows_or_columns": {
+              "rows": {
+                "club_career_statistics": [
+                  3,
+                  4,
+                  5,
+                  6,
+                  7,
+                  8,
+                  9
+                ]
+              },
+              "columns": [
+                "club_career_statistics.Club",
+                "club_career_statistics.League.Division",
+                "club_career_statistics.League.Goals"
+              ]
+            },
+            "confidence_or_check": "Step 001 filtered Liverpool Premier League rows and its automatic statistics report League.Goals sum=41.",
+            "invalidating_condition": "If the question intends goals across all competitions rather than league goals, use a different target column."
+          }
+        ]
+      },
+      "state_delta": {
+        "static_task_memory_changed": true,
+        "added_memory_ids": [
+          "mem_001"
+        ],
+        "dynamic_table_context_changed": false
+      }
+    },
+    {
+      "step_id": "step_003",
+      "tool_name": "answer_from_context",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": "41",
+          "evidence_rows": {
+            "club_career_statistics": [
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9
+            ]
+          },
+          "evidence_columns": [
+            "club_career_statistics.Club",
+            "club_career_statistics.League.Division",
+            "club_career_statistics.League.Goals"
+          ],
+          "supporting_memory_ids": [
+            "mem_001"
+          ],
+          "reason": "The League.Goals values for the seven Liverpool Premier League rows sum to 41."
+        }
+      },
+      "tool_output": {
+        "final_answer": "41",
+        "evidence": {
+          "rows": {
+            "club_career_statistics": [
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9
+            ]
+          },
+          "columns": [
+            "club_career_statistics.Club",
+            "club_career_statistics.League.Division",
+            "club_career_statistics.League.Goals"
+          ],
+          "memory_ids": [
+            "mem_001"
+          ]
+        }
+      },
+      "state_delta": {
+        "final_answer_submitted": true,
+        "dynamic_table_context_changed": false,
+        "static_task_memory_changed": false
+      }
+    }
+  ]
+}

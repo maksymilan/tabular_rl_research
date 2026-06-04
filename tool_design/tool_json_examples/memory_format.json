@@ -11,32 +11,19 @@
         "tables": ["users", "orders"],
         "columns": ["users.user_id", "orders.user_id"]
       },
-      "confidence_or_check": "inspect_dataset 返回 users.user_id 和 orders.user_id，字段名一致且样例值均为 U 开头用户编号。",
+      "confidence_or_check": "初始 dataset_overview 提供 users.user_id 和 orders.user_id，字段名一致且样例值均为 U 开头用户编号。",
       "invalidating_condition": "如果后续检索发现 orders.user_id 不是用户编号或无法与 users.user_id 匹配，则该 memory 需要删除或更新。"
     },
     {
       "id": "mem_002",
-      "type": "group_result",
-      "content": {
-        "group_by": "products.category",
-        "metric": "sum(orders.purchase_count)",
-        "result": [
-          {"category": "beauty", "value": 10},
-          {"category": "electronics", "value": 2}
-        ],
-        "best_group": "beauty"
-      },
-      "supporting_step_ids": ["step_004", "step_006", "step_007"],
+      "type": "derived_fact",
+      "content": "在 15-20 岁用户的订单里，按产品类别汇总 purchase_count，beauty 类最高（beauty=10 > electronics=2）。",
+      "supporting_step_ids": ["step_006", "step_007"],
       "supporting_rows_or_columns": {
-        "tables": ["users", "orders", "products"],
-        "rows": {
-          "users": [3, 8, 19],
-          "orders": [101, 102, 205],
-          "products": [7, 12]
-        },
-        "columns": ["users.age", "users.user_id", "orders.product_id", "orders.purchase_count", "products.category"]
+        "tables": ["g_category_purchase"],
+        "columns": ["products.category", "orders.purchase_count"]
       },
-      "confidence_or_check": "这些 rows 来自年龄过滤、订单检索和产品类别检索，beauty 的 purchase_count 汇总值最高。",
+      "confidence_or_check": "结论读自 data_view 派生表 g_category_purchase（订单按 15-20 岁用户过滤后按 category 分组求 purchase_count 之和），beauty 组的 sum 最大。",
       "invalidating_condition": "如果存在未检索到的 15-20 岁用户订单，或 purchase_count 不是兴趣度量，则需要重新计算。"
     }
   ]

@@ -1,25 +1,49 @@
 {
   "tool_name": "retrieve_row_context",
-  "version": "0.1",
-  "purpose": "根据实体、条件、语义描述或最值选择检索相关行，并更新 Dynamic Table Context。",
+  "version": "0.2",
+  "mode": "condition_filter",
+  "purpose": "根据结构化条件筛选行，自动返回完整匹配集合的数值列统计，并将可见匹配行合并到 Dynamic Table Context。",
   "tool_call": {
     "tool": "retrieve_row_context",
     "arguments": {
       "mode": "condition_filter",
+      "table_name": "users",
+      "search_scope": "full_table",
       "conditions": [
         {"column": "users.age", "operator": ">=", "value": 15},
         {"column": "users.age", "operator": "<=", "value": 20}
       ],
-      "columns": ["users.user_id", "users.age"],
+      "return_columns": ["users.user_id", "users.age"],
       "top_k": 100
     }
   },
   "tool_output": {
-    "matched_rows": {
-      "users": [3, 8, 19]
+    "matched_rows": {"users": [3, 8, 19]},
+    "matched_row_count": {"users": 3},
+    "matched_set_statistics": [
+      {
+        "table_name": "users",
+        "column": "age",
+        "scope": "all_matched_rows",
+        "count": 3,
+        "non_null_count": 3,
+        "sum": 53,
+        "mean": 17.6667,
+        "min": 16,
+        "max": 19,
+        "variance": 1.5556,
+        "stddev": 1.2472,
+        "parse_coverage": 1.0
+      }
+    ],
+    "visible_row_policy": {
+      "top_k": 100,
+      "matched_rows_total": 3,
+      "visible_rows_returned": 3,
+      "truncated": false
     },
     "current_table_context": {
-      "context_id": "ctx_003",
+      "context_id": "ctx_001",
       "tables": [
         {
           "table_name": "users",
@@ -30,23 +54,26 @@
             {"_row_id": 8, "user_id": "U008", "age": 19},
             {"_row_id": 19, "user_id": "U019", "age": 18}
           ],
-          "source_step_ids": ["step_004"]
+          "source_step_ids": ["step_001"]
         }
       ]
     }
   },
   "state_delta": {
     "dynamic_table_context_changed": true,
-    "context_id_before": "ctx_002",
-    "context_id_after": "ctx_003",
+    "context_id_before": "ctx_000",
+    "context_id_after": "ctx_001",
     "added_rows": {"users": [3, 8, 19]},
+    "added_columns": ["users.user_id", "users.age"],
     "static_task_memory_changed": false
   },
   "notes": [
-    "支持 mode: entity_match, condition_filter, semantic_match, extreme_value_select。",
-    "不能无目标随机扩展行；必须提供 query、conditions 或实体字段。",
-    "一次调用只表达一个行检索意图。多个独立证据目标应拆成多次 retrieve_row_context 调用。",
-    "query 是单次行检索的自然语言目标，不应写成复合计划。condition_filter 可以有多个 predicate，但它们应共同组成一个逻辑过滤条件。",
-    "extreme_value_select 用于选择某个可排序列的最大值或最小值所在行，例如按 Votes 最大值找到获胜候选人行。"
+    "所有 retrieve_row_context mode 共享 table_name、search_scope、return_columns 和 top_k。",
+    "search_scope 只能是 full_table 或 dynamic_table_context。",
+    "condition_filter.conditions 可以包含多个共同构成一个逻辑筛选意图的 predicate。",
+    "第一版支持的 operator 为 =、!=、>、>=、<、<=、contains 和 is_numeric。",
+    "matched_rows 只列出实际返回给模型的可见匹配行；matched_row_count 覆盖完整匹配集合。",
+    "matched_set_statistics 由 harness 自动为 return_columns 中可解析的数值列计算，不需要模型请求。",
+    "工具返回的行列始终与现有 Dynamic Table Context 合并。"
   ]
 }

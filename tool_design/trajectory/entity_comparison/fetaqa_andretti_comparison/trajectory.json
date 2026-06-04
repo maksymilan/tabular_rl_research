@@ -1,0 +1,417 @@
+{
+  "trajectory_id": "fetaqa_andretti_comparison",
+  "question_type": "EntityComparison",
+  "source_sample": {
+    "path": "data_sample/fetaqa_sample.json",
+    "record_index": 1,
+    "dataset": "fetaqa",
+    "record_id": 11292
+  },
+  "question": "How did Michael and Mario Andretti do?",
+  "dataset_gold_answer": "Michael Andretti finished with a run of 214.522 mph, faster than Mario.",
+  "dataset_annotations": {
+    "evidence": {
+      "highlighted_cell_ids": [
+        [
+          6,
+          3
+        ],
+        [
+          6,
+          4
+        ],
+        [
+          32,
+          3
+        ],
+        [
+          32,
+          4
+        ]
+      ]
+    },
+    "label_assessment": {
+      "status": "conflict",
+      "reason": "The label adds an mph unit and phrasing not supported by the Qual column metadata."
+    }
+  },
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "race_box_score",
+          "num_rows": 33,
+          "columns": [
+            {
+              "name": "Finish",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "Start",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "No",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "Name",
+              "semantic_type": "text"
+            },
+            {
+              "name": "Qual",
+              "semantic_type": "numeric",
+              "statistics": {
+                "count": 33,
+                "non_null_count": 33,
+                "sum": 6941.189,
+                "mean": 210.339061,
+                "min": 204.978,
+                "max": 216.828,
+                "variance": 6.167796,
+                "stddev": 2.483505,
+                "parse_coverage": 1.0
+              }
+            },
+            {
+              "name": "Laps",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "Status",
+              "semantic_type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    "static_task_memory": [],
+    "dynamic_table_context": {
+      "context_id": "ctx_000",
+      "tables": []
+    },
+    "context_budget": {
+      "max_rows_visible": 100,
+      "max_columns_visible": 12,
+      "current_rows_visible": 0,
+      "current_columns_visible": 0,
+      "estimated_tokens": 0
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_001",
+      "tool_name": "retrieve_row_context",
+      "tool_call": {
+        "tool": "retrieve_row_context",
+        "arguments": {
+          "mode": "entity_match",
+          "table_name": "race_box_score",
+          "search_scope": "full_table",
+          "query": "Michael Andretti",
+          "entity_columns": [
+            "race_box_score.Name"
+          ],
+          "return_columns": [
+            "race_box_score.Name",
+            "race_box_score.Qual"
+          ],
+          "top_k": 1
+        }
+      },
+      "tool_output": {
+        "matched_rows": {
+          "race_box_score": [
+            6
+          ]
+        },
+        "matched_row_count": {
+          "race_box_score": 1
+        },
+        "matched_set_statistics": [
+          {
+            "table_name": "race_box_score",
+            "column": "Qual",
+            "scope": "all_matched_rows",
+            "count": 1,
+            "non_null_count": 1,
+            "sum": 214.522,
+            "mean": 214.522,
+            "min": 214.522,
+            "max": 214.522,
+            "variance": 0,
+            "stddev": 0,
+            "parse_coverage": 1.0
+          }
+        ],
+        "visible_row_policy": {
+          "top_k": 1,
+          "matched_rows_total": 1,
+          "visible_rows_returned": 1,
+          "truncated": false
+        },
+        "current_table_context": {
+          "context_id": "ctx_001",
+          "tables": [
+            {
+              "table_name": "race_box_score",
+              "columns": [
+                "Name",
+                "Qual"
+              ],
+              "rows": [
+                6
+              ],
+              "data": [
+                {
+                  "_row_id": 6,
+                  "Name": "United States Michael Andretti",
+                  "Qual": "214.522"
+                }
+              ],
+              "source_step_ids": [
+                "step_001"
+              ]
+            }
+          ]
+        }
+      },
+      "state_delta": {
+        "dynamic_table_context_changed": true,
+        "context_id_before": "ctx_000",
+        "context_id_after": "ctx_001",
+        "added_rows": {
+          "race_box_score": [
+            6
+          ]
+        },
+        "added_columns": [
+          "race_box_score.Name",
+          "race_box_score.Qual"
+        ],
+        "static_task_memory_changed": false
+      }
+    },
+    {
+      "step_id": "step_002",
+      "tool_name": "retrieve_row_context",
+      "tool_call": {
+        "tool": "retrieve_row_context",
+        "arguments": {
+          "mode": "entity_match",
+          "table_name": "race_box_score",
+          "search_scope": "full_table",
+          "query": "Mario Andretti",
+          "entity_columns": [
+            "race_box_score.Name"
+          ],
+          "return_columns": [
+            "race_box_score.Name",
+            "race_box_score.Qual"
+          ],
+          "top_k": 1
+        }
+      },
+      "tool_output": {
+        "matched_rows": {
+          "race_box_score": [
+            32
+          ]
+        },
+        "matched_row_count": {
+          "race_box_score": 1
+        },
+        "matched_set_statistics": [
+          {
+            "table_name": "race_box_score",
+            "column": "Qual",
+            "scope": "all_matched_rows",
+            "count": 1,
+            "non_null_count": 1,
+            "sum": 212.3,
+            "mean": 212.3,
+            "min": 212.3,
+            "max": 212.3,
+            "variance": 0,
+            "stddev": 0,
+            "parse_coverage": 1.0
+          }
+        ],
+        "visible_row_policy": {
+          "top_k": 1,
+          "matched_rows_total": 1,
+          "visible_rows_returned": 1,
+          "truncated": false
+        },
+        "current_table_context": {
+          "context_id": "ctx_002",
+          "tables": [
+            {
+              "table_name": "race_box_score",
+              "columns": [
+                "Name",
+                "Qual"
+              ],
+              "rows": [
+                6,
+                32
+              ],
+              "data": [
+                {
+                  "_row_id": 6,
+                  "Name": "United States Michael Andretti",
+                  "Qual": "214.522"
+                },
+                {
+                  "_row_id": 32,
+                  "Name": "United States Mario Andretti (W)",
+                  "Qual": "212.300"
+                }
+              ],
+              "source_step_ids": [
+                "step_001",
+                "step_002"
+              ]
+            }
+          ]
+        }
+      },
+      "state_delta": {
+        "dynamic_table_context_changed": true,
+        "context_id_before": "ctx_001",
+        "context_id_after": "ctx_002",
+        "added_rows": {
+          "race_box_score": [
+            32
+          ]
+        },
+        "added_columns": [],
+        "static_task_memory_changed": false
+      }
+    },
+    {
+      "step_id": "step_003",
+      "tool_name": "add_to_memory",
+      "tool_call": {
+        "tool": "add_to_memory",
+        "arguments": {
+          "items": [
+            {
+              "type": "derived_fact",
+              "content": {
+                "michael_qual": 214.522,
+                "mario_qual": 212.3,
+                "comparison": "Michael Andretti had the higher Qual value",
+                "difference": 2.222
+              },
+              "supporting_step_ids": [
+                "step_001",
+                "step_002"
+              ],
+              "supporting_rows_or_columns": {
+                "rows": {
+                  "race_box_score": [
+                    6,
+                    32
+                  ]
+                },
+                "columns": [
+                  "race_box_score.Name",
+                  "race_box_score.Qual"
+                ]
+              },
+              "confidence_or_check": "214.522 is greater than 212.300.",
+              "invalidating_condition": "If Qual is not the intended comparison field, revise the comparison."
+            }
+          ]
+        }
+      },
+      "tool_output": {
+        "task_memory": [
+          {
+            "id": "mem_001",
+            "type": "derived_fact",
+            "content": {
+              "michael_qual": 214.522,
+              "mario_qual": 212.3,
+              "comparison": "Michael Andretti had the higher Qual value",
+              "difference": 2.222
+            },
+            "supporting_step_ids": [
+              "step_001",
+              "step_002"
+            ],
+            "supporting_rows_or_columns": {
+              "rows": {
+                "race_box_score": [
+                  6,
+                  32
+                ]
+              },
+              "columns": [
+                "race_box_score.Name",
+                "race_box_score.Qual"
+              ]
+            },
+            "confidence_or_check": "214.522 is greater than 212.300.",
+            "invalidating_condition": "If Qual is not the intended comparison field, revise the comparison."
+          }
+        ]
+      },
+      "state_delta": {
+        "static_task_memory_changed": true,
+        "added_memory_ids": [
+          "mem_001"
+        ],
+        "dynamic_table_context_changed": false
+      }
+    },
+    {
+      "step_id": "step_004",
+      "tool_name": "answer_from_context",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": "Michael Andretti had a Qual value of 214.522, higher than Mario Andretti's 212.300.",
+          "evidence_rows": {
+            "race_box_score": [
+              6,
+              32
+            ]
+          },
+          "evidence_columns": [
+            "race_box_score.Name",
+            "race_box_score.Qual"
+          ],
+          "supporting_memory_ids": [
+            "mem_001"
+          ],
+          "reason": "Michael's Qual value is greater than Mario's."
+        }
+      },
+      "tool_output": {
+        "final_answer": "Michael Andretti had a Qual value of 214.522, higher than Mario Andretti's 212.300.",
+        "evidence": {
+          "rows": {
+            "race_box_score": [
+              6,
+              32
+            ]
+          },
+          "columns": [
+            "race_box_score.Name",
+            "race_box_score.Qual"
+          ],
+          "memory_ids": [
+            "mem_001"
+          ]
+        }
+      },
+      "state_delta": {
+        "final_answer_submitted": true,
+        "dynamic_table_context_changed": false,
+        "static_task_memory_changed": false
+      }
+    }
+  ]
+}

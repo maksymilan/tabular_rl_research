@@ -1,0 +1,55 @@
+{
+  "tool_name": "group_aggregate",
+  "version": "0.1",
+  "purpose": "按一个或多个分组键对某张 data_view 表（源表或派生表）聚合，生成一张新的 group 派生表并登记到 data_view，只向模型返回句柄和受 budget 限制的样例组。",
+  "tool_call": {
+    "tool": "group_aggregate",
+    "arguments": {
+      "table_name": "orders",
+      "search_scope": "full_table",
+      "group_by": ["orders.product_id"],
+      "aggregations": [
+        {"op": "sum", "column": "orders.purchase_count", "as": "sum_purchase_count"},
+        {"op": "count", "as": "row_count"}
+      ]
+    }
+  },
+  "tool_output": {
+    "created_table": {
+      "table_name": "g_orders_by_product",
+      "kind": "group",
+      "intent": "orders 按 product_id 分组，求 purchase_count 之和与行数",
+      "columns": [
+        {"name": "product_id", "semantic_type": "identifier"},
+        {"name": "sum_purchase_count", "semantic_type": "numeric"},
+        {"name": "row_count", "semantic_type": "numeric"}
+      ],
+      "num_rows": 2,
+      "definition_in_harness": true
+    },
+    "group_sample_policy": {
+      "type": "fixed_head",
+      "num_rows": 2,
+      "groups_total": 2,
+      "truncated": false
+    },
+    "group_sample": [
+      {"_gid": 0, "product_id": "P007", "sum_purchase_count": 10, "row_count": 6},
+      {"_gid": 1, "product_id": "P012", "sum_purchase_count": 2, "row_count": 1}
+    ]
+  },
+  "state_delta": {
+    "data_view_changed": true,
+    "added_table": "g_orders_by_product",
+    "dynamic_table_context_changed": false,
+    "static_task_memory_changed": false
+  },
+  "notes": [
+    "group_aggregate 产出的是一张 data_view 派生表（kind=group），不直接进入 dynamic_table_context。",
+    "完整分组结果可能很大，只向模型返回句柄和固定数量的样例组；模型要读具体组需对该表再调 retrieve_row_context。",
+    "支持的聚合 op 为 sum、count、mean、min、max；除 count 外都要求可解析的数值列。",
+    "group_by=[] 时退化为对整表的单组聚合，等价于 retrieve_row_context 自动返回的 matched_set_statistics。",
+    "派生表的 definition 由 harness 保存用于按需重物化，不进入模型 prompt。",
+    "每个分组行的成员原始行 id 只记录在 internal tool history，用于 reward，不在模型可见输出中展开。"
+  ]
+}

@@ -11,15 +11,18 @@ Concrete example trajectories live in `trajectory/`. Use those files to understa
 The proposed system frames Table QA / Table Reasoning as a multi-step, observable tool-use trajectory. The model does not directly consume the full raw table or issue dataset-specific SQL/Python. Instead, an external harness maintains task state and executes abstract, data-format-agnostic tools through dataset adapters.
 
 Core state:
-- `Dynamic Table Context`: the materialized table subset currently visible to the model. It changes through retrieval and pruning actions.
+- `data_view` (harness-side): the actual table store holding both source tables and derived `group`/`join` tables. A `data_view` table can be large and is never injected into the model prompt; the model addresses any table by `table_name` and reads its rows only through bounded retrieval.
+- `Dynamic Table Context`: the small, budget-bounded slices retrieved from `data_view` tables and currently visible to the model. It changes through retrieval and pruning actions.
 - `Static Task Memory`: a structured task-level scratchpad that stores schema understanding, cross-table relations, confirmed facts, intermediate results, plans, and excluded information.
 - `Tool History`: the chronological trace of tool calls, normalized inputs, outputs, and state changes. It should be recorded by the harness for analysis and reward computation, but should not be directly included in the model-visible prompt context by default.
 
 Core tools in the first design:
-- `inspect_dataset`: get dataset/table overview, columns, row counts, and sample rows.
+- The harness provides `dataset_overview` in the initial model-visible state; schema inspection is not a model action.
 - `retrieve_column_context`: retrieve relevant columns and a small real-data view.
-- `aggregate_column`: compute numeric/statistical aggregations without exposing all rows.
 - `retrieve_row_context`: retrieve rows by entity match, condition filter, or semantic match.
+- `retrieve_row_context` automatically returns complete numeric statistics over its matched row set, so single-group filtered aggregation does not require a separate tool.
+- `group_aggregate`: group a `data_view` table by one or more keys and compute per-group aggregates, producing a new derived table. The zero-key case equals the auto-returned matched-set statistics.
+- `join_tables`: join two `data_view` tables on declared keys, producing a new derived table; cardinality from `dataset_overview.relations` guards against fan-out double-counting.
 - `drop_context`: remove irrelevant rows or, less frequently, columns from the dynamic context.
 - `add_to_memory`: add confirmed facts, intermediate results, schema facts, or plans to task memory.
 - `refine_memory`: compress, remove, or update task memory entries.
@@ -78,7 +81,7 @@ Adapters are necessary because the same abstract tools must work over CSV, DataF
 
 7. Dynamic context as `selected_rows x selected_columns` may be too restrictive.
 
-Some evidence is naturally cell-level, group-level, join-result-level, or derived-fact-level. The current plan is to store these higher-level evidence objects in Static Task Memory while keeping Dynamic Table Context as the materialized table view. This makes memory design central rather than auxiliary.
+Group-level and join-level results are not subsets of a source table, so they are materialized as derived `data_view` tables (`kind=group`/`join`) addressable by `table_name`, rather than being forced into Static Task Memory. The model reads them through the same bounded retrieval used for source tables, which keeps potentially large intermediate tables out of the prompt. Cell-level and scalar derived-fact evidence still lives in Static Task Memory.
 
 8. Task memory can become an uncontrolled hidden channel.
 

@@ -8,156 +8,238 @@
     "record_id": "39c3b24be6bcb3e279ecccea6b641efc"
   },
   "question": "What is the total GDP (nominal) of all countries with a UN budget greater than 2%?",
-  "gold_answer": "7700143",
-  "steps": [
-    {
-      "step_id": "step_001",
-      "tool_name": "inspect_dataset",
-      "tool_call": {
-        "tool": "inspect_dataset",
-        "arguments": {
-          "detail_level": "overview",
-          "num_sample_rows": 2
-        }
-      },
-      "tool_output": {
-        "dataset_overview": {
-          "tables": [
+  "dataset_gold_answer": "7700143",
+  "dataset_annotations": {
+    "evidence": {},
+    "label_assessment": {
+      "status": "accepted",
+      "reason": null
+    }
+  },
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "main_table",
+          "num_rows": 13,
+          "columns": [
             {
-              "table_name": "main_table",
-              "num_rows": 13,
-              "columns": ["country", "un budget", "international trade (millions of usd) 2011", "gdp (nominal) (millions of usd) 2011", "gdp (ppp) (millions of usd) 2011", "population"],
-              "sample_rows": [
-                {"_row_id": 0, "country": "italy", "un budget": "4.999%", "gdp (nominal) (millions of usd) 2011": "2198730"},
-                {"_row_id": 1, "country": "canada", "un budget": "3.207%", "gdp (nominal) (millions of usd) 2011": "1736869"}
-              ]
+              "name": "country",
+              "semantic_type": "text"
+            },
+            {
+              "name": "un budget",
+              "semantic_type": "numeric_percent",
+              "statistics": {
+                "count": 13,
+                "non_null_count": 13,
+                "sum": 17.421,
+                "mean": 1.340077,
+                "min": 0.003,
+                "max": 4.999,
+                "variance": 2.556127,
+                "stddev": 1.598789,
+                "parse_coverage": 1.0
+              },
+              "unit": "%"
+            },
+            {
+              "name": "international trade (millions of usd) 2011",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "gdp (nominal) (millions of usd) 2011",
+              "semantic_type": "numeric",
+              "statistics": {
+                "count": 13,
+                "non_null_count": 13,
+                "sum": 10361639,
+                "mean": 797049.153846,
+                "min": 2048,
+                "max": 2198730,
+                "variance": 467455815592.59174,
+                "stddev": 683707.404957,
+                "parse_coverage": 1.0
+              }
+            },
+            {
+              "name": "gdp (ppp) (millions of usd) 2011",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "population",
+              "semantic_type": "numeric"
             }
           ]
         }
-      },
-      "state_delta": {
-        "dataset_overview_changed": true,
-        "dynamic_table_context_changed": false,
-        "static_task_memory_changed": false
-      }
+      ]
     },
+    "static_task_memory": [],
+    "dynamic_table_context": {
+      "context_id": "ctx_000",
+      "tables": []
+    },
+    "context_budget": {
+      "max_rows_visible": 100,
+      "max_columns_visible": 12,
+      "current_rows_visible": 0,
+      "current_columns_visible": 0,
+      "estimated_tokens": 0
+    }
+  },
+  "steps": [
     {
-      "step_id": "step_002",
-      "tool_name": "retrieve_column_context",
+      "step_id": "step_001",
+      "tool_name": "retrieve_row_context",
       "tool_call": {
-        "tool": "retrieve_column_context",
+        "tool": "retrieve_row_context",
         "arguments": {
-          "request_reason": "需要按 un budget > 2% 过滤国家，并汇总这些国家的 nominal GDP。",
-          "requested_columns": [
+          "mode": "condition_filter",
+          "table_name": "main_table",
+          "search_scope": "full_table",
+          "conditions": [
             {
-              "table_name": "main_table",
-              "column": "country",
-              "needed_info": ["sample_values"],
-              "reason": "识别过滤后的国家实体"
-            },
-            {
-              "table_name": "main_table",
-              "column": "un budget",
-              "needed_info": ["sample_values", "numeric_statistics"],
-              "reason": "过滤条件列"
-            },
-            {
-              "table_name": "main_table",
-              "column": "gdp (nominal) (millions of usd) 2011",
-              "needed_info": ["sample_values", "numeric_statistics"],
-              "reason": "需要求和的目标数值列"
+              "column": "main_table.un budget",
+              "operator": ">",
+              "value": "2%"
             }
           ],
-          "sample_row_count": 2
+          "return_columns": [
+            "main_table.country",
+            "main_table.un budget",
+            "main_table.gdp (nominal) (millions of usd) 2011"
+          ],
+          "top_k": 20
         }
       },
       "tool_output": {
-        "retrieved_columns": [
-          {"table_name": "main_table", "column": "country", "reason": "identify filtered entities"},
-          {"table_name": "main_table", "column": "un budget", "reason": "filter condition"},
-          {"table_name": "main_table", "column": "gdp (nominal) (millions of usd) 2011", "reason": "value to sum"}
+        "matched_rows": {
+          "main_table": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "matched_row_count": {
+          "main_table": 5
+        },
+        "matched_set_statistics": [
+          {
+            "table_name": "main_table",
+            "column": "un budget",
+            "scope": "all_matched_rows",
+            "count": 5,
+            "non_null_count": 5,
+            "sum": 15.999,
+            "mean": 3.1998,
+            "min": 2.26,
+            "max": 4.999,
+            "variance": 0.966583,
+            "stddev": 0.98315,
+            "parse_coverage": 1.0
+          },
+          {
+            "table_name": "main_table",
+            "column": "gdp (nominal) (millions of usd) 2011",
+            "scope": "all_matched_rows",
+            "count": 5,
+            "non_null_count": 5,
+            "sum": 7700143,
+            "mean": 1540028.6,
+            "min": 1116247,
+            "max": 2198730,
+            "variance": 160560324961.04,
+            "stddev": 400699.794062,
+            "parse_coverage": 1.0
+          }
         ],
-        "sample_row_policy": {
-          "type": "fixed_head",
-          "num_rows": 2,
-          "note": "Column retrieval only returns sample rows for column-level awareness."
+        "visible_row_policy": {
+          "top_k": 20,
+          "matched_rows_total": 5,
+          "visible_rows_returned": 5,
+          "truncated": false
         },
         "current_table_context": {
           "context_id": "ctx_001",
           "tables": [
             {
               "table_name": "main_table",
-              "columns": ["country", "un budget", "gdp (nominal) (millions of usd) 2011"],
-              "rows": [0, 1],
-              "data": [
-                {"_row_id": 0, "country": "italy", "un budget": "4.999%", "gdp (nominal) (millions of usd) 2011": "2198730"},
-                {"_row_id": 1, "country": "canada", "un budget": "3.207%", "gdp (nominal) (millions of usd) 2011": "1736869"}
+              "columns": [
+                "country",
+                "un budget",
+                "gdp (nominal) (millions of usd) 2011"
               ],
-              "source_step_ids": ["step_002"]
+              "rows": [
+                0,
+                1,
+                2,
+                3,
+                4
+              ],
+              "data": [
+                {
+                  "_row_id": 0,
+                  "country": "italy",
+                  "un budget": "4.999%",
+                  "gdp (nominal) (millions of usd) 2011": "2198730"
+                },
+                {
+                  "_row_id": 1,
+                  "country": "canada",
+                  "un budget": "3.207%",
+                  "gdp (nominal) (millions of usd) 2011": "1736869"
+                },
+                {
+                  "_row_id": 2,
+                  "country": "spain",
+                  "un budget": "3.177%",
+                  "gdp (nominal) (millions of usd) 2011": "1493513"
+                },
+                {
+                  "_row_id": 3,
+                  "country": "mexico",
+                  "un budget": "2.356%",
+                  "gdp (nominal) (millions of usd) 2011": "1154784"
+                },
+                {
+                  "_row_id": 4,
+                  "country": "south korea",
+                  "un budget": "2.260%",
+                  "gdp (nominal) (millions of usd) 2011": "1116247"
+                }
+              ],
+              "source_step_ids": [
+                "step_001"
+              ]
             }
           ]
         }
       },
       "state_delta": {
         "dynamic_table_context_changed": true,
-        "context_id_before": null,
+        "context_id_before": "ctx_000",
         "context_id_after": "ctx_001",
-        "added_columns": ["main_table.country", "main_table.un budget", "main_table.gdp (nominal) (millions of usd) 2011"],
-        "static_task_memory_changed": false
-      }
-    },
-    {
-      "step_id": "step_003",
-      "tool_name": "retrieve_row_context",
-      "tool_call": {
-        "tool": "retrieve_row_context",
-        "arguments": {
-          "mode": "condition_filter",
-          "conditions": [
-            {"column": "main_table.un budget", "operator": ">", "value": "2%"}
-          ],
-          "columns": ["main_table.country", "main_table.un budget", "main_table.gdp (nominal) (millions of usd) 2011"],
-          "top_k": 20
-        }
-      },
-      "tool_output": {
-        "matched_rows": {"main_table": [0, 1, 2, 3, 4]},
-        "match_explanation": [
-          {"row": 0, "reason": "4.999% > 2%"},
-          {"row": 1, "reason": "3.207% > 2%"},
-          {"row": 2, "reason": "3.177% > 2%"},
-          {"row": 3, "reason": "2.356% > 2%"},
-          {"row": 4, "reason": "2.260% > 2%"}
-        ],
-        "current_table_context": {
-          "context_id": "ctx_002",
-          "tables": [
-            {
-              "table_name": "main_table",
-              "columns": ["country", "un budget", "gdp (nominal) (millions of usd) 2011"],
-              "rows": [0, 1, 2, 3, 4],
-              "data": [
-                {"_row_id": 0, "country": "italy", "un budget": "4.999%", "gdp (nominal) (millions of usd) 2011": "2198730"},
-                {"_row_id": 1, "country": "canada", "un budget": "3.207%", "gdp (nominal) (millions of usd) 2011": "1736869"},
-                {"_row_id": 2, "country": "spain", "un budget": "3.177%", "gdp (nominal) (millions of usd) 2011": "1493513"},
-                {"_row_id": 3, "country": "mexico", "un budget": "2.356%", "gdp (nominal) (millions of usd) 2011": "1154784"},
-                {"_row_id": 4, "country": "south korea", "un budget": "2.260%", "gdp (nominal) (millions of usd) 2011": "1116247"}
-              ],
-              "source_step_ids": ["step_002", "step_003"]
-            }
+        "added_rows": {
+          "main_table": [
+            0,
+            1,
+            2,
+            3,
+            4
           ]
-        }
-      },
-      "state_delta": {
-        "dynamic_table_context_changed": true,
-        "context_id_before": "ctx_001",
-        "context_id_after": "ctx_002",
-        "filtered_rows": {"main_table": [0, 1, 2, 3, 4]},
+        },
+        "added_columns": [
+          "main_table.country",
+          "main_table.un budget",
+          "main_table.gdp (nominal) (millions of usd) 2011"
+        ],
         "static_task_memory_changed": false
       }
     },
     {
-      "step_id": "step_004",
+      "step_id": "step_002",
       "tool_name": "add_to_memory",
       "tool_call": {
         "tool": "add_to_memory",
@@ -169,17 +251,35 @@
                 "operation": "sum_after_filter",
                 "filter": "main_table.un budget > 2%",
                 "value_column": "main_table.gdp (nominal) (millions of usd) 2011",
-                "included_countries": ["italy", "canada", "spain", "mexico", "south korea"],
-                "values": [2198730, 1736869, 1493513, 1154784, 1116247],
+                "included_countries": [
+                  "italy",
+                  "canada",
+                  "spain",
+                  "mexico",
+                  "south korea"
+                ],
                 "sum": 7700143
               },
-              "supporting_step_ids": ["step_003"],
+              "supporting_step_ids": [
+                "step_001"
+              ],
               "supporting_rows_or_columns": {
-                "rows": {"main_table": [0, 1, 2, 3, 4]},
-                "columns": ["main_table.un budget", "main_table.gdp (nominal) (millions of usd) 2011"]
+                "rows": {
+                  "main_table": [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4
+                  ]
+                },
+                "columns": [
+                  "main_table.un budget",
+                  "main_table.gdp (nominal) (millions of usd) 2011"
+                ]
               },
-              "confidence_or_check": "Rows 0-4 match UN budget > 2%; their GDP nominal values sum to 7700143.",
-              "invalidating_condition": "If percentage parsing changes or another row has UN budget greater than 2%, recompute."
+              "confidence_or_check": "Step 001 matched five rows and its automatic matched-set statistics report GDP sum=7700143.",
+              "invalidating_condition": "If percentage parsing changes, recompute."
             }
           ]
         }
@@ -193,45 +293,91 @@
               "operation": "sum_after_filter",
               "filter": "main_table.un budget > 2%",
               "value_column": "main_table.gdp (nominal) (millions of usd) 2011",
-              "included_countries": ["italy", "canada", "spain", "mexico", "south korea"],
-              "values": [2198730, 1736869, 1493513, 1154784, 1116247],
+              "included_countries": [
+                "italy",
+                "canada",
+                "spain",
+                "mexico",
+                "south korea"
+              ],
               "sum": 7700143
             },
-            "supporting_step_ids": ["step_003"],
+            "supporting_step_ids": [
+              "step_001"
+            ],
             "supporting_rows_or_columns": {
-              "rows": {"main_table": [0, 1, 2, 3, 4]},
-              "columns": ["main_table.un budget", "main_table.gdp (nominal) (millions of usd) 2011"]
+              "rows": {
+                "main_table": [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4
+                ]
+              },
+              "columns": [
+                "main_table.un budget",
+                "main_table.gdp (nominal) (millions of usd) 2011"
+              ]
             },
-            "confidence_or_check": "Rows 0-4 match UN budget > 2%; their GDP nominal values sum to 7700143.",
-            "invalidating_condition": "If percentage parsing changes or another row has UN budget greater than 2%, recompute."
+            "confidence_or_check": "Step 001 matched five rows and its automatic matched-set statistics report GDP sum=7700143.",
+            "invalidating_condition": "If percentage parsing changes, recompute."
           }
         ]
       },
       "state_delta": {
         "static_task_memory_changed": true,
-        "added_memory_ids": ["mem_001"],
+        "added_memory_ids": [
+          "mem_001"
+        ],
         "dynamic_table_context_changed": false
       }
     },
     {
-      "step_id": "step_005",
+      "step_id": "step_003",
       "tool_name": "answer_from_context",
       "tool_call": {
         "tool": "answer_from_context",
         "arguments": {
           "answer": "7700143",
-          "evidence_rows": {"main_table": [0, 1, 2, 3, 4]},
-          "evidence_columns": ["main_table.un budget", "main_table.gdp (nominal) (millions of usd) 2011"],
-          "supporting_memory_ids": ["mem_001"],
-          "reason": "Rows with UN budget greater than 2% are rows 0-4, and their nominal GDP values sum to 7700143."
+          "evidence_rows": {
+            "main_table": [
+              0,
+              1,
+              2,
+              3,
+              4
+            ]
+          },
+          "evidence_columns": [
+            "main_table.un budget",
+            "main_table.gdp (nominal) (millions of usd) 2011"
+          ],
+          "supporting_memory_ids": [
+            "mem_001"
+          ],
+          "reason": "The filtered matched-set GDP sum is 7700143."
         }
       },
       "tool_output": {
         "final_answer": "7700143",
         "evidence": {
-          "rows": {"main_table": [0, 1, 2, 3, 4]},
-          "columns": ["main_table.un budget", "main_table.gdp (nominal) (millions of usd) 2011"],
-          "memory_ids": ["mem_001"]
+          "rows": {
+            "main_table": [
+              0,
+              1,
+              2,
+              3,
+              4
+            ]
+          },
+          "columns": [
+            "main_table.un budget",
+            "main_table.gdp (nominal) (millions of usd) 2011"
+          ],
+          "memory_ids": [
+            "mem_001"
+          ]
         }
       },
       "state_delta": {

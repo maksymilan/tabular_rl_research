@@ -7,14 +7,17 @@
     "tool_name": "retrieve_row_context",
     "normalized_arguments": {
       "mode": "condition_filter",
+      "table_name": "users",
+      "search_scope": "full_table",
       "conditions": [
         {"column": "users.age", "operator": ">=", "value": 15},
         {"column": "users.age", "operator": "<=", "value": 20}
       ],
+      "return_columns": ["users.user_id", "users.age"],
       "top_k": 100
     },
     "output_summary": {
-      "matched_row_count": 3,
+      "matched_row_count": {"users": 3},
       "returned_tables": ["users"],
       "returned_columns": ["user_id", "age"]
     },

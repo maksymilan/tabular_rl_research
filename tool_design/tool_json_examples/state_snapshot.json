@@ -1,70 +1,69 @@
 {
   "format_name": "model_visible_state_snapshot",
-  "version": "0.1",
+  "version": "0.2",
   "question": "年龄在 15-20 的用户对哪些类别的产品更感兴趣？",
   "dataset_overview": {
     "tables": [
       {
         "table_name": "users",
         "num_rows": 10000,
-        "columns": ["user_id", "age", "gender", "city"],
-        "sample_rows": [
-          {"_row_id": 0, "user_id": "U001", "age": 16, "gender": "F", "city": "Shanghai"}
+        "columns": [
+          {"name": "user_id", "semantic_type": "identifier"},
+          {
+            "name": "age",
+            "semantic_type": "numeric",
+            "statistics": {
+              "count": 10000,
+              "non_null_count": 9987,
+              "parse_coverage": 0.9987,
+              "sum": 345758,
+              "mean": 34.6,
+              "min": 13,
+              "max": 78,
+              "variance": 142.8,
+              "stddev": 11.95
+            }
+          },
+          {"name": "gender", "semantic_type": "text"},
+          {"name": "city", "semantic_type": "text"}
         ]
       },
       {
         "table_name": "orders",
         "num_rows": 50000,
-        "columns": ["order_id", "user_id", "product_id", "amount", "order_time"],
-        "sample_rows": [
-          {"_row_id": 0, "order_id": "O001", "user_id": "U001", "product_id": "P003", "amount": 120}
+        "columns": [
+          {"name": "order_id", "semantic_type": "identifier"},
+          {"name": "user_id", "semantic_type": "identifier"},
+          {"name": "product_id", "semantic_type": "identifier"},
+          {"name": "amount", "semantic_type": "numeric"},
+          {"name": "order_time", "semantic_type": "datetime"}
         ]
       },
       {
         "table_name": "products",
         "num_rows": 2000,
-        "columns": ["product_id", "category", "price"],
-        "sample_rows": [
-          {"_row_id": 0, "product_id": "P003", "category": "beauty", "price": 99}
+        "columns": [
+          {"name": "product_id", "semantic_type": "identifier"},
+          {"name": "category", "semantic_type": "text"},
+          {"name": "price", "semantic_type": "numeric"}
         ]
       }
+    ],
+    "relations": [
+      {"from": "orders.user_id", "to": "users.user_id", "type": "many_to_one"},
+      {"from": "orders.product_id", "to": "products.product_id", "type": "many_to_one"}
     ]
   },
-  "static_task_memory": [
-    {
-      "id": "mem_001",
-      "type": "schema_fact",
-      "content": "users.age 可用于筛选 15-20 岁用户，users.user_id 可连接 orders.user_id。",
-      "supporting_step_ids": ["step_001"],
-      "supporting_rows_or_columns": {
-        "tables": ["users", "orders"],
-        "columns": ["users.age", "users.user_id", "orders.user_id"]
-      },
-      "confidence_or_check": "inspect_dataset 返回了这些表和列。",
-      "invalidating_condition": "如果后续 adapter 发现 users.user_id 与 orders.user_id 类型或语义不匹配，则需要更新。"
-    }
-  ],
+  "static_task_memory": [],
   "dynamic_table_context": {
-    "context_id": "ctx_003",
-    "tables": [
-      {
-        "table_name": "users",
-        "columns": ["user_id", "age"],
-        "rows": [3, 8, 19],
-        "data": [
-          {"_row_id": 3, "user_id": "U003", "age": 16},
-          {"_row_id": 8, "user_id": "U008", "age": 19},
-          {"_row_id": 19, "user_id": "U019", "age": 18}
-        ],
-        "source_step_ids": ["step_004"]
-      }
-    ]
+    "context_id": "ctx_000",
+    "tables": []
   },
   "context_budget": {
     "max_rows_visible": 100,
     "max_columns_visible": 12,
-    "current_rows_visible": 3,
-    "current_columns_visible": 2,
-    "estimated_tokens": 260
+    "current_rows_visible": 0,
+    "current_columns_visible": 0,
+    "estimated_tokens": 0
   }
 }

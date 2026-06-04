@@ -1,0 +1,462 @@
+{
+  "trajectory_id": "fetaqa_pleasure_best_selling",
+  "question_type": "TemporalComparison",
+  "source_sample": {
+    "path": "data_sample/fetaqa_sample.json",
+    "record_index": 2,
+    "dataset": "fetaqa",
+    "record_id": 11734
+  },
+  "question": "How many copies did \"Pleasure\" sell in 1998 alone, and how long was it the best selling album in Japan?",
+  "dataset_gold_answer": "B'z The Best \"Pleasure\" sold more than 5 million copies in 1998 alone, making it a temporary best-selling album in Japanese music history, until being surpassed by Utada Hikaru's First Love in 1999.",
+  "dataset_annotations": {
+    "evidence": {
+      "highlighted_cell_ids": [
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          3
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          2,
+          5
+        ]
+      ]
+    },
+    "label_assessment": {
+      "status": "accepted",
+      "reason": null
+    }
+  },
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "best_selling_albums_japan",
+          "num_rows": 20,
+          "columns": [
+            {
+              "name": "No.",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "Album",
+              "semantic_type": "text"
+            },
+            {
+              "name": "Artist",
+              "semantic_type": "text"
+            },
+            {
+              "name": "Released",
+              "semantic_type": "date",
+              "format": "D Month YYYY"
+            },
+            {
+              "name": "Chart",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "Sales",
+              "semantic_type": "numeric",
+              "statistics": {
+                "count": 20,
+                "non_null_count": 20,
+                "sum": 78199000,
+                "mean": 3909950,
+                "min": 3018000,
+                "max": 7672000,
+                "variance": 1121920147500,
+                "stddev": 1059207.320358,
+                "parse_coverage": 1.0
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "static_task_memory": [],
+    "dynamic_table_context": {
+      "context_id": "ctx_000",
+      "tables": []
+    },
+    "context_budget": {
+      "max_rows_visible": 100,
+      "max_columns_visible": 12,
+      "current_rows_visible": 0,
+      "current_columns_visible": 0,
+      "estimated_tokens": 0
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_001",
+      "tool_name": "retrieve_row_context",
+      "tool_call": {
+        "tool": "retrieve_row_context",
+        "arguments": {
+          "mode": "entity_match",
+          "table_name": "best_selling_albums_japan",
+          "search_scope": "full_table",
+          "query": "B'z The Best \"Pleasure\"",
+          "entity_columns": [
+            "best_selling_albums_japan.Album"
+          ],
+          "return_columns": [
+            "best_selling_albums_japan.Album",
+            "best_selling_albums_japan.Artist",
+            "best_selling_albums_japan.Released",
+            "best_selling_albums_japan.Sales"
+          ],
+          "top_k": 1
+        }
+      },
+      "tool_output": {
+        "matched_rows": {
+          "best_selling_albums_japan": [
+            2
+          ]
+        },
+        "matched_row_count": {
+          "best_selling_albums_japan": 1
+        },
+        "matched_set_statistics": [
+          {
+            "table_name": "best_selling_albums_japan",
+            "column": "Sales",
+            "scope": "all_matched_rows",
+            "count": 1,
+            "non_null_count": 1,
+            "sum": 5136000,
+            "mean": 5136000,
+            "min": 5136000,
+            "max": 5136000,
+            "variance": 0,
+            "stddev": 0,
+            "parse_coverage": 1.0
+          }
+        ],
+        "visible_row_policy": {
+          "top_k": 1,
+          "matched_rows_total": 1,
+          "visible_rows_returned": 1,
+          "truncated": false
+        },
+        "current_table_context": {
+          "context_id": "ctx_001",
+          "tables": [
+            {
+              "table_name": "best_selling_albums_japan",
+              "columns": [
+                "Album",
+                "Artist",
+                "Released",
+                "Sales"
+              ],
+              "rows": [
+                2
+              ],
+              "data": [
+                {
+                  "_row_id": 2,
+                  "Album": "B'z The Best \"Pleasure\"",
+                  "Artist": "B'z",
+                  "Released": "20 May 1998",
+                  "Sales": "5,136,000"
+                }
+              ],
+              "source_step_ids": [
+                "step_001"
+              ]
+            }
+          ]
+        }
+      },
+      "state_delta": {
+        "dynamic_table_context_changed": true,
+        "context_id_before": "ctx_000",
+        "context_id_after": "ctx_001",
+        "added_rows": {
+          "best_selling_albums_japan": [
+            2
+          ]
+        },
+        "added_columns": [
+          "best_selling_albums_japan.Album",
+          "best_selling_albums_japan.Artist",
+          "best_selling_albums_japan.Released",
+          "best_selling_albums_japan.Sales"
+        ],
+        "static_task_memory_changed": false
+      }
+    },
+    {
+      "step_id": "step_002",
+      "tool_name": "retrieve_row_context",
+      "tool_call": {
+        "tool": "retrieve_row_context",
+        "arguments": {
+          "mode": "condition_filter",
+          "table_name": "best_selling_albums_japan",
+          "search_scope": "full_table",
+          "conditions": [
+            {
+              "column": "best_selling_albums_japan.Released",
+              "operator": ">",
+              "value": "20 May 1998"
+            },
+            {
+              "column": "best_selling_albums_japan.Sales",
+              "operator": ">",
+              "value": 5136000
+            }
+          ],
+          "return_columns": [
+            "best_selling_albums_japan.Album",
+            "best_selling_albums_japan.Artist",
+            "best_selling_albums_japan.Released",
+            "best_selling_albums_japan.Sales"
+          ],
+          "top_k": 100
+        }
+      },
+      "tool_output": {
+        "matched_rows": {
+          "best_selling_albums_japan": [
+            1
+          ]
+        },
+        "matched_row_count": {
+          "best_selling_albums_japan": 1
+        },
+        "matched_set_statistics": [
+          {
+            "table_name": "best_selling_albums_japan",
+            "column": "Sales",
+            "scope": "all_matched_rows",
+            "count": 1,
+            "non_null_count": 1,
+            "sum": 7672000,
+            "mean": 7672000,
+            "min": 7672000,
+            "max": 7672000,
+            "variance": 0,
+            "stddev": 0,
+            "parse_coverage": 1.0
+          }
+        ],
+        "visible_row_policy": {
+          "top_k": 100,
+          "matched_rows_total": 1,
+          "visible_rows_returned": 1,
+          "truncated": false
+        },
+        "current_table_context": {
+          "context_id": "ctx_002",
+          "tables": [
+            {
+              "table_name": "best_selling_albums_japan",
+              "columns": [
+                "Album",
+                "Artist",
+                "Released",
+                "Sales"
+              ],
+              "rows": [
+                2,
+                1
+              ],
+              "data": [
+                {
+                  "_row_id": 2,
+                  "Album": "B'z The Best \"Pleasure\"",
+                  "Artist": "B'z",
+                  "Released": "20 May 1998",
+                  "Sales": "5,136,000"
+                },
+                {
+                  "_row_id": 1,
+                  "Album": "First Love",
+                  "Artist": "Hikaru Utada",
+                  "Released": "10 March 1999",
+                  "Sales": "7,672,000"
+                }
+              ],
+              "source_step_ids": [
+                "step_001",
+                "step_002"
+              ]
+            }
+          ]
+        }
+      },
+      "state_delta": {
+        "dynamic_table_context_changed": true,
+        "context_id_before": "ctx_001",
+        "context_id_after": "ctx_002",
+        "added_rows": {
+          "best_selling_albums_japan": [
+            1
+          ]
+        },
+        "added_columns": [],
+        "static_task_memory_changed": false
+      }
+    },
+    {
+      "step_id": "step_003",
+      "tool_name": "add_to_memory",
+      "tool_call": {
+        "tool": "add_to_memory",
+        "arguments": {
+          "items": [
+            {
+              "type": "derived_fact",
+              "content": {
+                "target_album": "B'z The Best \"Pleasure\"",
+                "target_sales": 5136000,
+                "target_release_year": 1998,
+                "surpassing_album": "First Love",
+                "surpassing_artist": "Hikaru Utada",
+                "surpassing_sales": 7672000,
+                "surpassing_release_year": 1999,
+                "record_duration_summary": "Pleasure was temporarily best-selling from its 1998 release until First Love surpassed it in 1999."
+              },
+              "supporting_step_ids": [
+                "step_001",
+                "step_002"
+              ],
+              "supporting_rows_or_columns": {
+                "rows": {
+                  "best_selling_albums_japan": [
+                    2,
+                    1
+                  ]
+                },
+                "columns": [
+                  "best_selling_albums_japan.Album",
+                  "best_selling_albums_japan.Artist",
+                  "best_selling_albums_japan.Released",
+                  "best_selling_albums_japan.Sales"
+                ]
+              },
+              "confidence_or_check": "Step 002 found exactly one later album with sales greater than 5,136,000: First Love in 1999.",
+              "invalidating_condition": "If the filter is incomplete or date parsing changes, recompute."
+            }
+          ]
+        }
+      },
+      "tool_output": {
+        "task_memory": [
+          {
+            "id": "mem_001",
+            "type": "derived_fact",
+            "content": {
+              "target_album": "B'z The Best \"Pleasure\"",
+              "target_sales": 5136000,
+              "target_release_year": 1998,
+              "surpassing_album": "First Love",
+              "surpassing_artist": "Hikaru Utada",
+              "surpassing_sales": 7672000,
+              "surpassing_release_year": 1999,
+              "record_duration_summary": "Pleasure was temporarily best-selling from its 1998 release until First Love surpassed it in 1999."
+            },
+            "supporting_step_ids": [
+              "step_001",
+              "step_002"
+            ],
+            "supporting_rows_or_columns": {
+              "rows": {
+                "best_selling_albums_japan": [
+                  2,
+                  1
+                ]
+              },
+              "columns": [
+                "best_selling_albums_japan.Album",
+                "best_selling_albums_japan.Artist",
+                "best_selling_albums_japan.Released",
+                "best_selling_albums_japan.Sales"
+              ]
+            },
+            "confidence_or_check": "Step 002 found exactly one later album with sales greater than 5,136,000: First Love in 1999.",
+            "invalidating_condition": "If the filter is incomplete or date parsing changes, recompute."
+          }
+        ]
+      },
+      "state_delta": {
+        "static_task_memory_changed": true,
+        "added_memory_ids": [
+          "mem_001"
+        ],
+        "dynamic_table_context_changed": false
+      }
+    },
+    {
+      "step_id": "step_004",
+      "tool_name": "answer_from_context",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": "B'z The Best \"Pleasure\" sold more than 5 million copies in 1998 alone, making it a temporary best-selling album in Japanese music history, until being surpassed by Utada Hikaru's First Love in 1999.",
+          "evidence_rows": {
+            "best_selling_albums_japan": [
+              2,
+              1
+            ]
+          },
+          "evidence_columns": [
+            "best_selling_albums_japan.Album",
+            "best_selling_albums_japan.Artist",
+            "best_selling_albums_japan.Released",
+            "best_selling_albums_japan.Sales"
+          ],
+          "supporting_memory_ids": [
+            "mem_001"
+          ],
+          "reason": "Pleasure sold 5,136,000 in 1998 and First Love surpassed it in 1999."
+        }
+      },
+      "tool_output": {
+        "final_answer": "B'z The Best \"Pleasure\" sold more than 5 million copies in 1998 alone, making it a temporary best-selling album in Japanese music history, until being surpassed by Utada Hikaru's First Love in 1999.",
+        "evidence": {
+          "rows": {
+            "best_selling_albums_japan": [
+              2,
+              1
+            ]
+          },
+          "columns": [
+            "best_selling_albums_japan.Album",
+            "best_selling_albums_japan.Artist",
+            "best_selling_albums_japan.Released",
+            "best_selling_albums_japan.Sales"
+          ],
+          "memory_ids": [
+            "mem_001"
+          ]
+        }
+      },
+      "state_delta": {
+        "final_answer_submitted": true,
+        "dynamic_table_context_changed": false,
+        "static_task_memory_changed": false
+      }
+    }
+  ]
+}

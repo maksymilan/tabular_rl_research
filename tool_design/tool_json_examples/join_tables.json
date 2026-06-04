@@ -1,0 +1,66 @@
+{
+  "tool_name": "join_tables",
+  "version": "0.1",
+  "purpose": "按连接键连接两张 data_view 表（源表或派生表），生成一张新的 join 派生表并登记到 data_view，只向模型返回句柄和受 budget 限制的样例行。",
+  "tool_call": {
+    "tool": "join_tables",
+    "arguments": {
+      "left_table": "orders",
+      "right_table": "users",
+      "on": [{"left": "orders.user_id", "right": "users.user_id"}],
+      "join_type": "inner",
+      "return_columns": ["orders.order_id", "orders.user_id", "orders.purchase_count", "users.age", "users.city"]
+    }
+  },
+  "tool_output": {
+    "created_table": {
+      "table_name": "j_orders_users",
+      "kind": "join",
+      "intent": "orders 通过 user_id 连接 users",
+      "columns": [
+        {"name": "order_id", "semantic_type": "identifier"},
+        {"name": "user_id", "semantic_type": "identifier"},
+        {"name": "purchase_count", "semantic_type": "numeric"},
+        {"name": "age", "semantic_type": "numeric"},
+        {"name": "city", "semantic_type": "text"}
+      ],
+      "num_rows": 50000,
+      "definition_in_harness": true
+    },
+    "join_diagnostics": {
+      "join_type": "inner",
+      "on": [{"left": "orders.user_id", "right": "users.user_id"}],
+      "relation_used": {"from": "orders.user_id", "to": "users.user_id", "type": "many_to_one"},
+      "left_rows": 50000,
+      "right_rows": 10000,
+      "result_rows": 50000,
+      "fanout_warning": false,
+      "unmatched_left_rows": 0
+    },
+    "row_sample_policy": {
+      "type": "fixed_head",
+      "num_rows": 2,
+      "rows_total": 50000,
+      "truncated": true
+    },
+    "row_sample": [
+      {"_row_id": 0, "order_id": "O0001", "user_id": "U003", "purchase_count": 2, "age": 16, "city": "Beijing"},
+      {"_row_id": 1, "order_id": "O0002", "user_id": "U008", "purchase_count": 1, "age": 19, "city": "Shanghai"}
+    ]
+  },
+  "state_delta": {
+    "data_view_changed": true,
+    "added_table": "j_orders_users",
+    "dynamic_table_context_changed": false,
+    "static_task_memory_changed": false
+  },
+  "notes": [
+    "join_tables 产出的是一张 data_view 派生表（kind=join），不直接进入 dynamic_table_context。",
+    "连接结果可能很大（尤其 one_to_many / many_to_many），只向模型返回句柄和固定数量样例行；读具体行需对该表再调 retrieve_row_context。",
+    "on 指定连接键；adapter 必须校验两侧键的可连接性，并优先复用 dataset_overview.relations 中声明的主外键关系。",
+    "派生表输出列使用扁平列名，后续工具以 <派生表名>.<列名> 寻址（如 j_orders_users.age）。",
+    "join_diagnostics.fanout_warning 在连接放大行数（one_to_many / many_to_many）时为 true，提示后续聚合可能重复计数。",
+    "第一版支持 join_type = inner、left；连接来源行（左右各自的 _row_id）只记录在 internal tool history，用于 reward。",
+    "派生表的 definition 由 harness 保存用于按需重物化，不进入模型 prompt。"
+  ]
+}

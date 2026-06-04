@@ -1,0 +1,600 @@
+{
+  "trajectory_id": "tqabench_airline_busiest_carrier",
+  "question_type": "MultiTableJoinAggregation",
+  "source_sample": {
+    "path": "data_sample/tqabench_airline_sample.json",
+    "record_index": 0,
+    "dataset": "tqabench",
+    "record_id": "32k_0_5_2"
+  },
+  "question": "Which airline operates the most flights in the table, and how many flights is that?",
+  "dataset_gold_answer": "American Airlines Inc.: AA operated the most flights in the table, with 12.",
+  "dataset_annotations": {
+    "evidence": {
+      "native_tqabench_question": "How many airlines land in Denver, CO: Denver International?",
+      "native_tqabench_answer": "6",
+      "note": "Question authored over the real tqabench airline snapshot; answer verified directly from the snapshot tables."
+    },
+    "label_assessment": {
+      "status": "accepted",
+      "reason": "Authored snapshot-faithful question; gold computed and verified from the provided multi-table snapshot."
+    }
+  },
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "Air Carriers",
+          "num_rows": 23,
+          "columns": [
+            {
+              "name": "Code",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "Description",
+              "semantic_type": "text"
+            }
+          ]
+        },
+        {
+          "table_name": "Airports",
+          "num_rows": 96,
+          "columns": [
+            {
+              "name": "Code",
+              "semantic_type": "text"
+            },
+            {
+              "name": "Description",
+              "semantic_type": "text"
+            }
+          ]
+        },
+        {
+          "table_name": "Airlines",
+          "num_rows": 100,
+          "columns": [
+            {
+              "name": "FL_DATE",
+              "semantic_type": "text"
+            },
+            {
+              "name": "OP_CARRIER_AIRLINE_ID",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "TAIL_NUM",
+              "semantic_type": "text"
+            },
+            {
+              "name": "OP_CARRIER_FL_NUM",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "ORIGIN_AIRPORT_ID",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "ORIGIN_AIRPORT_SEQ_ID",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "ORIGIN_CITY_MARKET_ID",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "ORIGIN",
+              "semantic_type": "text"
+            },
+            {
+              "name": "DEST_AIRPORT_ID",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "DEST_AIRPORT_SEQ_ID",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "DEST_CITY_MARKET_ID",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "DEST",
+              "semantic_type": "text"
+            },
+            {
+              "name": "CRS_DEP_TIME",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "DEP_TIME",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "DEP_DELAY",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "DEP_DELAY_NEW",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "ARR_TIME",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "ARR_DELAY",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "ARR_DELAY_NEW",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "CANCELLED",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "CANCELLATION_CODE",
+              "semantic_type": "text"
+            },
+            {
+              "name": "CRS_ELAPSED_TIME",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "ACTUAL_ELAPSED_TIME",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "CARRIER_DELAY",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "WEATHER_DELAY",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "NAS_DELAY",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "SECURITY_DELAY",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "LATE_AIRCRAFT_DELAY",
+              "semantic_type": "numeric"
+            }
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "from": "Airlines.OP_CARRIER_AIRLINE_ID",
+          "to": "Air Carriers.Code",
+          "type": "many_to_one"
+        },
+        {
+          "from": "Airlines.ORIGIN",
+          "to": "Airports.Code",
+          "type": "many_to_one"
+        },
+        {
+          "from": "Airlines.DEST",
+          "to": "Airports.Code",
+          "type": "many_to_one"
+        }
+      ]
+    },
+    "static_task_memory": [],
+    "dynamic_table_context": {
+      "context_id": "ctx_000",
+      "tables": []
+    },
+    "context_budget": {
+      "max_rows_visible": 100,
+      "max_columns_visible": 12,
+      "current_rows_visible": 0,
+      "current_columns_visible": 0,
+      "estimated_tokens": 0
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_001",
+      "tool_name": "group_aggregate",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table_name": "Airlines",
+          "search_scope": "full_table",
+          "group_by": [
+            "Airlines.OP_CARRIER_AIRLINE_ID"
+          ],
+          "aggregations": [
+            {
+              "op": "count",
+              "as": "flight_count"
+            }
+          ]
+        }
+      },
+      "tool_output": {
+        "created_table": {
+          "table_name": "g_flights_by_carrier",
+          "kind": "group",
+          "intent": "Airlines grouped by OP_CARRIER_AIRLINE_ID, counting flights",
+          "columns": [
+            {
+              "name": "OP_CARRIER_AIRLINE_ID",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "flight_count",
+              "semantic_type": "numeric"
+            }
+          ],
+          "num_rows": 21,
+          "definition_in_harness": true
+        },
+        "group_sample_policy": {
+          "type": "fixed_head",
+          "num_rows": 3,
+          "groups_total": 21,
+          "truncated": true
+        },
+        "group_sample": [
+          {
+            "_gid": 0,
+            "OP_CARRIER_AIRLINE_ID": 19393,
+            "flight_count": 11
+          },
+          {
+            "_gid": 1,
+            "OP_CARRIER_AIRLINE_ID": 19687,
+            "flight_count": 4
+          },
+          {
+            "_gid": 2,
+            "OP_CARRIER_AIRLINE_ID": 19690,
+            "flight_count": 1
+          }
+        ]
+      },
+      "state_delta": {
+        "data_view_changed": true,
+        "added_table": "g_flights_by_carrier",
+        "dynamic_table_context_changed": false,
+        "static_task_memory_changed": false
+      }
+    },
+    {
+      "step_id": "step_002",
+      "tool_name": "join_tables",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left_table": "g_flights_by_carrier",
+          "right_table": "Air Carriers",
+          "on": [
+            {
+              "left": "g_flights_by_carrier.OP_CARRIER_AIRLINE_ID",
+              "right": "Air Carriers.Code"
+            }
+          ],
+          "join_type": "inner",
+          "return_columns": [
+            "g_flights_by_carrier.OP_CARRIER_AIRLINE_ID",
+            "g_flights_by_carrier.flight_count",
+            "Air Carriers.Description"
+          ]
+        }
+      },
+      "tool_output": {
+        "created_table": {
+          "table_name": "j_carrier_named",
+          "kind": "join",
+          "intent": "carrier flight counts joined to airline names via Air Carriers.Code",
+          "columns": [
+            {
+              "name": "OP_CARRIER_AIRLINE_ID",
+              "semantic_type": "identifier"
+            },
+            {
+              "name": "flight_count",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "Description",
+              "semantic_type": "text"
+            }
+          ],
+          "num_rows": 21,
+          "definition_in_harness": true
+        },
+        "join_diagnostics": {
+          "join_type": "inner",
+          "on": [
+            {
+              "left": "g_flights_by_carrier.OP_CARRIER_AIRLINE_ID",
+              "right": "Air Carriers.Code"
+            }
+          ],
+          "relation_used": {
+            "from": "Airlines.OP_CARRIER_AIRLINE_ID",
+            "to": "Air Carriers.Code",
+            "type": "many_to_one"
+          },
+          "left_rows": 21,
+          "right_rows": 23,
+          "result_rows": 21,
+          "fanout_warning": false,
+          "unmatched_left_rows": 0
+        },
+        "row_sample_policy": {
+          "type": "fixed_head",
+          "num_rows": 3,
+          "rows_total": 21,
+          "truncated": true
+        },
+        "row_sample": [
+          {
+            "_row_id": 0,
+            "OP_CARRIER_AIRLINE_ID": 19393,
+            "flight_count": 11,
+            "Description": "Southwest Airlines Co.: WN"
+          },
+          {
+            "_row_id": 1,
+            "OP_CARRIER_AIRLINE_ID": 19687,
+            "flight_count": 4,
+            "Description": "Horizon Air: QX"
+          },
+          {
+            "_row_id": 2,
+            "OP_CARRIER_AIRLINE_ID": 19690,
+            "flight_count": 1,
+            "Description": "Hawaiian Airlines Inc.: HA"
+          }
+        ]
+      },
+      "state_delta": {
+        "data_view_changed": true,
+        "added_table": "j_carrier_named",
+        "dynamic_table_context_changed": false,
+        "static_task_memory_changed": false
+      }
+    },
+    {
+      "step_id": "step_003",
+      "tool_name": "retrieve_row_context",
+      "tool_call": {
+        "tool": "retrieve_row_context",
+        "arguments": {
+          "mode": "extreme_value_select",
+          "table_name": "j_carrier_named",
+          "search_scope": "full_table",
+          "target_column": "j_carrier_named.flight_count",
+          "order": "max",
+          "return_columns": [
+            "j_carrier_named.OP_CARRIER_AIRLINE_ID",
+            "j_carrier_named.flight_count",
+            "j_carrier_named.Description"
+          ],
+          "top_k": 1
+        }
+      },
+      "tool_output": {
+        "matched_rows": {
+          "j_carrier_named": [
+            4
+          ]
+        },
+        "matched_row_count": {
+          "j_carrier_named": 1
+        },
+        "matched_set_statistics": [
+          {
+            "table_name": "j_carrier_named",
+            "column": "flight_count",
+            "scope": "all_matched_rows",
+            "count": 1,
+            "non_null_count": 1,
+            "sum": 12,
+            "mean": 12.0,
+            "min": 12,
+            "max": 12,
+            "variance": 0.0,
+            "stddev": 0.0,
+            "parse_coverage": 1.0
+          }
+        ],
+        "visible_row_policy": {
+          "top_k": 1,
+          "matched_rows_total": 1,
+          "visible_rows_returned": 1,
+          "truncated": false
+        },
+        "extreme_value_result": {
+          "target_column": "j_carrier_named.flight_count",
+          "order": "max",
+          "selected_values": [
+            {
+              "row": 4,
+              "value": 12,
+              "rank": 1
+            }
+          ],
+          "tie_policy": "return_all_ties_up_to_top_k"
+        },
+        "current_table_context": {
+          "context_id": "ctx_001",
+          "tables": [
+            {
+              "table_name": "j_carrier_named",
+              "columns": [
+                "OP_CARRIER_AIRLINE_ID",
+                "flight_count",
+                "Description"
+              ],
+              "rows": [
+                4
+              ],
+              "data": [
+                {
+                  "_row_id": 4,
+                  "OP_CARRIER_AIRLINE_ID": 19805,
+                  "flight_count": 12,
+                  "Description": "American Airlines Inc.: AA"
+                }
+              ],
+              "source_step_ids": [
+                "step_003"
+              ]
+            }
+          ]
+        }
+      },
+      "state_delta": {
+        "dynamic_table_context_changed": true,
+        "context_id_before": "ctx_000",
+        "context_id_after": "ctx_001",
+        "added_rows": {
+          "j_carrier_named": [
+            4
+          ]
+        },
+        "added_columns": [
+          "j_carrier_named.OP_CARRIER_AIRLINE_ID",
+          "j_carrier_named.flight_count",
+          "j_carrier_named.Description"
+        ],
+        "static_task_memory_changed": false
+      }
+    },
+    {
+      "step_id": "step_004",
+      "tool_name": "add_to_memory",
+      "tool_call": {
+        "tool": "add_to_memory",
+        "arguments": {
+          "items": [
+            {
+              "type": "derived_fact",
+              "content": {
+                "busiest_airline_id": 19805,
+                "busiest_airline": "American Airlines Inc.: AA",
+                "flight_count": 12,
+                "runner_up_flight_count": 11,
+                "method": "group Airlines by OP_CARRIER_AIRLINE_ID (count) -> join Air Carriers for names -> max flight_count"
+              },
+              "supporting_step_ids": [
+                "step_001",
+                "step_002",
+                "step_003"
+              ],
+              "supporting_rows_or_columns": {
+                "tables": [
+                  "g_flights_by_carrier",
+                  "j_carrier_named"
+                ],
+                "columns": [
+                  "j_carrier_named.flight_count",
+                  "j_carrier_named.Description"
+                ]
+              },
+              "confidence_or_check": "Step 001 counted flights per carrier over the full Airlines snapshot; step 002 attached names via Air Carriers.Code (0 unmatched); step 003 took the max flight_count = 12 (runner-up 11).",
+              "invalidating_condition": "If the Airlines snapshot is not the table-of-record, or carrier ids are not the airline identity, recompute."
+            }
+          ]
+        }
+      },
+      "tool_output": {
+        "task_memory": [
+          {
+            "type": "derived_fact",
+            "content": {
+              "busiest_airline_id": 19805,
+              "busiest_airline": "American Airlines Inc.: AA",
+              "flight_count": 12,
+              "runner_up_flight_count": 11,
+              "method": "group Airlines by OP_CARRIER_AIRLINE_ID (count) -> join Air Carriers for names -> max flight_count"
+            },
+            "supporting_step_ids": [
+              "step_001",
+              "step_002",
+              "step_003"
+            ],
+            "supporting_rows_or_columns": {
+              "tables": [
+                "g_flights_by_carrier",
+                "j_carrier_named"
+              ],
+              "columns": [
+                "j_carrier_named.flight_count",
+                "j_carrier_named.Description"
+              ]
+            },
+            "confidence_or_check": "Step 001 counted flights per carrier over the full Airlines snapshot; step 002 attached names via Air Carriers.Code (0 unmatched); step 003 took the max flight_count = 12 (runner-up 11).",
+            "invalidating_condition": "If the Airlines snapshot is not the table-of-record, or carrier ids are not the airline identity, recompute.",
+            "id": "mem_001"
+          }
+        ]
+      },
+      "state_delta": {
+        "static_task_memory_changed": true,
+        "added_memory_ids": [
+          "mem_001"
+        ],
+        "dynamic_table_context_changed": false
+      }
+    },
+    {
+      "step_id": "step_005",
+      "tool_name": "answer_from_context",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": "American Airlines Inc.: AA operated the most flights in the table, with 12.",
+          "evidence_rows": {
+            "j_carrier_named": [
+              4
+            ]
+          },
+          "evidence_columns": [
+            "j_carrier_named.Description",
+            "j_carrier_named.flight_count"
+          ],
+          "supporting_memory_ids": [
+            "mem_001"
+          ],
+          "reason": "Max flight_count in the joined carrier table is 12 (American Airlines Inc.: AA), ahead of runner-up 11."
+        }
+      },
+      "tool_output": {
+        "final_answer": "American Airlines Inc.: AA operated the most flights in the table, with 12.",
+        "evidence": {
+          "rows": {
+            "j_carrier_named": [
+              4
+            ]
+          },
+          "columns": [
+            "j_carrier_named.Description",
+            "j_carrier_named.flight_count"
+          ],
+          "memory_ids": [
+            "mem_001"
+          ]
+        }
+      },
+      "state_delta": {
+        "final_answer_submitted": true,
+        "dynamic_table_context_changed": false,
+        "static_task_memory_changed": false
+      }
+    }
+  ]
+}

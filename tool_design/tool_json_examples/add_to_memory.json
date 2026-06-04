@@ -14,7 +14,7 @@
             "tables": ["users", "orders"],
             "columns": ["users.age", "users.user_id", "orders.user_id"]
           },
-          "confidence_or_check": "inspect_dataset 返回了这些表和字段，字段名称与任务需求匹配。",
+          "confidence_or_check": "初始 dataset_overview 提供了这些表和字段，字段名称与任务需求匹配。",
           "invalidating_condition": "如果后续发现 users.user_id 和 orders.user_id 不是同一实体编号，则需要更新。"
         },
         {
@@ -41,7 +41,7 @@
           "tables": ["users", "orders"],
           "columns": ["users.age", "users.user_id", "orders.user_id"]
         },
-        "confidence_or_check": "inspect_dataset 返回了这些表和字段，字段名称与任务需求匹配。",
+        "confidence_or_check": "初始 dataset_overview 提供了这些表和字段，字段名称与任务需求匹配。",
         "invalidating_condition": "如果后续发现 users.user_id 和 orders.user_id 不是同一实体编号，则需要更新。"
       },
       {

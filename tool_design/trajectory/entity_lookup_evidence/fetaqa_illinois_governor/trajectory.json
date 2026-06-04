@@ -8,141 +8,338 @@
     "record_id": 18162
   },
   "question": "Who won the 1982 Illinois gubernatorial election, and how many votes was the margin?",
-  "gold_answer": "Thompson prevailed in the 1982 Illinois gubernatorial election by a 5,074 vote margin.",
-  "dataset_specific_evidence": {
-    "highlighted_cell_ids": [[1, 2], [6, 3]],
-    "note": "The dataset annotation uses the Majority summary row for margin, but the trajectory computes the margin from the top two candidate rows because the model has not observed the full table."
+  "dataset_gold_answer": "Thompson prevailed in the 1982 Illinois gubernatorial election by a 5,074 vote margin.",
+  "dataset_annotations": {
+    "evidence": {
+      "highlighted_cell_ids": [
+        [
+          1,
+          2
+        ],
+        [
+          6,
+          3
+        ]
+      ]
+    },
+    "label_assessment": {
+      "status": "accepted",
+      "reason": null
+    }
+  },
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "results",
+          "num_rows": 8,
+          "columns": [
+            {
+              "name": "Party_0",
+              "semantic_type": "text"
+            },
+            {
+              "name": "Party_1",
+              "semantic_type": "text"
+            },
+            {
+              "name": "Candidate",
+              "semantic_type": "text"
+            },
+            {
+              "name": "Votes",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "%",
+              "semantic_type": "numeric"
+            },
+            {
+              "name": "±",
+              "semantic_type": "text"
+            }
+          ]
+        }
+      ]
+    },
+    "static_task_memory": [],
+    "dynamic_table_context": {
+      "context_id": "ctx_000",
+      "tables": []
+    },
+    "context_budget": {
+      "max_rows_visible": 100,
+      "max_columns_visible": 12,
+      "current_rows_visible": 0,
+      "current_columns_visible": 0,
+      "estimated_tokens": 0
+    }
   },
   "steps": [
     {
       "step_id": "step_001",
-      "tool_name": "inspect_dataset",
-      "tool_call": {
-        "tool": "inspect_dataset",
-        "arguments": {
-          "detail_level": "overview",
-          "num_sample_rows": 2
-        }
-      },
-      "tool_output": {
-        "dataset_overview": {
-          "tables": [
-            {
-              "table_name": "1982 Illinois gubernatorial election::Results",
-              "num_rows": 8,
-              "columns": ["Party", "Party", "Candidate", "Votes", "%", "±"],
-              "sample_rows": [
-                {"_row_id": 1, "Party_0": "-", "Party_1": "Republican", "Candidate": "James R. Thompson (incumbent)", "Votes": "1,816,101", "%": "49.44", "±": "-"},
-                {"_row_id": 2, "Party_0": "-", "Party_1": "Democratic", "Candidate": "Adlai Stevenson III", "Votes": "1,811,027", "%": "49.30", "±": "-"}
-              ]
-            }
-          ]
-        }
-      },
-      "state_delta": {
-        "dataset_overview_changed": true,
-        "dynamic_table_context_changed": false,
-        "static_task_memory_changed": false
-      }
-    },
-    {
-      "step_id": "step_002",
       "tool_name": "retrieve_column_context",
       "tool_call": {
         "tool": "retrieve_column_context",
         "arguments": {
-          "request_reason": "需要找出获胜候选人并计算领先票数。",
           "requested_columns": [
             {
               "table_name": "results",
-              "column": "Party_1",
-              "needed_info": ["sample_values"],
-              "reason": "辅助识别候选人所属党派或汇总行类型"
+              "column": "Party_0"
             },
             {
               "table_name": "results",
-              "column": "Candidate",
-              "needed_info": ["sample_values"],
-              "reason": "回答获胜候选人姓名"
+              "column": "Party_1"
             },
             {
               "table_name": "results",
-              "column": "Votes",
-              "needed_info": ["sample_values", "numeric_statistics"],
-              "reason": "按票数选择前两名并计算票差"
+              "column": "Candidate"
             },
             {
               "table_name": "results",
-              "column": "%",
-              "needed_info": ["sample_values", "numeric_statistics"],
-              "reason": "辅助判断候选人领先比例"
+              "column": "Votes"
+            },
+            {
+              "table_name": "results",
+              "column": "%"
             }
-          ],
-          "sample_row_count": 2
+          ]
         }
       },
       "tool_output": {
         "retrieved_columns": [
-          {"table_name": "results", "column": "Party_1", "reason": "party and result status"},
-          {"table_name": "results", "column": "Candidate", "reason": "winner name"},
-          {"table_name": "results", "column": "Votes", "reason": "vote totals and margin calculation"},
-          {"table_name": "results", "column": "%", "reason": "helps identify leading candidate"}
-        ],
-        "column_statistics": [
-          {
-            "table_name": "results",
-            "column": "Votes",
-            "semantic_type": "numeric",
-            "count": 8,
-            "non_null_count": 8,
-            "parse_coverage": 0.875,
-            "min": 161,
-            "max": 3673707,
-            "mean": 790210.125,
-            "variance": 1742858188492.1094,
-            "stddev": 1320173.547,
-            "notes": "Statistics include summary rows. Candidate-only ranking should use row_scope in extreme_value_select."
-          },
-          {
-            "table_name": "results",
-            "column": "%",
-            "semantic_type": "numeric",
-            "count": 8,
-            "non_null_count": 6,
-            "parse_coverage": 0.75,
-            "min": 0.0,
-            "max": 49.44,
-            "mean": 16.7683333333,
-            "variance": 547.6690138889,
-            "stddev": 23.402329
-          }
+          "results.Party_0",
+          "results.Party_1",
+          "results.Candidate",
+          "results.Votes",
+          "results.%"
         ],
         "sample_row_policy": {
           "type": "fixed_head",
-          "num_rows": 2,
-          "note": "Column retrieval only returns a small sample for column-level awareness. It does not retrieve all evidence rows."
+          "num_rows": 2
         },
         "current_table_context": {
           "context_id": "ctx_001",
           "tables": [
             {
               "table_name": "results",
-              "columns": ["Party_1", "Candidate", "Votes", "%"],
-              "rows": [1, 2],
-              "data": [
-                {"_row_id": 1, "Party_1": "Republican", "Candidate": "James R. Thompson (incumbent)", "Votes": "1,816,101", "%": "49.44"},
-                {"_row_id": 2, "Party_1": "Democratic", "Candidate": "Adlai Stevenson III", "Votes": "1,811,027", "%": "49.30"}
+              "columns": [
+                "Party_0",
+                "Party_1",
+                "Candidate",
+                "Votes",
+                "%"
               ],
-              "source_step_ids": ["step_002"]
+              "rows": [
+                1,
+                2
+              ],
+              "data": [
+                {
+                  "_row_id": 1,
+                  "Party_0": "-",
+                  "Party_1": "Republican",
+                  "Candidate": "James R. Thompson (incumbent)",
+                  "Votes": "1,816,101",
+                  "%": "49.44"
+                },
+                {
+                  "_row_id": 2,
+                  "Party_0": "-",
+                  "Party_1": "Democratic",
+                  "Candidate": "Adlai Stevenson III",
+                  "Votes": "1,811,027",
+                  "%": "49.30"
+                }
+              ],
+              "source_step_ids": [
+                "step_001"
+              ]
             }
           ]
         }
       },
       "state_delta": {
         "dynamic_table_context_changed": true,
-        "context_id_before": null,
+        "context_id_before": "ctx_000",
         "context_id_after": "ctx_001",
-        "added_columns": ["results.Party_1", "results.Candidate", "results.Votes", "results.%"],
+        "added_rows": {
+          "results": [
+            1,
+            2
+          ]
+        },
+        "added_columns": [
+          "results.Party_0",
+          "results.Party_1",
+          "results.Candidate",
+          "results.Votes",
+          "results.%"
+        ],
+        "static_task_memory_changed": false
+      }
+    },
+    {
+      "step_id": "step_002",
+      "tool_name": "retrieve_row_context",
+      "tool_call": {
+        "tool": "retrieve_row_context",
+        "arguments": {
+          "mode": "condition_filter",
+          "table_name": "results",
+          "search_scope": "full_table",
+          "conditions": [
+            {
+              "column": "results.Party_0",
+              "operator": "=",
+              "value": "-"
+            },
+            {
+              "column": "results.Votes",
+              "operator": "is_numeric",
+              "value": true
+            }
+          ],
+          "return_columns": [
+            "results.Party_0",
+            "results.Party_1",
+            "results.Candidate",
+            "results.Votes",
+            "results.%"
+          ],
+          "top_k": 100
+        }
+      },
+      "tool_output": {
+        "matched_rows": {
+          "results": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        "matched_row_count": {
+          "results": 5
+        },
+        "matched_set_statistics": [
+          {
+            "table_name": "results",
+            "column": "Votes",
+            "scope": "all_matched_rows",
+            "count": 5,
+            "non_null_count": 5,
+            "sum": 3673707,
+            "mean": 734741.4,
+            "min": 161,
+            "max": 1816101,
+            "variance": 775979454474.24,
+            "stddev": 880896.960191,
+            "parse_coverage": 1.0
+          },
+          {
+            "table_name": "results",
+            "column": "%",
+            "scope": "all_matched_rows",
+            "count": 5,
+            "non_null_count": 5,
+            "sum": 100,
+            "mean": 20,
+            "min": 0,
+            "max": 49.44,
+            "variance": 575.11984,
+            "stddev": 23.981656,
+            "parse_coverage": 1.0
+          }
+        ],
+        "visible_row_policy": {
+          "top_k": 100,
+          "matched_rows_total": 5,
+          "visible_rows_returned": 5,
+          "truncated": false
+        },
+        "current_table_context": {
+          "context_id": "ctx_002",
+          "tables": [
+            {
+              "table_name": "results",
+              "columns": [
+                "Party_0",
+                "Party_1",
+                "Candidate",
+                "Votes",
+                "%"
+              ],
+              "rows": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ],
+              "data": [
+                {
+                  "_row_id": 1,
+                  "Party_0": "-",
+                  "Party_1": "Republican",
+                  "Candidate": "James R. Thompson (incumbent)",
+                  "Votes": "1,816,101",
+                  "%": "49.44"
+                },
+                {
+                  "_row_id": 2,
+                  "Party_0": "-",
+                  "Party_1": "Democratic",
+                  "Candidate": "Adlai Stevenson III",
+                  "Votes": "1,811,027",
+                  "%": "49.30"
+                },
+                {
+                  "_row_id": 3,
+                  "Party_0": "-",
+                  "Party_1": "Libertarian",
+                  "Candidate": "Bea Armstrong",
+                  "Votes": "24,417",
+                  "%": "0.66"
+                },
+                {
+                  "_row_id": 4,
+                  "Party_0": "-",
+                  "Party_1": "Taxpayers",
+                  "Candidate": "John E. Roche",
+                  "Votes": "22,001",
+                  "%": "0.60"
+                },
+                {
+                  "_row_id": 5,
+                  "Party_0": "-",
+                  "Party_1": "N/A",
+                  "Candidate": "write-ins",
+                  "Votes": "161",
+                  "%": "0.00"
+                }
+              ],
+              "source_step_ids": [
+                "step_001",
+                "step_002"
+              ]
+            }
+          ]
+        }
+      },
+      "state_delta": {
+        "dynamic_table_context_changed": true,
+        "context_id_before": "ctx_001",
+        "context_id_after": "ctx_002",
+        "added_rows": {
+          "results": [
+            3,
+            4,
+            5
+          ]
+        },
+        "added_columns": [],
         "static_task_memory_changed": false
       }
     },
@@ -153,61 +350,159 @@
         "tool": "retrieve_row_context",
         "arguments": {
           "mode": "extreme_value_select",
-          "query": "top two candidate rows by votes",
           "table_name": "results",
+          "search_scope": "dynamic_table_context",
           "target_column": "results.Votes",
           "order": "max",
-          "top_k": 2,
-          "row_scope": {
-            "row_type": "candidate_result_rows",
-            "target_column_must_parse_as": "numeric"
-          },
-          "return_columns": ["results.Party_1", "results.Candidate", "results.Votes", "results.%"]
+          "return_columns": [
+            "results.Party_1",
+            "results.Candidate",
+            "results.Votes",
+            "results.%"
+          ],
+          "top_k": 2
         }
       },
       "tool_output": {
-        "matched_rows": {"results": [1, 2]},
+        "matched_rows": {
+          "results": [
+            1,
+            2
+          ]
+        },
+        "matched_row_count": {
+          "results": 2
+        },
+        "matched_set_statistics": [
+          {
+            "table_name": "results",
+            "column": "Votes",
+            "scope": "all_matched_rows",
+            "count": 2,
+            "non_null_count": 2,
+            "sum": 3627128,
+            "mean": 1813564,
+            "min": 1811027,
+            "max": 1816101,
+            "variance": 6436369,
+            "stddev": 2537,
+            "parse_coverage": 1.0
+          },
+          {
+            "table_name": "results",
+            "column": "%",
+            "scope": "all_matched_rows",
+            "count": 2,
+            "non_null_count": 2,
+            "sum": 98.74,
+            "mean": 49.37,
+            "min": 49.3,
+            "max": 49.44,
+            "variance": 0.0049,
+            "stddev": 0.07,
+            "parse_coverage": 1.0
+          }
+        ],
+        "visible_row_policy": {
+          "top_k": 2,
+          "matched_rows_total": 2,
+          "visible_rows_returned": 2,
+          "truncated": false
+        },
         "extreme_value_result": {
           "target_column": "results.Votes",
           "order": "max",
           "selected_values": [
-            {"row": 1, "value": 1816101, "rank": 1},
-            {"row": 2, "value": 1811027, "rank": 2}
+            {
+              "row": 1,
+              "value": 1816101,
+              "rank": 1
+            },
+            {
+              "row": 2,
+              "value": 1811027,
+              "rank": 2
+            }
           ],
-          "selected_rows": [1, 2],
-          "tie_policy": "return_all_ties_up_to_top_k",
-          "scope_summary": {
-            "row_type": "candidate_result_rows",
-            "candidate_rows_considered": 5,
-            "non_candidate_or_unparseable_rows_excluded": 3,
-            "note": "Detailed excluded rows are internal harness audit data, not default model-visible output."
-          }
+          "tie_policy": "return_all_ties_up_to_top_k"
         },
-        "match_explanation": [
-          {"row": 1, "reason": "Within candidate/result rows, 1,816,101 is the largest Votes value."},
-          {"row": 2, "reason": "Within candidate/result rows, 1,811,027 is the second largest Votes value."}
-        ],
         "current_table_context": {
           "context_id": "ctx_002",
           "tables": [
             {
               "table_name": "results",
-              "columns": ["Party_1", "Candidate", "Votes", "%"],
-              "rows": [1, 2],
-              "data": [
-                {"_row_id": 1, "Party_1": "Republican", "Candidate": "James R. Thompson (incumbent)", "Votes": "1,816,101", "%": "49.44"},
-                {"_row_id": 2, "Party_1": "Democratic", "Candidate": "Adlai Stevenson III", "Votes": "1,811,027", "%": "49.30"}
+              "columns": [
+                "Party_0",
+                "Party_1",
+                "Candidate",
+                "Votes",
+                "%"
               ],
-              "source_step_ids": ["step_002", "step_003"]
+              "rows": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ],
+              "data": [
+                {
+                  "_row_id": 1,
+                  "Party_0": "-",
+                  "Party_1": "Republican",
+                  "Candidate": "James R. Thompson (incumbent)",
+                  "Votes": "1,816,101",
+                  "%": "49.44"
+                },
+                {
+                  "_row_id": 2,
+                  "Party_0": "-",
+                  "Party_1": "Democratic",
+                  "Candidate": "Adlai Stevenson III",
+                  "Votes": "1,811,027",
+                  "%": "49.30"
+                },
+                {
+                  "_row_id": 3,
+                  "Party_0": "-",
+                  "Party_1": "Libertarian",
+                  "Candidate": "Bea Armstrong",
+                  "Votes": "24,417",
+                  "%": "0.66"
+                },
+                {
+                  "_row_id": 4,
+                  "Party_0": "-",
+                  "Party_1": "Taxpayers",
+                  "Candidate": "John E. Roche",
+                  "Votes": "22,001",
+                  "%": "0.60"
+                },
+                {
+                  "_row_id": 5,
+                  "Party_0": "-",
+                  "Party_1": "N/A",
+                  "Candidate": "write-ins",
+                  "Votes": "161",
+                  "%": "0.00"
+                }
+              ],
+              "source_step_ids": [
+                "step_001",
+                "step_002"
+              ]
             }
           ]
         }
       },
       "state_delta": {
-        "dynamic_table_context_changed": true,
-        "context_id_before": "ctx_001",
+        "dynamic_table_context_changed": false,
+        "context_id_before": "ctx_002",
         "context_id_after": "ctx_002",
-        "matched_rows": {"results": [1, 2]},
+        "added_rows": {
+          "results": []
+        },
+        "added_columns": [],
         "static_task_memory_changed": false
       }
     },
@@ -228,19 +523,23 @@
                 "margin": 5074,
                 "calculation": "1816101 - 1811027 = 5074"
               },
-              "supporting_step_ids": ["step_003"],
+              "supporting_step_ids": [
+                "step_003"
+              ],
               "supporting_rows_or_columns": {
-                "rows": {"results": [1, 2]},
-                "columns": ["results.Candidate", "results.Votes"],
-                "cells": [
-                  {"row": 1, "column": "Candidate", "value": "James R. Thompson (incumbent)"},
-                  {"row": 1, "column": "Votes", "value": "1,816,101"},
-                  {"row": 2, "column": "Candidate", "value": "Adlai Stevenson III"},
-                  {"row": 2, "column": "Votes", "value": "1,811,027"}
+                "rows": {
+                  "results": [
+                    1,
+                    2
+                  ]
+                },
+                "columns": [
+                  "results.Candidate",
+                  "results.Votes"
                 ]
               },
-              "confidence_or_check": "Step 003 retrieved the top two candidate rows by Votes; subtracting second from first gives the margin.",
-              "invalidating_condition": "If there is an unobserved candidate row with more votes or a tie, recompute the winner and margin."
+              "confidence_or_check": "Step 003 selected the top two Votes rows from the explicitly filtered candidate-shaped dynamic table.",
+              "invalidating_condition": "If the row filter does not represent all candidate result rows, recompute."
             }
           ]
         }
@@ -258,25 +557,31 @@
               "margin": 5074,
               "calculation": "1816101 - 1811027 = 5074"
             },
-            "supporting_step_ids": ["step_003"],
+            "supporting_step_ids": [
+              "step_003"
+            ],
             "supporting_rows_or_columns": {
-              "rows": {"results": [1, 2]},
-              "columns": ["results.Candidate", "results.Votes"],
-              "cells": [
-                {"row": 1, "column": "Candidate", "value": "James R. Thompson (incumbent)"},
-                {"row": 1, "column": "Votes", "value": "1,816,101"},
-                {"row": 2, "column": "Candidate", "value": "Adlai Stevenson III"},
-                {"row": 2, "column": "Votes", "value": "1,811,027"}
+              "rows": {
+                "results": [
+                  1,
+                  2
+                ]
+              },
+              "columns": [
+                "results.Candidate",
+                "results.Votes"
               ]
             },
-            "confidence_or_check": "Step 003 retrieved the top two candidate rows by Votes; subtracting second from first gives the margin.",
-            "invalidating_condition": "If there is an unobserved candidate row with more votes or a tie, recompute the winner and margin."
+            "confidence_or_check": "Step 003 selected the top two Votes rows from the explicitly filtered candidate-shaped dynamic table.",
+            "invalidating_condition": "If the row filter does not represent all candidate result rows, recompute."
           }
         ]
       },
       "state_delta": {
         "static_task_memory_changed": true,
-        "added_memory_ids": ["mem_001"],
+        "added_memory_ids": [
+          "mem_001"
+        ],
         "dynamic_table_context_changed": false
       }
     },
@@ -287,18 +592,38 @@
         "tool": "answer_from_context",
         "arguments": {
           "answer": "Thompson prevailed in the 1982 Illinois gubernatorial election by a 5,074 vote margin.",
-          "evidence_rows": {"results": [1, 2]},
-          "evidence_columns": ["results.Candidate", "results.Votes"],
-          "supporting_memory_ids": ["mem_001"],
-          "reason": "The top two candidate rows show Thompson with 1,816,101 votes and Stevenson with 1,811,027 votes, so the margin is 5,074."
+          "evidence_rows": {
+            "results": [
+              1,
+              2
+            ]
+          },
+          "evidence_columns": [
+            "results.Candidate",
+            "results.Votes"
+          ],
+          "supporting_memory_ids": [
+            "mem_001"
+          ],
+          "reason": "The top two filtered candidate rows differ by 5,074 votes."
         }
       },
       "tool_output": {
         "final_answer": "Thompson prevailed in the 1982 Illinois gubernatorial election by a 5,074 vote margin.",
         "evidence": {
-          "rows": {"results": [1, 2]},
-          "columns": ["results.Candidate", "results.Votes"],
-          "memory_ids": ["mem_001"]
+          "rows": {
+            "results": [
+              1,
+              2
+            ]
+          },
+          "columns": [
+            "results.Candidate",
+            "results.Votes"
+          ],
+          "memory_ids": [
+            "mem_001"
+          ]
         }
       },
       "state_delta": {

@@ -10,19 +10,19 @@ Gold answer: Thompson prevailed in the 1982 Illinois gubernatorial election by a
 
 ## Steps
 
-1. `inspect_dataset`
-   - The agent inspects the table title and columns.
-   - It sees an election results table with candidate, votes, percentage, and majority rows.
+Initial state: The harness provides the election results schema and full-table column metadata in `dataset_overview`.
 
-2. `retrieve_column_context`
-   - The agent retrieves columns needed for winner and margin: `Candidate`, `Votes`, and `%`.
-   - This step only returns fixed sample rows for column-level awareness, not the full table.
-   - Since `Votes` is numeric after comma removal, the column context also exposes statistics such as max vote value.
+1. `retrieve_column_context`
+   - The agent retrieves fixed samples for `Party_0`, `Party_1`, `Candidate`, `Votes`, and `%`.
+   - The samples show that candidate rows use `Party_0="-"`.
+
+2. `retrieve_row_context`
+   - The agent uses `mode=condition_filter` on the full table with `Party_0="-"` and numeric `Votes`.
+   - This explicitly constructs candidate-shaped rows without asking the adapter to invent a semantic row type.
 
 3. `retrieve_row_context`
-   - The agent retrieves the top two candidate rows by `Votes`.
-   - It uses `mode=extreme_value_select` with `top_k=2`.
-   - This avoids assuming the model already knows whether a `Majority` summary row exists.
+   - The agent uses `mode=extreme_value_select` with `search_scope=dynamic_table_context` and `top_k=2`.
+   - This is a nested tool call over the candidate rows maintained in the dynamic table.
    - It gets row `1` for `James R. Thompson (incumbent)` and row `2` for `Adlai Stevenson III`.
 
 4. `add_to_memory`

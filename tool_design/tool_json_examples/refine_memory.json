@@ -16,7 +16,7 @@
             "supporting_rows_or_columns": {
               "columns": ["users.age", "users.user_id", "orders.user_id", "orders.product_id", "products.product_id", "products.category"]
             },
-            "confidence_or_check": "inspect_dataset 和 retrieve_column_context 均返回了这些连接字段。",
+            "confidence_or_check": "初始 dataset_overview 和 retrieve_column_context 均提供了这些连接字段。",
             "invalidating_condition": "如果任一连接字段无法实际匹配，则需要拆分并重新检索。"
           }
         },
@@ -38,7 +38,7 @@
         "supporting_rows_or_columns": {
           "columns": ["users.age", "users.user_id", "orders.user_id", "orders.product_id", "products.product_id", "products.category"]
         },
-        "confidence_or_check": "inspect_dataset 和 retrieve_column_context 均返回了这些连接字段。",
+        "confidence_or_check": "初始 dataset_overview 和 retrieve_column_context 均提供了这些连接字段。",
         "invalidating_condition": "如果任一连接字段无法实际匹配，则需要拆分并重新检索。"
       }
     ],

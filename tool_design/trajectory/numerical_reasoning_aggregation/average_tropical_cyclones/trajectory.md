@@ -10,20 +10,13 @@ Gold answer: `10.6`.
 
 ## Steps
 
-1. `inspect_dataset`
-   - The agent inspects the table schema.
-   - It learns that the table contains season-level storm statistics and a `tropical cyclones` column.
+Initial state: The harness provides the table schema and full-table statistics for `tropical cyclones`, including `count=10`, `sum=106`, and `mean=10.6`.
 
-2. `retrieve_column_context`
-   - The agent asks for columns relevant to computing the average number of tropical cyclones.
-   - The harness returns `season` and `tropical cyclones` with only fixed sample rows for reference.
-   - It also returns the needed numeric statistic: `mean=10.6`.
+1. `add_to_memory`
+   - The agent stores the initialized column statistic and parse check as a memory item.
+   - No retrieval action is needed because the question asks for an unfiltered full-table statistic already present in metadata.
 
-3. `add_to_memory`
-   - The agent stores the column statistic and parse check as a memory item.
-   - No extra `aggregate_column` call is needed because the required mean was already returned by column context.
-
-4. `answer_from_context`
+2. `answer_from_context`
    - The agent answers `10.6`, citing the aggregate result memory and the target column.
 
 Structured JSON: `trajectory.json`.

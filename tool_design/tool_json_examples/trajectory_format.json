@@ -1,0 +1,65 @@
+{
+  "format_name": "tool_use_trajectory",
+  "version": "0.2",
+  "trajectory": {
+    "trajectory_id": "example_case",
+    "question_type": "EntityLookup",
+    "source_sample": {
+      "path": "data_sample/example.json",
+      "record_index": 0,
+      "dataset": "example",
+      "record_id": "example-0"
+    },
+    "question": "What is the user's age?",
+    "dataset_gold_answer": "16",
+    "dataset_annotations": {
+      "evidence": {},
+      "label_assessment": {
+        "status": "accepted",
+        "reason": null
+      }
+    },
+    "initial_state": {
+      "dataset_overview": {
+        "tables": [
+          {
+            "table_name": "users",
+            "num_rows": 10000,
+            "columns": [
+              {"name": "user_id", "semantic_type": "identifier"},
+              {"name": "age", "semantic_type": "numeric"}
+            ]
+          }
+        ]
+      },
+      "static_task_memory": [],
+      "dynamic_table_context": {
+        "context_id": "ctx_000",
+        "tables": []
+      },
+      "context_budget": {
+        "max_rows_visible": 100,
+        "max_columns_visible": 12,
+        "current_rows_visible": 0,
+        "current_columns_visible": 0,
+        "estimated_tokens": 0
+      }
+    },
+    "steps": [
+      {
+        "step_id": "step_001",
+        "tool_name": "retrieve_row_context",
+        "tool_call": {},
+        "tool_output": {},
+        "state_delta": {}
+      }
+    ]
+  },
+  "notes": [
+    "trajectory 顶层只使用本文件列出的字段。",
+    "每个 step 只包含 step_id、tool_name、tool_call、tool_output 和 state_delta。",
+    "模型的 Reason/Observation 文本写入同目录 trajectory.md，不写入 trajectory.json。",
+    "dataset_gold_answer 保留数据集标签；当标签与可验证表格证据冲突时，label_assessment.status 使用 conflict。",
+    "最后一个 answer_from_context 的答案允许与冲突的数据集标签不同。"
+  ]
+}

@@ -1,2 +1,6 @@
 /data/*
 !/data/agent.md
+
+# Python bytecode cache
+__pycache__/
+*.pyc
