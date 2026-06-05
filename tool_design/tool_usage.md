@@ -2,6 +2,8 @@
 
 This document is the local interface contract for Table Agent Harness tool design. Future tool design changes and harness implementations should follow the formats in this folder unless a new versioned spec is explicitly added.
 
+The machine-readable single source of truth for tool I/O and state field formats is `tool_design/tool_io_spec.json`. To change any format, edit that spec first, then update the matching `tool_json_examples/*.json` and conform every trajectory. `scripts/tool_design/validate_trajectories.py` loads the spec and enforces it; it does not hardcode field sets. This document is the human-readable contract; the spec is the enforced one. For a field-by-field dictionary (meaning, who fills each field, enum value meanings, and a dataset-conversion checklist) see `tool_design/tool_io_spec.md`.
+
 Concrete examples live in `tool_design/tool_json_examples/`. Each tool has one JSON file containing:
 - `tool_name`: canonical tool name;
 - `purpose`: what the tool is for;
@@ -153,17 +155,22 @@ Tool JSON examples:
 - `refine_memory.json`
 - `answer_from_context.json`
 
-Canonical format examples:
+Single source of truth (enforced):
+- `../tool_io_spec.json` — authoritative field sets and enums for every tool and state object, loaded by `scripts/tool_design/validate_trajectories.py`.
+
+Canonical format examples (human-readable):
 - `state_snapshot.json`
 - `memory_format.json`
 - `tool_history_entry.json`
 - `trajectory_format.json`
 
 When adding a tool:
-1. Add one JSON example file in `tool_json_examples/`.
-2. Update the tool list in this document.
-3. Update `tool_design/agent.md` with the research/design reason.
-4. Keep the model-visible output small enough to respect `context_budget`.
+1. Add the tool's `arguments`/`output`/`state_delta` field sets and any new enums to `tool_io_spec.json` first (the single source of truth).
+2. Add one JSON example file in `tool_json_examples/`.
+3. Update the tool list in this document.
+4. Extend `scripts/tool_design/validate_trajectories.py` only with semantic checks the flat spec cannot express (qualified columns, derived-table tracking, etc.).
+5. Update `tool_design/agent.md` with the research/design reason.
+6. Keep the model-visible output small enough to respect `context_budget`.
 
 When adding a trajectory:
 1. Create `trajectory/<question_type>/<case_id>/`.

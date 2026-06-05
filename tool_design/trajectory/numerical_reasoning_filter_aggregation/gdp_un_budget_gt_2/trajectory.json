@@ -246,7 +246,7 @@
         "arguments": {
           "items": [
             {
-              "type": "group_result",
+              "type": "derived_fact",
               "content": {
                 "operation": "sum_after_filter",
                 "filter": "main_table.un budget > 2%",
@@ -288,7 +288,7 @@
         "task_memory": [
           {
             "id": "mem_001",
-            "type": "group_result",
+            "type": "derived_fact",
             "content": {
               "operation": "sum_after_filter",
               "filter": "main_table.un budget > 2%",

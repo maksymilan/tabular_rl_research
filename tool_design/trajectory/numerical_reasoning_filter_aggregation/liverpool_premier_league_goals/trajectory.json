@@ -270,7 +270,7 @@
         "arguments": {
           "items": [
             {
-              "type": "group_result",
+              "type": "derived_fact",
               "content": {
                 "operation": "sum_after_filter",
                 "column": "club_career_statistics.League.Goals",
@@ -309,7 +309,7 @@
         "task_memory": [
           {
             "id": "mem_001",
-            "type": "group_result",
+            "type": "derived_fact",
             "content": {
               "operation": "sum_after_filter",
               "column": "club_career_statistics.League.Goals",

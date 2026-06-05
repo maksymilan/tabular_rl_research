@@ -80,7 +80,7 @@
         "arguments": {
           "items": [
             {
-              "type": "group_result",
+              "type": "derived_fact",
               "content": {
                 "operation": "mean_from_dataset_overview_metadata",
                 "column": "main_table.tropical cyclones",
@@ -103,7 +103,7 @@
         "task_memory": [
           {
             "id": "mem_001",
-            "type": "group_result",
+            "type": "derived_fact",
             "content": {
               "operation": "mean_from_dataset_overview_metadata",
               "column": "main_table.tropical cyclones",

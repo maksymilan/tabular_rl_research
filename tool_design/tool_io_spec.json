@@ -1,0 +1,98 @@
+{
+  "spec_name": "tool_io_spec",
+  "spec_version": "1.0",
+  "description": "Single source of truth for Table Agent Harness tool I/O and state formats. To change any format: edit THIS file first, then update the matching tool_json_examples/*.json and conform every trajectory. scripts/tool_design/validate_trajectories.py loads this file and enforces it; it does not hardcode field sets.",
+  "enums": {
+    "memory_type": ["schema_fact", "evidence", "intermediate_result", "plan", "exclusion", "derived_fact"],
+    "search_scope": ["full_table", "dynamic_table_context"],
+    "condition_operator": ["=", "!=", ">", ">=", "<", "<=", "contains", "is_numeric"],
+    "extreme_order": ["max", "min"],
+    "aggregation_op": ["sum", "count", "mean", "min", "max"],
+    "join_type": ["inner", "left"],
+    "derived_table_kind": ["group", "join"],
+    "relation_cardinality": ["one_to_one", "one_to_many", "many_to_one", "many_to_many"],
+    "label_status": ["accepted", "conflict"]
+  },
+  "trajectory": {
+    "top_level": ["trajectory_id", "question_type", "source_sample", "question", "dataset_gold_answer", "dataset_annotations", "initial_state", "steps"],
+    "source_sample": ["path", "record_index", "dataset", "record_id"],
+    "dataset_annotations": ["evidence", "label_assessment"],
+    "label_assessment": ["status", "reason"],
+    "step": ["step_id", "tool_name", "tool_call", "tool_output", "state_delta"],
+    "tool_call": ["tool", "arguments"]
+  },
+  "state": {
+    "initial_state": ["dataset_overview", "static_task_memory", "dynamic_table_context", "context_budget"],
+    "context_budget": ["max_rows_visible", "max_columns_visible", "current_rows_visible", "current_columns_visible", "estimated_tokens"],
+    "dataset_overview": {"required": ["tables"], "optional": ["relations"]},
+    "overview_table": ["table_name", "num_rows", "columns"],
+    "overview_column": {"required": ["name", "semantic_type"], "optional": ["statistics", "unit", "format"]},
+    "overview_statistic": ["count", "non_null_count", "parse_coverage", "sum", "mean", "min", "max", "variance", "stddev"],
+    "relation": ["from", "to", "type"],
+    "dynamic_table_context": ["context_id", "tables"],
+    "context_table": ["table_name", "columns", "rows", "data", "source_step_ids"],
+    "memory_item": {"required": ["type", "content", "supporting_step_ids", "supporting_rows_or_columns", "confidence_or_check", "invalidating_condition"], "stored_only": ["id"]},
+    "memory_support": ["tables", "rows", "columns", "cells"],
+    "matched_set_statistic": ["table_name", "column", "scope", "count", "non_null_count", "sum", "mean", "min", "max", "variance", "stddev", "parse_coverage"],
+    "created_table": ["table_name", "kind", "intent", "columns", "num_rows", "definition_in_harness"],
+    "condition": ["column", "operator", "value"],
+    "answer_evidence": ["rows", "columns", "memory_ids"],
+    "requested_column": ["table_name", "column"],
+    "join_condition": ["left", "right"]
+  },
+  "tools": {
+    "retrieve_column_context": {
+      "arguments": ["requested_columns"],
+      "output": ["retrieved_columns", "sample_row_policy", "current_table_context"],
+      "state_delta": ["dynamic_table_context_changed", "context_id_before", "context_id_after", "added_rows", "added_columns", "static_task_memory_changed"]
+    },
+    "retrieve_row_context": {
+      "mode_field": "mode",
+      "common_arguments": ["mode", "table_name", "search_scope", "return_columns", "top_k"],
+      "mode_arguments": {
+        "condition_filter": ["conditions"],
+        "entity_match": ["query", "entity_columns"],
+        "extreme_value_select": ["target_column", "order"],
+        "semantic_match": ["query", "semantic_columns"]
+      },
+      "common_output": ["matched_rows", "matched_row_count", "matched_set_statistics", "visible_row_policy", "current_table_context"],
+      "mode_output": {
+        "condition_filter": [],
+        "entity_match": [],
+        "extreme_value_select": ["extreme_value_result"],
+        "semantic_match": ["semantic_match_result"]
+      },
+      "state_delta": ["dynamic_table_context_changed", "context_id_before", "context_id_after", "added_rows", "added_columns", "static_task_memory_changed"]
+    },
+    "group_aggregate": {
+      "arguments": ["table_name", "search_scope", "group_by", "aggregations"],
+      "output": ["created_table", "group_sample_policy", "group_sample"],
+      "state_delta": ["data_view_changed", "added_table", "dynamic_table_context_changed", "static_task_memory_changed"]
+    },
+    "join_tables": {
+      "arguments": ["left_table", "right_table", "on", "join_type", "return_columns"],
+      "output": ["created_table", "join_diagnostics", "row_sample_policy", "row_sample"],
+      "state_delta": ["data_view_changed", "added_table", "dynamic_table_context_changed", "static_task_memory_changed"]
+    },
+    "drop_context": {
+      "arguments": ["drop_rows", "drop_columns", "reason"],
+      "output": ["current_table_context", "dropped"],
+      "state_delta": ["dynamic_table_context_changed", "context_id_before", "context_id_after", "removed_rows", "removed_columns"]
+    },
+    "add_to_memory": {
+      "arguments": ["items"],
+      "output": ["task_memory"],
+      "state_delta": ["static_task_memory_changed", "added_memory_ids", "dynamic_table_context_changed"]
+    },
+    "refine_memory": {
+      "arguments": ["operations"],
+      "output": ["task_memory", "refine_trace"],
+      "state_delta": ["static_task_memory_changed", "removed_memory_ids", "added_memory_ids", "dynamic_table_context_changed"]
+    },
+    "answer_from_context": {
+      "arguments": ["answer", "evidence_rows", "evidence_columns", "supporting_memory_ids", "reason"],
+      "output": ["final_answer", "evidence"],
+      "state_delta": ["final_answer_submitted", "dynamic_table_context_changed", "static_task_memory_changed"]
+    }
+  }
+}
