@@ -1,0 +1,203 @@
+{
+  "trajectory_id": "sample_having",
+  "source": {
+    "dataset": "synthetic",
+    "db_id": "employees",
+    "gold_sql": "SELECT dept FROM employees GROUP BY dept HAVING COUNT(*) > 1"
+  },
+  "question": "Which departments have more than one employee?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "employees",
+          "num_rows": 6,
+          "columns": [
+            {
+              "name": "id",
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "type": "text"
+            },
+            {
+              "name": "dept",
+              "type": "text"
+            },
+            {
+              "name": "salary",
+              "type": "int"
+            },
+            {
+              "name": "age",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "table_name": "depts",
+          "num_rows": 3,
+          "columns": [
+            {
+              "name": "dept",
+              "type": "text"
+            },
+            {
+              "name": "location",
+              "type": "text"
+            },
+            {
+              "name": "budget",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "table_name": "sales",
+          "num_rows": 3,
+          "columns": [
+            {
+              "name": "item",
+              "type": "text"
+            },
+            {
+              "name": "price",
+              "type": "real"
+            },
+            {
+              "name": "qty",
+              "type": "int"
+            },
+            {
+              "name": "dept",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "employees",
+          "group_by": [
+            "dept"
+          ],
+          "aggregations": [
+            {
+              "op": "count",
+              "column": "*",
+              "as": "count_1"
+            }
+          ]
+        }
+      },
+      "tool_output": {
+        "created_table": {
+          "table_name": "group_001",
+          "kind": "group",
+          "row_count": 3,
+          "columns": [
+            "dept",
+            "count_1"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "group_001",
+          "conditions": {
+            "column": "count_1",
+            "op": ">",
+            "value": 1
+          }
+        }
+      },
+      "tool_output": {
+        "created_table": {
+          "table_name": "filter_002",
+          "kind": "filter",
+          "row_count": 2,
+          "columns": [
+            "dept",
+            "count_1"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_002",
+          "expressions": [
+            "dept"
+          ]
+        }
+      },
+      "tool_output": {
+        "created_table": {
+          "table_name": "project_003",
+          "kind": "project",
+          "row_count": 2,
+          "columns": [
+            "dept"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "eng"
+            ],
+            [
+              "sales"
+            ]
+          ],
+          "evidence": {
+            "table": "project_003"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "eng"
+          ],
+          [
+            "sales"
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "eng"
+    ],
+    [
+      "sales"
+    ]
+  ]
+}

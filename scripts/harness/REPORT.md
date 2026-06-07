@@ -1,8 +1,8 @@
 # Harness + Compiler — Test Report
 
-Generated 2026-06-07 21:01 · `python scripts/harness/run_all.py`
+Generated 2026-06-07 21:08 · `python scripts/harness/run_all.py`
 
-## Unit tests — 63/63 passed
+## Unit tests — 81/81 passed
 
 | module | passed | failed |
 |---|---|---|
@@ -10,6 +10,7 @@ Generated 2026-06-07 21:01 · `python scripts/harness/run_all.py`
 | test_plan | 3 | 0 |
 | test_compiler | 12 | 0 |
 | test_verify | 38 | 0 |
+| test_emitter | 18 | 0 |
 
 ## Spider compile coverage — 1824/2000 (91.2%)
 

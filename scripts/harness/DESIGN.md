@@ -30,6 +30,7 @@ the executor's internal substrate, like a CPU is for a code agent.
 | `plan.py` | The IR between compiler and executor. `Step(id, tool, args)`; `run_plan` resolves step-id refs to real view names and returns the final rows. | `Step`, `run_plan`, `TABLE_REF_ARGS` |
 | `compiler.py` | SQL → Plan. sqlglot AST → one Step per logical stage. Unsupported → `CompileError`. | `Compiler().compile(sql)`, `CompileError` |
 | `verify.py` | Round-trip gate: compile → run → compare to gold SQL. | `round_trip(harness, sql) -> (status, info)` |
+| `emitter.py` | Verified Plan → training **trajectory** (ReAct steps + terminal `answer_from_context`, `dataset_overview` initial state) + structural **legality** check. | `emit(harness, question, gold_sql)`, `validate(traj)` |
 | `tests/` | Per-module unit tests + the round-trip suite. Each exposes `run() -> (passed, failed, fails)`. | `test_executor/plan/compiler/verify` |
 | `run_all.py` | Integration: run all tests + Spider compile-coverage probe → write `REPORT.md`. | `main()` |
 
@@ -69,6 +70,17 @@ Examples (executor already supports these — only the compiler case is missing)
 - `UNION/INTERSECT/EXCEPT` → `set_op` on the two compiled sides.
 - `top-3 per group` → `window(partition_by, order_by, row_number)` → `condition_filter(rn<=3)`.
 - correlated subquery → `group_aggregate` → `join_tables` → `condition_filter` (column-vs-column).
+
+## Trajectory emission & validation
+
+`emitter.emit(harness, question, gold_sql)` compiles the SQL, executes the Plan while capturing
+each step's real `tool_output` + the assigned table names, verifies the final result against the
+gold SQL (`label_status = verified`), and packages a trajectory: `dataset_overview` initial state,
+one ReAct step per tool call (`think` / `tool_call` / `tool_output`), and a terminal
+`answer_from_context` citing the final evidence table. `emitter.validate(traj)` is the legality
+gate: required fields, every `tool_call.tool` in the known tool set, well-formed steps, a terminal
+`answer_from_context`, citation integrity (answer cites a real source/derived table), and that the
+trajectory was execution-verified. A sample is written to `sample_trajectory.json` by `run_all.py`.
 
 ## Testing strategy
 

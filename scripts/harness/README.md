@@ -17,10 +17,12 @@ Modular pipeline DONE for the v1 SQL core (see `DESIGN.md`, test results in `REP
 - `plan.py` — Plan IR (`Step`) + `run_plan` (step-id threading).
 - `compiler.py` — SQL → Plan via sqlglot (FROM/JOIN/WHERE/GROUP/HAVING/ORDER/LIMIT/DISTINCT/projection/scalar-agg).
 - `verify.py` — round-trip gate (compile → run → compare to gold SQL).
-- `run_all.py` — integration runner; runs all unit tests + the round-trip suite + Spider compile-coverage, writes `REPORT.md`.
+- `emitter.py` — verified Plan → training trajectory (+ `validate` legality check).
+- `run_all.py` — integration runner; runs all tests + the round-trip suite + Spider compile-coverage, emits a sample trajectory, writes `REPORT.md`.
 
-Run: `.venv/bin/python scripts/harness/run_all.py`. Current: **49 unit tests pass**, round-trip
-suite **26/26**, **Spider compile coverage ~76%** (2000 queries) with a prioritized backlog.
+Run: `.venv/bin/python scripts/harness/run_all.py`. Current: **81 tests pass**, round-trip
+suite **38/38**, **Spider compile coverage ~91%** (2000 queries), sample trajectory verified+legal.
+Remaining coverage gap is subqueries (backlog).
 Needs the project venv with sqlglot: `python3 -m venv .venv && .venv/bin/pip install sqlglot`.
 
 ## To build (in order)

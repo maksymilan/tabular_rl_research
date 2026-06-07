@@ -24,6 +24,7 @@ import test_executor          # noqa: E402
 import test_plan              # noqa: E402
 import test_compiler          # noqa: E402
 import test_verify            # noqa: E402
+import test_emitter           # noqa: E402
 
 SPIDER = os.path.join(ROOT, "data/spider/spider/train-00000-of-00001.parquet")
 
@@ -31,7 +32,7 @@ SPIDER = os.path.join(ROOT, "data/spider/spider/train-00000-of-00001.parquet")
 def run_unit_tests():
     """Run each module's run() -> list of (module, passed, failed, fails)."""
     results = []
-    for mod in (test_executor, test_plan, test_compiler, test_verify):
+    for mod in (test_executor, test_plan, test_compiler, test_verify, test_emitter):
         passed, failed, fails = mod.run()
         results.append((mod.run.__module__, passed, failed, fails))
     return results
@@ -114,9 +115,23 @@ def write_report(unit, cov, path):
     open(path, "w").write("\n".join(L) + "\n")
 
 
+def emit_sample():
+    """Emit + validate one sample trajectory artifact (build step 3)."""
+    from common import employees_db
+    from emitter import emit, validate
+    h = employees_db()
+    traj = emit(h, "Which departments have more than one employee?",
+                "SELECT dept FROM employees GROUP BY dept HAVING COUNT(*) > 1",
+                dataset="synthetic", db_id="employees", trajectory_id="sample_having")
+    path = os.path.join(HERE, "sample_trajectory.json")
+    json.dump(traj, open(path, "w"), indent=2, default=str)
+    return path, traj["label_status"], validate(traj)
+
+
 def main():
     unit = run_unit_tests()
     cov = spider_compile_coverage()
+    sample_path, sample_status, sample_errs = emit_sample()
     report = os.path.join(HERE, "REPORT.md")
     write_report(unit, cov, report)
 
@@ -130,6 +145,8 @@ def main():
     if cov["total"]:
         print(f"SPIDER compile coverage: {cov['ok']}/{cov['total']} "
               f"({100.0 * cov['ok'] / cov['total']:.1f}%)")
+    print(f"SAMPLE trajectory: {sample_status}, validate={'legal' if not sample_errs else sample_errs} "
+          f"-> {os.path.relpath(sample_path, ROOT)}")
     print(f"report -> {os.path.relpath(report, ROOT)}")
     return 0 if tot_f == 0 else 1
 
