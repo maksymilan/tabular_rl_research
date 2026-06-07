@@ -33,6 +33,7 @@ class Harness:
     def __init__(self, db_path: str = ":memory:"):
         self.conn = sqlite3.connect(db_path)
         self.views: dict[str, str] = {}
+        self._lc: dict[str, str] = {}  # lowercased name -> canonical (SQL identifiers are case-insensitive)
         self._n = 0
         self.register_sources()
 
@@ -42,12 +43,16 @@ class Harness:
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall():
             self.views.setdefault(name, f'SELECT * FROM "{name}"')
+            self._lc.setdefault(name.lower(), name)
 
     # ---- helpers ----
     def _sql(self, table: str) -> str:
-        if table not in self.views:
-            raise KeyError(f"unknown table: {table}")
-        return self.views[table]
+        if table in self.views:
+            return self.views[table]
+        canon = self._lc.get(table.lower())  # case-insensitive fallback (SQL identifiers)
+        if canon is not None:
+            return self.views[canon]
+        raise KeyError(f"unknown table: {table}")
 
     def _src(self, table: str) -> str:
         return f"({self._sql(table)})"
@@ -118,6 +123,7 @@ class Harness:
 
     def join_tables(self, left, right, on, join_type="inner", return_columns=None) -> dict:
         lc = self._cols(left)
+        rc = self._cols(right)
         jt = {"inner": "JOIN", "left": "LEFT JOIN", "cross": "CROSS JOIN"}.get(join_type, "JOIN")
 
         def qual(name: str) -> str:
@@ -128,9 +134,16 @@ class Harness:
             f"L.{o['left'].split('.')[-1]} = R.{o['right'].split('.')[-1]}" for o in (on or [])
         )
         oncl = f" ON {cond}" if on and join_type != "cross" else ""
-        sel = "*" if not return_columns else ", ".join(
-            f"{qual(c)} AS {c.split('.')[-1]}" for c in return_columns
-        )
+        if return_columns:
+            sel = ", ".join(f"{qual(c)} AS {c.split('.')[-1]}" for c in return_columns)
+        else:
+            # No explicit projection: emit all columns but DEDUPE shared names (mostly the join
+            # key) so downstream bare column references are unambiguous. Dedupe is case-insensitive
+            # (SQL identifiers are), else SQLite auto-renames collisions to `col:1` (invalid).
+            # Shared columns are equal across the join, so keeping the left side is value-correct.
+            seen = {c.lower() for c in lc}
+            sel = ", ".join([f"L.{c}" for c in lc] +
+                            [f"R.{c}" for c in rc if c.lower() not in seen])
         return self._new(
             "join", f"SELECT {sel} FROM {self._src(left)} AS L {jt} {self._src(right)} AS R{oncl}"
         )

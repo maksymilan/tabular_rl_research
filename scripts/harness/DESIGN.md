@@ -32,7 +32,8 @@ the executor's internal substrate, like a CPU is for a code agent.
 | `verify.py` | Round-trip gate: compile → run → compare to gold SQL. | `round_trip(harness, sql) -> (status, info)` |
 | `emitter.py` | Verified Plan → training **trajectory** (ReAct steps + terminal `answer_from_context`, `dataset_overview` initial state) + structural **legality** check. | `emit(harness, question, gold_sql)`, `validate(traj)` |
 | `tests/` | Per-module unit tests + the round-trip suite. Each exposes `run() -> (passed, failed, fails)`. | `test_executor/plan/compiler/verify` |
-| `run_all.py` | Integration: run all tests + Spider compile-coverage probe → write `REPORT.md`. | `main()` |
+| `run_all.py` | Integration: run all tests + Spider compile-coverage probe + emit a sample trajectory → write `REPORT.md`. | `main()` |
+| `run_spider.py` | **Execution-verified** eval on the real Spider SQLite DBs: round-trip each gold SQL against its actual database. | `.venv/bin/python scripts/harness/run_spider.py [N]` |
 
 ## The Plan IR
 
@@ -95,11 +96,16 @@ trajectory was execution-verified. A sample is written to `sample_trajectory.jso
 ## Status (see REPORT.md)
 
 - Unit tests: all passing (executor/plan/compiler/verify); round-trip suite 26/26.
-- Spider compile coverage: **~91%** of 2000 queries (after boolean condition trees, set ops,
-  multiple scalar aggregates, and Spider's double-quoted-string convention). Remaining frontier
-  (~9%, almost all subqueries): `IN (subquery)` (semi/anti-join), scalar subquery in WHERE —
-  both need value/table threading from a subquery's steps into the outer query (a Plan-IR
-  extension); plus a few multi-table self-joins and mixed agg/non-agg projections.
+- Spider **compile** coverage: **~91%** of 2000 queries (after boolean condition trees, set ops,
+  multiple scalar aggregates, and Spider's double-quoted-string convention).
+- Spider **execution-verified** coverage (`run_spider.py`, the real SQLite DBs): **~78.5%** of
+  1500 train queries round-trip exactly to the gold SQL's result on the actual database. The gap
+  vs compile coverage is real-schema behavior: (a) case-insensitive identifiers — fixed (table
+  lookup + join column dedupe are now case-insensitive; this alone was +22 points); (b) remaining
+  exec failures are multi-table joins with shared/ambiguous columns under bare-column rendering;
+  (c) the subquery compile gaps (`IN (subquery)`, scalar subquery in WHERE — need value/table
+  threading in the Plan IR); (d) a few `ORDER BY ... LIMIT` tie nondeterminisms. Proper join fix =
+  qualified-column resolution (a refactor), the next major work along with subqueries.
 
 ## Out of scope (v1)
 
