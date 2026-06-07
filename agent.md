@@ -23,6 +23,7 @@ Downloaded datasets:
 - `table-benchmark/tqabench` -> `data/tqabench`
 - `DongfuJiang/FeTaQA` -> `data/FeTaQA`
 - `Multilingual-Multimodal-NLP/TableBench` -> `data/TableBench`
+- `xlangai/spider` -> `data/spider`
 
 Useful commands:
 - Download/update datasets: `bash scripts/data_pipeline/download_datasets.sh`

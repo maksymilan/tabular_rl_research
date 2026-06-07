@@ -1,5 +1,12 @@
 # Tool Usage And State Format Spec
 
+> **SUPERSEDED (2026-06-06).** The finalized tool design is `tool_design/final_tool_design.md`.
+> That document is now canonical (3-store state model, no drop / no persistent subtable, full
+> SQL coverage with `derive_column`/`set_op`/`window` + expression sublanguage, uniform
+> `(table,row_id)` citation). `tool_io_spec.json`, the validator, the per-tool JSON examples, and
+> the old `trajectory/` cases below predate the finalization and will be realigned / regenerated
+> by the SQL→tool compiler (`scripts/harness/`). Kept for reference and rationale history.
+
 This document is the local interface contract for Table Agent Harness tool design. Future tool design changes and harness implementations should follow the formats in this folder unless a new versioned spec is explicitly added.
 
 The machine-readable single source of truth for tool I/O and state field formats is `tool_design/tool_io_spec.json`. To change any format, edit that spec first, then update the matching `tool_json_examples/*.json` and conform every trajectory. `scripts/tool_design/validate_trajectories.py` loads the spec and enforces it; it does not hardcode field sets. This document is the human-readable contract; the spec is the enforced one. For a field-by-field dictionary (meaning, who fills each field, enum value meanings, and a dataset-conversion checklist) see `tool_design/tool_io_spec.md`.
