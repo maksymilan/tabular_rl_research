@@ -39,6 +39,21 @@ CASES = [
     # joins
     "SELECT name, location FROM employees JOIN depts ON employees.dept = depts.dept WHERE salary > 1000",
     "SELECT e.name, d.location FROM employees AS e JOIN depts AS d ON e.dept = d.dept",
+    # boolean tree: OR / NOT / IN / BETWEEN / LIKE
+    "SELECT name FROM employees WHERE dept = 'eng' OR dept = 'hr'",
+    "SELECT name FROM employees WHERE salary > 1000 AND (dept = 'eng' OR age > 40)",
+    "SELECT name FROM employees WHERE dept NOT IN ('eng')",
+    "SELECT name FROM employees WHERE dept IN ('eng', 'sales')",
+    "SELECT name FROM employees WHERE age BETWEEN 30 AND 45",
+    "SELECT name FROM employees WHERE name LIKE 'A%'",
+    "SELECT name FROM employees WHERE NOT salary > 1000",
+    # multiple scalar aggregates
+    "SELECT MAX(salary), MIN(salary) FROM employees",
+    "SELECT COUNT(*), AVG(age) FROM employees WHERE dept = 'eng'",
+    # set operations
+    "SELECT dept FROM employees INTERSECT SELECT dept FROM depts",
+    "SELECT dept FROM employees EXCEPT SELECT dept FROM depts WHERE budget < 2000",
+    "SELECT name FROM employees WHERE dept='eng' UNION SELECT name FROM employees WHERE dept='hr'",
 ]
 
 

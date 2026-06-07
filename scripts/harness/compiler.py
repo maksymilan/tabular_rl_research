@@ -46,9 +46,26 @@ class Compiler:
             ast = sqlglot.parse_one(sql, read="sqlite")
         except Exception as exc:  # sqlglot parse error
             raise CompileError(f"parse error: {exc}") from exc
-        if not isinstance(ast, E.Select):
-            raise CompileError(f"top-level {type(ast).__name__} unsupported (only SELECT)")
-        return self._select(ast)
+        return self._node(ast)
+
+    _SETOP = {E.Union: "union", E.Intersect: "intersect", E.Except: "except"}
+
+    def _node(self, ast: E.Expression) -> list[Step]:
+        """Dispatch a top-level node: SELECT, or a set operation over two queries."""
+        if isinstance(ast, E.Select):
+            return self._select(ast)
+        for cls, op in self._SETOP.items():
+            if isinstance(ast, cls):
+                if op == "union" and ast.args.get("distinct") is False:
+                    op = "union_all"
+                left = self._node(ast.this)
+                right = self._node(ast.expression)
+                steps = left + right
+                sid = self._id()
+                steps.append(Step(sid, "set_op",
+                                  {"left": left[-1].id, "right": right[-1].id, "op": op}))
+                return steps
+        raise CompileError(f"top-level {type(ast).__name__} unsupported (only SELECT / set-op)")
 
     # ---------- rendering ----------
     def _bare(self, node: E.Expression) -> str:
@@ -66,6 +83,13 @@ class Compiler:
             return int(s)
         except ValueError:
             return float(s)
+
+    def _str_value(self, node: E.Expression):
+        """Spider writes string values with double quotes; standard SQL (sqlglot) parses those as
+        quoted identifiers (Columns). Treat an unqualified quoted identifier as a string literal."""
+        if isinstance(node, E.Column) and node.this.quoted and not node.table:
+            return node.name
+        return None
 
     # ---------- FROM + JOIN ----------
     def _from(self, sel: E.Select, steps: list[Step]) -> str:
@@ -90,7 +114,7 @@ class Compiler:
         if isinstance(node, E.Table):
             return node.name
         if isinstance(node, E.Subquery):
-            sub = self._select(node.this)
+            sub = self._node(node.this)
             steps.extend(sub)
             return sub[-1].id
         raise CompileError(f"FROM/JOIN source {type(node).__name__} unsupported")
@@ -102,25 +126,52 @@ class Compiler:
             return [{"left": self._bare(cond.this), "right": self._bare(cond.expression)}]
         raise CompileError("join ON supports equality / AND of equalities only")
 
-    # ---------- WHERE / HAVING predicates ----------
-    def _predicates(self, cond: E.Expression, colmap: dict[str, str] | None = None) -> list[dict]:
+    # ---------- WHERE / HAVING conditions (boolean tree) ----------
+    def _condition(self, cond: E.Expression, colmap: dict[str, str] | None = None):
         colmap = colmap or {}
+        if isinstance(cond, E.Paren):
+            return self._condition(cond.this, colmap)
         if isinstance(cond, E.And):
-            return self._predicates(cond.this, colmap) + self._predicates(cond.expression, colmap)
+            return {"and": [self._condition(cond.this, colmap), self._condition(cond.expression, colmap)]}
+        if isinstance(cond, E.Or):
+            return {"or": [self._condition(cond.this, colmap), self._condition(cond.expression, colmap)]}
+        if isinstance(cond, E.Not):
+            return {"not": self._condition(cond.this, colmap)}
         for cls, op in _CMP.items():
             if isinstance(cond, cls):
                 col = self._resolve(cond.this, colmap)
                 rhs = cond.expression
                 if isinstance(rhs, E.Literal):
-                    return [{"column": col, "op": op, "value": self._literal(rhs)}]
+                    return {"column": col, "op": op, "value": self._literal(rhs)}
+                sv = self._str_value(rhs)
+                if sv is not None:
+                    return {"column": col, "op": op, "value": sv}
                 if isinstance(rhs, E.Column):
-                    return [{"column": col, "op": op, "column_value": self._bare(rhs)}]
+                    return {"column": col, "op": op, "column_value": self._bare(rhs)}
                 raise CompileError(f"predicate RHS {type(rhs).__name__} unsupported")
         if isinstance(cond, E.Like):
             pat = cond.expression
-            if isinstance(pat, E.Literal) and pat.is_string:
-                return [{"column": self._resolve(cond.this, colmap), "op": "contains",
-                         "value": pat.this.strip("%")}]
+            val = pat.this if (isinstance(pat, E.Literal) and pat.is_string) else self._str_value(pat)
+            if val is not None:
+                return {"column": self._resolve(cond.this, colmap), "op": "like", "value": val}
+            raise CompileError("LIKE pattern must be a string literal")
+        if isinstance(cond, E.In):
+            if cond.args.get("query"):
+                raise CompileError("IN (subquery) unsupported")
+            out = []
+            for e in cond.expressions:
+                if isinstance(e, E.Literal):
+                    out.append(self._literal(e))
+                elif self._str_value(e) is not None:
+                    out.append(self._str_value(e))
+                else:
+                    raise CompileError("IN list must be literals")
+            return {"column": self._resolve(cond.this, colmap), "op": "in", "values": out}
+        if isinstance(cond, E.Between):
+            return {"column": self._resolve(cond.this, colmap), "op": "between",
+                    "low": self._literal(cond.args["low"]), "high": self._literal(cond.args["high"])}
+        if isinstance(cond, E.Is) and isinstance(cond.expression, E.Null):
+            return {"column": self._resolve(cond.this, colmap), "op": "is_null"}
         raise CompileError(f"predicate {type(cond).__name__} unsupported")
 
     def _resolve(self, node: E.Expression, colmap: dict[str, str]) -> str:
@@ -183,7 +234,7 @@ class Compiler:
         if where is not None:
             sid = self._id()
             steps.append(Step(sid, "condition_filter",
-                              {"table": cur, "conditions": self._predicates(where.this)}))
+                              {"table": cur, "conditions": self._condition(where.this)}))
             cur = sid
 
         keys, aggs, agg_map = self._select_items(sel)
@@ -193,11 +244,14 @@ class Compiler:
 
         # SELECT agg(...) with no GROUP BY and no plain columns -> single scalar (terminal)
         if group is None and aggs and not keys:
-            if len(aggs) != 1:
-                raise CompileError("multiple scalar aggregates without GROUP BY unsupported in v1")
-            a = aggs[0]
+            if len(aggs) == 1:
+                a = aggs[0]
+                sid = self._id()
+                steps.append(Step(sid, "aggregate", {"table": cur, "column": a["column"], "op": a["op"]}))
+                return steps
+            # multiple scalar aggregates (e.g. MAX, MIN) -> single-row group with empty group_by
             sid = self._id()
-            steps.append(Step(sid, "aggregate", {"table": cur, "column": a["column"], "op": a["op"]}))
+            steps.append(Step(sid, "group_aggregate", {"table": cur, "group_by": [], "aggregations": aggs}))
             return steps
         if group is None and aggs and keys:
             raise CompileError("mixed aggregate + non-aggregate without GROUP BY unsupported")
@@ -217,7 +271,7 @@ class Compiler:
             if having is not None:
                 sid = self._id()
                 steps.append(Step(sid, "condition_filter",
-                                  {"table": cur, "conditions": self._predicates(having.this, agg_map)}))
+                                  {"table": cur, "conditions": self._condition(having.this, agg_map)}))
                 cur = sid
 
         # ORDER BY [+ LIMIT] before final projection (may reference non-projected columns)

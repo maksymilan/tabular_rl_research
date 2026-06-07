@@ -67,17 +67,36 @@ class Harness:
         return self.conn.execute(self._sql(table)).fetchall()
 
     # ---- table-producing tools ----
-    def condition_filter(self, table: str, conditions: list[dict]) -> dict:
-        parts = []
-        for c in conditions:
-            col, op = c["column"], c.get("op", "=")
-            if op == "contains":
-                parts.append(f"{col} LIKE '%' || {_lit(c['value'])} || '%'")
-            elif "column_value" in c:  # column-vs-column predicate
-                parts.append(f"{col} {op} {c['column_value']}")
-            else:
-                parts.append(f"{col} {op} {_lit(c['value'])}")
-        where = " AND ".join(parts) if parts else "1=1"
+    def _render_leaf(self, c: dict) -> str:
+        col, op = c["column"], c.get("op", "=")
+        if op == "contains":
+            return f"{col} LIKE '%' || {_lit(c['value'])} || '%'"
+        if op == "like":
+            return f"{col} LIKE {_lit(c['value'])}"
+        if op == "in":
+            return f"{col} IN ({', '.join(_lit(v) for v in c['values'])})"
+        if op == "between":
+            return f"{col} BETWEEN {_lit(c['low'])} AND {_lit(c['high'])}"
+        if op == "is_null":
+            return f"{col} IS NULL"
+        if "column_value" in c:  # column-vs-column predicate
+            return f"{col} {op} {c['column_value']}"
+        return f"{col} {op} {_lit(c['value'])}"
+
+    def _render_cond(self, cond) -> str:
+        """Render a boolean condition (tree dict with and/or/not, or a list = implicit AND)."""
+        if isinstance(cond, list):
+            cond = {"and": cond}
+        if "and" in cond:
+            return "(" + " AND ".join(self._render_cond(x) for x in cond["and"]) + ")"
+        if "or" in cond:
+            return "(" + " OR ".join(self._render_cond(x) for x in cond["or"]) + ")"
+        if "not" in cond:
+            return "NOT (" + self._render_cond(cond["not"]) + ")"
+        return self._render_leaf(cond)
+
+    def condition_filter(self, table: str, conditions) -> dict:
+        where = self._render_cond(conditions) if conditions else "1=1"
         return self._new("filter", f"SELECT * FROM {self._src(table)} WHERE {where}")
 
     def derive_column(self, table: str, new_column: str, expression: str) -> dict:
@@ -117,7 +136,8 @@ class Harness:
         )
 
     def set_op(self, left: str, right: str, op: str) -> dict:
-        m = {"union": "UNION", "intersect": "INTERSECT", "except": "EXCEPT"}
+        m = {"union": "UNION", "union_all": "UNION ALL",
+             "intersect": "INTERSECT", "except": "EXCEPT"}
         return self._new("setop", f"{self._sql(left)} {m[op]} {self._sql(right)}")
 
     def window(self, table, partition_by, order_by, fn, as_) -> dict:

@@ -16,7 +16,7 @@ def run():
             ["condition_filter", "group_aggregate", "condition_filter", "order_limit", "project"],
             str([s.tool for s in p]))
     t.check("HAVING aggregate resolved to alias",
-            p[2].args["conditions"][0]["column"] == "a", str(p[2].args))
+            p[2].args["conditions"]["column"] == "a", str(p[2].args))
     t.check("ORDER aggregate resolved to alias",
             p[3].args["order_by"] == ["a DESC"], str(p[3].args))
 
@@ -37,12 +37,23 @@ def run():
     # bare-column rendering strips table qualifiers
     pq = Compiler().compile("SELECT e.name FROM employees AS e WHERE e.salary > 1000")
     t.check("strips table qualifier",
-            pq[0].args["conditions"][0]["column"] == "salary", str(pq[0].args))
+            pq[0].args["conditions"]["column"] == "salary", str(pq[0].args))
+
+    # boolean tree: OR
+    po = Compiler().compile("SELECT name FROM employees WHERE dept='eng' OR dept='hr'")
+    t.check("OR -> boolean tree", "or" in po[0].args["conditions"], str(po[0].args))
+
+    # set operation -> set_op terminal
+    pi = Compiler().compile("SELECT dept FROM employees INTERSECT SELECT dept FROM depts")
+    t.check("set op emitted", pi[-1].tool == "set_op" and pi[-1].args["op"] == "intersect", str(pi[-1]))
+
+    # multiple scalar aggregates -> single-row group_aggregate
+    pm = Compiler().compile("SELECT MAX(salary), MIN(salary) FROM employees")
+    t.check("multi scalar agg", pm[-1].tool == "group_aggregate" and pm[-1].args["group_by"] == [], str(pm[-1]))
 
     # unsupported constructs raise CompileError (honest coverage gaps)
     for bad, label in [
         ("INSERT INTO t VALUES (1)", "non-SELECT"),
-        ("SELECT a FROM t UNION SELECT a FROM s", "UNION top-level"),
         ("SELECT a FROM t WHERE a > (SELECT MAX(b) FROM s)", "scalar subquery in WHERE"),
     ]:
         try:

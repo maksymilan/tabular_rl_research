@@ -83,10 +83,11 @@ Examples (executor already supports these — only the compiler case is missing)
 ## Status (see REPORT.md)
 
 - Unit tests: all passing (executor/plan/compiler/verify); round-trip suite 26/26.
-- Spider compile coverage: ~76% of 2000 queries. Top backlog (mostly easy, executor-ready):
-  `OR`, `BETWEEN`, `IN`, `NOT`, `LIKE` variants, multiple scalar aggregates, set ops
-  (UNION/INTERSECT/EXCEPT), scalar subqueries, multi-table self-joins. Closing these should push
-  coverage well past 90%.
+- Spider compile coverage: **~91%** of 2000 queries (after boolean condition trees, set ops,
+  multiple scalar aggregates, and Spider's double-quoted-string convention). Remaining frontier
+  (~9%, almost all subqueries): `IN (subquery)` (semi/anti-join), scalar subquery in WHERE —
+  both need value/table threading from a subquery's steps into the outer query (a Plan-IR
+  extension); plus a few multi-table self-joins and mixed agg/non-agg projections.
 
 ## Out of scope (v1)
 
