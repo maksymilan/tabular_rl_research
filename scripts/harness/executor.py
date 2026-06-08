@@ -132,7 +132,13 @@ class Harness:
         tail = f" GROUP BY {gb}" if gb else ""
         return self._new("group", f"SELECT {sel} FROM {self._src(table)}{tail}")
 
-    def join_tables(self, left, right, on, join_type="inner", return_columns=None) -> dict:
+    def join_tables(self, left, right, on, join_type="inner", return_columns=None,
+                    left_prefix=None, right_prefix=None) -> dict:
+        # `left_prefix`/`right_prefix`: when set, rename that side's columns to `<prefix>__<col>`
+        # so a multi-table join disambiguates shared / self-join column names INTERNALLY — the
+        # compiler no longer emits separate rename steps for join disambiguation. A side with
+        # prefix=None passes through unchanged: bare single-table mode, or an already-prefixed
+        # accumulated intermediate (left side of every join after the first).
         lc = self._cols(left)
         rc = self._cols(right)
         jt = {"inner": "JOIN", "left": "LEFT JOIN", "cross": "CROSS JOIN"}.get(join_type, "JOIN")
@@ -147,11 +153,16 @@ class Harness:
         oncl = f" ON {cond}" if on and join_type != "cross" else ""
         if return_columns:
             sel = ", ".join(f"{qual(c)} AS {c.split('.')[-1]}" for c in return_columns)
+        elif left_prefix is not None or right_prefix is not None:
+            # qualified mode: prefix each base side's columns; pass an already-prefixed side through.
+            left_sel = [f"L.{c} AS {left_prefix}__{c}" for c in lc] if left_prefix else [f"L.{c}" for c in lc]
+            right_sel = [f"R.{c} AS {right_prefix}__{c}" for c in rc] if right_prefix else [f"R.{c}" for c in rc]
+            sel = ", ".join(left_sel + right_sel)
         else:
-            # No explicit projection: emit all columns but DEDUPE shared names (mostly the join
-            # key) so downstream bare column references are unambiguous. Dedupe is case-insensitive
-            # (SQL identifiers are), else SQLite auto-renames collisions to `col:1` (invalid).
-            # Shared columns are equal across the join, so keeping the left side is value-correct.
+            # No projection / no prefixing: emit all columns but DEDUPE shared names (mostly the
+            # join key) so downstream bare references are unambiguous. Case-insensitive (SQL ids),
+            # else SQLite auto-renames collisions to `col:1` (invalid). Shared columns are equal
+            # across the join, so keeping the left side is value-correct.
             seen = {c.lower() for c in lc}
             sel = ", ".join([f"L.{c}" for c in lc] +
                             [f"R.{c}" for c in rc if c.lower() not in seen])
@@ -178,12 +189,15 @@ class Harness:
             f"SELECT {_AGG[op]}({d}{column}) FROM {self._src(table)}"
         ).fetchone()[0]
 
-    def extreme_value_select(self, table, target_column, order="max", top_k=1, return_columns=None):
-        cols = ", ".join(return_columns) if return_columns else "*"
-        o = "DESC" if order == "max" else "ASC"
-        return self.conn.execute(
-            f"SELECT {cols} FROM {self._src(table)} ORDER BY {target_column} {o} LIMIT {int(top_k)}"
-        ).fetchall()
+    def extreme_value_select(self, table, order_by, top_k=None, return_columns=None) -> dict:
+        """Table-producing ORDER BY [... LIMIT k]: keep the extreme rows under an ordering.
+        Merged from the old `order_limit` — one tool now covers a plain ORDER BY/LIMIT, a top-k
+        pick, and multi-column ordering. `order_by`: list of 'col' or 'col DESC'.
+        `return_columns`: optional projection. The result is small and inlined by `preview`."""
+        order = f" ORDER BY {', '.join(order_by)}" if order_by else ""
+        lim = f" LIMIT {int(top_k)}" if top_k is not None else ""
+        sel = ", ".join(return_columns) if return_columns else "*"
+        return self._new("top", f"SELECT {sel} FROM {self._src(table)}{order}{lim}")
 
     def project(self, table, expressions) -> dict:
         """Realize a SELECT projection: SELECT <expressions> FROM (src). Table-producing.
@@ -191,11 +205,20 @@ class Harness:
         sel = ", ".join(expressions) if expressions else "*"
         return self._new("project", f"SELECT {sel} FROM {self._src(table)}")
 
-    def order_limit(self, table, order_by, limit=None) -> dict:
-        """Table-producing ORDER BY [... LIMIT k]. order_by: list of 'col [DESC]'."""
-        order = f" ORDER BY {', '.join(order_by)}" if order_by else ""
-        lim = f" LIMIT {int(limit)}" if limit is not None else ""
-        return self._new("order", f"SELECT * FROM {self._src(table)}{order}{lim}")
+    def preview(self, table: str, cell_limit: int = 100) -> dict:
+        """Model-perceivable view of a table after a table-producing tool: inline ALL rows when the
+        table is small (rows*cols <= cell_limit) else a truncated head flagged with `is_truncated`,
+        so the model never silently reasons over data it cannot see. Used by the emitter (and RL
+        rollouts) to CLOSE THE LOOP: the model perceives intermediate content, not just a handle."""
+        cols = self._cols(table)
+        total = self.conn.execute(f"SELECT COUNT(*) FROM {self._src(table)}").fetchone()[0]
+        max_rows = max(1, cell_limit // max(1, len(cols)))
+        rows = self.conn.execute(f"SELECT * FROM {self._src(table)} LIMIT {max_rows}").fetchall()
+        out = {"columns": cols, "row_count": total, "rows": [list(r) for r in rows]}
+        if total > len(rows):
+            out["is_truncated"] = True
+            out["note"] = f"showing first {len(rows)} of {total} rows (exceeds {cell_limit}-cell preview budget)"
+        return out
 
     def read_subtable(self, table, columns=None, limit=10):
         cols = ", ".join(columns) if columns else "*"
@@ -244,9 +267,10 @@ def _selftest() -> None:
     total = h.aggregate(d["table_name"], "bonus", "sum")
     assert abs(total - h.gold("SELECT SUM(salary*0.1) FROM employees")[0][0]) < 1e-9, ("T3", total)
 
-    # T4: extreme_value_select  ==  ORDER BY ... LIMIT
-    top = h.extreme_value_select("employees", "salary", "max", 2, ["name", "salary"])
-    assert top == h.gold("SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 2"), ("T4", top)
+    # T4: extreme_value_select (table-producing ORDER BY ... LIMIT)
+    top = h.extreme_value_select("employees", ["salary DESC"], 2, ["name", "salary"])
+    assert h.rows(top["table_name"]) == h.gold(
+        "SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 2"), ("T4", top)
 
     print("all harness self-tests passed (T1 filter+group, T2 join, T3 derive+aggregate, T4 extreme)")
 

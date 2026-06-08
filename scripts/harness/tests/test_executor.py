@@ -30,15 +30,21 @@ def run():
             h.aggregate("employees", "dept", "count_distinct") ==
             h.gold("SELECT COUNT(DISTINCT dept) FROM employees")[0][0])
 
-    t.check("extreme_value_select",
-            h.extreme_value_select("employees", "salary", "max", 2, ["name"]) ==
-            h.gold("SELECT name FROM employees ORDER BY salary DESC LIMIT 2"))
+    e = h.extreme_value_select("employees", ["salary DESC"], 2, ["name"])
+    t.check("extreme_value_select (projection)",
+            h.rows(e["table_name"]) == h.gold("SELECT name FROM employees ORDER BY salary DESC LIMIT 2"))
 
     p = h.project("employees", ["name", "salary"])
     t.check("project", norm(h.rows(p["table_name"])) == norm(h.gold("SELECT name,salary FROM employees")))
 
-    o = h.order_limit("employees", ["salary DESC"], 2)
-    t.check("order_limit", h.rows(o["table_name"]) == h.gold("SELECT * FROM employees ORDER BY salary DESC LIMIT 2"))
+    # merged: extreme_value_select with no projection subsumes the old order_limit
+    o = h.extreme_value_select("employees", ["salary DESC"], 2)
+    t.check("extreme_value_select (no projection)",
+            h.rows(o["table_name"]) == h.gold("SELECT * FROM employees ORDER BY salary DESC LIMIT 2"))
+
+    pv = h.preview(f["table_name"])
+    t.check("preview inlines small table",
+            pv["row_count"] == 4 and len(pv["rows"]) == 4 and "is_truncated" not in pv, str(pv))
 
     s = h.set_op("employees", "employees", "union")
     t.check("set_op union (dedup)", norm(h.rows(s["table_name"])) ==

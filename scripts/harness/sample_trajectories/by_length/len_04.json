@@ -1,11 +1,11 @@
 {
-  "trajectory_id": "spider_dev_6",
+  "trajectory_id": "spider_dev_8",
   "source": {
     "dataset": "spider",
     "db_id": "concert_singer",
-    "gold_sql": "SELECT song_name ,  song_release_year FROM singer ORDER BY age LIMIT 1"
+    "gold_sql": "SELECT DISTINCT country FROM singer WHERE age  >  20"
   },
-  "question": "Show the name and the release year of the song by the youngest singer.",
+  "question": "What are all distinct countries where singers above age 20 are from?",
   "label_status": "verified",
   "initial_state": {
     "dataset_overview": {
@@ -124,32 +124,87 @@
   "steps": [
     {
       "step_id": "step_1",
-      "think": "Order the rows and keep the requested top ones.",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
       "tool_call": {
-        "tool": "order_limit",
+        "tool": "condition_filter",
         "arguments": {
           "table": "singer",
-          "order_by": [
-            "age"
-          ],
-          "limit": 1
+          "conditions": {
+            "column": "age",
+            "op": ">",
+            "value": 20
+          }
         }
       },
       "tool_output": {
-        "created_table": {
-          "table_name": "order_001",
-          "kind": "order",
-          "row_count": 1,
-          "columns": [
-            "Singer_ID",
-            "Name",
-            "Country",
-            "Song_Name",
-            "Song_release_year",
-            "Age",
-            "Is_male"
+        "table": "filter_001",
+        "kind": "filter",
+        "columns": [
+          "Singer_ID",
+          "Name",
+          "Country",
+          "Song_Name",
+          "Song_release_year",
+          "Age",
+          "Is_male"
+        ],
+        "row_count": 6,
+        "rows": [
+          [
+            1,
+            "Joe Sharp",
+            "Netherlands",
+            "You",
+            "1992",
+            52,
+            "F"
+          ],
+          [
+            2,
+            "Timbaland",
+            "United States",
+            "Dangerous",
+            "2008",
+            32,
+            "T"
+          ],
+          [
+            3,
+            "Justin Brown",
+            "France",
+            "Hey Oh",
+            "2013",
+            29,
+            "T"
+          ],
+          [
+            4,
+            "Rose White",
+            "France",
+            "Sun",
+            "2003",
+            41,
+            "F"
+          ],
+          [
+            5,
+            "John Nizinik",
+            "France",
+            "Gentleman",
+            "2014",
+            43,
+            "T"
+          ],
+          [
+            6,
+            "Tribal King",
+            "France",
+            "Love",
+            "2016",
+            25,
+            "T"
           ]
-        }
+        ]
       }
     },
     {
@@ -158,39 +213,93 @@
       "tool_call": {
         "tool": "project",
         "arguments": {
-          "table": "order_001",
+          "table": "filter_001",
           "expressions": [
-            "song_name",
-            "song_release_year"
+            "country"
           ]
         }
       },
       "tool_output": {
-        "created_table": {
-          "table_name": "project_002",
-          "kind": "project",
-          "row_count": 1,
-          "columns": [
-            "song_name",
-            "song_release_year"
+        "table": "project_002",
+        "kind": "project",
+        "columns": [
+          "country"
+        ],
+        "row_count": 6,
+        "rows": [
+          [
+            "Netherlands"
+          ],
+          [
+            "United States"
+          ],
+          [
+            "France"
+          ],
+          [
+            "France"
+          ],
+          [
+            "France"
+          ],
+          [
+            "France"
           ]
-        }
+        ]
       }
     },
     {
       "step_id": "step_3",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "project_002",
+          "group_by": [
+            "country"
+          ],
+          "aggregations": []
+        }
+      },
+      "tool_output": {
+        "table": "group_003",
+        "kind": "group",
+        "columns": [
+          "country"
+        ],
+        "row_count": 3,
+        "rows": [
+          [
+            "France"
+          ],
+          [
+            "Netherlands"
+          ],
+          [
+            "United States"
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_4",
       "think": "Answer the question from the final evidence rows.",
       "tool_call": {
         "tool": "answer_from_context",
         "arguments": {
           "answer": [
             [
-              "Love",
-              "2016"
+              "France"
+            ],
+            [
+              "Netherlands"
+            ],
+            [
+              "United States"
             ]
           ],
           "evidence": {
-            "table": "project_002"
+            "table": "group_003"
           },
           "reason": "Derived by the verified tool chain."
         }
@@ -198,8 +307,13 @@
       "tool_output": {
         "final_answer": [
           [
-            "Love",
-            "2016"
+            "France"
+          ],
+          [
+            "Netherlands"
+          ],
+          [
+            "United States"
           ]
         ]
       }
@@ -207,8 +321,13 @@
   ],
   "final_answer": [
     [
-      "Love",
-      "2016"
+      "France"
+    ],
+    [
+      "Netherlands"
+    ],
+    [
+      "United States"
     ]
   ]
 }

@@ -147,47 +147,49 @@ class Compiler:
         return cur
 
     def _from_qualified(self, sel: E.Select, steps: list[Step]) -> str:
-        # one prefixed base view per alias: SELECT "col" AS alias__col ... FROM table
-        ali_step: dict[str, str] = {}
-        for alias, table in self._qual.items():
-            cols = self.schema[table]
-            sid = self._id()
-            steps.append(Step(sid, "project", {
-                "table": table,
-                "expressions": [f'"{c}" AS "{alias}__{c}"' for c in cols],
-            }))
-            ali_step[alias] = sid
+        # Qualified mode WITHOUT separate rename steps: `join_tables` prefixes each base table's
+        # columns to `<alias>__<col>` internally (left_prefix / right_prefix). The first base table
+        # is prefixed by the first join (left_prefix); each newly-joined right table by right_prefix;
+        # the accumulated intermediate is already prefixed and passes through (left_prefix=None).
         frm = sel.args.get("from_") or sel.args.get("from")
         first = frm.this
-        cur = ali_step[first.alias or first.name]
+        cur = self._qual[first.alias or first.name]   # base table name (resolved case-insensitively)
+        left_prefix = first.alias or first.name        # the first base table still needs prefixing
         for join in sel.args.get("joins", []) or []:
             jn = join.this
+            r_alias = jn.alias or jn.name
             on = join.args.get("on")
             if on is None:
                 raise CompileError("only ON-condition joins supported")
             jt = "left" if (join.side or "").lower() == "left" else "inner"
             sid = self._id()
             steps.append(Step(sid, "join_tables", {
-                "left": cur, "right": ali_step[jn.alias or jn.name],
-                "on": self._join_on_qualified(on, jn.alias or jn.name), "join_type": jt,
+                "left": cur, "right": self._qual[r_alias],
+                "on": self._join_on_internal(on, r_alias, left_prefix),
+                "join_type": jt, "left_prefix": left_prefix, "right_prefix": r_alias,
             }))
             cur = sid
+            left_prefix = None                          # accumulated intermediate already prefixed
         return cur
 
-    def _join_on_qualified(self, cond: E.Expression, right_alias: str) -> list[dict]:
-        """Like _join_on but routes each equality so 'right' is the column of the newly-joined
-        (right) table, regardless of which side the SQL wrote it on (the executor maps left->L,
-        right->R positionally, and qualified column names are table-specific)."""
+    def _join_on_internal(self, cond: E.Expression, right_alias: str, left_prefix):
+        """ON keys in SOURCE terms for internalized prefixing: the right (newly-joined base) key is
+        bare; the left key is bare while the left is still an un-prefixed base table (the first
+        join, `left_prefix` set) and `<owner>__<col>` once the left is a prefixed intermediate.
+        Routes each equality by which operand belongs to the newly-joined right table."""
         if isinstance(cond, E.And):
-            return (self._join_on_qualified(cond.this, right_alias)
-                    + self._join_on_qualified(cond.expression, right_alias))
+            return (self._join_on_internal(cond.this, right_alias, left_prefix)
+                    + self._join_on_internal(cond.expression, right_alias, left_prefix))
         if isinstance(cond, E.EQ):
-            lhs, rhs = cond.this, cond.expression
-            lq, rq = self._qualify(lhs), self._qualify(rhs)
-            lhs_alias = lhs.table or (self._find_alias(lhs.name) if isinstance(lhs, E.Column) else None)
-            if lhs_alias == right_alias:
-                return [{"left": rq, "right": lq}]
-            return [{"left": lq, "right": rq}]
+            a, b = cond.this, cond.expression
+            a_alias = a.table or (self._find_alias(a.name) if isinstance(a, E.Column) else None)
+            b_alias = b.table or (self._find_alias(b.name) if isinstance(b, E.Column) else None)
+            if b_alias == right_alias:                  # a = left side, b = right (newly joined)
+                l_node, l_alias, r_node = a, a_alias, b
+            else:                                       # written right-table-first: swap
+                l_node, l_alias, r_node = b, b_alias, a
+            l_key = l_node.name if left_prefix is not None else f"{l_alias}__{l_node.name}"
+            return [{"left": l_key, "right": r_node.name}]
         raise CompileError("join ON supports equality / AND of equalities only")
 
     def _table_ref(self, node: E.Expression, steps: list[Step]) -> str:
@@ -371,7 +373,7 @@ class Compiler:
                     ob.append(f"{col} DESC" if o.args.get("desc") else col)
             lim = self._literal(limit.expression) if limit is not None else None
             sid = self._id()
-            steps.append(Step(sid, "order_limit", {"table": cur, "order_by": ob, "limit": lim}))
+            steps.append(Step(sid, "extreme_value_select", {"table": cur, "order_by": ob, "top_k": lim}))
             cur = sid
 
         proj = self._projection(sel, agg_map)

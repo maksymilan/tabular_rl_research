@@ -23,7 +23,7 @@ THINK = {
     "join_tables": "Join the two tables on their key to combine the needed columns.",
     "group_aggregate": "Group the rows and compute the requested aggregates.",
     "derive_column": "Derive the computed column needed by the question.",
-    "order_limit": "Order the rows and keep the requested top ones.",
+    "extreme_value_select": "Order the rows and keep the top ones (the extreme values).",
     "project": "Project the output columns the question asks for.",
     "set_op": "Combine the two row sets with the set operation.",
     "aggregate": "Compute the scalar aggregate that answers the question.",
@@ -60,11 +60,15 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
         if isinstance(out, dict) and "table_name" in out:
             id_to_table[step.id] = out["table_name"]
             final = ("table", out["table_name"])
-            tool_output = {"created_table": out}
+            # close the loop: inline the new table's content (small tables in full, large ones
+            # truncated + flagged) so the model perceives the data, not just a table handle.
+            tool_output = {"table": out["table_name"], "kind": out["kind"],
+                           **h.preview(out["table_name"])}
         else:
             final = ("value", out)
             rows = out if isinstance(out, list) else [(out,)]
-            tool_output = {"result_sample": rows[:5], "row_count": len(rows)}
+            tool_output = {"result_sample": [list(r) if isinstance(r, tuple) else r for r in rows[:5]],
+                           "row_count": len(rows)}
         steps.append({
             "step_id": f"step_{i}",
             "think": THINK.get(step.tool, ""),
@@ -121,9 +125,9 @@ def validate(traj: dict) -> list[str]:
             errs.append(f"{s.get('step_id', '?')}: unknown tool {tc.get('tool')!r}")
         if "arguments" not in tc:
             errs.append(f"{s.get('step_id', '?')}: tool_call missing arguments")
-        ct = s.get("tool_output", {}).get("created_table")
-        if ct:
-            created.add(ct["table_name"])
+        tbl = s.get("tool_output", {}).get("table")
+        if tbl:
+            created.add(tbl)
 
     if steps and steps[-1]["tool_call"]["tool"] != "answer_from_context":
         errs.append("final step must be answer_from_context")

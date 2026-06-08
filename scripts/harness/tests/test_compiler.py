@@ -13,7 +13,7 @@ def run():
     )
     t.check("pipeline order",
             [s.tool for s in p] ==
-            ["condition_filter", "group_aggregate", "condition_filter", "order_limit", "project"],
+            ["condition_filter", "group_aggregate", "condition_filter", "extreme_value_select", "project"],
             str([s.tool for s in p]))
     t.check("HAVING aggregate resolved to alias",
             p[2].args["conditions"]["column"] == "a", str(p[2].args))
@@ -24,6 +24,16 @@ def run():
     pj = Compiler().compile("SELECT name FROM employees JOIN depts ON employees.dept=depts.dept")
     t.check("join emitted", pj[0].tool == "join_tables" and pj[0].args["on"] == [{"left": "dept", "right": "dept"}],
             str(pj[0]))
+
+    # qualified join: prefixing is internalized into join_tables (no separate rename steps)
+    sch = {"employees": ["id", "name", "dept", "salary"], "depts": ["dept", "location"]}
+    pq2 = Compiler(sch).compile("SELECT e.name, d.location FROM employees e JOIN depts d ON e.dept=d.dept")
+    t.check("join internalizes prefixing (no rename step before join)",
+            pq2[0].tool == "join_tables" and pq2[0].args.get("left_prefix") == "e"
+            and pq2[0].args.get("right_prefix") == "d"
+            and [s.tool for s in pq2].count("join_tables") == 1
+            and "project" not in [s.tool for s in pq2[:1]],
+            str([s.tool for s in pq2]))
 
     # scalar aggregate (no GROUP BY) -> terminal aggregate
     ps = Compiler().compile("SELECT COUNT(*) FROM employees")

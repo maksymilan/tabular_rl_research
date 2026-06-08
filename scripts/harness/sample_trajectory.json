@@ -100,15 +100,27 @@
         }
       },
       "tool_output": {
-        "created_table": {
-          "table_name": "group_001",
-          "kind": "group",
-          "row_count": 3,
-          "columns": [
-            "dept",
-            "count_1"
+        "table": "group_001",
+        "kind": "group",
+        "columns": [
+          "dept",
+          "count_1"
+        ],
+        "row_count": 3,
+        "rows": [
+          [
+            "eng",
+            3
+          ],
+          [
+            "hr",
+            1
+          ],
+          [
+            "sales",
+            2
           ]
-        }
+        ]
       }
     },
     {
@@ -126,15 +138,23 @@
         }
       },
       "tool_output": {
-        "created_table": {
-          "table_name": "filter_002",
-          "kind": "filter",
-          "row_count": 2,
-          "columns": [
-            "dept",
-            "count_1"
+        "table": "filter_002",
+        "kind": "filter",
+        "columns": [
+          "dept",
+          "count_1"
+        ],
+        "row_count": 2,
+        "rows": [
+          [
+            "eng",
+            3
+          ],
+          [
+            "sales",
+            2
           ]
-        }
+        ]
       }
     },
     {
@@ -150,14 +170,20 @@
         }
       },
       "tool_output": {
-        "created_table": {
-          "table_name": "project_003",
-          "kind": "project",
-          "row_count": 2,
-          "columns": [
-            "dept"
+        "table": "project_003",
+        "kind": "project",
+        "columns": [
+          "dept"
+        ],
+        "row_count": 2,
+        "rows": [
+          [
+            "eng"
+          ],
+          [
+            "sales"
           ]
-        }
+        ]
       }
     },
     {

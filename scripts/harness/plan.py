@@ -20,7 +20,6 @@ TABLE_REF_ARGS: dict[str, list[str]] = {
     "group_aggregate": ["table"],
     "derive_column": ["table"],
     "project": ["table"],
-    "order_limit": ["table"],
     "extreme_value_select": ["table"],
     "aggregate": ["table"],
     "read_subtable": ["table"],
@@ -30,7 +29,8 @@ TABLE_REF_ARGS: dict[str, list[str]] = {
 }
 
 # Tools whose result is a value/rows (terminal) rather than a registered table.
-TERMINAL_TOOLS = {"aggregate", "extreme_value_select", "read_subtable"}
+# (`extreme_value_select` is now table-producing — merged with the old `order_limit`.)
+TERMINAL_TOOLS = {"aggregate", "read_subtable"}
 
 
 @dataclass

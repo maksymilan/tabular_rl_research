@@ -1,11 +1,11 @@
 {
-  "trajectory_id": "spider_dev_5",
+  "trajectory_id": "spider_dev_0",
   "source": {
     "dataset": "spider",
     "db_id": "concert_singer",
-    "gold_sql": "SELECT avg(age) ,  min(age) ,  max(age) FROM singer WHERE country  =  'France'"
+    "gold_sql": "SELECT count(*) FROM singer"
   },
-  "question": "What is the average, minimum, and maximum age for all French singers?",
+  "question": "How many singers do we have?",
   "label_status": "verified",
   "initial_state": {
     "dataset_overview": {
@@ -124,90 +124,37 @@
   "steps": [
     {
       "step_id": "step_1",
-      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "think": "Compute the scalar aggregate that answers the question.",
       "tool_call": {
-        "tool": "condition_filter",
+        "tool": "aggregate",
         "arguments": {
           "table": "singer",
-          "conditions": {
-            "column": "country",
-            "op": "=",
-            "value": "France"
-          }
+          "column": "*",
+          "op": "count"
         }
       },
       "tool_output": {
-        "created_table": {
-          "table_name": "filter_001",
-          "kind": "filter",
-          "row_count": 4,
-          "columns": [
-            "Singer_ID",
-            "Name",
-            "Country",
-            "Song_Name",
-            "Song_release_year",
-            "Age",
-            "Is_male"
+        "result_sample": [
+          [
+            6
           ]
-        }
+        ],
+        "row_count": 1
       }
     },
     {
       "step_id": "step_2",
-      "think": "Group the rows and compute the requested aggregates.",
-      "tool_call": {
-        "tool": "group_aggregate",
-        "arguments": {
-          "table": "filter_001",
-          "group_by": [],
-          "aggregations": [
-            {
-              "op": "mean",
-              "column": "age",
-              "as": "mean_1"
-            },
-            {
-              "op": "min",
-              "column": "age",
-              "as": "min_2"
-            },
-            {
-              "op": "max",
-              "column": "age",
-              "as": "max_3"
-            }
-          ]
-        }
-      },
-      "tool_output": {
-        "created_table": {
-          "table_name": "group_002",
-          "kind": "group",
-          "row_count": 1,
-          "columns": [
-            "mean_1",
-            "min_2",
-            "max_3"
-          ]
-        }
-      }
-    },
-    {
-      "step_id": "step_3",
       "think": "Answer the question from the final evidence rows.",
       "tool_call": {
         "tool": "answer_from_context",
         "arguments": {
           "answer": [
             [
-              34.5,
-              25,
-              43
+              6
             ]
           ],
           "evidence": {
-            "table": "group_002"
+            "table": null
           },
           "reason": "Derived by the verified tool chain."
         }
@@ -215,9 +162,7 @@
       "tool_output": {
         "final_answer": [
           [
-            34.5,
-            25,
-            43
+            6
           ]
         ]
       }
@@ -225,9 +170,7 @@
   ],
   "final_answer": [
     [
-      34.5,
-      25,
-      43
+      6
     ]
   ]
 }

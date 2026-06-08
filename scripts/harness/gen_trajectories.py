@@ -56,8 +56,8 @@ def main() -> int:
 
     stats = collections.Counter()
     by_len = collections.Counter()
+    by_len_sample: dict[int, dict] = {}   # one representative trajectory per step-count
     kept = 0
-    samples: list[dict] = []
 
     with open(out_path, "w") as out:
         for i, ex in enumerate(data):
@@ -83,13 +83,17 @@ def main() -> int:
                 continue
             out.write(json.dumps(traj, default=str) + "\n")
             kept += 1
-            by_len[len(traj["steps"])] += 1
-            if len(samples) < 5 and len(traj["steps"]) >= 3:
-                samples.append(traj)
+            L = len(traj["steps"])
+            by_len[L] += 1
+            by_len_sample.setdefault(L, traj)   # keep the first trajectory seen at each length
 
-    for t in samples:
-        json.dump(t, open(os.path.join(sample_dir, f"{t['trajectory_id']}.json"), "w"),
+    # write one readable sample per distinct trajectory length, for inspection
+    bylen_dir = os.path.join(sample_dir, "by_length")
+    os.makedirs(bylen_dir, exist_ok=True)
+    for L, t in sorted(by_len_sample.items()):
+        json.dump(t, open(os.path.join(bylen_dir, f"len_{L:02d}.json"), "w"),
                   indent=2, default=str)
+    samples = list(by_len_sample.values())
 
     total = len(data)
     manifest = {

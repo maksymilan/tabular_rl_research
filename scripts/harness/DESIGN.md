@@ -26,7 +26,7 @@ the executor's internal substrate, like a CPU is for a code agent.
 
 | Module | Responsibility | Key API |
 |---|---|---|
-| `executor.py` | Relational core. Each table-producing tool registers a named view (`SELECT … FROM (prev)`); reading/scalar tools run a SELECT. | `Harness`: `condition_filter, group_aggregate, join_tables, derive_column, set_op, window, project, order_limit, aggregate, extreme_value_select, read_subtable, rows, gold` |
+| `executor.py` | Relational core. Each table-producing tool registers a named view (`SELECT … FROM (prev)`); reading/scalar tools run a SELECT. `join_tables` prefixes columns internally (`left_prefix`/`right_prefix`); `preview` inlines a table's content (small in full, large truncated+flagged) so the model perceives intermediates. | `Harness`: `condition_filter, group_aggregate, join_tables, derive_column, set_op, window, project, extreme_value_select, aggregate, read_subtable, preview, rows, gold` |
 | `plan.py` | The IR between compiler and executor. `Step(id, tool, args)`; `run_plan` resolves step-id refs to real view names and returns the final rows. | `Step`, `run_plan`, `TABLE_REF_ARGS` |
 | `compiler.py` | SQL → Plan. sqlglot AST → one Step per logical stage. Unsupported → `CompileError`. | `Compiler().compile(sql)`, `CompileError` |
 | `verify.py` | Round-trip gate: compile → run → compare to gold SQL. | `round_trip(harness, sql) -> (status, info)` |
@@ -52,9 +52,13 @@ Per SELECT, in logical order:
 Notable decisions:
 - **Column rendering, two modes**: *bare* (single-table / no schema) strips qualifiers so columns
   resolve inside single-source views; *qualified* (joins + a known schema, `Compiler(schema)`)
-  renames each base table's columns to `<alias>__<col>` at FROM time and renders every reference
-  the same way — resolving shared column names, self-joins, and ambiguity. Join `ON` keys are
-  routed to the correct L/R side by which table each column belongs to (not SQL position).
+  renders every reference as `<alias>__<col>` — resolving shared column names, self-joins, and
+  ambiguity. The prefixing is **internalized in `join_tables`** (`left_prefix`/`right_prefix`): the
+  first base table is prefixed by the first join, each newly-joined right table by `right_prefix`,
+  and the accumulated intermediate (already prefixed) passes through. The compiler emits **no
+  separate rename steps**, so a join is one `join_tables` call, not a rename-then-join. Join `ON`
+  keys are given in source terms (bare for an un-prefixed base side, `<owner>__<col>` for a
+  prefixed intermediate) and routed to L/R by which table each column belongs to (not SQL position).
 - **Passthrough columns**: a SELECT column that is neither grouped nor aggregated (SQLite's lenient
   bare-column extension; functionally dependent on the group key in practice) is carried through
   `group_aggregate`'s `passthrough` so the final projection can reference it.
@@ -84,7 +88,10 @@ Examples (executor already supports these — only the compiler case is missing)
 each step's real `tool_output` + the assigned table names, verifies the final result against the
 gold SQL (`label_status = verified`), and packages a trajectory: `dataset_overview` initial state,
 one ReAct step per tool call (`think` / `tool_call` / `tool_output`), and a terminal
-`answer_from_context` citing the final evidence table. `emitter.validate(traj)` is the legality
+`answer_from_context` citing the final evidence table. Each table-producing step's `tool_output`
+**inlines the new table's content via `harness.preview`** (small tables in full, large ones a
+truncated head with `is_truncated` + a note) so the trajectory is closed-loop — the model perceives
+intermediate data, not just a table handle. `emitter.validate(traj)` is the legality
 gate: required fields, every `tool_call.tool` in the known tool set, well-formed steps, a terminal
 `answer_from_context`, citation integrity (answer cites a real source/derived table), and that the
 trajectory was execution-verified. A sample is written to `sample_trajectory.json` by `run_all.py`.
@@ -103,13 +110,15 @@ trajectory was execution-verified. A sample is written to `sample_trajectory.jso
 
 - Unit tests: all passing (executor/plan/compiler/verify/emitter).
 - Spider **compile** coverage (`run_all.py`, no DB): **~91%** of 2000 queries.
-- Spider **execution-verified** coverage (`run_spider.py`, the real SQLite DBs): **~90.3%** of
-  1500 train queries round-trip exactly to the gold SQL's result on the actual database. Path:
-  78.5% (initial, case-insensitive ids) → **90.3%** after **qualified-column mode** (alias-prefixed
-  columns for joins), **ON-key L/R routing**, and **passthrough** of non-grouped SELECT columns
-  (mismatches 70 → 23, exec errors → 2). Remaining is almost entirely **subqueries** (`IN
+- Spider **execution-verified** coverage (`run_spider.py`, the real SQLite DBs): **~91.6%** of
+  train queries round-trip exactly to the gold SQL's result on the actual database. Path:
+  78.5% (initial, case-insensitive ids) → 90.3% (qualified-column mode, ON-key L/R routing,
+  passthrough of non-grouped SELECT columns) → **91.6%** after **internalizing prefixing into
+  `join_tables`** (no separate rename steps). Remaining is almost entirely **subqueries** (`IN
   (subquery)` semi/anti-join, scalar subquery in WHERE) — need value/table threading in the Plan
-  IR (the next major work) — plus ~23 result mismatches to triage.
+  IR (the next major work) — plus a handful of tie-ordering mismatches to triage.
+- Batch generation (`gen_trajectories.py`): **6,256 train + 914 dev** execution-verified + legal
+  trajectories (lengths 2–14); one readable sample per length in `sample_trajectories/by_length/`.
 
 ## Out of scope (v1)
 

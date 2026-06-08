@@ -1,0 +1,681 @@
+{
+  "trajectory_id": "spider_dev_37",
+  "source": {
+    "dataset": "spider",
+    "db_id": "concert_singer",
+    "gold_sql": "SELECT T2.name FROM singer_in_concert AS T1 JOIN singer AS T2 ON T1.singer_id  =  T2.singer_id JOIN concert AS T3 ON T1.concert_id  =  T3.concert_id WHERE T3.year  =  2014"
+  },
+  "question": "List all singer names in concerts in year 2014.",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "stadium",
+          "num_rows": 9,
+          "columns": [
+            {
+              "name": "Stadium_ID",
+              "type": "int"
+            },
+            {
+              "name": "Location",
+              "type": "text"
+            },
+            {
+              "name": "Name",
+              "type": "text"
+            },
+            {
+              "name": "Capacity",
+              "type": "int"
+            },
+            {
+              "name": "Highest",
+              "type": "int"
+            },
+            {
+              "name": "Lowest",
+              "type": "int"
+            },
+            {
+              "name": "Average",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "table_name": "singer",
+          "num_rows": 6,
+          "columns": [
+            {
+              "name": "Singer_ID",
+              "type": "int"
+            },
+            {
+              "name": "Name",
+              "type": "text"
+            },
+            {
+              "name": "Country",
+              "type": "text"
+            },
+            {
+              "name": "Song_Name",
+              "type": "text"
+            },
+            {
+              "name": "Song_release_year",
+              "type": "text"
+            },
+            {
+              "name": "Age",
+              "type": "int"
+            },
+            {
+              "name": "Is_male",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "table_name": "concert",
+          "num_rows": 6,
+          "columns": [
+            {
+              "name": "concert_ID",
+              "type": "int"
+            },
+            {
+              "name": "concert_Name",
+              "type": "text"
+            },
+            {
+              "name": "Theme",
+              "type": "text"
+            },
+            {
+              "name": "Stadium_ID",
+              "type": "text"
+            },
+            {
+              "name": "Year",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "table_name": "singer_in_concert",
+          "num_rows": 10,
+          "columns": [
+            {
+              "name": "concert_ID",
+              "type": "int"
+            },
+            {
+              "name": "Singer_ID",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "singer_in_concert",
+          "right": "singer",
+          "on": [
+            {
+              "left": "singer_id",
+              "right": "singer_id"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__concert_ID",
+          "T1__Singer_ID",
+          "T2__Singer_ID",
+          "T2__Name",
+          "T2__Country",
+          "T2__Song_Name",
+          "T2__Song_release_year",
+          "T2__Age",
+          "T2__Is_male"
+        ],
+        "row_count": 10,
+        "rows": [
+          [
+            1,
+            "2",
+            2,
+            "Timbaland",
+            "United States",
+            "Dangerous",
+            "2008",
+            32,
+            "T"
+          ],
+          [
+            1,
+            "3",
+            3,
+            "Justin Brown",
+            "France",
+            "Hey Oh",
+            "2013",
+            29,
+            "T"
+          ],
+          [
+            1,
+            "5",
+            5,
+            "John Nizinik",
+            "France",
+            "Gentleman",
+            "2014",
+            43,
+            "T"
+          ],
+          [
+            2,
+            "3",
+            3,
+            "Justin Brown",
+            "France",
+            "Hey Oh",
+            "2013",
+            29,
+            "T"
+          ],
+          [
+            2,
+            "6",
+            6,
+            "Tribal King",
+            "France",
+            "Love",
+            "2016",
+            25,
+            "T"
+          ],
+          [
+            3,
+            "5",
+            5,
+            "John Nizinik",
+            "France",
+            "Gentleman",
+            "2014",
+            43,
+            "T"
+          ],
+          [
+            4,
+            "4",
+            4,
+            "Rose White",
+            "France",
+            "Sun",
+            "2003",
+            41,
+            "F"
+          ],
+          [
+            5,
+            "6",
+            6,
+            "Tribal King",
+            "France",
+            "Love",
+            "2016",
+            25,
+            "T"
+          ],
+          [
+            5,
+            "3",
+            3,
+            "Justin Brown",
+            "France",
+            "Hey Oh",
+            "2013",
+            29,
+            "T"
+          ],
+          [
+            6,
+            "2",
+            2,
+            "Timbaland",
+            "United States",
+            "Dangerous",
+            "2008",
+            32,
+            "T"
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "join_001",
+          "right": "concert",
+          "on": [
+            {
+              "left": "T1__concert_id",
+              "right": "concert_id"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": null,
+          "right_prefix": "T3"
+        }
+      },
+      "tool_output": {
+        "table": "join_002",
+        "kind": "join",
+        "columns": [
+          "T1__concert_ID",
+          "T1__Singer_ID",
+          "T2__Singer_ID",
+          "T2__Name",
+          "T2__Country",
+          "T2__Song_Name",
+          "T2__Song_release_year",
+          "T2__Age",
+          "T2__Is_male",
+          "T3__concert_ID",
+          "T3__concert_Name",
+          "T3__Theme",
+          "T3__Stadium_ID",
+          "T3__Year"
+        ],
+        "row_count": 10,
+        "rows": [
+          [
+            1,
+            "2",
+            2,
+            "Timbaland",
+            "United States",
+            "Dangerous",
+            "2008",
+            32,
+            "T",
+            1,
+            "Auditions",
+            "Free choice",
+            "1",
+            "2014"
+          ],
+          [
+            1,
+            "3",
+            3,
+            "Justin Brown",
+            "France",
+            "Hey Oh",
+            "2013",
+            29,
+            "T",
+            1,
+            "Auditions",
+            "Free choice",
+            "1",
+            "2014"
+          ],
+          [
+            1,
+            "5",
+            5,
+            "John Nizinik",
+            "France",
+            "Gentleman",
+            "2014",
+            43,
+            "T",
+            1,
+            "Auditions",
+            "Free choice",
+            "1",
+            "2014"
+          ],
+          [
+            2,
+            "3",
+            3,
+            "Justin Brown",
+            "France",
+            "Hey Oh",
+            "2013",
+            29,
+            "T",
+            2,
+            "Super bootcamp",
+            "Free choice 2",
+            "2",
+            "2014"
+          ],
+          [
+            2,
+            "6",
+            6,
+            "Tribal King",
+            "France",
+            "Love",
+            "2016",
+            25,
+            "T",
+            2,
+            "Super bootcamp",
+            "Free choice 2",
+            "2",
+            "2014"
+          ],
+          [
+            3,
+            "5",
+            5,
+            "John Nizinik",
+            "France",
+            "Gentleman",
+            "2014",
+            43,
+            "T",
+            3,
+            "Home Visits",
+            "Bleeding Love",
+            "2",
+            "2015"
+          ],
+          [
+            4,
+            "4",
+            4,
+            "Rose White",
+            "France",
+            "Sun",
+            "2003",
+            41,
+            "F",
+            4,
+            "Week 1",
+            "Wide Awake",
+            "10",
+            "2014"
+          ]
+        ],
+        "is_truncated": true,
+        "note": "showing first 7 of 10 rows (exceeds 100-cell preview budget)"
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_002",
+          "conditions": {
+            "column": "T3__year",
+            "op": "=",
+            "value": 2014
+          }
+        }
+      },
+      "tool_output": {
+        "table": "filter_003",
+        "kind": "filter",
+        "columns": [
+          "T1__concert_ID",
+          "T1__Singer_ID",
+          "T2__Singer_ID",
+          "T2__Name",
+          "T2__Country",
+          "T2__Song_Name",
+          "T2__Song_release_year",
+          "T2__Age",
+          "T2__Is_male",
+          "T3__concert_ID",
+          "T3__concert_Name",
+          "T3__Theme",
+          "T3__Stadium_ID",
+          "T3__Year"
+        ],
+        "row_count": 6,
+        "rows": [
+          [
+            1,
+            "2",
+            2,
+            "Timbaland",
+            "United States",
+            "Dangerous",
+            "2008",
+            32,
+            "T",
+            1,
+            "Auditions",
+            "Free choice",
+            "1",
+            "2014"
+          ],
+          [
+            1,
+            "3",
+            3,
+            "Justin Brown",
+            "France",
+            "Hey Oh",
+            "2013",
+            29,
+            "T",
+            1,
+            "Auditions",
+            "Free choice",
+            "1",
+            "2014"
+          ],
+          [
+            1,
+            "5",
+            5,
+            "John Nizinik",
+            "France",
+            "Gentleman",
+            "2014",
+            43,
+            "T",
+            1,
+            "Auditions",
+            "Free choice",
+            "1",
+            "2014"
+          ],
+          [
+            2,
+            "3",
+            3,
+            "Justin Brown",
+            "France",
+            "Hey Oh",
+            "2013",
+            29,
+            "T",
+            2,
+            "Super bootcamp",
+            "Free choice 2",
+            "2",
+            "2014"
+          ],
+          [
+            2,
+            "6",
+            6,
+            "Tribal King",
+            "France",
+            "Love",
+            "2016",
+            25,
+            "T",
+            2,
+            "Super bootcamp",
+            "Free choice 2",
+            "2",
+            "2014"
+          ],
+          [
+            4,
+            "4",
+            4,
+            "Rose White",
+            "France",
+            "Sun",
+            "2003",
+            41,
+            "F",
+            4,
+            "Week 1",
+            "Wide Awake",
+            "10",
+            "2014"
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_003",
+          "expressions": [
+            "T2__name"
+          ]
+        }
+      },
+      "tool_output": {
+        "table": "project_004",
+        "kind": "project",
+        "columns": [
+          "T2__name"
+        ],
+        "row_count": 6,
+        "rows": [
+          [
+            "Timbaland"
+          ],
+          [
+            "Justin Brown"
+          ],
+          [
+            "John Nizinik"
+          ],
+          [
+            "Justin Brown"
+          ],
+          [
+            "Tribal King"
+          ],
+          [
+            "Rose White"
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "Timbaland"
+            ],
+            [
+              "Justin Brown"
+            ],
+            [
+              "John Nizinik"
+            ],
+            [
+              "Justin Brown"
+            ],
+            [
+              "Tribal King"
+            ],
+            [
+              "Rose White"
+            ]
+          ],
+          "evidence": {
+            "table": "project_004"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "Timbaland"
+          ],
+          [
+            "Justin Brown"
+          ],
+          [
+            "John Nizinik"
+          ],
+          [
+            "Justin Brown"
+          ],
+          [
+            "Tribal King"
+          ],
+          [
+            "Rose White"
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "Timbaland"
+    ],
+    [
+      "Justin Brown"
+    ],
+    [
+      "John Nizinik"
+    ],
+    [
+      "Justin Brown"
+    ],
+    [
+      "Tribal King"
+    ],
+    [
+      "Rose White"
+    ]
+  ]
+}
