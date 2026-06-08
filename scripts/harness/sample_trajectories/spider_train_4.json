@@ -1,0 +1,169 @@
+{
+  "trajectory_id": "spider_train_4",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT avg(num_employees) FROM department WHERE ranking BETWEEN 10 AND 15"
+  },
+  "question": "What is the average number of employees of the departments whose rank is between 10 and 15?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15,
+          "columns": [
+            {
+              "name": "Department_ID",
+              "type": "int"
+            },
+            {
+              "name": "Name",
+              "type": "text"
+            },
+            {
+              "name": "Creation",
+              "type": "text"
+            },
+            {
+              "name": "Ranking",
+              "type": "int"
+            },
+            {
+              "name": "Budget_in_Billions",
+              "type": "real"
+            },
+            {
+              "name": "Num_Employees",
+              "type": "real"
+            }
+          ]
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10,
+          "columns": [
+            {
+              "name": "head_ID",
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "type": "text"
+            },
+            {
+              "name": "born_state",
+              "type": "text"
+            },
+            {
+              "name": "age",
+              "type": "real"
+            }
+          ]
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5,
+          "columns": [
+            {
+              "name": "department_ID",
+              "type": "int"
+            },
+            {
+              "name": "head_ID",
+              "type": "int"
+            },
+            {
+              "name": "temporary_acting",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "department",
+          "conditions": {
+            "column": "ranking",
+            "op": "between",
+            "low": 10,
+            "high": 15
+          }
+        }
+      },
+      "tool_output": {
+        "created_table": {
+          "table_name": "filter_001",
+          "kind": "filter",
+          "row_count": 6,
+          "columns": [
+            "Department_ID",
+            "Name",
+            "Creation",
+            "Ranking",
+            "Budget_in_Billions",
+            "Num_Employees"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Compute the scalar aggregate that answers the question.",
+      "tool_call": {
+        "tool": "aggregate",
+        "arguments": {
+          "table": "filter_001",
+          "column": "num_employees",
+          "op": "mean"
+        }
+      },
+      "tool_output": {
+        "result_sample": [
+          [
+            105468.16666666667
+          ]
+        ],
+        "row_count": 1
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              105468.16666666667
+            ]
+          ],
+          "evidence": {
+            "table": null
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            105468.16666666667
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      105468.16666666667
+    ]
+  ]
+}

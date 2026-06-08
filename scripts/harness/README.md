@@ -19,6 +19,11 @@ Modular pipeline DONE for the v1 SQL core (see `DESIGN.md`, test results in `REP
 - `verify.py` — round-trip gate (compile → run → compare to gold SQL).
 - `emitter.py` — verified Plan → training trajectory (+ `validate` legality check).
 - `run_all.py` — integration runner; runs all tests + the round-trip suite + Spider compile-coverage, emits a sample trajectory, writes `REPORT.md`.
+- `run_spider.py` — execution-verified eval on the real Spider SQLite DBs (`run_spider.py [N]`).
+- `gen_trajectories.py` — batch-emit execution-verified Spider trajectories as JSONL training data
+  (`gen_trajectories.py [N] [train|dev]`). Generated **6,279 train + 919 dev** verified+legal
+  trajectories (2–24 steps) from full Spider → `data/trajectories/spider_*.jsonl` (gitignored);
+  5 samples in `sample_trajectories/`.
 
 Run: `.venv/bin/python scripts/harness/run_all.py`. Current: **81 tests pass**, round-trip
 suite **38/38**, **Spider compile coverage ~91%** (2000 queries), sample trajectory verified+legal.

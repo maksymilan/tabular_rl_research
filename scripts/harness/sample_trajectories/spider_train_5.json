@@ -1,0 +1,214 @@
+{
+  "trajectory_id": "spider_train_5",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT name FROM head WHERE born_state != 'California'"
+  },
+  "question": "What are the names of the heads who are born outside the California state?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15,
+          "columns": [
+            {
+              "name": "Department_ID",
+              "type": "int"
+            },
+            {
+              "name": "Name",
+              "type": "text"
+            },
+            {
+              "name": "Creation",
+              "type": "text"
+            },
+            {
+              "name": "Ranking",
+              "type": "int"
+            },
+            {
+              "name": "Budget_in_Billions",
+              "type": "real"
+            },
+            {
+              "name": "Num_Employees",
+              "type": "real"
+            }
+          ]
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10,
+          "columns": [
+            {
+              "name": "head_ID",
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "type": "text"
+            },
+            {
+              "name": "born_state",
+              "type": "text"
+            },
+            {
+              "name": "age",
+              "type": "real"
+            }
+          ]
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5,
+          "columns": [
+            {
+              "name": "department_ID",
+              "type": "int"
+            },
+            {
+              "name": "head_ID",
+              "type": "int"
+            },
+            {
+              "name": "temporary_acting",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "head",
+          "conditions": {
+            "column": "born_state",
+            "op": "!=",
+            "value": "California"
+          }
+        }
+      },
+      "tool_output": {
+        "created_table": {
+          "table_name": "filter_001",
+          "kind": "filter",
+          "row_count": 6,
+          "columns": [
+            "head_ID",
+            "name",
+            "born_state",
+            "age"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_001",
+          "expressions": [
+            "name"
+          ]
+        }
+      },
+      "tool_output": {
+        "created_table": {
+          "table_name": "project_002",
+          "kind": "project",
+          "row_count": 6,
+          "columns": [
+            "name"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "Tiger Woods"
+            ],
+            [
+              "K. J. Choi"
+            ],
+            [
+              "Jeff Maggert"
+            ],
+            [
+              "Stewart Cink"
+            ],
+            [
+              "P\u00e1draig Harrington"
+            ],
+            [
+              "Franklin Langham"
+            ]
+          ],
+          "evidence": {
+            "table": "project_002"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "Tiger Woods"
+          ],
+          [
+            "K. J. Choi"
+          ],
+          [
+            "Jeff Maggert"
+          ],
+          [
+            "Stewart Cink"
+          ],
+          [
+            "P\u00e1draig Harrington"
+          ],
+          [
+            "Franklin Langham"
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "Tiger Woods"
+    ],
+    [
+      "K. J. Choi"
+    ],
+    [
+      "Jeff Maggert"
+    ],
+    [
+      "Stewart Cink"
+    ],
+    [
+      "P\u00e1draig Harrington"
+    ],
+    [
+      "Franklin Langham"
+    ]
+  ]
+}

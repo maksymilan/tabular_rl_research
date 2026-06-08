@@ -1,0 +1,294 @@
+{
+  "trajectory_id": "spider_dev_3",
+  "source": {
+    "dataset": "spider",
+    "db_id": "concert_singer",
+    "gold_sql": "SELECT name ,  country ,  age FROM singer ORDER BY age DESC"
+  },
+  "question": "What are the names, countries, and ages for every singer in descending order of age?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "stadium",
+          "num_rows": 9,
+          "columns": [
+            {
+              "name": "Stadium_ID",
+              "type": "int"
+            },
+            {
+              "name": "Location",
+              "type": "text"
+            },
+            {
+              "name": "Name",
+              "type": "text"
+            },
+            {
+              "name": "Capacity",
+              "type": "int"
+            },
+            {
+              "name": "Highest",
+              "type": "int"
+            },
+            {
+              "name": "Lowest",
+              "type": "int"
+            },
+            {
+              "name": "Average",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "table_name": "singer",
+          "num_rows": 6,
+          "columns": [
+            {
+              "name": "Singer_ID",
+              "type": "int"
+            },
+            {
+              "name": "Name",
+              "type": "text"
+            },
+            {
+              "name": "Country",
+              "type": "text"
+            },
+            {
+              "name": "Song_Name",
+              "type": "text"
+            },
+            {
+              "name": "Song_release_year",
+              "type": "text"
+            },
+            {
+              "name": "Age",
+              "type": "int"
+            },
+            {
+              "name": "Is_male",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "table_name": "concert",
+          "num_rows": 6,
+          "columns": [
+            {
+              "name": "concert_ID",
+              "type": "int"
+            },
+            {
+              "name": "concert_Name",
+              "type": "text"
+            },
+            {
+              "name": "Theme",
+              "type": "text"
+            },
+            {
+              "name": "Stadium_ID",
+              "type": "text"
+            },
+            {
+              "name": "Year",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "table_name": "singer_in_concert",
+          "num_rows": 10,
+          "columns": [
+            {
+              "name": "concert_ID",
+              "type": "int"
+            },
+            {
+              "name": "Singer_ID",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Order the rows and keep the requested top ones.",
+      "tool_call": {
+        "tool": "order_limit",
+        "arguments": {
+          "table": "singer",
+          "order_by": [
+            "age DESC"
+          ],
+          "limit": null
+        }
+      },
+      "tool_output": {
+        "created_table": {
+          "table_name": "order_001",
+          "kind": "order",
+          "row_count": 6,
+          "columns": [
+            "Singer_ID",
+            "Name",
+            "Country",
+            "Song_Name",
+            "Song_release_year",
+            "Age",
+            "Is_male"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "order_001",
+          "expressions": [
+            "name",
+            "country",
+            "age"
+          ]
+        }
+      },
+      "tool_output": {
+        "created_table": {
+          "table_name": "project_002",
+          "kind": "project",
+          "row_count": 6,
+          "columns": [
+            "name",
+            "country",
+            "age"
+          ]
+        }
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "Joe Sharp",
+              "Netherlands",
+              52
+            ],
+            [
+              "John Nizinik",
+              "France",
+              43
+            ],
+            [
+              "Rose White",
+              "France",
+              41
+            ],
+            [
+              "Timbaland",
+              "United States",
+              32
+            ],
+            [
+              "Justin Brown",
+              "France",
+              29
+            ],
+            [
+              "Tribal King",
+              "France",
+              25
+            ]
+          ],
+          "evidence": {
+            "table": "project_002"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "Joe Sharp",
+            "Netherlands",
+            52
+          ],
+          [
+            "John Nizinik",
+            "France",
+            43
+          ],
+          [
+            "Rose White",
+            "France",
+            41
+          ],
+          [
+            "Timbaland",
+            "United States",
+            32
+          ],
+          [
+            "Justin Brown",
+            "France",
+            29
+          ],
+          [
+            "Tribal King",
+            "France",
+            25
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "Joe Sharp",
+      "Netherlands",
+      52
+    ],
+    [
+      "John Nizinik",
+      "France",
+      43
+    ],
+    [
+      "Rose White",
+      "France",
+      41
+    ],
+    [
+      "Timbaland",
+      "United States",
+      32
+    ],
+    [
+      "Justin Brown",
+      "France",
+      29
+    ],
+    [
+      "Tribal King",
+      "France",
+      25
+    ]
+  ]
+}
