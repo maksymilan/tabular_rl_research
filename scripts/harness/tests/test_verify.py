@@ -36,9 +36,13 @@ CASES = [
     "SELECT name, salary FROM employees ORDER BY age DESC LIMIT 2",
     # expression projection
     "SELECT item, price * qty AS rev FROM sales",
-    # joins
+    # joins (qualified-column mode)
     "SELECT name, location FROM employees JOIN depts ON employees.dept = depts.dept WHERE salary > 1000",
     "SELECT e.name, d.location FROM employees AS e JOIN depts AS d ON e.dept = d.dept",
+    # ON written right-table-first (exercises join-key L/R routing)
+    "SELECT e.name FROM employees AS e JOIN depts AS d ON d.dept = e.dept WHERE d.budget > 1000",
+    # non-grouped, non-aggregated SELECT column carried through (SQLite lenient + passthrough)
+    "SELECT d.dept, d.location, COUNT(*) FROM employees AS e JOIN depts AS d ON e.dept = d.dept GROUP BY d.dept",
     # boolean tree: OR / NOT / IN / BETWEEN / LIKE
     "SELECT name FROM employees WHERE dept = 'eng' OR dept = 'hr'",
     "SELECT name FROM employees WHERE salary > 1000 AND (dept = 'eng' OR age > 40)",

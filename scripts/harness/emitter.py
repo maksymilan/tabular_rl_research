@@ -46,7 +46,7 @@ def _norm(rows):
 
 def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
          trajectory_id: str = "traj") -> dict:
-    plan = Compiler().compile(gold_sql)
+    plan = Compiler(h.schema()).compile(gold_sql)
     id_to_table: dict[str, str] = {}
     steps: list[dict] = []
     final = None

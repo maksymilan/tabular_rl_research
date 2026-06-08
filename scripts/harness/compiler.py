@@ -5,14 +5,15 @@ Parses a SQL string with sqlglot and walks the **logical** relational pipeline
     FROM/JOIN -> WHERE -> GROUP BY -> HAVING -> ORDER BY/LIMIT -> SELECT(project) -> DISTINCT
 emitting one `Step` (abstract tool call) per stage and threading named intermediate tables.
 
-Design choices:
-- Columns are rendered **bare** (table qualifiers stripped); each pipeline stage is a
-  single-source view whose columns are bare. This also neutralizes most single-table aliases.
-- Aggregates referenced by HAVING / ORDER BY but absent from SELECT are still materialized as
-  group columns, then projected away by a final projection (so the result matches the gold SELECT).
-- Unsupported constructs raise `CompileError` (surfaced in the coverage report, never silently
-  mis-compiled). v1 scope-outs: subqueries in WHERE, correlated subqueries, UNION/INTERSECT,
-  window functions, multi-table column-ambiguous joins.
+Column rendering has two modes:
+- **bare** (default / single-table / no schema): strip table qualifiers; columns are bare. Works
+  whenever there is no column-name ambiguity.
+- **qualified** (joins + a known schema): at FROM time each base table's columns are renamed to
+  `<alias>__<col>`, and every column reference renders to `<alias>__<col>`. This resolves shared
+  column names, self-joins, and ambiguity in multi-table queries. Pass `Compiler(schema)`.
+
+Unsupported constructs raise `CompileError` (surfaced in coverage reports, never mis-compiled).
+v1 scope-outs: subqueries in WHERE, correlated subqueries.
 """
 from __future__ import annotations
 
@@ -34,8 +35,11 @@ _AGG_TYPES = tuple(_AGG.keys())
 
 
 class Compiler:
-    def __init__(self) -> None:
+    def __init__(self, schema: dict[str, list[str]] | None = None) -> None:
+        # schema: {lowercased table name -> [column names]}; enables qualified-column mode for joins
+        self.schema = schema
         self._ids = itertools.count(1)
+        self._qual: dict[str, str] | None = None  # current SELECT's alias -> table (or None = bare)
 
     def _id(self) -> str:
         return f"s{next(self._ids)}"
@@ -44,14 +48,13 @@ class Compiler:
     def compile(self, sql: str) -> list[Step]:
         try:
             ast = sqlglot.parse_one(sql, read="sqlite")
-        except Exception as exc:  # sqlglot parse error
+        except Exception as exc:
             raise CompileError(f"parse error: {exc}") from exc
         return self._node(ast)
 
     _SETOP = {E.Union: "union", E.Intersect: "intersect", E.Except: "except"}
 
     def _node(self, ast: E.Expression) -> list[Step]:
-        """Dispatch a top-level node: SELECT, or a set operation over two queries."""
         if isinstance(ast, E.Select):
             return self._select(ast)
         for cls, op in self._SETOP.items():
@@ -67,13 +70,46 @@ class Compiler:
                 return steps
         raise CompileError(f"top-level {type(ast).__name__} unsupported (only SELECT / set-op)")
 
-    # ---------- rendering ----------
+    # ---------- column rendering (bare vs qualified) ----------
     def _bare(self, node: E.Expression) -> str:
-        """Render an expression with table qualifiers removed (bare column names)."""
+        if self._qual is not None:
+            return self._qualify(node)
         n = node.copy()
         for col in n.find_all(E.Column):
             col.set("table", None)
         return n.sql(dialect="sqlite")
+
+    def _qualify(self, node: E.Expression) -> str:
+        """Render `node` with each column rewritten to `<alias>__<col>` (qualified mode)."""
+        n = node.copy()
+        cols = [n] if isinstance(n, E.Column) else list(n.find_all(E.Column))
+        for c in cols:
+            alias = c.table or self._find_alias(c.name)
+            combined = f"{alias}__{c.name}"
+            c.set("table", None)
+            c.this.set("this", combined)
+        return n.sql(dialect="sqlite")
+
+    def _find_alias(self, name: str) -> str:
+        nl = name.lower()
+        for alias, table in self._qual.items():
+            if any(c.lower() == nl for c in self.schema.get(table, [])):
+                return alias
+        return next(iter(self._qual))  # ambiguous/unknown -> first alias (best effort)
+
+    def _aliases(self, sel: E.Select):
+        """alias -> lowercased table name for FROM + JOIN base tables; None if any source is a
+        subquery or an unknown table (then fall back to bare rendering)."""
+        frm = sel.args.get("from_") or sel.args.get("from")
+        if frm is None:
+            return None
+        nodes = [frm.this] + [j.this for j in (sel.args.get("joins") or [])]
+        out: dict[str, str] = {}
+        for nd in nodes:
+            if not isinstance(nd, E.Table) or nd.name.lower() not in (self.schema or {}):
+                return None
+            out[nd.alias or nd.name] = nd.name.lower()
+        return out
 
     def _literal(self, lit: E.Literal):
         if lit.is_string:
@@ -85,15 +121,16 @@ class Compiler:
             return float(s)
 
     def _str_value(self, node: E.Expression):
-        """Spider writes string values with double quotes; standard SQL (sqlglot) parses those as
-        quoted identifiers (Columns). Treat an unqualified quoted identifier as a string literal."""
+        """Spider writes string values with double quotes -> quoted identifiers (Columns)."""
         if isinstance(node, E.Column) and node.this.quoted and not node.table:
             return node.name
         return None
 
     # ---------- FROM + JOIN ----------
     def _from(self, sel: E.Select, steps: list[Step]) -> str:
-        frm = sel.args.get("from_") or sel.args.get("from")  # sqlglot>=30 uses "from_"
+        if self._qual is not None:
+            return self._from_qualified(sel, steps)
+        frm = sel.args.get("from_") or sel.args.get("from")
         if frm is None:
             raise CompileError("missing FROM")
         cur = self._table_ref(frm.this, steps)
@@ -104,11 +141,54 @@ class Compiler:
                 raise CompileError("only ON-condition joins supported")
             jt = "left" if (join.side or "").lower() == "left" else "inner"
             sid = self._id()
+            steps.append(Step(sid, "join_tables",
+                              {"left": cur, "right": right, "on": self._join_on(on), "join_type": jt}))
+            cur = sid
+        return cur
+
+    def _from_qualified(self, sel: E.Select, steps: list[Step]) -> str:
+        # one prefixed base view per alias: SELECT "col" AS alias__col ... FROM table
+        ali_step: dict[str, str] = {}
+        for alias, table in self._qual.items():
+            cols = self.schema[table]
+            sid = self._id()
+            steps.append(Step(sid, "project", {
+                "table": table,
+                "expressions": [f'"{c}" AS "{alias}__{c}"' for c in cols],
+            }))
+            ali_step[alias] = sid
+        frm = sel.args.get("from_") or sel.args.get("from")
+        first = frm.this
+        cur = ali_step[first.alias or first.name]
+        for join in sel.args.get("joins", []) or []:
+            jn = join.this
+            on = join.args.get("on")
+            if on is None:
+                raise CompileError("only ON-condition joins supported")
+            jt = "left" if (join.side or "").lower() == "left" else "inner"
+            sid = self._id()
             steps.append(Step(sid, "join_tables", {
-                "left": cur, "right": right, "on": self._join_on(on), "join_type": jt,
+                "left": cur, "right": ali_step[jn.alias or jn.name],
+                "on": self._join_on_qualified(on, jn.alias or jn.name), "join_type": jt,
             }))
             cur = sid
         return cur
+
+    def _join_on_qualified(self, cond: E.Expression, right_alias: str) -> list[dict]:
+        """Like _join_on but routes each equality so 'right' is the column of the newly-joined
+        (right) table, regardless of which side the SQL wrote it on (the executor maps left->L,
+        right->R positionally, and qualified column names are table-specific)."""
+        if isinstance(cond, E.And):
+            return (self._join_on_qualified(cond.this, right_alias)
+                    + self._join_on_qualified(cond.expression, right_alias))
+        if isinstance(cond, E.EQ):
+            lhs, rhs = cond.this, cond.expression
+            lq, rq = self._qualify(lhs), self._qualify(rhs)
+            lhs_alias = lhs.table or (self._find_alias(lhs.name) if isinstance(lhs, E.Column) else None)
+            if lhs_alias == right_alias:
+                return [{"left": rq, "right": lq}]
+            return [{"left": lq, "right": rq}]
+        raise CompileError("join ON supports equality / AND of equalities only")
 
     def _table_ref(self, node: E.Expression, steps: list[Step]) -> str:
         if isinstance(node, E.Table):
@@ -191,7 +271,6 @@ class Compiler:
         return None
 
     def _select_items(self, sel: E.Select):
-        """Return (keys, aggs, agg_map): keys=non-agg select exprs, aggs=specs, agg_map=expr->alias."""
         keys, aggs, agg_map = [], [], {}
         for proj in sel.expressions:
             inner = proj.this if isinstance(proj, E.Alias) else proj
@@ -207,7 +286,6 @@ class Compiler:
         return keys, aggs, agg_map
 
     def _extend_aggs(self, node: E.Expression, aggs: list, agg_map: dict) -> None:
-        """Materialize aggregates referenced (e.g. in HAVING/ORDER) but not already in SELECT."""
         for agg_node in node.find_all(*_AGG_TYPES):
             key = self._bare(agg_node)
             if key not in agg_map:
@@ -227,6 +305,14 @@ class Compiler:
 
     # ---------- the SELECT pipeline ----------
     def _select(self, sel: E.Select) -> list[Step]:
+        saved = self._qual
+        self._qual = self._aliases(sel) if (sel.args.get("joins") and self.schema is not None) else None
+        try:
+            return self._select_body(sel)
+        finally:
+            self._qual = saved
+
+    def _select_body(self, sel: E.Select) -> list[Step]:
         steps: list[Step] = []
         cur = self._from(sel, steps)
 
@@ -242,14 +328,12 @@ class Compiler:
         order = sel.args.get("order")
         limit = sel.args.get("limit")
 
-        # SELECT agg(...) with no GROUP BY and no plain columns -> single scalar (terminal)
         if group is None and aggs and not keys:
             if len(aggs) == 1:
                 a = aggs[0]
                 sid = self._id()
                 steps.append(Step(sid, "aggregate", {"table": cur, "column": a["column"], "op": a["op"]}))
                 return steps
-            # multiple scalar aggregates (e.g. MAX, MIN) -> single-row group with empty group_by
             sid = self._id()
             steps.append(Step(sid, "group_aggregate", {"table": cur, "group_by": [], "aggregations": aggs}))
             return steps
@@ -264,9 +348,14 @@ class Compiler:
                 for o in order.expressions:
                     self._extend_aggs(o.this, aggs, agg_map)
             group_by = [self._bare(g) for g in group.expressions]
+            # SQLite allows selecting non-grouped, non-aggregated columns (arbitrary per group);
+            # carry them through so the final projection can reference them.
+            extras = [k for k, _ in keys if k not in group_by]
+            g_args = {"table": cur, "group_by": group_by, "aggregations": aggs}
+            if extras:
+                g_args["passthrough"] = extras
             sid = self._id()
-            steps.append(Step(sid, "group_aggregate",
-                              {"table": cur, "group_by": group_by, "aggregations": aggs}))
+            steps.append(Step(sid, "group_aggregate", g_args))
             cur = sid
             if having is not None:
                 sid = self._id()
@@ -274,7 +363,6 @@ class Compiler:
                                   {"table": cur, "conditions": self._condition(having.this, agg_map)}))
                 cur = sid
 
-        # ORDER BY [+ LIMIT] before final projection (may reference non-projected columns)
         if order is not None or limit is not None:
             ob = []
             if order is not None:
@@ -286,7 +374,6 @@ class Compiler:
             steps.append(Step(sid, "order_limit", {"table": cur, "order_by": ob, "limit": lim}))
             cur = sid
 
-        # final projection to SELECT columns (drops extra having/order aggregates)
         proj = self._projection(sel, agg_map)
         if proj != ["*"]:
             sid = self._id()

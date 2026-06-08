@@ -50,8 +50,14 @@ Per SELECT, in logical order:
 `FROM/JOIN → WHERE → GROUP BY → HAVING → ORDER BY/LIMIT → SELECT projection → DISTINCT`.
 
 Notable decisions:
-- **Bare columns**: table qualifiers are stripped (`e.salary`→`salary`) so columns resolve inside
-  single-source views; this also absorbs most single-table aliases.
+- **Column rendering, two modes**: *bare* (single-table / no schema) strips qualifiers so columns
+  resolve inside single-source views; *qualified* (joins + a known schema, `Compiler(schema)`)
+  renames each base table's columns to `<alias>__<col>` at FROM time and renders every reference
+  the same way — resolving shared column names, self-joins, and ambiguity. Join `ON` keys are
+  routed to the correct L/R side by which table each column belongs to (not SQL position).
+- **Passthrough columns**: a SELECT column that is neither grouped nor aggregated (SQLite's lenient
+  bare-column extension; functionally dependent on the group key in practice) is carried through
+  `group_aggregate`'s `passthrough` so the final projection can reference it.
 - **HAVING/ORDER aggregates** absent from SELECT are still materialized as group columns
   (`_extend_aggs`), then dropped by the **final projection** so the result matches the gold SELECT.
 - **Scalar aggregate** with no GROUP BY (`SELECT COUNT(*) …`) compiles to a terminal `aggregate`.
@@ -95,17 +101,15 @@ trajectory was execution-verified. A sample is written to `sample_trajectory.jso
 
 ## Status (see REPORT.md)
 
-- Unit tests: all passing (executor/plan/compiler/verify); round-trip suite 26/26.
-- Spider **compile** coverage: **~91%** of 2000 queries (after boolean condition trees, set ops,
-  multiple scalar aggregates, and Spider's double-quoted-string convention).
-- Spider **execution-verified** coverage (`run_spider.py`, the real SQLite DBs): **~78.5%** of
-  1500 train queries round-trip exactly to the gold SQL's result on the actual database. The gap
-  vs compile coverage is real-schema behavior: (a) case-insensitive identifiers — fixed (table
-  lookup + join column dedupe are now case-insensitive; this alone was +22 points); (b) remaining
-  exec failures are multi-table joins with shared/ambiguous columns under bare-column rendering;
-  (c) the subquery compile gaps (`IN (subquery)`, scalar subquery in WHERE — need value/table
-  threading in the Plan IR); (d) a few `ORDER BY ... LIMIT` tie nondeterminisms. Proper join fix =
-  qualified-column resolution (a refactor), the next major work along with subqueries.
+- Unit tests: all passing (executor/plan/compiler/verify/emitter).
+- Spider **compile** coverage (`run_all.py`, no DB): **~91%** of 2000 queries.
+- Spider **execution-verified** coverage (`run_spider.py`, the real SQLite DBs): **~90.3%** of
+  1500 train queries round-trip exactly to the gold SQL's result on the actual database. Path:
+  78.5% (initial, case-insensitive ids) → **90.3%** after **qualified-column mode** (alias-prefixed
+  columns for joins), **ON-key L/R routing**, and **passthrough** of non-grouped SELECT columns
+  (mismatches 70 → 23, exec errors → 2). Remaining is almost entirely **subqueries** (`IN
+  (subquery)` semi/anti-join, scalar subquery in WHERE) — need value/table threading in the Plan
+  IR (the next major work) — plus ~23 result mismatches to triage.
 
 ## Out of scope (v1)
 

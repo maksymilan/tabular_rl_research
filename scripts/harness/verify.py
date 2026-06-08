@@ -21,7 +21,7 @@ def _norm(rows: list[tuple]) -> list[str]:
 def round_trip(harness, sql: str):
     """Return (status, info)."""
     try:
-        plan = Compiler().compile(sql)
+        plan = Compiler(harness.schema()).compile(sql)
     except CompileError as exc:
         return "compile_error", str(exc)
     try:

@@ -45,6 +45,13 @@ class Harness:
             self.views.setdefault(name, f'SELECT * FROM "{name}"')
             self._lc.setdefault(name.lower(), name)
 
+    def schema(self) -> dict[str, list[str]]:
+        """{lowercased table name -> [column names]} for the compiler's qualified-column mode."""
+        out: dict[str, list[str]] = {}
+        for (name,) in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
+            out[name.lower()] = [r[1] for r in self.conn.execute(f'PRAGMA table_info("{name}")')]
+        return out
+
     # ---- helpers ----
     def _sql(self, table: str) -> str:
         if table in self.views:
@@ -109,14 +116,18 @@ class Harness:
             "derive", f"SELECT *, ({expression}) AS {new_column} FROM {self._src(table)}"
         )
 
-    def group_aggregate(self, table: str, group_by: list[str], aggregations: list[dict]) -> dict:
+    def group_aggregate(self, table: str, group_by: list[str], aggregations: list[dict],
+                        passthrough: list[str] | None = None) -> dict:
+        # passthrough: columns selected but not grouped/aggregated (SQLite's lenient bare-column
+        # extension; they are functionally dependent on the group key in practice).
         gb = ", ".join(group_by)
+        extra = ", ".join(passthrough or [])
         aggs = ", ".join(
             f"{_AGG[a['op']]}({'DISTINCT ' if a['op'] == 'count_distinct' else ''}"
             f"{a.get('column', '*')}) AS {a['as']}"
             for a in aggregations
         )
-        parts = ([gb] if gb else []) + ([aggs] if aggs else [])
+        parts = [p for p in (gb, extra, aggs) if p]
         sel = ", ".join(parts) if parts else "*"
         tail = f" GROUP BY {gb}" if gb else ""
         return self._new("group", f"SELECT {sel} FROM {self._src(table)}{tail}")
