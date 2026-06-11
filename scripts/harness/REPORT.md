@@ -1,6 +1,6 @@
 # Harness + Compiler — Test Report
 
-Generated 2026-06-11 15:19 · `python scripts/harness/run_all.py`
+Generated 2026-06-11 21:38 · `python scripts/harness/run_all.py`
 
 ## Unit tests — 98/98 passed
 

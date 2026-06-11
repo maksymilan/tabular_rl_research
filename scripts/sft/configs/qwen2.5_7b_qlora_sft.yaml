@@ -1,0 +1,48 @@
+# LLaMA-Factory SFT config — Qwen2.5-7B main run (v0 Spider tool trajectories).
+# QLoRA (4-bit base) so 7B + 10K context fits a 24G RTX 3090.
+# Run on server:  conda activate sft && llamafactory-cli train configs/qwen2.5_7b_qlora_sft.yaml
+
+### model
+model_name_or_path: Qwen/Qwen2.5-7B-Instruct
+trust_remote_code: true
+quantization_bit: 4        # QLoRA; drop this line on a >=48G card for plain LoRA
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 32
+lora_alpha: 64
+lora_dropout: 0.05
+
+### dataset
+dataset: spider_tools_v0
+dataset_dir: /home/dengyan/tabular_rl_project/data/sft
+template: qwen
+cutoff_len: 10240
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: /home/dengyan/tabular_rl_project/checkpoints/qwen2.5-7b-spider-v0-qlora
+logging_steps: 10
+save_steps: 200
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-4
+num_train_epochs: 2.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+
+### eval
+val_size: 0.02
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 200

@@ -1,120 +1,132 @@
 {
-  "trajectory_id": "spider_dev_2",
+  "trajectory_id": "spider_train_34",
   "source": {
     "dataset": "spider",
-    "db_id": "concert_singer",
-    "gold_sql": "SELECT name ,  country ,  age FROM singer ORDER BY age DESC"
+    "db_id": "farm",
+    "gold_sql": "SELECT T2.Year ,  T1.Official_Name FROM city AS T1 JOIN farm_competition AS T2 ON T1.City_ID  =  T2.Host_city_ID"
   },
-  "question": "Show name, country, age for all singers ordered by age from the oldest to the youngest.",
+  "question": "Show the years and the official names of the host cities of competitions.",
   "label_status": "verified",
   "initial_state": {
     "dataset_overview": {
       "tables": [
         {
-          "table_name": "stadium",
-          "num_rows": 9,
+          "table_name": "city",
+          "num_rows": 5,
           "columns": [
             {
-              "name": "Stadium_ID",
+              "name": "City_ID",
               "type": "int"
             },
             {
-              "name": "Location",
+              "name": "Official_Name",
               "type": "text"
             },
             {
-              "name": "Name",
+              "name": "Status",
               "type": "text"
             },
             {
-              "name": "Capacity",
-              "type": "int"
+              "name": "Area_km_2",
+              "type": "real"
             },
             {
-              "name": "Highest",
-              "type": "int"
+              "name": "Population",
+              "type": "real"
             },
             {
-              "name": "Lowest",
-              "type": "int"
-            },
-            {
-              "name": "Average",
-              "type": "int"
+              "name": "Census_Ranking",
+              "type": "text"
             }
           ]
         },
         {
-          "table_name": "singer",
-          "num_rows": 6,
+          "table_name": "farm",
+          "num_rows": 8,
           "columns": [
             {
-              "name": "Singer_ID",
+              "name": "Farm_ID",
               "type": "int"
             },
             {
-              "name": "Name",
-              "type": "text"
-            },
-            {
-              "name": "Country",
-              "type": "text"
-            },
-            {
-              "name": "Song_Name",
-              "type": "text"
-            },
-            {
-              "name": "Song_release_year",
-              "type": "text"
-            },
-            {
-              "name": "Age",
+              "name": "Year",
               "type": "int"
             },
             {
-              "name": "Is_male",
-              "type": "bool"
+              "name": "Total_Horses",
+              "type": "real"
+            },
+            {
+              "name": "Working_Horses",
+              "type": "real"
+            },
+            {
+              "name": "Total_Cattle",
+              "type": "real"
+            },
+            {
+              "name": "Oxen",
+              "type": "real"
+            },
+            {
+              "name": "Bulls",
+              "type": "real"
+            },
+            {
+              "name": "Cows",
+              "type": "real"
+            },
+            {
+              "name": "Pigs",
+              "type": "real"
+            },
+            {
+              "name": "Sheep_and_Goats",
+              "type": "real"
             }
           ]
         },
         {
-          "table_name": "concert",
+          "table_name": "farm_competition",
           "num_rows": 6,
           "columns": [
             {
-              "name": "concert_ID",
+              "name": "Competition_ID",
               "type": "int"
             },
             {
-              "name": "concert_Name",
-              "type": "text"
+              "name": "Year",
+              "type": "int"
             },
             {
               "name": "Theme",
               "type": "text"
             },
             {
-              "name": "Stadium_ID",
-              "type": "text"
+              "name": "Host_city_ID",
+              "type": "int"
             },
             {
-              "name": "Year",
+              "name": "Hosts",
               "type": "text"
             }
           ]
         },
         {
-          "table_name": "singer_in_concert",
-          "num_rows": 10,
+          "table_name": "competition_record",
+          "num_rows": 12,
           "columns": [
             {
-              "name": "concert_ID",
+              "name": "Competition_ID",
               "type": "int"
             },
             {
-              "name": "Singer_ID",
-              "type": "text"
+              "name": "Farm_ID",
+              "type": "int"
+            },
+            {
+              "name": "Rank",
+              "type": "int"
             }
           ]
         }
@@ -124,99 +136,132 @@
   "steps": [
     {
       "step_id": "step_1",
-      "think": "Order the rows and keep the top ones (the extreme values).",
+      "think": "I need to bring together the competition year and the host city's official name, so I join the city table with farm_competition on City_ID to match each host city to its details.",
       "tool_call": {
-        "tool": "extreme_value_select",
+        "tool": "join_tables",
         "arguments": {
-          "table": "singer",
-          "order_by": [
-            "age DESC"
+          "left": "city",
+          "right": "farm_competition",
+          "on": [
+            {
+              "left": "City_ID",
+              "right": "Host_city_ID"
+            }
           ],
-          "top_k": null
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
         }
       },
       "tool_output": {
-        "table": "top_001",
-        "kind": "top",
+        "table": "join_001",
+        "kind": "join",
         "columns": [
-          "Singer_ID",
-          "Name",
-          "Country",
-          "Song_Name",
-          "Song_release_year",
-          "Age",
-          "Is_male"
+          "T1__City_ID",
+          "T1__Official_Name",
+          "T1__Status",
+          "T1__Area_km_2",
+          "T1__Population",
+          "T1__Census_Ranking",
+          "T2__Competition_ID",
+          "T2__Year",
+          "T2__Theme",
+          "T2__Host_city_ID",
+          "T2__Hosts"
         ],
         "row_count": 6,
         "rows": [
           [
             1,
-            "Joe Sharp",
-            "Netherlands",
-            "You",
-            "1992",
-            52,
-            "F"
-          ],
-          [
-            5,
-            "John Nizinik",
-            "France",
-            "Gentleman",
-            "2014",
-            43,
-            "T"
-          ],
-          [
-            4,
-            "Rose White",
-            "France",
-            "Sun",
-            "2003",
-            41,
-            "F"
+            "Grand Falls/Grand-Sault",
+            "Town",
+            18.06,
+            5706.0,
+            "636 of 5008",
+            1,
+            2013,
+            "Carnival M is back!",
+            1,
+            "Miley Cyrus Jared Leto and Karen Mok"
           ],
           [
             2,
-            "Timbaland",
-            "United States",
-            "Dangerous",
-            "2008",
-            32,
-            "T"
+            "Perth-Andover",
+            "Village",
+            8.89,
+            1778.0,
+            "1442 of 5,008",
+            2,
+            2006,
+            "Codehunters",
+            2,
+            "Leehom Wang and Kelly Rowland"
           ],
           [
             3,
-            "Justin Brown",
-            "France",
-            "Hey Oh",
-            "2013",
-            29,
-            "T"
+            "Plaster Rock",
+            "Village",
+            3.09,
+            1135.0,
+            "1936 of 5,008",
+            3,
+            2005,
+            "MTV Asia Aid",
+            3,
+            "Alicia Keys"
           ],
           [
+            4,
+            "Drummond",
+            "Village",
+            8.91,
+            775.0,
+            "2418 of 5008",
+            4,
+            2004,
+            "Valentine's Day",
+            4,
+            "Vanness Wu and Michelle Branch"
+          ],
+          [
+            5,
+            "Aroostook",
+            "Village",
+            2.24,
+            351.0,
+            "3460 of 5008",
+            5,
+            2003,
+            "MTV Cube",
+            5,
+            "Shaggy and Coco Lee"
+          ],
+          [
+            5,
+            "Aroostook",
+            "Village",
+            2.24,
+            351.0,
+            "3460 of 5008",
             6,
-            "Tribal King",
-            "France",
-            "Love",
-            "2016",
-            25,
-            "T"
+            2002,
+            "Aliens",
+            5,
+            "Mandy Moore and Ronan Keating"
           ]
         ]
       }
     },
     {
       "step_id": "step_2",
-      "think": "Project the output columns the question asks for.",
+      "think": "The question asks only for years and official names, so I project the T2__Year and T1__Official_Name columns from the joined table to keep exactly the requested data.",
       "tool_call": {
         "tool": "project",
         "arguments": {
-          "table": "top_001",
+          "table": "join_001",
           "expressions": [
-            "name",
-            "country",
-            "age"
+            "T2__Year",
+            "T1__Official_Name"
           ]
         }
       },
@@ -224,81 +269,68 @@
         "table": "project_002",
         "kind": "project",
         "columns": [
-          "name",
-          "country",
-          "age"
+          "T2__Year",
+          "T1__Official_Name"
         ],
         "row_count": 6,
         "rows": [
           [
-            "Joe Sharp",
-            "Netherlands",
-            52
+            2013,
+            "Grand Falls/Grand-Sault"
           ],
           [
-            "John Nizinik",
-            "France",
-            43
+            2006,
+            "Perth-Andover"
           ],
           [
-            "Rose White",
-            "France",
-            41
+            2005,
+            "Plaster Rock"
           ],
           [
-            "Timbaland",
-            "United States",
-            32
+            2004,
+            "Drummond"
           ],
           [
-            "Justin Brown",
-            "France",
-            29
+            2003,
+            "Aroostook"
           ],
           [
-            "Tribal King",
-            "France",
-            25
+            2002,
+            "Aroostook"
           ]
         ]
       }
     },
     {
       "step_id": "step_3",
-      "think": "Answer the question from the final evidence rows.",
+      "think": "The six entries in project_002 list each competition's year and the host city's official name, fully answering the question with the required fields.",
       "tool_call": {
         "tool": "answer_from_context",
         "arguments": {
           "answer": [
             [
-              "Joe Sharp",
-              "Netherlands",
-              52
+              2013,
+              "Grand Falls/Grand-Sault"
             ],
             [
-              "John Nizinik",
-              "France",
-              43
+              2006,
+              "Perth-Andover"
             ],
             [
-              "Rose White",
-              "France",
-              41
+              2005,
+              "Plaster Rock"
             ],
             [
-              "Timbaland",
-              "United States",
-              32
+              2004,
+              "Drummond"
             ],
             [
-              "Justin Brown",
-              "France",
-              29
+              2003,
+              "Aroostook"
             ],
             [
-              "Tribal King",
-              "France",
-              25
+              2002,
+              "Aroostook"
             ]
           ],
           "evidence": {
@@ -310,34 +342,28 @@
       "tool_output": {
         "final_answer": [
           [
-            "Joe Sharp",
-            "Netherlands",
-            52
+            2013,
+            "Grand Falls/Grand-Sault"
           ],
           [
-            "John Nizinik",
-            "France",
-            43
+            2006,
+            "Perth-Andover"
           ],
           [
-            "Rose White",
-            "France",
-            41
+            2005,
+            "Plaster Rock"
           ],
           [
-            "Timbaland",
-            "United States",
-            32
+            2004,
+            "Drummond"
           ],
           [
-            "Justin Brown",
-            "France",
-            29
+            2003,
+            "Aroostook"
           ],
           [
-            "Tribal King",
-            "France",
-            25
+            2002,
+            "Aroostook"
           ]
         ]
       }
@@ -345,34 +371,28 @@
   ],
   "final_answer": [
     [
-      "Joe Sharp",
-      "Netherlands",
-      52
+      2013,
+      "Grand Falls/Grand-Sault"
     ],
     [
-      "John Nizinik",
-      "France",
-      43
+      2006,
+      "Perth-Andover"
     ],
     [
-      "Rose White",
-      "France",
-      41
+      2005,
+      "Plaster Rock"
     ],
     [
-      "Timbaland",
-      "United States",
-      32
+      2004,
+      "Drummond"
     ],
     [
-      "Justin Brown",
-      "France",
-      29
+      2003,
+      "Aroostook"
     ],
     [
-      "Tribal King",
-      "France",
-      25
+      2002,
+      "Aroostook"
     ]
   ]
 }

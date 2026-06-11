@@ -1,55 +1,21 @@
 {
-  "trajectory_id": "spider_dev_8",
+  "trajectory_id": "spider_train_9",
   "source": {
     "dataset": "spider",
-    "db_id": "concert_singer",
-    "gold_sql": "SELECT DISTINCT country FROM singer WHERE age  >  20"
+    "db_id": "department_management",
+    "gold_sql": "SELECT T1.name ,  T1.num_employees FROM department AS T1 JOIN management AS T2 ON T1.department_id  =  T2.department_id WHERE T2.temporary_acting  =  'Yes'"
   },
-  "question": "What are all distinct countries where singers above age 20 are from?",
+  "question": "Show the name and number of employees for the departments managed by heads whose temporary acting value is 'Yes'?",
   "label_status": "verified",
   "initial_state": {
     "dataset_overview": {
       "tables": [
         {
-          "table_name": "stadium",
-          "num_rows": 9,
+          "table_name": "department",
+          "num_rows": 15,
           "columns": [
             {
-              "name": "Stadium_ID",
-              "type": "int"
-            },
-            {
-              "name": "Location",
-              "type": "text"
-            },
-            {
-              "name": "Name",
-              "type": "text"
-            },
-            {
-              "name": "Capacity",
-              "type": "int"
-            },
-            {
-              "name": "Highest",
-              "type": "int"
-            },
-            {
-              "name": "Lowest",
-              "type": "int"
-            },
-            {
-              "name": "Average",
-              "type": "int"
-            }
-          ]
-        },
-        {
-          "table_name": "singer",
-          "num_rows": 6,
-          "columns": [
-            {
-              "name": "Singer_ID",
+              "name": "Department_ID",
               "type": "int"
             },
             {
@@ -57,63 +23,59 @@
               "type": "text"
             },
             {
-              "name": "Country",
+              "name": "Creation",
               "type": "text"
             },
             {
-              "name": "Song_Name",
-              "type": "text"
-            },
-            {
-              "name": "Song_release_year",
-              "type": "text"
-            },
-            {
-              "name": "Age",
+              "name": "Ranking",
               "type": "int"
             },
             {
-              "name": "Is_male",
-              "type": "bool"
+              "name": "Budget_in_Billions",
+              "type": "real"
+            },
+            {
+              "name": "Num_Employees",
+              "type": "real"
             }
           ]
         },
         {
-          "table_name": "concert",
-          "num_rows": 6,
-          "columns": [
-            {
-              "name": "concert_ID",
-              "type": "int"
-            },
-            {
-              "name": "concert_Name",
-              "type": "text"
-            },
-            {
-              "name": "Theme",
-              "type": "text"
-            },
-            {
-              "name": "Stadium_ID",
-              "type": "text"
-            },
-            {
-              "name": "Year",
-              "type": "text"
-            }
-          ]
-        },
-        {
-          "table_name": "singer_in_concert",
+          "table_name": "head",
           "num_rows": 10,
           "columns": [
             {
-              "name": "concert_ID",
+              "name": "head_ID",
               "type": "int"
             },
             {
-              "name": "Singer_ID",
+              "name": "name",
+              "type": "text"
+            },
+            {
+              "name": "born_state",
+              "type": "text"
+            },
+            {
+              "name": "age",
+              "type": "real"
+            }
+          ]
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5,
+          "columns": [
+            {
+              "name": "department_ID",
+              "type": "int"
+            },
+            {
+              "name": "head_ID",
+              "type": "int"
+            },
+            {
+              "name": "temporary_acting",
               "type": "text"
             }
           ]
@@ -124,182 +86,222 @@
   "steps": [
     {
       "step_id": "step_1",
-      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "think": "I need to combine department and management tables to link each department with its head's temporary_acting status, so I inner join them on department_id.",
       "tool_call": {
-        "tool": "condition_filter",
+        "tool": "join_tables",
         "arguments": {
-          "table": "singer",
-          "conditions": {
-            "column": "age",
-            "op": ">",
-            "value": 20
-          }
+          "left": "department",
+          "right": "management",
+          "on": [
+            {
+              "left": "department_id",
+              "right": "department_id"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
         }
       },
       "tool_output": {
-        "table": "filter_001",
-        "kind": "filter",
+        "table": "join_001",
+        "kind": "join",
         "columns": [
-          "Singer_ID",
-          "Name",
-          "Country",
-          "Song_Name",
-          "Song_release_year",
-          "Age",
-          "Is_male"
+          "T1__Department_ID",
+          "T1__Name",
+          "T1__Creation",
+          "T1__Ranking",
+          "T1__Budget_in_Billions",
+          "T1__Num_Employees",
+          "T2__department_ID",
+          "T2__head_ID",
+          "T2__temporary_acting"
         ],
-        "row_count": 6,
+        "row_count": 5,
         "rows": [
           [
-            1,
-            "Joe Sharp",
-            "Netherlands",
-            "You",
-            "1992",
-            52,
-            "F"
+            2,
+            "Treasury",
+            "1789",
+            2,
+            11.1,
+            115897.0,
+            2,
+            5,
+            "Yes"
+          ],
+          [
+            15,
+            "Homeland Security",
+            "2002",
+            15,
+            44.6,
+            208000.0,
+            15,
+            4,
+            "Yes"
           ],
           [
             2,
-            "Timbaland",
-            "United States",
-            "Dangerous",
-            "2008",
-            32,
-            "T"
-          ],
-          [
-            3,
-            "Justin Brown",
-            "France",
-            "Hey Oh",
-            "2013",
-            29,
-            "T"
-          ],
-          [
-            4,
-            "Rose White",
-            "France",
-            "Sun",
-            "2003",
-            41,
-            "F"
-          ],
-          [
-            5,
-            "John Nizinik",
-            "France",
-            "Gentleman",
-            "2014",
-            43,
-            "T"
-          ],
-          [
+            "Treasury",
+            "1789",
+            2,
+            11.1,
+            115897.0,
+            2,
             6,
-            "Tribal King",
-            "France",
-            "Love",
-            "2016",
-            25,
-            "T"
+            "Yes"
+          ],
+          [
+            7,
+            "Commerce",
+            "1903",
+            7,
+            6.2,
+            36000.0,
+            7,
+            3,
+            "No"
+          ],
+          [
+            11,
+            "Transportation",
+            "1966",
+            11,
+            58.0,
+            58622.0,
+            11,
+            10,
+            "No"
           ]
         ]
       }
     },
     {
       "step_id": "step_2",
-      "think": "Project the output columns the question asks for.",
+      "think": "I filter the joined table to keep only rows where the temporary_acting column equals 'Yes', as we are interested in departments managed by heads with that status.",
       "tool_call": {
-        "tool": "project",
+        "tool": "condition_filter",
         "arguments": {
-          "table": "filter_001",
-          "expressions": [
-            "country"
-          ]
+          "table": "join_001",
+          "conditions": {
+            "column": "T2__temporary_acting",
+            "op": "=",
+            "value": "Yes"
+          }
         }
       },
       "tool_output": {
-        "table": "project_002",
-        "kind": "project",
+        "table": "filter_002",
+        "kind": "filter",
         "columns": [
-          "country"
+          "T1__Department_ID",
+          "T1__Name",
+          "T1__Creation",
+          "T1__Ranking",
+          "T1__Budget_in_Billions",
+          "T1__Num_Employees",
+          "T2__department_ID",
+          "T2__head_ID",
+          "T2__temporary_acting"
         ],
-        "row_count": 6,
+        "row_count": 3,
         "rows": [
           [
-            "Netherlands"
+            2,
+            "Treasury",
+            "1789",
+            2,
+            11.1,
+            115897.0,
+            2,
+            5,
+            "Yes"
           ],
           [
-            "United States"
+            15,
+            "Homeland Security",
+            "2002",
+            15,
+            44.6,
+            208000.0,
+            15,
+            4,
+            "Yes"
           ],
           [
-            "France"
-          ],
-          [
-            "France"
-          ],
-          [
-            "France"
-          ],
-          [
-            "France"
+            2,
+            "Treasury",
+            "1789",
+            2,
+            11.1,
+            115897.0,
+            2,
+            6,
+            "Yes"
           ]
         ]
       }
     },
     {
       "step_id": "step_3",
-      "think": "Group the rows and compute the requested aggregates.",
+      "think": "I extract just the department name and number of employees columns from the filtered rows, as the question asks for these two attributes.",
       "tool_call": {
-        "tool": "group_aggregate",
+        "tool": "project",
         "arguments": {
-          "table": "project_002",
-          "group_by": [
-            "country"
-          ],
-          "aggregations": []
+          "table": "filter_002",
+          "expressions": [
+            "T1__name",
+            "T1__num_employees"
+          ]
         }
       },
       "tool_output": {
-        "table": "group_003",
-        "kind": "group",
+        "table": "project_003",
+        "kind": "project",
         "columns": [
-          "country"
+          "T1__name",
+          "T1__num_employees"
         ],
         "row_count": 3,
         "rows": [
           [
-            "France"
+            "Treasury",
+            115897.0
           ],
           [
-            "Netherlands"
+            "Homeland Security",
+            208000.0
           ],
           [
-            "United States"
+            "Treasury",
+            115897.0
           ]
         ]
       }
     },
     {
       "step_id": "step_4",
-      "think": "Answer the question from the final evidence rows.",
+      "think": "These rows provide the department name and employee count for every department whose head has temporary acting 'Yes', directly answering the question.",
       "tool_call": {
         "tool": "answer_from_context",
         "arguments": {
           "answer": [
             [
-              "France"
+              "Treasury",
+              115897.0
             ],
             [
-              "Netherlands"
+              "Homeland Security",
+              208000.0
             ],
             [
-              "United States"
+              "Treasury",
+              115897.0
             ]
           ],
           "evidence": {
-            "table": "group_003"
+            "table": "project_003"
           },
           "reason": "Derived by the verified tool chain."
         }
@@ -307,13 +309,16 @@
       "tool_output": {
         "final_answer": [
           [
-            "France"
+            "Treasury",
+            115897.0
           ],
           [
-            "Netherlands"
+            "Homeland Security",
+            208000.0
           ],
           [
-            "United States"
+            "Treasury",
+            115897.0
           ]
         ]
       }
@@ -321,13 +326,16 @@
   ],
   "final_answer": [
     [
-      "France"
+      "Treasury",
+      115897.0
     ],
     [
-      "Netherlands"
+      "Homeland Security",
+      208000.0
     ],
     [
-      "United States"
+      "Treasury",
+      115897.0
     ]
   ]
 }

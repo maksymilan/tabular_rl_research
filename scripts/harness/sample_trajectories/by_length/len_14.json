@@ -230,7 +230,7 @@
   "steps": [
     {
       "step_id": "step_1",
-      "think": "Join the two tables on their key to combine the needed columns.",
+      "think": "I join student and enroll on stu_num to link each student to their enrolled classes.",
       "tool_call": {
         "tool": "join_tables",
         "arguments": {
@@ -376,7 +376,7 @@
     },
     {
       "step_id": "step_2",
-      "think": "Join the two tables on their key to combine the needed columns.",
+      "think": "Joining with class on class_code adds the course code for each enrollment.",
       "tool_call": {
         "tool": "join_tables",
         "arguments": {
@@ -520,7 +520,7 @@
     },
     {
       "step_id": "step_3",
-      "think": "Join the two tables on their key to combine the needed columns.",
+      "think": "Joining with course on crs_code provides the department code for each course.",
       "tool_call": {
         "tool": "join_tables",
         "arguments": {
@@ -684,7 +684,7 @@
     },
     {
       "step_id": "step_4",
-      "think": "Join the two tables on their key to combine the needed columns.",
+      "think": "Joining with department on dept_code adds the department name, needed to filter by department.",
       "tool_call": {
         "tool": "join_tables",
         "arguments": {
@@ -845,7 +845,7 @@
     },
     {
       "step_id": "step_5",
-      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "think": "I filter for rows where department name is 'Accounting' to get only Accounting students.",
       "tool_call": {
         "tool": "condition_filter",
         "arguments": {
@@ -966,7 +966,7 @@
     },
     {
       "step_id": "step_6",
-      "think": "Project the output columns the question asks for.",
+      "think": "Projecting stu_fname extracts the first names of Accounting students.",
       "tool_call": {
         "tool": "project",
         "arguments": {
@@ -995,7 +995,7 @@
     },
     {
       "step_id": "step_7",
-      "think": "Join the two tables on their key to combine the needed columns.",
+      "think": "I rebuild the join chain starting with student and enroll to independently find Computer Info. Systems students.",
       "tool_call": {
         "tool": "join_tables",
         "arguments": {
@@ -1141,7 +1141,7 @@
     },
     {
       "step_id": "step_8",
-      "think": "Join the two tables on their key to combine the needed columns.",
+      "think": "Joining with class returns the course codes for these enrollments.",
       "tool_call": {
         "tool": "join_tables",
         "arguments": {
@@ -1285,7 +1285,7 @@
     },
     {
       "step_id": "step_9",
-      "think": "Join the two tables on their key to combine the needed columns.",
+      "think": "Joining with course gives the department codes for these courses.",
       "tool_call": {
         "tool": "join_tables",
         "arguments": {
@@ -1449,7 +1449,7 @@
     },
     {
       "step_id": "step_10",
-      "think": "Join the two tables on their key to combine the needed columns.",
+      "think": "Joining with department adds the department name for filtering.",
       "tool_call": {
         "tool": "join_tables",
         "arguments": {
@@ -1610,7 +1610,7 @@
     },
     {
       "step_id": "step_11",
-      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "think": "Filtering for department name 'Computer Info. Systems' isolates the CIS students.",
       "tool_call": {
         "tool": "condition_filter",
         "arguments": {
@@ -1766,7 +1766,7 @@
     },
     {
       "step_id": "step_12",
-      "think": "Project the output columns the question asks for.",
+      "think": "Projecting stu_fname obtains the first names of CIS students.",
       "tool_call": {
         "tool": "project",
         "arguments": {
@@ -1801,7 +1801,7 @@
     },
     {
       "step_id": "step_13",
-      "think": "Combine the two row sets with the set operation.",
+      "think": "Intersecting the two name sets yields students common to both Accounting and CIS.",
       "tool_call": {
         "tool": "set_op",
         "arguments": {
@@ -1829,7 +1829,7 @@
     },
     {
       "step_id": "step_14",
-      "think": "Answer the question from the final evidence rows.",
+      "think": "The evidence shows Anne and William are the first names from the intersection, so they are the students taking classes from both departments.",
       "tool_call": {
         "tool": "answer_from_context",
         "arguments": {

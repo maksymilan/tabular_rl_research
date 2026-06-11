@@ -1,120 +1,100 @@
 {
-  "trajectory_id": "spider_dev_37",
+  "trajectory_id": "spider_train_359",
   "source": {
     "dataset": "spider",
-    "db_id": "concert_singer",
-    "gold_sql": "SELECT T2.name FROM singer_in_concert AS T1 JOIN singer AS T2 ON T1.singer_id  =  T2.singer_id JOIN concert AS T3 ON T1.concert_id  =  T3.concert_id WHERE T3.year  =  2014"
+    "db_id": "flight_1",
+    "gold_sql": "SELECT name FROM Aircraft WHERE distance  >  (SELECT avg(distance) FROM Aircraft)"
   },
-  "question": "List all singer names in concerts in year 2014.",
+  "question": "Show names for all aircrafts with distances more than the average.",
   "label_status": "verified",
   "initial_state": {
     "dataset_overview": {
       "tables": [
         {
-          "table_name": "stadium",
-          "num_rows": 9,
-          "columns": [
-            {
-              "name": "Stadium_ID",
-              "type": "int"
-            },
-            {
-              "name": "Location",
-              "type": "text"
-            },
-            {
-              "name": "Name",
-              "type": "text"
-            },
-            {
-              "name": "Capacity",
-              "type": "int"
-            },
-            {
-              "name": "Highest",
-              "type": "int"
-            },
-            {
-              "name": "Lowest",
-              "type": "int"
-            },
-            {
-              "name": "Average",
-              "type": "int"
-            }
-          ]
-        },
-        {
-          "table_name": "singer",
-          "num_rows": 6,
-          "columns": [
-            {
-              "name": "Singer_ID",
-              "type": "int"
-            },
-            {
-              "name": "Name",
-              "type": "text"
-            },
-            {
-              "name": "Country",
-              "type": "text"
-            },
-            {
-              "name": "Song_Name",
-              "type": "text"
-            },
-            {
-              "name": "Song_release_year",
-              "type": "text"
-            },
-            {
-              "name": "Age",
-              "type": "int"
-            },
-            {
-              "name": "Is_male",
-              "type": "bool"
-            }
-          ]
-        },
-        {
-          "table_name": "concert",
-          "num_rows": 6,
-          "columns": [
-            {
-              "name": "concert_ID",
-              "type": "int"
-            },
-            {
-              "name": "concert_Name",
-              "type": "text"
-            },
-            {
-              "name": "Theme",
-              "type": "text"
-            },
-            {
-              "name": "Stadium_ID",
-              "type": "text"
-            },
-            {
-              "name": "Year",
-              "type": "text"
-            }
-          ]
-        },
-        {
-          "table_name": "singer_in_concert",
+          "table_name": "flight",
           "num_rows": 10,
           "columns": [
             {
-              "name": "concert_ID",
-              "type": "int"
+              "name": "flno",
+              "type": "number(4,0)"
             },
             {
-              "name": "Singer_ID",
-              "type": "text"
+              "name": "origin",
+              "type": "varchar2(20)"
+            },
+            {
+              "name": "destination",
+              "type": "varchar2(20)"
+            },
+            {
+              "name": "distance",
+              "type": "number(6,0)"
+            },
+            {
+              "name": "departure_date",
+              "type": "date"
+            },
+            {
+              "name": "arrival_date",
+              "type": "date"
+            },
+            {
+              "name": "price",
+              "type": "number(7,2)"
+            },
+            {
+              "name": "aid",
+              "type": "number(9,0)"
+            }
+          ]
+        },
+        {
+          "table_name": "aircraft",
+          "num_rows": 16,
+          "columns": [
+            {
+              "name": "aid",
+              "type": "number(9,0)"
+            },
+            {
+              "name": "name",
+              "type": "varchar2(30)"
+            },
+            {
+              "name": "distance",
+              "type": "number(6,0)"
+            }
+          ]
+        },
+        {
+          "table_name": "employee",
+          "num_rows": 31,
+          "columns": [
+            {
+              "name": "eid",
+              "type": "number(9,0)"
+            },
+            {
+              "name": "name",
+              "type": "varchar2(30)"
+            },
+            {
+              "name": "salary",
+              "type": "number(10,2)"
+            }
+          ]
+        },
+        {
+          "table_name": "certificate",
+          "num_rows": 69,
+          "columns": [
+            {
+              "name": "eid",
+              "type": "number(9,0)"
+            },
+            {
+              "name": "aid",
+              "type": "number(9,0)"
             }
           ]
         }
@@ -124,512 +104,180 @@
   "steps": [
     {
       "step_id": "step_1",
-      "think": "Join the two tables on their key to combine the needed columns.",
+      "think": "I compute the mean distance from the Aircraft table so I can compare each aircraft’s distance to this average.",
       "tool_call": {
-        "tool": "join_tables",
+        "tool": "aggregate",
         "arguments": {
-          "left": "singer_in_concert",
-          "right": "singer",
-          "on": [
-            {
-              "left": "singer_id",
-              "right": "singer_id"
-            }
-          ],
-          "join_type": "inner",
-          "left_prefix": "T1",
-          "right_prefix": "T2"
+          "table": "Aircraft",
+          "column": "distance",
+          "op": "mean"
         }
       },
       "tool_output": {
-        "table": "join_001",
-        "kind": "join",
-        "columns": [
-          "T1__concert_ID",
-          "T1__Singer_ID",
-          "T2__Singer_ID",
-          "T2__Name",
-          "T2__Country",
-          "T2__Song_Name",
-          "T2__Song_release_year",
-          "T2__Age",
-          "T2__Is_male"
-        ],
-        "row_count": 10,
-        "rows": [
+        "result_sample": [
           [
-            1,
-            "2",
-            2,
-            "Timbaland",
-            "United States",
-            "Dangerous",
-            "2008",
-            32,
-            "T"
-          ],
-          [
-            1,
-            "3",
-            3,
-            "Justin Brown",
-            "France",
-            "Hey Oh",
-            "2013",
-            29,
-            "T"
-          ],
-          [
-            1,
-            "5",
-            5,
-            "John Nizinik",
-            "France",
-            "Gentleman",
-            "2014",
-            43,
-            "T"
-          ],
-          [
-            2,
-            "3",
-            3,
-            "Justin Brown",
-            "France",
-            "Hey Oh",
-            "2013",
-            29,
-            "T"
-          ],
-          [
-            2,
-            "6",
-            6,
-            "Tribal King",
-            "France",
-            "Love",
-            "2016",
-            25,
-            "T"
-          ],
-          [
-            3,
-            "5",
-            5,
-            "John Nizinik",
-            "France",
-            "Gentleman",
-            "2014",
-            43,
-            "T"
-          ],
-          [
-            4,
-            "4",
-            4,
-            "Rose White",
-            "France",
-            "Sun",
-            "2003",
-            41,
-            "F"
-          ],
-          [
-            5,
-            "6",
-            6,
-            "Tribal King",
-            "France",
-            "Love",
-            "2016",
-            25,
-            "T"
-          ],
-          [
-            5,
-            "3",
-            3,
-            "Justin Brown",
-            "France",
-            "Hey Oh",
-            "2013",
-            29,
-            "T"
-          ],
-          [
-            6,
-            "2",
-            2,
-            "Timbaland",
-            "United States",
-            "Dangerous",
-            "2008",
-            32,
-            "T"
+            3655.375
           ]
-        ]
+        ],
+        "row_count": 1
       }
     },
     {
       "step_id": "step_2",
-      "think": "Join the two tables on their key to combine the needed columns.",
+      "think": "I store the average distance value in memory so I can reference it in the next filter condition.",
       "tool_call": {
-        "tool": "join_tables",
+        "tool": "add_to_memory",
         "arguments": {
-          "left": "join_001",
-          "right": "concert",
-          "on": [
-            {
-              "left": "T1__concert_id",
-              "right": "concert_id"
-            }
-          ],
-          "join_type": "inner",
-          "left_prefix": null,
-          "right_prefix": "T3"
+          "key": "v2",
+          "value": 3655.375,
+          "content": "mean(distance) from subquery"
         }
       },
       "tool_output": {
-        "table": "join_002",
-        "kind": "join",
-        "columns": [
-          "T1__concert_ID",
-          "T1__Singer_ID",
-          "T2__Singer_ID",
-          "T2__Name",
-          "T2__Country",
-          "T2__Song_Name",
-          "T2__Song_release_year",
-          "T2__Age",
-          "T2__Is_male",
-          "T3__concert_ID",
-          "T3__concert_Name",
-          "T3__Theme",
-          "T3__Stadium_ID",
-          "T3__Year"
-        ],
-        "row_count": 10,
-        "rows": [
-          [
-            1,
-            "2",
-            2,
-            "Timbaland",
-            "United States",
-            "Dangerous",
-            "2008",
-            32,
-            "T",
-            1,
-            "Auditions",
-            "Free choice",
-            "1",
-            "2014"
-          ],
-          [
-            1,
-            "3",
-            3,
-            "Justin Brown",
-            "France",
-            "Hey Oh",
-            "2013",
-            29,
-            "T",
-            1,
-            "Auditions",
-            "Free choice",
-            "1",
-            "2014"
-          ],
-          [
-            1,
-            "5",
-            5,
-            "John Nizinik",
-            "France",
-            "Gentleman",
-            "2014",
-            43,
-            "T",
-            1,
-            "Auditions",
-            "Free choice",
-            "1",
-            "2014"
-          ],
-          [
-            2,
-            "3",
-            3,
-            "Justin Brown",
-            "France",
-            "Hey Oh",
-            "2013",
-            29,
-            "T",
-            2,
-            "Super bootcamp",
-            "Free choice 2",
-            "2",
-            "2014"
-          ],
-          [
-            2,
-            "6",
-            6,
-            "Tribal King",
-            "France",
-            "Love",
-            "2016",
-            25,
-            "T",
-            2,
-            "Super bootcamp",
-            "Free choice 2",
-            "2",
-            "2014"
-          ],
-          [
-            3,
-            "5",
-            5,
-            "John Nizinik",
-            "France",
-            "Gentleman",
-            "2014",
-            43,
-            "T",
-            3,
-            "Home Visits",
-            "Bleeding Love",
-            "2",
-            "2015"
-          ],
-          [
-            4,
-            "4",
-            4,
-            "Rose White",
-            "France",
-            "Sun",
-            "2003",
-            41,
-            "F",
-            4,
-            "Week 1",
-            "Wide Awake",
-            "10",
-            "2014"
-          ]
-        ],
-        "is_truncated": true,
-        "note": "showing first 7 of 10 rows (exceeds 100-cell preview budget)"
+        "memory": {
+          "key": "v2",
+          "value": 3655.375,
+          "content": "mean(distance) from subquery"
+        }
       }
     },
     {
       "step_id": "step_3",
-      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "think": "I filter the Aircraft table to keep only those rows where distance exceeds the stored average.",
       "tool_call": {
         "tool": "condition_filter",
         "arguments": {
-          "table": "join_002",
+          "table": "Aircraft",
           "conditions": {
-            "column": "T3__year",
-            "op": "=",
-            "value": 2014
+            "column": "distance",
+            "op": ">",
+            "value_ref": "v2"
           }
         }
       },
       "tool_output": {
-        "table": "filter_003",
+        "table": "filter_001",
         "kind": "filter",
         "columns": [
-          "T1__concert_ID",
-          "T1__Singer_ID",
-          "T2__Singer_ID",
-          "T2__Name",
-          "T2__Country",
-          "T2__Song_Name",
-          "T2__Song_release_year",
-          "T2__Age",
-          "T2__Is_male",
-          "T3__concert_ID",
-          "T3__concert_Name",
-          "T3__Theme",
-          "T3__Stadium_ID",
-          "T3__Year"
+          "aid",
+          "name",
+          "distance"
         ],
-        "row_count": 6,
+        "row_count": 7,
         "rows": [
           [
             1,
-            "2",
-            2,
-            "Timbaland",
-            "United States",
-            "Dangerous",
-            "2008",
-            32,
-            "T",
-            1,
-            "Auditions",
-            "Free choice",
-            "1",
-            "2014"
+            "Boeing 747-400",
+            8430
           ],
           [
-            1,
-            "3",
             3,
-            "Justin Brown",
-            "France",
-            "Hey Oh",
-            "2013",
-            29,
-            "T",
-            1,
-            "Auditions",
-            "Free choice",
-            "1",
-            "2014"
+            "Airbus A340-300",
+            7120
           ],
           [
-            1,
-            "5",
-            5,
-            "John Nizinik",
-            "France",
-            "Gentleman",
-            "2014",
-            43,
-            "T",
-            1,
-            "Auditions",
-            "Free choice",
-            "1",
-            "2014"
+            8,
+            "Tupolev 154",
+            4103
           ],
           [
-            2,
-            "3",
-            3,
-            "Justin Brown",
-            "France",
-            "Hey Oh",
-            "2013",
-            29,
-            "T",
-            2,
-            "Super bootcamp",
-            "Free choice 2",
-            "2",
-            "2014"
+            9,
+            "Lockheed L1011",
+            6900
           ],
           [
-            2,
-            "6",
-            6,
-            "Tribal King",
-            "France",
-            "Love",
-            "2016",
-            25,
-            "T",
-            2,
-            "Super bootcamp",
-            "Free choice 2",
-            "2",
-            "2014"
+            10,
+            "Boeing 757-300",
+            4010
           ],
           [
-            4,
-            "4",
-            4,
-            "Rose White",
-            "France",
-            "Sun",
-            "2003",
-            41,
-            "F",
-            4,
-            "Week 1",
-            "Wide Awake",
-            "10",
-            "2014"
+            11,
+            "Boeing 777-300",
+            6441
+          ],
+          [
+            12,
+            "Boeing 767-400ER",
+            6475
           ]
         ]
       }
     },
     {
       "step_id": "step_4",
-      "think": "Project the output columns the question asks for.",
+      "think": "I keep only the name column from the filtered results, as the question asks for names.",
       "tool_call": {
         "tool": "project",
         "arguments": {
-          "table": "filter_003",
+          "table": "filter_001",
           "expressions": [
-            "T2__name"
+            "name"
           ]
         }
       },
       "tool_output": {
-        "table": "project_004",
+        "table": "project_002",
         "kind": "project",
         "columns": [
-          "T2__name"
+          "name"
         ],
-        "row_count": 6,
+        "row_count": 7,
         "rows": [
           [
-            "Timbaland"
+            "Boeing 747-400"
           ],
           [
-            "Justin Brown"
+            "Airbus A340-300"
           ],
           [
-            "John Nizinik"
+            "Tupolev 154"
           ],
           [
-            "Justin Brown"
+            "Lockheed L1011"
           ],
           [
-            "Tribal King"
+            "Boeing 757-300"
           ],
           [
-            "Rose White"
+            "Boeing 777-300"
+          ],
+          [
+            "Boeing 767-400ER"
           ]
         ]
       }
     },
     {
       "step_id": "step_5",
-      "think": "Answer the question from the final evidence rows.",
+      "think": "The seven aircraft names in the evidence all have distances greater than the average distance of 3655.375, so they answer the question.",
       "tool_call": {
         "tool": "answer_from_context",
         "arguments": {
           "answer": [
             [
-              "Timbaland"
+              "Boeing 747-400"
             ],
             [
-              "Justin Brown"
+              "Airbus A340-300"
             ],
             [
-              "John Nizinik"
+              "Tupolev 154"
             ],
             [
-              "Justin Brown"
+              "Lockheed L1011"
             ],
             [
-              "Tribal King"
+              "Boeing 757-300"
             ],
             [
-              "Rose White"
+              "Boeing 777-300"
+            ],
+            [
+              "Boeing 767-400ER"
             ]
           ],
           "evidence": {
-            "table": "project_004"
+            "table": "project_002"
           },
           "reason": "Derived by the verified tool chain."
         }
@@ -637,22 +285,25 @@
       "tool_output": {
         "final_answer": [
           [
-            "Timbaland"
+            "Boeing 747-400"
           ],
           [
-            "Justin Brown"
+            "Airbus A340-300"
           ],
           [
-            "John Nizinik"
+            "Tupolev 154"
           ],
           [
-            "Justin Brown"
+            "Lockheed L1011"
           ],
           [
-            "Tribal King"
+            "Boeing 757-300"
           ],
           [
-            "Rose White"
+            "Boeing 777-300"
+          ],
+          [
+            "Boeing 767-400ER"
           ]
         ]
       }
@@ -660,22 +311,25 @@
   ],
   "final_answer": [
     [
-      "Timbaland"
+      "Boeing 747-400"
     ],
     [
-      "Justin Brown"
+      "Airbus A340-300"
     ],
     [
-      "John Nizinik"
+      "Tupolev 154"
     ],
     [
-      "Justin Brown"
+      "Lockheed L1011"
     ],
     [
-      "Tribal King"
+      "Boeing 757-300"
     ],
     [
-      "Rose White"
+      "Boeing 777-300"
+    ],
+    [
+      "Boeing 767-400ER"
     ]
   ]
 }

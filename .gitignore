@@ -8,3 +8,5 @@ __pycache__/
 api_usage.md
 # Python venv
 .venv/
+.claude/
+api.md
