@@ -85,6 +85,8 @@ class Harness:
             return f"{col} LIKE '%' || {_lit(c['value'])} || '%'"
         if op == "like":
             return f"{col} LIKE {_lit(c['value'])}"
+        if op == "in" and "in_table" in c:  # membership against an IN-subquery's (single-column) table
+            return f"{col} IN (SELECT * FROM ({self._sql(c['in_table'])}))"
         if op == "in":
             return f"{col} IN ({', '.join(_lit(v) for v in c['values'])})"
         if op == "between":

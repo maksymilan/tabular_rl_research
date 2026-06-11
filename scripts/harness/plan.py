@@ -47,26 +47,26 @@ class Step:
 Plan = list[Step]
 
 
-def resolve_value_refs(cond, values: dict):
-    """Substitute every `{value_ref: K}` leaf in a condition tree with `{value: values[K]}`.
-    `value_ref` threads a scalar produced earlier (an aggregate's result, parked in memory) into a
-    predicate — this is how a scalar subquery's value reaches the filter that consumes it."""
+def resolve_cond(cond, id_to_table: dict, values: dict | None = None):
+    """Resolve subquery references inside a condition tree.
+    - `in_table` (an IN-subquery's set table, by step id) -> its real view name. Always resolved.
+    - `value_ref` (a scalar subquery's value, parked in memory) -> the literal. Resolved only when
+      `values` is given (i.e. at execution; the trajectory keeps `value_ref` so the model's action
+      references the memory entry, not a magic constant)."""
     if isinstance(cond, list):
-        return [resolve_value_refs(c, values) for c in cond]
+        return [resolve_cond(c, id_to_table, values) for c in cond]
     if not isinstance(cond, dict):
         return cond
-    if "value_ref" in cond:
-        out = {k: v for k, v in cond.items() if k != "value_ref"}
-        out["value"] = values[cond["value_ref"]]
-        return out
-    out = {}
-    for k, v in cond.items():
-        if k in ("and", "or"):
-            out[k] = [resolve_value_refs(x, values) for x in v]
-        elif k == "not":
-            out[k] = resolve_value_refs(v, values)
-        else:
-            out[k] = v
+    for key in ("and", "or"):
+        if key in cond:
+            return {key: [resolve_cond(x, id_to_table, values) for x in cond[key]]}
+    if "not" in cond:
+        return {"not": resolve_cond(cond["not"], id_to_table, values)}
+    out = dict(cond)
+    if "in_table" in out:
+        out["in_table"] = id_to_table.get(out["in_table"], out["in_table"])
+    if values is not None and "value_ref" in out:
+        out["value"] = values[out.pop("value_ref")]
     return out
 
 
@@ -89,10 +89,15 @@ def run_plan(harness, plan: Plan) -> list[tuple]:
             if ref in id_to_table:
                 args[key] = id_to_table[ref]
         if step.tool == "condition_filter":
-            args["conditions"] = resolve_value_refs(args.get("conditions"), values)
+            args["conditions"] = resolve_cond(args.get("conditions"), id_to_table, values)
         elif step.tool == "add_to_memory":
-            args = {"key": step.args["key"], "value": values.get(step.args["source"]),
-                    "content": step.args.get("content", "")}
+            src = step.args["source"]
+            if src in id_to_table:                       # single-row subquery: take its one cell
+                rows = harness.rows(id_to_table[src])
+                val = rows[0][0] if rows else None
+            else:
+                val = values.get(src)                    # aggregate scalar
+            args = {"key": step.args["key"], "value": val, "content": step.args.get("content", "")}
         method = getattr(harness, step.tool, None)
         if method is None:
             raise ValueError(f"harness has no tool {step.tool!r}")

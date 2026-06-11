@@ -10,7 +10,7 @@ that the trajectory was execution-verified.
 from __future__ import annotations
 
 from compiler import Compiler
-from plan import TABLE_REF_ARGS, resolve_value_refs
+from plan import TABLE_REF_ARGS, resolve_cond
 
 # every tool the model may call (table-producing + reading/scalar + memory/terminal)
 TOOLS = set(TABLE_REF_ARGS) | {
@@ -63,9 +63,17 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
         display = args
         exec_args = args
         if step.tool == "condition_filter":
-            exec_args = {**args, "conditions": resolve_value_refs(args.get("conditions"), values)}
+            # display resolves in_table to a real name but keeps value_ref (model references memory);
+            # exec resolves both so the SQL gets concrete literals.
+            display = {**args, "conditions": resolve_cond(args.get("conditions"), id_to_table)}
+            exec_args = {**args, "conditions": resolve_cond(args.get("conditions"), id_to_table, values)}
         elif step.tool == "add_to_memory":
-            val = values.get(step.args["source"])
+            src = step.args["source"]
+            if src in id_to_table:                       # single-row subquery: take its one cell
+                rows = h.rows(id_to_table[src])
+                val = rows[0][0] if rows else None
+            else:
+                val = values.get(src)
             exec_args = display = {"key": step.args["key"], "value": val,
                                    "content": step.args.get("content", "")}
         out = getattr(h, step.tool)(**exec_args)

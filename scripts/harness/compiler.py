@@ -243,8 +243,9 @@ class Compiler:
                 return {"column": self._resolve(cond.this, colmap), "op": "like", "value": val}
             raise CompileError("LIKE pattern must be a string literal")
         if isinstance(cond, E.In):
-            if cond.args.get("query"):
-                raise CompileError("IN (subquery) unsupported")
+            sub = cond.args.get("query")
+            if sub is not None:
+                return self._in_subquery(cond.this, sub, steps, colmap)
             out = []
             for e in cond.expressions:
                 if isinstance(e, E.Literal):
@@ -261,6 +262,25 @@ class Compiler:
             return {"column": self._resolve(cond.this, colmap), "op": "is_null"}
         raise CompileError(f"predicate {type(cond).__name__} unsupported")
 
+    def _in_subquery(self, this_node: E.Expression, sub: E.Expression, steps: list[Step], colmap):
+        """`col IN (subquery)` -> compile the subquery to a single-column table and test membership
+        against it (`in_table`); a set-valued subquery stays a table, NOT memory. If the subquery is
+        scalar (ends in `aggregate`), `IN` degenerates to equality, routed through memory like any
+        scalar subquery. `NOT IN` is the parser's `Not(In(...))`, rendered as `NOT (col IN ...)`."""
+        inner = sub.this if isinstance(sub, (E.Subquery, E.Paren)) else sub
+        sub_steps = self._node(inner)   # SELECT or a set-op (UNION/INTERSECT/EXCEPT) -> a table
+        steps.extend(sub_steps)
+        last = sub_steps[-1]
+        col = self._resolve(this_node, colmap)
+        if last.tool == "aggregate":          # IN (scalar subquery) == equality to that scalar
+            mem = self._id()
+            key = f"v{mem[1:]}"
+            steps.append(Step(mem, "add_to_memory",
+                              {"key": key, "source": last.id,
+                               "content": f"{last.args['op']}({last.args['column']}) from subquery"}))
+            return {"column": col, "op": "=", "value_ref": key}
+        return {"column": col, "op": "in", "in_table": last.id}
+
     def _scalar_subquery(self, node: E.Expression, steps: list[Step]):
         """Uncorrelated scalar subquery in a predicate -> compile it to an `aggregate` step, park the
         scalar with `add_to_memory` (the memory entry cites the aggregate, the predicate cites the
@@ -272,15 +292,17 @@ class Compiler:
         if not isinstance(inner, E.Select):
             return None
         sub = self._node(inner)
-        if not sub or sub[-1].tool != "aggregate":
-            raise CompileError("only scalar (single-aggregate) subqueries are supported")
+        if not sub:
+            return None
         steps.extend(sub)
-        agg = sub[-1]
+        last = sub[-1]
         mem = self._id()
         key = f"v{mem[1:]}"          # distinct namespace from step ids (s*) in the value map
-        steps.append(Step(mem, "add_to_memory",
-                          {"key": key, "source": agg.id,
-                           "content": f"{agg.args['op']}({agg.args['column']}) from subquery"}))
+        # aggregate -> a scalar; otherwise a single-row subquery used as a scalar (= (SELECT ... LIMIT 1)),
+        # whose one cell is extracted at execution — matching SQLite's first-row scalar semantics.
+        content = (f"{last.args['op']}({last.args['column']}) from subquery"
+                   if last.tool == "aggregate" else "single-row value from subquery")
+        steps.append(Step(mem, "add_to_memory", {"key": key, "source": last.id, "content": content}))
         return key
 
     def _resolve(self, node: E.Expression, colmap: dict[str, str]) -> str:
@@ -367,7 +389,20 @@ class Compiler:
             steps.append(Step(sid, "group_aggregate", {"table": cur, "group_by": [], "aggregations": aggs}))
             return steps
         if group is None and aggs and keys:
-            raise CompileError("mixed aggregate + non-aggregate without GROUP BY unsupported")
+            # SQLite bare-column extension: non-aggregated columns selected alongside aggregates with
+            # no GROUP BY -> a single row, the bare columns from an arbitrary row. Model it as a
+            # whole-table group (group_by=[]) carrying the bare columns through as passthrough.
+            sid = self._id()
+            steps.append(Step(sid, "group_aggregate",
+                              {"table": cur, "group_by": [], "aggregations": aggs,
+                               "passthrough": [k for k, _ in keys]}))
+            cur = sid
+            proj = self._projection(sel, agg_map)
+            if proj != ["*"]:
+                sid = self._id()
+                steps.append(Step(sid, "project", {"table": cur, "expressions": proj}))
+                cur = sid
+            return steps
 
         if group is not None:
             having = sel.args.get("having")
@@ -414,5 +449,9 @@ class Compiler:
             sid = self._id()
             steps.append(Step(sid, "group_aggregate", {"table": cur, "group_by": cols, "aggregations": []}))
             cur = sid
+
+        if not steps:               # bare `SELECT * FROM t`: materialize the source so there is a result
+            sid = self._id()
+            steps.append(Step(sid, "project", {"table": cur, "expressions": ["*"]}))
 
         return steps

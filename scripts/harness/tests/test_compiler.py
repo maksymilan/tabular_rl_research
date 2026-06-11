@@ -71,11 +71,16 @@ def run():
             and mem.args["source"] == "s1"
             and filt.args["conditions"].get("value_ref") == mem.args["key"], str(tools))
 
+    # IN (subquery) -> compile the subquery to a table, test membership via in_table
+    pin = Compiler().compile("SELECT a FROM t WHERE a IN (SELECT b FROM s)")
+    filt = next(s for s in pin if s.tool == "condition_filter")
+    t.check("IN (subquery) -> in_table membership",
+            filt.args["conditions"].get("op") == "in" and "in_table" in filt.args["conditions"], str(pin))
+
     # unsupported constructs raise CompileError (honest coverage gaps)
     for bad, label in [
         ("INSERT INTO t VALUES (1)", "non-SELECT"),
-        ("SELECT a FROM t WHERE a IN (SELECT b FROM s)", "IN (subquery)"),
-        ("SELECT a FROM t WHERE a > (SELECT b FROM s)", "non-scalar subquery"),
+        ("SELECT a FROM t JOIN s ON t.x > s.y", "non-equality join ON"),
     ]:
         try:
             Compiler().compile(bad)

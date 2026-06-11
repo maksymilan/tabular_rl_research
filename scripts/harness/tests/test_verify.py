@@ -63,6 +63,18 @@ CASES = [
     "SELECT name FROM employees WHERE age = (SELECT MAX(age) FROM employees)",
     "SELECT COUNT(*) FROM employees WHERE salary > (SELECT AVG(salary) FROM employees)",
     "SELECT name FROM employees WHERE salary >= (SELECT MIN(salary) FROM employees WHERE dept='eng')",
+    # IN / NOT IN (subquery): semi-join / anti-join via membership against the subquery's table
+    "SELECT name FROM employees WHERE dept IN (SELECT dept FROM depts WHERE budget > 1000)",
+    "SELECT name FROM employees WHERE dept NOT IN (SELECT dept FROM depts WHERE budget < 2000)",
+    "SELECT name FROM employees WHERE salary IN (SELECT MAX(salary) FROM employees)",
+    # mixed aggregate + bare column, no GROUP BY (SQLite extension)
+    "SELECT dept, COUNT(*), SUM(salary) FROM employees",
+    # bare SELECT * (must emit a step, not an empty plan)
+    "SELECT * FROM employees",
+    # IN (set-op subquery) and = (single-row LIMIT-1 subquery used as a scalar)
+    "SELECT name FROM employees WHERE dept IN "
+    "(SELECT dept FROM depts WHERE budget>1000 INTERSECT SELECT dept FROM depts WHERE budget<5000)",
+    "SELECT name FROM employees WHERE salary = (SELECT salary FROM employees ORDER BY salary DESC LIMIT 1)",
 ]
 
 
