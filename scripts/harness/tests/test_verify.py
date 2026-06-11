@@ -58,6 +58,11 @@ CASES = [
     "SELECT dept FROM employees INTERSECT SELECT dept FROM depts",
     "SELECT dept FROM employees EXCEPT SELECT dept FROM depts WHERE budget < 2000",
     "SELECT name FROM employees WHERE dept='eng' UNION SELECT name FROM employees WHERE dept='hr'",
+    # scalar subqueries: aggregate -> add_to_memory -> filter(value_ref) -> ...
+    "SELECT name FROM employees WHERE salary > (SELECT AVG(salary) FROM employees)",
+    "SELECT name FROM employees WHERE age = (SELECT MAX(age) FROM employees)",
+    "SELECT COUNT(*) FROM employees WHERE salary > (SELECT AVG(salary) FROM employees)",
+    "SELECT name FROM employees WHERE salary >= (SELECT MIN(salary) FROM employees WHERE dept='eng')",
 ]
 
 

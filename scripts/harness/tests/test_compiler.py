@@ -61,10 +61,21 @@ def run():
     pm = Compiler().compile("SELECT MAX(salary), MIN(salary) FROM employees")
     t.check("multi scalar agg", pm[-1].tool == "group_aggregate" and pm[-1].args["group_by"] == [], str(pm[-1]))
 
+    # scalar subquery -> aggregate + add_to_memory + filter referencing it via value_ref
+    psub = Compiler().compile("SELECT name FROM employees WHERE salary > (SELECT AVG(salary) FROM employees)")
+    tools = [s.tool for s in psub]
+    mem = next(s for s in psub if s.tool == "add_to_memory")
+    filt = next(s for s in psub if s.tool == "condition_filter")
+    t.check("scalar subquery -> aggregate+add_to_memory+value_ref",
+            tools[:3] == ["aggregate", "add_to_memory", "condition_filter"]
+            and mem.args["source"] == "s1"
+            and filt.args["conditions"].get("value_ref") == mem.args["key"], str(tools))
+
     # unsupported constructs raise CompileError (honest coverage gaps)
     for bad, label in [
         ("INSERT INTO t VALUES (1)", "non-SELECT"),
-        ("SELECT a FROM t WHERE a > (SELECT MAX(b) FROM s)", "scalar subquery in WHERE"),
+        ("SELECT a FROM t WHERE a IN (SELECT b FROM s)", "IN (subquery)"),
+        ("SELECT a FROM t WHERE a > (SELECT b FROM s)", "non-scalar subquery"),
     ]:
         try:
             Compiler().compile(bad)

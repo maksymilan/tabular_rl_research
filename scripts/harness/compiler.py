@@ -209,16 +209,18 @@ class Compiler:
         raise CompileError("join ON supports equality / AND of equalities only")
 
     # ---------- WHERE / HAVING conditions (boolean tree) ----------
-    def _condition(self, cond: E.Expression, colmap: dict[str, str] | None = None):
+    def _condition(self, cond: E.Expression, steps: list[Step], colmap: dict[str, str] | None = None):
         colmap = colmap or {}
         if isinstance(cond, E.Paren):
-            return self._condition(cond.this, colmap)
+            return self._condition(cond.this, steps, colmap)
         if isinstance(cond, E.And):
-            return {"and": [self._condition(cond.this, colmap), self._condition(cond.expression, colmap)]}
+            return {"and": [self._condition(cond.this, steps, colmap),
+                            self._condition(cond.expression, steps, colmap)]}
         if isinstance(cond, E.Or):
-            return {"or": [self._condition(cond.this, colmap), self._condition(cond.expression, colmap)]}
+            return {"or": [self._condition(cond.this, steps, colmap),
+                           self._condition(cond.expression, steps, colmap)]}
         if isinstance(cond, E.Not):
-            return {"not": self._condition(cond.this, colmap)}
+            return {"not": self._condition(cond.this, steps, colmap)}
         for cls, op in _CMP.items():
             if isinstance(cond, cls):
                 col = self._resolve(cond.this, colmap)
@@ -230,6 +232,9 @@ class Compiler:
                     return {"column": col, "op": op, "value": sv}
                 if isinstance(rhs, E.Column):
                     return {"column": col, "op": op, "column_value": self._bare(rhs)}
+                ref = self._scalar_subquery(rhs, steps)
+                if ref is not None:
+                    return {"column": col, "op": op, "value_ref": ref}
                 raise CompileError(f"predicate RHS {type(rhs).__name__} unsupported")
         if isinstance(cond, E.Like):
             pat = cond.expression
@@ -255,6 +260,28 @@ class Compiler:
         if isinstance(cond, E.Is) and isinstance(cond.expression, E.Null):
             return {"column": self._resolve(cond.this, colmap), "op": "is_null"}
         raise CompileError(f"predicate {type(cond).__name__} unsupported")
+
+    def _scalar_subquery(self, node: E.Expression, steps: list[Step]):
+        """Uncorrelated scalar subquery in a predicate -> compile it to an `aggregate` step, park the
+        scalar with `add_to_memory` (the memory entry cites the aggregate, the predicate cites the
+        memory entry -> an explicit provenance chain for the process reward), and return the memory
+        key for the predicate's `value_ref`. Returns None if `node` is not a subquery, so the caller
+        falls through to its normal 'unsupported RHS' error. Correlated / non-scalar subqueries
+        either raise here or fail round-trip verification and are dropped (never mis-compiled)."""
+        inner = node.this if isinstance(node, (E.Subquery, E.Paren)) else node
+        if not isinstance(inner, E.Select):
+            return None
+        sub = self._node(inner)
+        if not sub or sub[-1].tool != "aggregate":
+            raise CompileError("only scalar (single-aggregate) subqueries are supported")
+        steps.extend(sub)
+        agg = sub[-1]
+        mem = self._id()
+        key = f"v{mem[1:]}"          # distinct namespace from step ids (s*) in the value map
+        steps.append(Step(mem, "add_to_memory",
+                          {"key": key, "source": agg.id,
+                           "content": f"{agg.args['op']}({agg.args['column']}) from subquery"}))
+        return key
 
     def _resolve(self, node: E.Expression, colmap: dict[str, str]) -> str:
         key = self._bare(node)
@@ -320,9 +347,9 @@ class Compiler:
 
         where = sel.args.get("where")
         if where is not None:
+            conds = self._condition(where.this, steps)   # may append subquery + add_to_memory steps
             sid = self._id()
-            steps.append(Step(sid, "condition_filter",
-                              {"table": cur, "conditions": self._condition(where.this)}))
+            steps.append(Step(sid, "condition_filter", {"table": cur, "conditions": conds}))
             cur = sid
 
         keys, aggs, agg_map = self._select_items(sel)
@@ -360,9 +387,9 @@ class Compiler:
             steps.append(Step(sid, "group_aggregate", g_args))
             cur = sid
             if having is not None:
+                conds = self._condition(having.this, steps, agg_map)
                 sid = self._id()
-                steps.append(Step(sid, "condition_filter",
-                                  {"table": cur, "conditions": self._condition(having.this, agg_map)}))
+                steps.append(Step(sid, "condition_filter", {"table": cur, "conditions": conds}))
                 cur = sid
 
         if order is not None or limit is not None:

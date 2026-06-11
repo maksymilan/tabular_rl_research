@@ -1,18 +1,18 @@
 # Harness + Compiler — Test Report
 
-Generated 2026-06-08 14:48 · `python scripts/harness/run_all.py`
+Generated 2026-06-11 10:05 · `python scripts/harness/run_all.py`
 
-## Unit tests — 85/85 passed
+## Unit tests — 91/91 passed
 
 | module | passed | failed |
 |---|---|---|
 | test_executor | 11 | 0 |
 | test_plan | 3 | 0 |
-| test_compiler | 13 | 0 |
-| test_verify | 40 | 0 |
+| test_compiler | 15 | 0 |
+| test_verify | 44 | 0 |
 | test_emitter | 18 | 0 |
 
-## Spider compile coverage — 1824/2000 (91.2%)
+## Spider compile coverage — 1885/2000 (94.2%)
 
 Parse + decompose of real Spider gold SQL. *Compile coverage only* — the HF parquet ships no SQLite DBs, so results are not execution-verified here.
 
@@ -21,7 +21,7 @@ Top unsupported-construct buckets:
 | count | reason | example |
 |---|---|---|
 | 101 | IN (subquery) unsupported | `SELECT count(*) FROM department WHERE department_id NOT IN (SELECT dep…` |
-| 69 | predicate RHS Subquery unsupported | `SELECT date ,  zip_code FROM weather WHERE min_dew_point_f  <  (SELECT…` |
+| 8 | only scalar (single-aggregate) subqueries are su | `SELECT t1.catalog_entry_name FROM Catalog_Contents AS t1 JOIN Catalog_…` |
 | 4 | mixed aggregate + non-aggregate without GROUP BY | `SELECT billing_state ,  COUNT(*) ,  SUM(total) FROM invoices WHERE bil…` |
 | 2 | join ON supports equality / AND of equalities on | `SELECT count(*) FROM station AS T1 JOIN trip AS T2 JOIN station AS T3 …` |
 

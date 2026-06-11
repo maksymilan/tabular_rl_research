@@ -10,7 +10,7 @@ that the trajectory was execution-verified.
 from __future__ import annotations
 
 from compiler import Compiler
-from plan import TABLE_REF_ARGS
+from plan import TABLE_REF_ARGS, resolve_value_refs
 
 # every tool the model may call (table-producing + reading/scalar + memory/terminal)
 TOOLS = set(TABLE_REF_ARGS) | {
@@ -27,6 +27,7 @@ THINK = {
     "project": "Project the output columns the question asks for.",
     "set_op": "Combine the two row sets with the set operation.",
     "aggregate": "Compute the scalar aggregate that answers the question.",
+    "add_to_memory": "Record this scalar in memory so a later step can use it as a threshold.",
 }
 
 
@@ -48,6 +49,7 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
          trajectory_id: str = "traj") -> dict:
     plan = Compiler(h.schema()).compile(gold_sql)
     id_to_table: dict[str, str] = {}
+    values: dict = {}
     steps: list[dict] = []
     final = None
 
@@ -56,7 +58,17 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
         for key in TABLE_REF_ARGS.get(step.tool, []):
             if args.get(key) in id_to_table:
                 args[key] = id_to_table[args[key]]
-        out = getattr(h, step.tool)(**args)
+        # `display` is what the trajectory shows the model (keeps value_ref / the committed
+        # scalar); `exec_args` is what the harness runs (value_refs resolved to concrete values).
+        display = args
+        exec_args = args
+        if step.tool == "condition_filter":
+            exec_args = {**args, "conditions": resolve_value_refs(args.get("conditions"), values)}
+        elif step.tool == "add_to_memory":
+            val = values.get(step.args["source"])
+            exec_args = display = {"key": step.args["key"], "value": val,
+                                   "content": step.args.get("content", "")}
+        out = getattr(h, step.tool)(**exec_args)
         if isinstance(out, dict) and "table_name" in out:
             id_to_table[step.id] = out["table_name"]
             final = ("table", out["table_name"])
@@ -64,7 +76,12 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
             # truncated + flagged) so the model perceives the data, not just a table handle.
             tool_output = {"table": out["table_name"], "kind": out["kind"],
                            **h.preview(out["table_name"])}
+        elif step.tool == "add_to_memory":
+            values[step.args["key"]] = exec_args["value"]
+            tool_output = {"memory": out["memory"]}
         else:
+            if step.tool == "aggregate":
+                values[step.id] = out
             final = ("value", out)
             rows = out if isinstance(out, list) else [(out,)]
             tool_output = {"result_sample": [list(r) if isinstance(r, tuple) else r for r in rows[:5]],
@@ -72,7 +89,7 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
         steps.append({
             "step_id": f"step_{i}",
             "think": THINK.get(step.tool, ""),
-            "tool_call": {"tool": step.tool, "arguments": args},
+            "tool_call": {"tool": step.tool, "arguments": display},
             "tool_output": tool_output,
         })
 
