@@ -12,7 +12,7 @@ abstract tools (relational + perception + memory); the harness translates each c
 SQL over SQLite and verifies results. Training data is built by **compiling Spider/BIRD gold SQL into
 tool-call trajectories** (not LLM-guessed), so every trajectory is execution-verified.
 
-## Current state (2026-06-11)
+## Current state (2026-06-12)
 
 - **v0 SFT done** (Qwen2.5-3B LoRA): exec-acc **63.8%** on full Spider dev vs text-to-SQL parity line
   **64–66%** vs base+few-shot **4%**. Conclusion: SFT = behavior cloning of interface + canonical
@@ -22,9 +22,34 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   `add_to_memory`** (scalar subqueries), think-filled by the external LLM (99.7%). Compile coverage
   99.9%, execution-verified **98.4%** on 2000q. System prompt updated with `add_to_memory` +
   `value_ref`/`in_table` predicate forms.
-- **Next**: build the v1 SFT set from `data/trajectories/spider_{split}_think.jsonl`; 7B baseline
-  (parallel-safe, no data dep); 7B / v1 SFT; then v1-c (`semantic_match` via literal-fuzzing +
-  embedding backend) and RL (`scripts/eval/rollout.py` is the env loop).
+- **7B baselines done** on all 1,034 Spider dev examples with Qwen2.5-7B-Instruct:
+  zero-shot direct SQL **716/1034 = 69.25%**; strict two-shot tool use **40/1034 = 3.87%**.
+  The tool run reached only 78 legal final answers. Its dominant failure is formatting:
+  950 final `protocol_error`s, and 954 trajectories omitted a complete
+  `<tool_call>...</tool_call>` block at least once (usually the closing tag). Do not reinterpret
+  this score as pure table-reasoning failure or silently relax the parser when comparing to SFT.
+  Full model inputs/outputs and per-case success/failure JSON live under
+  `data/results/qwen2.5_7b_baselines/` (gitignored).
+- **Next**: run 7B / v1 SFT and zero-shot tool evaluation. After that, continue with v1-c
+  (`semantic_match` via literal-fuzzing + embedding backend) and RL
+  (`scripts/eval/rollout.py` is the env loop).
+- **7B / v1 SFT running** (started 2026-06-13 00:01 Asia/Shanghai): Qwen2.5-7B QLoRA on GPU 7,
+  PID `3961316`, output `checkpoints/qwen2.5-7b-spider-v1-qlora`. The viable 24G configuration is
+  `cutoff_len=8192`, LoRA rank/alpha 16/32, `paged_adamw_8bit`, bf16, gradient checkpointing,
+  effective batch 16, 2 epochs / 830 optimizer steps. Logs are
+  `logs/qwen2.5_7b_spider_v1_qlora{,_gpu.csv}`. See `scripts/sft/EXPERIMENTS.md`.
+- **Long-context OOM result**: the 9,113-token longest record OOMs at cutoff 10,240. At cutoff
+  8,192, standard AdamW OOMs only after its first optimizer-state allocation, so a one-step smoke
+  is misleading. Rank 16 + paged 8-bit AdamW passed two worst-case updates at 23,646/24,576 MiB.
+  The full run uses `spider_tools_v1_8k`: 6,763 records after dropping 8 records over 7,900 raw
+  content tokens; longest kept is 7,701. Remote SFT env now has `bitsandbytes==0.46.1`.
+- **v1 SFT data built**: `build_sft_data.py` now accepts `--input-pattern`, `--output-dir`,
+  `--output-prefix`, and `--dataset-name`. The reproducible v1 command uses the think-filled
+  trajectories and `--max-est-tokens 8900`, producing 6771 train + 998 dev records under
+  `data/sft/spider_v1_*`. It deliberately drops `spider_train_3698` and `spider_train_3697`;
+  Qwen2.5-7B tokenizer audit found them above/too close to the 10240 training cutoff. Final raw
+  content-token maximum is 9113 train / 8166 dev (6 train records exceed 8192), so keep
+  `cutoff_len: 10240`. The files are synced to `~/tabular_rl_project/data/sft/` on NewGNN.
 
 ## Architecture (`scripts/harness/`)
 
@@ -63,6 +88,9 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
 .venv/bin/python scripts/harness/run_spider.py 2000  # execution-verified on real DBs
 .venv/bin/python scripts/harness/gen_trajectories.py train   # (and dev)
 .venv/bin/python scripts/sft/fill_think.py --split train --n 99999 --workers 16 --out <path>
+.venv/bin/python scripts/sft/build_sft_data.py both \
+  --input-pattern 'data/trajectories/spider_{split}_think.jsonl' \
+  --output-prefix spider_v1 --dataset-name spider_tools_v1 --max-est-tokens 8900
 ```
 Uses the project venv `.venv` (sqlglot 30.9). Spider DBs in `data/spider_data/` (gitignored).
 
