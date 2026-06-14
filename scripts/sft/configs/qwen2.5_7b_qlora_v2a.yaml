@@ -1,0 +1,51 @@
+# LLaMA-Factory SFT config — Qwen2.5-7B, V2a Spider tool trajectories (harness-grounded memory +
+# step-level provenance). Same validated 24G QLoRA recipe as the v1 run; only dataset + output_dir
+# change. Run on server:  conda activate sft && llamafactory-cli train configs/qwen2.5_7b_qlora_v2a.yaml
+
+### model
+model_name_or_path: Qwen/Qwen2.5-7B-Instruct
+trust_remote_code: true
+quantization_bit: 4        # QLoRA
+upcast_layernorm: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: spider_tools_v2_8k    # 8 records over the 8192 Qwen-token cutoff dropped (audit 2026-06-14)
+dataset_dir: /home/dengyan/tabular_rl_project/data/sft
+template: qwen
+cutoff_len: 8192
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: /home/dengyan/tabular_rl_project/checkpoints/qwen2.5-7b-spider-v2a-qlora
+logging_steps: 10
+save_steps: 200
+plot_loss: true
+overwrite_output_dir: true
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-4
+num_train_epochs: 2.0
+optim: paged_adamw_8bit
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+
+### eval
+val_size: 0.02
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 200

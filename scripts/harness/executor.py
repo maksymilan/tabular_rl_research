@@ -234,6 +234,42 @@ class Harness:
             f"SELECT {cols} FROM {self._src(table)} LIMIT {int(limit)}"
         ).fetchall()
 
+    # ---- resident perception (context-management layer: structure + value-domain, no row dump) ----
+    def describe_table(self, tables) -> dict:
+        """Schema of one or more tables (multi-table in one call to avoid long describe chains):
+        columns + types + PK flags + foreign keys. NO row values (that is inspect_column /
+        read_subtable). Joins the model's RESIDENT world-model. Works on source tables and on
+        derived views (views carry columns but no PK/FK)."""
+        if isinstance(tables, str):
+            tables = [tables]
+        out = []
+        for t in tables:
+            canon = self._lc.get(t.lower(), t)
+            info = list(self.conn.execute(f'PRAGMA table_info("{canon}")'))
+            if info:                                            # a real base table
+                columns = [{"name": r[1], "type": (r[2] or "text").lower(), "pk": bool(r[5])} for r in info]
+                fks = [{"column": r[3], "references": f"{r[2]}.{r[4]}"}
+                       for r in self.conn.execute(f'PRAGMA foreign_key_list("{canon}")')]
+            else:                                               # a derived view: columns only
+                columns = [{"name": c} for c in self._cols(t)]
+                fks = []
+            n = self.conn.execute(f"SELECT COUNT(*) FROM {self._src(t)}").fetchone()[0]
+            out.append({"table_name": t, "row_count": n, "columns": columns, "foreign_keys": fks})
+        return {"tables": out}
+
+    def inspect_column(self, table: str, column: str, top_k: int = 10) -> dict:
+        """Value-domain of one column for grounding a filter literal (does 'France' exist? spelling?):
+        distinct count + most frequent values + NULL flag. NO numeric aggregates. Joins the RESIDENT
+        world-model. Bounded by top_k so it stays small even for high-cardinality columns."""
+        src = self._src(table)
+        n_distinct = self.conn.execute(f"SELECT COUNT(DISTINCT {column}) FROM {src}").fetchone()[0]
+        n_null = self.conn.execute(f"SELECT COUNT(*) FROM {src} WHERE {column} IS NULL").fetchone()[0]
+        freq = self.conn.execute(
+            f"SELECT {column}, COUNT(*) c FROM {src} GROUP BY {column} ORDER BY c DESC LIMIT {int(top_k)}"
+        ).fetchall()
+        return {"column": column, "distinct_count": n_distinct, "has_null": bool(n_null),
+                "frequent_values": [v for v, _ in freq], "truncated": n_distinct > int(top_k)}
+
     # ---- verification ----
     def gold(self, sql: str) -> list[tuple]:
         return self.conn.execute(sql).fetchall()

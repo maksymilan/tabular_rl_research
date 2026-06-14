@@ -1,5 +1,6 @@
 {
   "trajectory_id": "sample_having",
+  "schema_version": "v2a",
   "source": {
     "dataset": "synthetic",
     "db_id": "employees",
