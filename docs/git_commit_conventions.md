@@ -64,8 +64,8 @@ docs(agents): record dataset directory assumptions
 Run the checks that match the change:
 
 ```bash
-bash -n scripts/data_pipeline/download_datasets.sh
-python3 scripts/data_pipeline/extract_samples.py --dataset all --num 5
+bash -n src/data_pipeline/download_datasets.sh
+python3 src/data_pipeline/extract_samples.py --dataset all --num 5
 python3 -m json.tool data_sample/tablebench_sample.json >/dev/null
 ```
 

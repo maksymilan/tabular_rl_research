@@ -34,7 +34,7 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   830 optimizer steps in 13:01:20. Final train loss is **0.2495**, validation loss **0.2271**.
   Adapter output is `checkpoints/qwen2.5-7b-spider-v1-qlora`. The viable 24G configuration is
   `cutoff_len=8192`, LoRA rank/alpha 16/32, `paged_adamw_8bit`, bf16, gradient checkpointing,
-  and effective batch 16. See `scripts/sft/EXPERIMENTS.md`.
+  and effective batch 16. See `src/sft/EXPERIMENTS.md`.
 - **7B / v1 zero-shot tool evaluation done** on all 1,034 Spider dev examples: **707/1034 =
   68.38%**, with 985 legal final answers (95.26%). Failures: 276 wrong answers, 42 execution
   errors, 8 protocol errors, and 1 max-steps case. On the 998 examples covered by verified v1 dev
@@ -52,7 +52,7 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   carries harness-authored `references`/`produces`; `emitter.backward_slice` reverse-derives the
   answer's dependency set (through memory too). Strict scalar-source validation rejects
   NULL/0-row/multi-row/multi-col → manifest `memory_reject_*` buckets (v2a dropped 4). New SHARED
-  module `scripts/harness/memory_semantics.py` is called by BOTH emitter and rollout. Observation
+  module `src/harness/memory_semantics.py` is called by BOTH emitter and rollout. Observation
   envelope is now `{step_id, status, output}` so the model copies a `step_id` as `source_step_id`.
   Verified: Spider dev replay **998/998**, strict per-tool schema 30,534 calls / **0** fail,
   backward-slice invariant **7767/7767**, unit 98+6+4, exec-verified **98.4%**, **v1 files byte-identical
@@ -136,7 +136,7 @@ diversity from execution-verified rollouts. External LLM output is only a candid
 wording, alternate plans, or hypotheses; execution and provenance checks remain the acceptance
 gate.
 
-## Architecture (`scripts/harness/`)
+## Architecture (`src/harness/`)
 
 - `executor.py` — relational core. Each table-producing tool registers a named SQL view; reading/
   scalar tools run a SELECT. Tools: condition_filter, project, join_tables (prefixes columns
@@ -164,7 +164,7 @@ gate.
 - `run_all.py` (tests + compile coverage), `run_spider.py [N]` (execution-verified on real DBs),
   `gen_trajectories.py [train|dev]` (batch emit → `data/trajectories/spider_*.jsonl`, gitignored).
 
-## SFT pipeline (`scripts/sft/`, `scripts/eval/`)
+## SFT pipeline (`src/sft/`, `src/eval/`)
 
 - `protocol.py` — SINGLE source of truth for the model↔harness protocol (system prompt + tool specs
   + `<think>`/`<tool_call>` rendering + parse). V2a: observation envelope `{step_id, status, output}`
@@ -178,16 +178,16 @@ gate.
 - `rollout.py` — closed-loop eval (live model ↔ harness) + `--replay`. V2a: online step_ids +
   `tool_history` + harness-derived `references`/`produces` (`_online_references`) + memory grounding
   via `memory_semantics` — model-claimed provenance is never trusted. Doubles as the RL env.
-- Configs: `scripts/sft/configs/qwen2.5_{3b_lora,7b_qlora}_sft.yaml`.
+- Configs: `src/sft/configs/qwen2.5_{3b_lora,7b_qlora}_sft.yaml`.
 
 ## How to run (local, Mac)
 
 ```
-.venv/bin/python scripts/harness/run_all.py          # unit tests + Spider compile coverage
-.venv/bin/python scripts/harness/run_spider.py 2000  # execution-verified on real DBs
-.venv/bin/python scripts/harness/gen_trajectories.py train   # (and dev)
-.venv/bin/python scripts/sft/fill_think.py --split train --n 99999 --workers 16 --out <path>
-.venv/bin/python scripts/sft/build_sft_data.py both \
+.venv/bin/python src/harness/run_all.py          # unit tests + Spider compile coverage
+.venv/bin/python src/harness/run_spider.py 2000  # execution-verified on real DBs
+.venv/bin/python src/harness/gen_trajectories.py train   # (and dev)
+.venv/bin/python src/sft/fill_think.py --split train --n 99999 --workers 16 --out <path>
+.venv/bin/python src/sft/build_sft_data.py both \
   --input-pattern 'data/trajectories/spider_{split}_think.jsonl' \
   --output-prefix spider_v1 --dataset-name spider_tools_v1 --max-est-tokens 8900
 ```
@@ -198,7 +198,7 @@ Uses the project venv `.venv` (sqlglot 30.9). Spider DBs in `data/spider_data/` 
 - host zju, user dengyan, key auth. 8× RTX 3090 24G, **driver 550 = CUDA 12.4 max**, NO direct net.
 - **Writable only `/home/dengyan` and `/data/dengyan`; `/data` is ~full → keep everything in
   `/home/dengyan`.** Project at `~/tabular_rl_project`. Models in `~/.cache/huggingface/hub/`.
-- Internet via reverse tunnel from the Mac: `nohup bash scripts/sft/tunnel.sh > /tmp/tunnel.log 2>&1
+- Internet via reverse tunnel from the Mac: `nohup bash src/sft/tunnel.sh > /tmp/tunnel.log 2>&1
   & disown` (auto-reconnect loop; -R 28471→Mac clash 7897 gives the server egress; -L 18000→server
   vLLM 8000 lets the Mac reach the model). Server side: `export http(s)_proxy=http://127.0.0.1:28471`.
 

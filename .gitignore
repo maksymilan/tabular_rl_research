@@ -10,3 +10,4 @@ api_usage.md
 .venv/
 .claude/
 api.md
+*.log

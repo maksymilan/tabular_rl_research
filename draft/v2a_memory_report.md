@@ -170,10 +170,10 @@ basis for dense process-reward credit assignment.
 - Data (gitignored; v1 preserved): `data/trajectories/spider_{train,dev}_v2{,_think}.jsonl`
   (6769+998, `schema_version:"v2a"`) · SFT `data/sft/spider_v2_{train,dev}.jsonl` (6767+998; manifest
   records `protocol_version:v2a`, `protocol_hash:eedbb946aa0f2cb7`).
-- Code: `scripts/harness/memory_semantics.py` (shared grounding), `compiler.py` (emits
+- Code: `src/harness/memory_semantics.py` (shared grounding), `compiler.py` (emits
   `{type, source_step_id}`), `plan.py` (run_plan threading), `emitter.py` (references/produces/
-  backward_slice/validate), `scripts/sft/protocol.py` (observation envelope, specs, strict schema,
-  protocol hash), `scripts/eval/rollout.py` (online provenance + grounding), `scripts/sft/splice_think.py`.
+  backward_slice/validate), `src/sft/protocol.py` (observation envelope, specs, strict schema,
+  protocol hash), `src/eval/rollout.py` (online provenance + grounding), `src/sft/splice_think.py`.
 - Reproduce:
   ```
   gen_trajectories.py {dev,train} --tag=_v2

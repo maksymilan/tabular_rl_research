@@ -231,7 +231,7 @@ the source of truth. Keep the structured object for validation and RL.
 Suggested shared module:
 
 ```text
-scripts/harness/memory_semantics.py
+src/harness/memory_semantics.py
 ```
 
 It should provide:

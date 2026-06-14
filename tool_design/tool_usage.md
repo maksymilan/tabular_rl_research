@@ -5,11 +5,11 @@
 > SQL coverage with `derive_column`/`set_op`/`window` + expression sublanguage, uniform
 > `(table,row_id)` citation). `tool_io_spec.json`, the validator, the per-tool JSON examples, and
 > the old `trajectory/` cases below predate the finalization and will be realigned / regenerated
-> by the SQL→tool compiler (`scripts/harness/`). Kept for reference and rationale history.
+> by the SQL→tool compiler (`src/harness/`). Kept for reference and rationale history.
 
 This document is the local interface contract for Table Agent Harness tool design. Future tool design changes and harness implementations should follow the formats in this folder unless a new versioned spec is explicitly added.
 
-The machine-readable single source of truth for tool I/O and state field formats is `tool_design/tool_io_spec.json`. To change any format, edit that spec first, then update the matching `tool_json_examples/*.json` and conform every trajectory. `scripts/tool_design/validate_trajectories.py` loads the spec and enforces it; it does not hardcode field sets. This document is the human-readable contract; the spec is the enforced one. For a field-by-field dictionary (meaning, who fills each field, enum value meanings, and a dataset-conversion checklist) see `tool_design/tool_io_spec.md`.
+The machine-readable single source of truth for tool I/O and state field formats is `tool_design/tool_io_spec.json`. To change any format, edit that spec first, then update the matching `tool_json_examples/*.json` and conform every trajectory. `src/tool_design/validate_trajectories.py` loads the spec and enforces it; it does not hardcode field sets. This document is the human-readable contract; the spec is the enforced one. For a field-by-field dictionary (meaning, who fills each field, enum value meanings, and a dataset-conversion checklist) see `tool_design/tool_io_spec.md`.
 
 Concrete examples live in `tool_design/tool_json_examples/`. Each tool has one JSON file containing:
 - `tool_name`: canonical tool name;
@@ -163,7 +163,7 @@ Tool JSON examples:
 - `answer_from_context.json`
 
 Single source of truth (enforced):
-- `../tool_io_spec.json` — authoritative field sets and enums for every tool and state object, loaded by `scripts/tool_design/validate_trajectories.py`.
+- `../tool_io_spec.json` — authoritative field sets and enums for every tool and state object, loaded by `src/tool_design/validate_trajectories.py`.
 
 Canonical format examples (human-readable):
 - `state_snapshot.json`
@@ -175,7 +175,7 @@ When adding a tool:
 1. Add the tool's `arguments`/`output`/`state_delta` field sets and any new enums to `tool_io_spec.json` first (the single source of truth).
 2. Add one JSON example file in `tool_json_examples/`.
 3. Update the tool list in this document.
-4. Extend `scripts/tool_design/validate_trajectories.py` only with semantic checks the flat spec cannot express (qualified columns, derived-table tracking, etc.).
+4. Extend `src/tool_design/validate_trajectories.py` only with semantic checks the flat spec cannot express (qualified columns, derived-table tracking, etc.).
 5. Update `tool_design/agent.md` with the research/design reason.
 6. Keep the model-visible output small enough to respect `context_budget`.
 

@@ -26,10 +26,10 @@ Downloaded datasets:
 - `xlangai/spider` -> `data/spider`
 
 Useful commands:
-- Download/update datasets: `bash scripts/data_pipeline/download_datasets.sh`
-- Extract default samples: `python3 scripts/data_pipeline/extract_samples.py --dataset all --num 5`
-- Extract deterministic random samples: `python3 scripts/data_pipeline/extract_samples.py --dataset all --num 5 --mode random --seed 20260602`
-- Validate tool-use trajectory formats: `python3 scripts/tool_design/validate_trajectories.py`
+- Download/update datasets: `bash src/data_pipeline/download_datasets.sh`
+- Extract default samples: `python3 src/data_pipeline/extract_samples.py --dataset all --num 5`
+- Extract deterministic random samples: `python3 src/data_pipeline/extract_samples.py --dataset all --num 5 --mode random --seed 20260602`
+- Validate tool-use trajectory formats: `python3 src/tool_design/validate_trajectories.py`
 
 Important implementation notes:
 - `tqabench` stores examples as parquet; this repo uses the `duckdb` CLI for sampling so it does not require local `pandas`, `pyarrow`, or `datasets`.

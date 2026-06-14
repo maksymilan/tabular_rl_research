@@ -5,7 +5,7 @@ When converting **any** new dataset into trajectory data, follow the field meani
 ownership defined here.
 
 Companion files:
-- `tool_io_spec.json` — machine-readable single source of truth (field sets + enums), enforced by `scripts/tool_design/validate_trajectories.py`.
+- `tool_io_spec.json` — machine-readable single source of truth (field sets + enums), enforced by `src/tool_design/validate_trajectories.py`.
 - `tool_usage.md` — the design contract and rationale.
 
 ## Who fills a field: the location rule
@@ -280,6 +280,6 @@ To turn a record from a new dataset into a trajectory:
 3. **Verify the gold against the table.** If the table reproduces it, set `label_assessment.status = accepted`. If not (e.g. the dataset gold is computed over data not present in the provided table), either set `conflict`, or author a snapshot-verified question and record both the native and authored Q/A in `dataset_annotations.evidence`.
 4. **Author the steps** in order: each `tool_call` (MODEL) using only the argument fields above; each `tool_output` and `state_delta` (HARNESS) exactly as a correct environment would return them. Reference columns as `table.column`; derived-table columns as `derived_table.column`.
 5. **End with `answer_from_context`** whose `final_answer` satisfies the `label_status` rule.
-6. **Validate**: `python3 scripts/tool_design/validate_trajectories.py`. It loads `tool_io_spec.json` and checks every field set, enum, qualified column, derived-table reference, and the final-answer/label rule.
+6. **Validate**: `python3 src/tool_design/validate_trajectories.py`. It loads `tool_io_spec.json` and checks every field set, enum, qualified column, derived-table reference, and the final-answer/label rule.
 
 Any field added or changed must be edited in `tool_io_spec.json` **first**, then reflected here and in `tool_json_examples/`.

@@ -23,7 +23,7 @@ v1 完成后：13/15 工具有数据，总量约 8–10k 条。全部机制使�
 
 ## 二、SFT 数据准备（Phase 1）
 
-1. **格式转换** `scripts/sft/build_sft_data.py`：trajectory JSON → messages（sharegpt 格式）：
+1. **格式转换** `src/sft/build_sft_data.py`：trajectory JSON → messages（sharegpt 格式）：
    - system：工具规范（紧凑 schema）+ 调用规则（一次一个 tool_call、JSON 格式、必须以 answer_from_context 终止、引用证据表）。
    - user：dataset_overview（紧凑渲染）+ question。
    - 循环：assistant = think + tool_call JSON；observation = tool_output（含内联表内容）。
@@ -49,7 +49,7 @@ v1 完成后：13/15 工具有数据，总量约 8–10k 条。全部机制使�
 
 ## 四、评测协议（Phase 3）—— SFT 前后同一协议
 
-**缺口组件（最优先做）**：rollout runner `scripts/eval/rollout.py`。模型生成 think+tool_call → 解析 → harness 执行 → 返回 tool_output（含 preview）→ 循环，直到 answer_from_context 或 max_steps=20；非法调用返回错误信息、允许重试 ≤2 次。模型经 vLLM OpenAI 兼容端点服务，temperature=0。此组件后续直接复用为 RL 环境交互循环。
+**缺口组件（最优先做）**：rollout runner `src/eval/rollout.py`。模型生成 think+tool_call → 解析 → harness 执行 → 返回 tool_output（含 preview）→ 循环，直到 answer_from_context 或 max_steps=20；非法调用返回错误信息、允许重试 ≤2 次。模型经 vLLM OpenAI 兼容端点服务，temperature=0。此组件后续直接复用为 RL 环境交互循环。
 
 **评测集**：Spider dev 全部 1,034 题。gold = gold SQL 在真库执行的行集（与我的编译器是否覆盖无关，覆盖率 100%）。另报 914 条 in-coverage 子集切片。
 

@@ -26,8 +26,8 @@ Each sample JSON should be an object:
 
 ## Adding a Dataset
 
-1. Add an `hf download` entry in `scripts/data_pipeline/download_datasets.sh`.
-2. Add a `DatasetConfig` in `scripts/data_pipeline/extract_samples.py`.
+1. Add an `hf download` entry in `src/data_pipeline/download_datasets.sh`.
+2. Add a `DatasetConfig` in `src/data_pipeline/extract_samples.py`.
 3. If the dataset contains non-JSON table encodings, add a small postprocessor that preserves the raw field and adds a parsed JSON-friendly field.
 4. Run extraction and inspect the output manually.
 5. Update the nearest `agent.md` with durable path/schema notes.
