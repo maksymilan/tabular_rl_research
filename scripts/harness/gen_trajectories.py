@@ -24,6 +24,7 @@ sys.path.insert(0, HERE)
 from compiler import CompileError          # noqa: E402
 from emitter import emit, validate         # noqa: E402
 from executor import Harness               # noqa: E402
+from memory_semantics import MemoryGroundingError  # noqa: E402
 
 SPIDER = os.path.join(ROOT, "data/spider_data")
 
@@ -35,11 +36,14 @@ def db_path(db_id: str) -> str:
 def main() -> int:
     n = None
     split = "train"
+    tag = ""                      # output suffix: "" = v1 path (default), "_v2" = data-v2 path
     for a in sys.argv[1:]:
         if a.isdigit():
             n = int(a)
         elif a in ("train", "dev"):
             split = a
+        elif a.startswith("--tag="):
+            tag = a.split("=", 1)[1]
     src = os.path.join(SPIDER, "train_spider.json" if split == "train" else "dev.json")
     if not os.path.exists(src):
         print(f"missing {src} — download Spider DBs first (see scripts/harness/README.md)")
@@ -50,7 +54,7 @@ def main() -> int:
 
     out_dir = os.path.join(ROOT, "data", "trajectories")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"spider_{split}.jsonl")
+    out_path = os.path.join(out_dir, f"spider_{split}{tag}.jsonl")
     sample_dir = os.path.join(HERE, "sample_trajectories")
     os.makedirs(sample_dir, exist_ok=True)
 
@@ -72,6 +76,9 @@ def main() -> int:
             except CompileError:
                 stats["compile_error"] += 1
                 continue
+            except MemoryGroundingError as e:
+                stats[f"memory_reject_{e.code}"] += 1
+                continue
             except Exception:
                 stats["exec_error"] += 1
                 continue
@@ -88,7 +95,7 @@ def main() -> int:
             by_len_sample.setdefault(L, traj)   # keep the first trajectory seen at each length
 
     # write one readable sample per distinct trajectory length, for inspection
-    bylen_dir = os.path.join(sample_dir, "by_length")
+    bylen_dir = os.path.join(sample_dir, f"by_length{tag}")
     os.makedirs(bylen_dir, exist_ok=True)
     for L, t in sorted(by_len_sample.items()):
         json.dump(t, open(os.path.join(bylen_dir, f"len_{L:02d}.json"), "w"),

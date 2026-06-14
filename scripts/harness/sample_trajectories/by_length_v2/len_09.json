@@ -1,0 +1,668 @@
+{
+  "trajectory_id": "spider_train_285",
+  "schema_version": "v2a",
+  "source": {
+    "dataset": "spider",
+    "db_id": "twitter_1",
+    "gold_sql": "SELECT T1.name FROM user_profiles AS T1 JOIN follows AS T2 ON T1.uid  =  T2.f1 GROUP BY T2.f1 HAVING count(*)  >  (SELECT count(*) FROM user_profiles AS T1 JOIN follows AS T2 ON T1.uid  =  T2.f1 WHERE T1.name  =  'Tyler Swift')"
+  },
+  "question": "Find the names of the users whose number of followers is greater than that of the user named \"Tyler Swift\".",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "follows",
+          "num_rows": 9,
+          "columns": [
+            {
+              "name": "f1",
+              "type": "int(11)"
+            },
+            {
+              "name": "f2",
+              "type": "int(11)"
+            }
+          ]
+        },
+        {
+          "table_name": "tweets",
+          "num_rows": 8,
+          "columns": [
+            {
+              "name": "id",
+              "type": "bigint(20)"
+            },
+            {
+              "name": "uid",
+              "type": "int(11)"
+            },
+            {
+              "name": "text",
+              "type": "char(140)"
+            },
+            {
+              "name": "createdate",
+              "type": "datetime"
+            }
+          ]
+        },
+        {
+          "table_name": "user_profiles",
+          "num_rows": 7,
+          "columns": [
+            {
+              "name": "uid",
+              "type": "int(11)"
+            },
+            {
+              "name": "name",
+              "type": "varchar(255)"
+            },
+            {
+              "name": "email",
+              "type": "varchar(255)"
+            },
+            {
+              "name": "partitionid",
+              "type": "int(11)"
+            },
+            {
+              "name": "followers",
+              "type": "int(11)"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "user_profiles",
+          "right": "follows",
+          "on": [
+            {
+              "left": "uid",
+              "right": "f1"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "source": "user_profiles",
+          "as": "left"
+        },
+        {
+          "source": "follows",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__uid",
+          "T1__name",
+          "T1__email",
+          "T1__partitionid",
+          "T1__followers",
+          "T2__f1",
+          "T2__f2"
+        ],
+        "row_count": 9,
+        "rows": [
+          [
+            1,
+            "Iron Man",
+            "ts@richest.com",
+            1,
+            6662425,
+            1,
+            2
+          ],
+          [
+            2,
+            "Mary",
+            "Mary@yale.edu",
+            2,
+            890,
+            2,
+            3
+          ],
+          [
+            7,
+            "Natalie Portman",
+            "np@superstar.com",
+            5,
+            94375428,
+            7,
+            1
+          ],
+          [
+            1,
+            "Iron Man",
+            "ts@richest.com",
+            1,
+            6662425,
+            1,
+            3
+          ],
+          [
+            3,
+            "Black Widow\n",
+            "bw@superhero.com",
+            23,
+            35425845,
+            3,
+            6
+          ],
+          [
+            5,
+            "Tyler Swift",
+            "ts@superstar.com\n",
+            10,
+            99999998,
+            5,
+            6
+          ],
+          [
+            5,
+            "Tyler Swift",
+            "ts@superstar.com\n",
+            10,
+            99999998,
+            5,
+            1
+          ],
+          [
+            1,
+            "Iron Man",
+            "ts@richest.com",
+            1,
+            6662425,
+            1,
+            5
+          ],
+          [
+            3,
+            "Black Widow\n",
+            "bw@superhero.com",
+            23,
+            35425845,
+            3,
+            4
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "join_001",
+          "group_by": [
+            "T2__f1"
+          ],
+          "aggregations": [
+            {
+              "op": "count",
+              "column": "*",
+              "as": "count_1"
+            }
+          ],
+          "passthrough": [
+            "T1__name"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_1",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "group_002"
+      },
+      "tool_output": {
+        "table": "group_002",
+        "kind": "group",
+        "columns": [
+          "T2__f1",
+          "T1__name",
+          "count_1"
+        ],
+        "row_count": 5,
+        "rows": [
+          [
+            1,
+            "Iron Man",
+            3
+          ],
+          [
+            2,
+            "Mary",
+            1
+          ],
+          [
+            3,
+            "Black Widow\n",
+            2
+          ],
+          [
+            5,
+            "Tyler Swift",
+            2
+          ],
+          [
+            7,
+            "Natalie Portman",
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "user_profiles",
+          "right": "follows",
+          "on": [
+            {
+              "left": "uid",
+              "right": "f1"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "source": "user_profiles",
+          "as": "left"
+        },
+        {
+          "source": "follows",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_003"
+      },
+      "tool_output": {
+        "table": "join_003",
+        "kind": "join",
+        "columns": [
+          "T1__uid",
+          "T1__name",
+          "T1__email",
+          "T1__partitionid",
+          "T1__followers",
+          "T2__f1",
+          "T2__f2"
+        ],
+        "row_count": 9,
+        "rows": [
+          [
+            1,
+            "Iron Man",
+            "ts@richest.com",
+            1,
+            6662425,
+            1,
+            2
+          ],
+          [
+            2,
+            "Mary",
+            "Mary@yale.edu",
+            2,
+            890,
+            2,
+            3
+          ],
+          [
+            7,
+            "Natalie Portman",
+            "np@superstar.com",
+            5,
+            94375428,
+            7,
+            1
+          ],
+          [
+            1,
+            "Iron Man",
+            "ts@richest.com",
+            1,
+            6662425,
+            1,
+            3
+          ],
+          [
+            3,
+            "Black Widow\n",
+            "bw@superhero.com",
+            23,
+            35425845,
+            3,
+            6
+          ],
+          [
+            5,
+            "Tyler Swift",
+            "ts@superstar.com\n",
+            10,
+            99999998,
+            5,
+            6
+          ],
+          [
+            5,
+            "Tyler Swift",
+            "ts@superstar.com\n",
+            10,
+            99999998,
+            5,
+            1
+          ],
+          [
+            1,
+            "Iron Man",
+            "ts@richest.com",
+            1,
+            6662425,
+            1,
+            5
+          ],
+          [
+            3,
+            "Black Widow\n",
+            "bw@superhero.com",
+            23,
+            35425845,
+            3,
+            4
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_003",
+          "conditions": {
+            "column": "T1__name",
+            "op": "=",
+            "value": "Tyler Swift"
+          }
+        }
+      },
+      "references": [
+        {
+          "step": "step_3",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_004"
+      },
+      "tool_output": {
+        "table": "filter_004",
+        "kind": "filter",
+        "columns": [
+          "T1__uid",
+          "T1__name",
+          "T1__email",
+          "T1__partitionid",
+          "T1__followers",
+          "T2__f1",
+          "T2__f2"
+        ],
+        "row_count": 2,
+        "rows": [
+          [
+            5,
+            "Tyler Swift",
+            "ts@superstar.com\n",
+            10,
+            99999998,
+            5,
+            1
+          ],
+          [
+            5,
+            "Tyler Swift",
+            "ts@superstar.com\n",
+            10,
+            99999998,
+            5,
+            6
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Compute the scalar aggregate that answers the question.",
+      "tool_call": {
+        "tool": "aggregate",
+        "arguments": {
+          "table": "filter_004",
+          "column": "*",
+          "op": "count"
+        }
+      },
+      "references": [
+        {
+          "step": "step_4",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "scalar"
+      },
+      "tool_output": {
+        "result_sample": [
+          [
+            2
+          ]
+        ],
+        "row_count": 1
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Register the scalar computed by the cited source step as a value a later step can reference (the harness grounds the actual number and its derivation).",
+      "tool_call": {
+        "tool": "add_to_memory",
+        "arguments": {
+          "type": "derived_value",
+          "source_step_id": "step_5"
+        }
+      },
+      "references": [
+        {
+          "step": "step_5",
+          "via": "source"
+        }
+      ],
+      "produces": {
+        "kind": "memory",
+        "memory_id": "mem_step_5",
+        "key": "count"
+      },
+      "tool_output": {
+        "memory": {
+          "memory_id": "mem_step_5",
+          "key": "count",
+          "value": 2,
+          "authority": "harness_grounded",
+          "content": "count(*) over rows where T1__name = Tyler Swift",
+          "source_step_id": "step_5",
+          "derivation": {
+            "type": "filtered_aggregate",
+            "op": "count",
+            "column": "*",
+            "filter": "T1__name = Tyler Swift",
+            "source_table": "user_profiles",
+            "supporting_step_ids": [
+              "step_3",
+              "step_4",
+              "step_5"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "group_002",
+          "conditions": {
+            "column": "count_1",
+            "op": ">",
+            "value_ref": "mem_step_5"
+          }
+        }
+      },
+      "references": [
+        {
+          "step": "step_2",
+          "as": "table"
+        },
+        {
+          "step": "step_6",
+          "via": "value_ref"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_005"
+      },
+      "tool_output": {
+        "table": "filter_005",
+        "kind": "filter",
+        "columns": [
+          "T2__f1",
+          "T1__name",
+          "count_1"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            1,
+            "Iron Man",
+            3
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_8",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_005",
+          "expressions": [
+            "T1__name"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_7",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_006"
+      },
+      "tool_output": {
+        "table": "project_006",
+        "kind": "project",
+        "columns": [
+          "T1__name"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            "Iron Man"
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_9",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "Iron Man"
+            ]
+          ],
+          "evidence": {
+            "table": "project_006"
+          },
+          "supporting_memory_ids": [
+            "mem_step_5"
+          ],
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "step": "step_8"
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "Iron Man"
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "Iron Man"
+    ]
+  ]
+}

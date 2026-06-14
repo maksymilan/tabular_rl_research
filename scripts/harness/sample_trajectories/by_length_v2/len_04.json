@@ -1,21 +1,52 @@
 {
-  "trajectory_id": "sample_having",
+  "trajectory_id": "spider_train_7",
+  "schema_version": "v2a",
   "source": {
-    "dataset": "synthetic",
-    "db_id": "employees",
-    "gold_sql": "SELECT dept FROM employees GROUP BY dept HAVING COUNT(*) > 1"
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT born_state FROM head GROUP BY born_state HAVING count(*)  >=  3"
   },
-  "question": "Which departments have more than one employee?",
+  "question": "What are the names of the states where at least 3 heads were born?",
   "label_status": "verified",
   "initial_state": {
     "dataset_overview": {
       "tables": [
         {
-          "table_name": "employees",
-          "num_rows": 6,
+          "table_name": "department",
+          "num_rows": 15,
           "columns": [
             {
-              "name": "id",
+              "name": "Department_ID",
+              "type": "int"
+            },
+            {
+              "name": "Name",
+              "type": "text"
+            },
+            {
+              "name": "Creation",
+              "type": "text"
+            },
+            {
+              "name": "Ranking",
+              "type": "int"
+            },
+            {
+              "name": "Budget_in_Billions",
+              "type": "real"
+            },
+            {
+              "name": "Num_Employees",
+              "type": "real"
+            }
+          ]
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10,
+          "columns": [
+            {
+              "name": "head_ID",
               "type": "int"
             },
             {
@@ -23,55 +54,29 @@
               "type": "text"
             },
             {
-              "name": "dept",
+              "name": "born_state",
               "type": "text"
-            },
-            {
-              "name": "salary",
-              "type": "int"
             },
             {
               "name": "age",
-              "type": "int"
-            }
-          ]
-        },
-        {
-          "table_name": "depts",
-          "num_rows": 3,
-          "columns": [
-            {
-              "name": "dept",
-              "type": "text"
-            },
-            {
-              "name": "location",
-              "type": "text"
-            },
-            {
-              "name": "budget",
-              "type": "int"
-            }
-          ]
-        },
-        {
-          "table_name": "sales",
-          "num_rows": 3,
-          "columns": [
-            {
-              "name": "item",
-              "type": "text"
-            },
-            {
-              "name": "price",
               "type": "real"
-            },
+            }
+          ]
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5,
+          "columns": [
             {
-              "name": "qty",
+              "name": "department_ID",
               "type": "int"
             },
             {
-              "name": "dept",
+              "name": "head_ID",
+              "type": "int"
+            },
+            {
+              "name": "temporary_acting",
               "type": "text"
             }
           ]
@@ -86,9 +91,9 @@
       "tool_call": {
         "tool": "group_aggregate",
         "arguments": {
-          "table": "employees",
+          "table": "head",
           "group_by": [
-            "dept"
+            "born_state"
           ],
           "aggregations": [
             {
@@ -101,7 +106,7 @@
       },
       "references": [
         {
-          "source": "employees",
+          "source": "head",
           "as": "table"
         }
       ],
@@ -113,22 +118,30 @@
         "table": "group_001",
         "kind": "group",
         "columns": [
-          "dept",
+          "born_state",
           "count_1"
         ],
-        "row_count": 3,
+        "row_count": 5,
         "rows": [
           [
-            "eng",
-            3
+            "Alabama",
+            2
           ],
           [
-            "hr",
+            "California",
+            4
+          ],
+          [
+            "Connecticut",
+            2
+          ],
+          [
+            "Delaware",
             1
           ],
           [
-            "sales",
-            2
+            "Florida",
+            1
           ]
         ]
       }
@@ -142,8 +155,8 @@
           "table": "group_001",
           "conditions": {
             "column": "count_1",
-            "op": ">",
-            "value": 1
+            "op": ">=",
+            "value": 3
           }
         }
       },
@@ -161,18 +174,14 @@
         "table": "filter_002",
         "kind": "filter",
         "columns": [
-          "dept",
+          "born_state",
           "count_1"
         ],
-        "row_count": 2,
+        "row_count": 1,
         "rows": [
           [
-            "eng",
-            3
-          ],
-          [
-            "sales",
-            2
+            "California",
+            4
           ]
         ]
       }
@@ -185,7 +194,7 @@
         "arguments": {
           "table": "filter_002",
           "expressions": [
-            "dept"
+            "born_state"
           ]
         }
       },
@@ -203,15 +212,12 @@
         "table": "project_003",
         "kind": "project",
         "columns": [
-          "dept"
+          "born_state"
         ],
-        "row_count": 2,
+        "row_count": 1,
         "rows": [
           [
-            "eng"
-          ],
-          [
-            "sales"
+            "California"
           ]
         ]
       }
@@ -224,10 +230,7 @@
         "arguments": {
           "answer": [
             [
-              "eng"
-            ],
-            [
-              "sales"
+              "California"
             ]
           ],
           "evidence": {
@@ -248,10 +251,7 @@
       "tool_output": {
         "final_answer": [
           [
-            "eng"
-          ],
-          [
-            "sales"
+            "California"
           ]
         ]
       }
@@ -259,10 +259,7 @@
   ],
   "final_answer": [
     [
-      "eng"
-    ],
-    [
-      "sales"
+      "California"
     ]
   ]
 }

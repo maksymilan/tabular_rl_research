@@ -88,16 +88,19 @@ def run_plan(harness, plan: Plan) -> list[tuple]:
             ref = args.get(key)
             if ref in id_to_table:
                 args[key] = id_to_table[ref]
-        if step.tool == "condition_filter":
-            args["conditions"] = resolve_cond(args.get("conditions"), id_to_table, values)
-        elif step.tool == "add_to_memory":
+        if step.tool == "add_to_memory":
+            # V2a: a pure memory op. Extract the scalar from the cited source and park it under THIS
+            # step's id, which is exactly what the predicate's `value_ref` points at. No SQL view.
             src = step.args["source"]
             if src in id_to_table:                       # single-row subquery: take its one cell
                 rows = harness.rows(id_to_table[src])
                 val = rows[0][0] if rows else None
             else:
                 val = values.get(src)                    # aggregate scalar
-            args = {"key": step.args["key"], "value": val, "content": step.args.get("content", "")}
+            values[step.id] = val
+            continue
+        if step.tool == "condition_filter":
+            args["conditions"] = resolve_cond(args.get("conditions"), id_to_table, values)
         method = getattr(harness, step.tool, None)
         if method is None:
             raise ValueError(f"harness has no tool {step.tool!r}")
@@ -105,8 +108,6 @@ def run_plan(harness, plan: Plan) -> list[tuple]:
         if isinstance(result, dict) and "table_name" in result:
             id_to_table[step.id] = result["table_name"]
             final = ("table", result["table_name"])
-        elif step.tool == "add_to_memory":
-            values[step.args["key"]] = args["value"]
         else:
             if step.tool == "aggregate":
                 values[step.id] = result

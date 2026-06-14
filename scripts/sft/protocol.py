@@ -14,6 +14,7 @@ Message protocol (chat roles):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 
@@ -27,7 +28,7 @@ TOOL_SPECS: dict[str, str] = {
         '=,!=,>,>=,<,<= | {"op":"in","values":[..]} | {"op":"between","low":x,"high":y} | '
         '{"op":"like","value":pat} | {"op":"contains","value":s} | {"op":"is_null"} | '
         'column-vs-column via {"column":a,"op":o,"column_value":b}; '
-        'a value parked in memory via {"column":a,"op":o,"value_ref":key}; '
+        'a grounded value from memory via {"column":a,"op":o,"value_ref":memory_id}; '
         'set membership against a computed table via {"column":a,"op":"in","in_table":table}; '
         'combine with {"and":[..]}, {"or":[..]}, {"not": ..}.',
     "project":
@@ -49,9 +50,11 @@ TOOL_SPECS: dict[str, str] = {
         'aggregate(table, column, op) -> a single scalar (op: sum|count|count_distinct|mean|min|max; '
         'column "*" allowed for count).',
     "add_to_memory":
-        'add_to_memory(key, value, content) -> record a scalar conclusion (typically a value you just '
-        'computed with aggregate, e.g. a threshold from a sub-question) under `key`, so a later '
-        'condition_filter can reference it with {"value_ref": key}. Returns the entry; changes no table.',
+        'add_to_memory(type, source_step_id) -> register a scalar already computed by an earlier step '
+        'so a later condition_filter can reference it. type="derived_value"; source_step_id is the '
+        'step_id (from an observation) of a step whose output is a single scalar. You do NOT supply '
+        'the value — the harness extracts it and returns {"memory_id", "key", "value", ...}. Use the '
+        'returned memory_id as {"value_ref": memory_id}. Optional "alias": a short human label.',
     "extreme_value_select":
         'extreme_value_select(table, order_by, top_k=None, return_columns=None) -> new table with '
         'the rows ordered by `order_by` (list of "col" or "col DESC") keeping the top `top_k` '
@@ -60,24 +63,71 @@ TOOL_SPECS: dict[str, str] = {
         'set_op(left, right, op) -> new table combining two tables with op: '
         'union|union_all|intersect|except (their columns must align).',
     "answer_from_context":
-        'answer_from_context(answer, evidence, reason) -> TERMINAL. answer: the result rows as a '
-        'list of rows (each row a list of cells; at most 50 rows). evidence: {"table": name of the '
-        'table holding the answer rows, or null for a scalar}. reason: one short sentence.',
+        'answer_from_context(answer, evidence, supporting_memory_ids, reason) -> TERMINAL. answer: the '
+        'result rows as a list of rows (each row a list of cells; at most 50 rows). evidence: {"table": '
+        'name of the table holding the answer rows, or null for a scalar}. supporting_memory_ids: list '
+        'of memory_ids the answer relies on (or []). reason: one short sentence.',
 }
 
 TOOLS = set(TOOL_SPECS)
 
+PROTOCOL_VERSION = "v2a"   # bump when specs, rendering, or the memory model change
+
+# Strict per-tool argument schema (required, optional). Unlisted keys are rejected so the SFT data
+# and the live rollout can never silently drift — and so the V2a memory trust boundary holds:
+# add_to_memory carries ONLY type + source_step_id, never a model-authored value/key/provenance.
+_ARG_SCHEMA: dict[str, tuple[set, set]] = {
+    "condition_filter": ({"table", "conditions"}, {"return_columns", "preview_k"}),
+    "project": ({"table", "expressions"}, set()),
+    "join_tables": ({"left", "right"}, {"on", "join_type", "left_prefix", "right_prefix", "return_columns"}),
+    "group_aggregate": ({"table", "group_by", "aggregations"}, {"passthrough"}),
+    "aggregate": ({"table", "column", "op"}, set()),
+    "extreme_value_select": ({"table", "order_by"}, {"top_k", "return_columns"}),
+    "set_op": ({"left", "right", "op"}, set()),
+    "derive_column": ({"table", "new_column", "expression"}, set()),
+    "add_to_memory": ({"type", "source_step_id"}, {"alias"}),
+    "answer_from_context": ({"answer", "evidence"}, {"supporting_memory_ids", "reason"}),
+}
+
+
+def validate_arguments(tool: str, args: dict) -> None:
+    """Strict per-tool argument schema; raises ProtocolError on any missing/unexpected key."""
+    schema = _ARG_SCHEMA.get(tool)
+    if schema is None:
+        return
+    required, optional = schema
+    keys = set(args)
+    missing = required - keys
+    if missing:
+        raise ProtocolError(f"{tool}: missing arguments {sorted(missing)}")
+    extra = keys - required - optional
+    if extra:
+        raise ProtocolError(f"{tool}: unexpected arguments {sorted(extra)}")
+    if tool == "add_to_memory" and args.get("type") != "derived_value":
+        raise ProtocolError("add_to_memory: only type='derived_value' is supported in V2a")
+
+
+def protocol_hash() -> str:
+    """Stable hash of the model<->harness contract (version + system prompt + tool specs). SFT
+    manifests and rollout runs record it so a train/eval protocol mismatch is detectable."""
+    payload = json.dumps({"version": PROTOCOL_VERSION, "system": SYSTEM_PROMPT, "tools": TOOL_SPECS},
+                         sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
 SYSTEM_PROMPT = (
     "You are a table-reasoning agent. You answer questions over a relational dataset by calling "
     "tools, one call per turn. Tables (sources and the new tables your calls create) are referred "
-    "to by name. Each tool result shows the created table's name and content (truncated when "
-    "large, with is_truncated=true).\n\n"
+    "to by name. Each tool result is an observation {\"step_id\", \"status\", \"output\"}: step_id "
+    "names that step so you can cite it later (e.g. as add_to_memory's source_step_id); output holds "
+    "the created table's name and content (truncated when large, with is_truncated=true).\n\n"
     "TOOLS\n" + "\n".join(TOOL_SPECS.values()) + "\n\n"
     "RULES\n"
     "1. Each turn, output exactly: <think>brief reasoning</think> then "
     '<tool_call>{"tool": "<name>", "arguments": {...}}</tool_call>. Nothing else.\n'
     "2. Use exact table and column names as given by the overview and previous tool results.\n"
-    "3. Finish with answer_from_context, citing the table that holds the answer rows.\n"
+    "3. To reuse a computed scalar as a threshold, add_to_memory with its source_step_id, then "
+    'reference the returned memory_id via {"value_ref": memory_id}.\n'
+    "4. Finish with answer_from_context, citing the table that holds the answer rows.\n"
 )
 
 
@@ -98,8 +148,10 @@ def assistant_message(think: str, tool: str, arguments: dict) -> str:
             f"<tool_call>{_compact({'tool': tool, 'arguments': arguments})}</tool_call>")
 
 
-def tool_output_message(output: dict) -> str:
-    return _compact(output)
+def tool_output_message(step_id: str, output: dict, status: str = "success") -> str:
+    """Observation envelope: a stable `step_id` (so the model can cite it as `source_step_id`),
+    a status, and the tool output. Identical offline (SFT) and online (rollout)."""
+    return _compact({"step_id": step_id, "status": status, "output": output})
 
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
@@ -121,6 +173,7 @@ def parse_assistant(text: str) -> tuple[str, str, dict]:
         raise ProtocolError(f"unknown tool {tool!r}; legal tools: {sorted(TOOLS)}")
     if not isinstance(args, dict):
         raise ProtocolError('tool_call must have an "arguments" object')
+    validate_arguments(tool, args)
     tm = _THINK_RE.search(text)
     return (tm.group(1).strip() if tm else ""), tool, args
 

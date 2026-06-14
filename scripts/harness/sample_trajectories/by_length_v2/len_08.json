@@ -1,0 +1,954 @@
+{
+  "trajectory_id": "spider_train_143",
+  "schema_version": "v2a",
+  "source": {
+    "dataset": "spider",
+    "db_id": "bike_1",
+    "gold_sql": "SELECT T1.name ,  T1.id FROM station AS T1 JOIN status AS T2 ON T1.id  =  T2.station_id GROUP BY T2.station_id HAVING avg(T2.bikes_available)  >  14 UNION SELECT name ,  id FROM station WHERE installation_date LIKE \"12/%\""
+  },
+  "question": "What are the names and ids of stations that had more than 14 bikes available on average or were installed in December?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "station",
+          "num_rows": 70,
+          "columns": [
+            {
+              "name": "id",
+              "type": "integer"
+            },
+            {
+              "name": "name",
+              "type": "text"
+            },
+            {
+              "name": "lat",
+              "type": "numeric"
+            },
+            {
+              "name": "long",
+              "type": "numeric"
+            },
+            {
+              "name": "dock_count",
+              "type": "integer"
+            },
+            {
+              "name": "city",
+              "type": "text"
+            },
+            {
+              "name": "installation_date",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "table_name": "status",
+          "num_rows": 8487,
+          "columns": [
+            {
+              "name": "station_id",
+              "type": "integer"
+            },
+            {
+              "name": "bikes_available",
+              "type": "integer"
+            },
+            {
+              "name": "docks_available",
+              "type": "integer"
+            },
+            {
+              "name": "time",
+              "type": "text"
+            }
+          ]
+        },
+        {
+          "table_name": "trip",
+          "num_rows": 9959,
+          "columns": [
+            {
+              "name": "id",
+              "type": "integer"
+            },
+            {
+              "name": "duration",
+              "type": "integer"
+            },
+            {
+              "name": "start_date",
+              "type": "text"
+            },
+            {
+              "name": "start_station_name",
+              "type": "text"
+            },
+            {
+              "name": "start_station_id",
+              "type": "integer"
+            },
+            {
+              "name": "end_date",
+              "type": "text"
+            },
+            {
+              "name": "end_station_name",
+              "type": "text"
+            },
+            {
+              "name": "end_station_id",
+              "type": "integer"
+            },
+            {
+              "name": "bike_id",
+              "type": "integer"
+            },
+            {
+              "name": "subscription_type",
+              "type": "text"
+            },
+            {
+              "name": "zip_code",
+              "type": "integer"
+            }
+          ]
+        },
+        {
+          "table_name": "weather",
+          "num_rows": 3665,
+          "columns": [
+            {
+              "name": "date",
+              "type": "text"
+            },
+            {
+              "name": "max_temperature_f",
+              "type": "integer"
+            },
+            {
+              "name": "mean_temperature_f",
+              "type": "integer"
+            },
+            {
+              "name": "min_temperature_f",
+              "type": "integer"
+            },
+            {
+              "name": "max_dew_point_f",
+              "type": "integer"
+            },
+            {
+              "name": "mean_dew_point_f",
+              "type": "integer"
+            },
+            {
+              "name": "min_dew_point_f",
+              "type": "integer"
+            },
+            {
+              "name": "max_humidity",
+              "type": "integer"
+            },
+            {
+              "name": "mean_humidity",
+              "type": "integer"
+            },
+            {
+              "name": "min_humidity",
+              "type": "integer"
+            },
+            {
+              "name": "max_sea_level_pressure_inches",
+              "type": "numeric"
+            },
+            {
+              "name": "mean_sea_level_pressure_inches",
+              "type": "numeric"
+            },
+            {
+              "name": "min_sea_level_pressure_inches",
+              "type": "numeric"
+            },
+            {
+              "name": "max_visibility_miles",
+              "type": "integer"
+            },
+            {
+              "name": "mean_visibility_miles",
+              "type": "integer"
+            },
+            {
+              "name": "min_visibility_miles",
+              "type": "integer"
+            },
+            {
+              "name": "max_wind_Speed_mph",
+              "type": "integer"
+            },
+            {
+              "name": "mean_wind_speed_mph",
+              "type": "integer"
+            },
+            {
+              "name": "max_gust_speed_mph",
+              "type": "integer"
+            },
+            {
+              "name": "precipitation_inches",
+              "type": "integer"
+            },
+            {
+              "name": "cloud_cover",
+              "type": "integer"
+            },
+            {
+              "name": "events",
+              "type": "text"
+            },
+            {
+              "name": "wind_dir_degrees",
+              "type": "integer"
+            },
+            {
+              "name": "zip_code",
+              "type": "integer"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "station",
+          "right": "status",
+          "on": [
+            {
+              "left": "id",
+              "right": "station_id"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "source": "station",
+          "as": "left"
+        },
+        {
+          "source": "status",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__id",
+          "T1__name",
+          "T1__lat",
+          "T1__long",
+          "T1__dock_count",
+          "T1__city",
+          "T1__installation_date",
+          "T2__station_id",
+          "T2__bikes_available",
+          "T2__docks_available",
+          "T2__time"
+        ],
+        "row_count": 8487,
+        "rows": [
+          [
+            3,
+            "San Jose Civic Center",
+            37.330698,
+            -121.888979,
+            15,
+            "San Jose",
+            "8/5/2013",
+            3,
+            12,
+            3,
+            "2015-06-02 12:46:02"
+          ],
+          [
+            3,
+            "San Jose Civic Center",
+            37.330698,
+            -121.888979,
+            15,
+            "San Jose",
+            "8/5/2013",
+            3,
+            12,
+            3,
+            "2015-06-02 12:47:02"
+          ],
+          [
+            3,
+            "San Jose Civic Center",
+            37.330698,
+            -121.888979,
+            15,
+            "San Jose",
+            "8/5/2013",
+            3,
+            12,
+            3,
+            "2015-06-02 12:48:02"
+          ],
+          [
+            3,
+            "San Jose Civic Center",
+            37.330698,
+            -121.888979,
+            15,
+            "San Jose",
+            "8/5/2013",
+            3,
+            12,
+            3,
+            "2015-06-02 12:49:02"
+          ],
+          [
+            3,
+            "San Jose Civic Center",
+            37.330698,
+            -121.888979,
+            15,
+            "San Jose",
+            "8/5/2013",
+            3,
+            12,
+            3,
+            "2015-06-02 12:50:02"
+          ],
+          [
+            3,
+            "San Jose Civic Center",
+            37.330698,
+            -121.888979,
+            15,
+            "San Jose",
+            "8/5/2013",
+            3,
+            12,
+            3,
+            "2015-06-02 12:51:02"
+          ],
+          [
+            3,
+            "San Jose Civic Center",
+            37.330698,
+            -121.888979,
+            15,
+            "San Jose",
+            "8/5/2013",
+            3,
+            12,
+            3,
+            "2015-06-02 12:52:02"
+          ],
+          [
+            3,
+            "San Jose Civic Center",
+            37.330698,
+            -121.888979,
+            15,
+            "San Jose",
+            "8/5/2013",
+            3,
+            12,
+            3,
+            "2015-06-02 12:53:03"
+          ],
+          [
+            3,
+            "San Jose Civic Center",
+            37.330698,
+            -121.888979,
+            15,
+            "San Jose",
+            "8/5/2013",
+            3,
+            12,
+            3,
+            "2015-06-02 12:54:02"
+          ]
+        ],
+        "is_truncated": true,
+        "note": "showing first 9 of 8487 rows (exceeds 100-cell preview budget)"
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "join_001",
+          "group_by": [
+            "T2__station_id"
+          ],
+          "aggregations": [
+            {
+              "op": "mean",
+              "column": "T2__bikes_available",
+              "as": "mean_1"
+            }
+          ],
+          "passthrough": [
+            "T1__name",
+            "T1__id"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_1",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "group_002"
+      },
+      "tool_output": {
+        "table": "group_002",
+        "kind": "group",
+        "columns": [
+          "T2__station_id",
+          "T1__name",
+          "T1__id",
+          "mean_1"
+        ],
+        "row_count": 69,
+        "rows": [
+          [
+            3,
+            "San Jose Civic Center",
+            3,
+            12.0
+          ],
+          [
+            4,
+            "Santa Clara at Almaden",
+            4,
+            6.747967479674797
+          ],
+          [
+            5,
+            "Adobe on Almaden",
+            5,
+            5.0
+          ],
+          [
+            6,
+            "San Pedro Square",
+            6,
+            5.008130081300813
+          ],
+          [
+            7,
+            "Paseo de San Antonio",
+            7,
+            5.0
+          ],
+          [
+            8,
+            "San Salvador at 1st",
+            8,
+            6.203252032520325
+          ],
+          [
+            9,
+            "Japantown",
+            9,
+            0.34959349593495936
+          ],
+          [
+            10,
+            "San Jose City Hall",
+            10,
+            8.642276422764228
+          ],
+          [
+            11,
+            "MLK Library",
+            11,
+            12.0
+          ],
+          [
+            12,
+            "SJSU 4th at San Carlos",
+            12,
+            11.089430894308943
+          ],
+          [
+            13,
+            "St James Park",
+            13,
+            7.788617886178862
+          ],
+          [
+            14,
+            "Arena Green / SAP Center",
+            14,
+            7.0
+          ],
+          [
+            16,
+            "SJSU - San Salvador at 9th",
+            16,
+            6.0
+          ],
+          [
+            21,
+            "Franklin at Maple",
+            21,
+            3.0
+          ],
+          [
+            22,
+            "Redwood City Caltrain Station",
+            22,
+            4.1138211382113825
+          ],
+          [
+            23,
+            "San Mateo County Center",
+            23,
+            5.837398373983739
+          ],
+          [
+            24,
+            "Redwood City Public Library",
+            24,
+            5.0
+          ],
+          [
+            25,
+            "Stanford in Redwood City",
+            25,
+            9.951219512195122
+          ],
+          [
+            26,
+            "Redwood City Medical Center",
+            26,
+            3.0
+          ],
+          [
+            27,
+            "Mountain View City Hall",
+            27,
+            9.0
+          ],
+          [
+            28,
+            "Mountain View Caltrain Station",
+            28,
+            8.0
+          ],
+          [
+            29,
+            "San Antonio Caltrain Station",
+            29,
+            6.0
+          ],
+          [
+            30,
+            "Evelyn Park and Ride",
+            30,
+            8.0
+          ],
+          [
+            31,
+            "San Antonio Shopping Center",
+            31,
+            8.040650406504065
+          ],
+          [
+            32,
+            "Castro Street and El Camino Real",
+            32,
+            5.0
+          ]
+        ],
+        "is_truncated": true,
+        "note": "showing first 25 of 69 rows (exceeds 100-cell preview budget)"
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "group_002",
+          "conditions": {
+            "column": "mean_1",
+            "op": ">",
+            "value": 14
+          }
+        }
+      },
+      "references": [
+        {
+          "step": "step_2",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_003"
+      },
+      "tool_output": {
+        "table": "filter_003",
+        "kind": "filter",
+        "columns": [
+          "T2__station_id",
+          "T1__name",
+          "T1__id",
+          "mean_1"
+        ],
+        "row_count": 2,
+        "rows": [
+          [
+            72,
+            "Civic Center BART (7th at Market)",
+            72,
+            14.089430894308943
+          ],
+          [
+            77,
+            "Market at Sansome",
+            77,
+            15.422764227642276
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_003",
+          "expressions": [
+            "T1__name",
+            "T1__id"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_3",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_004"
+      },
+      "tool_output": {
+        "table": "project_004",
+        "kind": "project",
+        "columns": [
+          "T1__name",
+          "T1__id"
+        ],
+        "row_count": 2,
+        "rows": [
+          [
+            "Civic Center BART (7th at Market)",
+            72
+          ],
+          [
+            "Market at Sansome",
+            77
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "station",
+          "conditions": {
+            "column": "installation_date",
+            "op": "like",
+            "value": "12/%"
+          }
+        }
+      },
+      "references": [
+        {
+          "source": "station",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_005"
+      },
+      "tool_output": {
+        "table": "filter_005",
+        "kind": "filter",
+        "columns": [
+          "id",
+          "name",
+          "lat",
+          "long",
+          "dock_count",
+          "city",
+          "installation_date"
+        ],
+        "row_count": 3,
+        "rows": [
+          [
+            31,
+            "San Antonio Shopping Center",
+            37.400443,
+            -122.10833799999999,
+            15,
+            "Mountain View",
+            "12/31/2013"
+          ],
+          [
+            32,
+            "Castro Street and El Camino Real",
+            37.385956,
+            -122.083678,
+            11,
+            "Mountain View",
+            "12/31/2013"
+          ],
+          [
+            80,
+            "Santa Clara County Civic Center",
+            37.352601,
+            -121.90573300000001,
+            15,
+            "San Jose",
+            "12/31/2013"
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_005",
+          "expressions": [
+            "name",
+            "id"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_5",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_006"
+      },
+      "tool_output": {
+        "table": "project_006",
+        "kind": "project",
+        "columns": [
+          "name",
+          "id"
+        ],
+        "row_count": 3,
+        "rows": [
+          [
+            "San Antonio Shopping Center",
+            31
+          ],
+          [
+            "Castro Street and El Camino Real",
+            32
+          ],
+          [
+            "Santa Clara County Civic Center",
+            80
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Combine the two row sets with the set operation.",
+      "tool_call": {
+        "tool": "set_op",
+        "arguments": {
+          "left": "project_004",
+          "right": "project_006",
+          "op": "union"
+        }
+      },
+      "references": [
+        {
+          "step": "step_4",
+          "as": "left"
+        },
+        {
+          "step": "step_6",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "setop_007"
+      },
+      "tool_output": {
+        "table": "setop_007",
+        "kind": "setop",
+        "columns": [
+          "T1__name",
+          "T1__id"
+        ],
+        "row_count": 5,
+        "rows": [
+          [
+            "Castro Street and El Camino Real",
+            32
+          ],
+          [
+            "Civic Center BART (7th at Market)",
+            72
+          ],
+          [
+            "Market at Sansome",
+            77
+          ],
+          [
+            "San Antonio Shopping Center",
+            31
+          ],
+          [
+            "Santa Clara County Civic Center",
+            80
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_8",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "Castro Street and El Camino Real",
+              32
+            ],
+            [
+              "Civic Center BART (7th at Market)",
+              72
+            ],
+            [
+              "Market at Sansome",
+              77
+            ],
+            [
+              "San Antonio Shopping Center",
+              31
+            ],
+            [
+              "Santa Clara County Civic Center",
+              80
+            ]
+          ],
+          "evidence": {
+            "table": "setop_007"
+          },
+          "supporting_memory_ids": [],
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "step": "step_7"
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "Castro Street and El Camino Real",
+            32
+          ],
+          [
+            "Civic Center BART (7th at Market)",
+            72
+          ],
+          [
+            "Market at Sansome",
+            77
+          ],
+          [
+            "San Antonio Shopping Center",
+            31
+          ],
+          [
+            "Santa Clara County Civic Center",
+            80
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "Castro Street and El Camino Real",
+      32
+    ],
+    [
+      "Civic Center BART (7th at Market)",
+      72
+    ],
+    [
+      "Market at Sansome",
+      77
+    ],
+    [
+      "San Antonio Shopping Center",
+      31
+    ],
+    [
+      "Santa Clara County Civic Center",
+      80
+    ]
+  ]
+}

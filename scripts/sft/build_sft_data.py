@@ -31,7 +31,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from protocol import SYSTEM_PROMPT, assistant_message, first_user_message, tool_output_message  # noqa: E402
+from protocol import (SYSTEM_PROMPT, PROTOCOL_VERSION, assistant_message,  # noqa: E402
+                      first_user_message, protocol_hash, tool_output_message)
 
 CHARS_PER_TOKEN = 3.5  # rough for English+JSON; manifest reports char counts too
 DEFAULT_INPUT_PATTERN = "data/trajectories/spider_{split}.jsonl"
@@ -50,7 +51,8 @@ def convert(traj: dict) -> dict:
         conv.append({"from": "gpt",
                      "value": assistant_message(s.get("think", ""), tc["tool"], tc["arguments"])})
         if i < len(steps) - 1:  # terminal call has no observation
-            conv.append({"from": "observation", "value": tool_output_message(s["tool_output"])})
+            conv.append({"from": "observation",
+                         "value": tool_output_message(s["step_id"], s["tool_output"])})
     return {"system": SYSTEM_PROMPT, "conversations": conv}
 
 
@@ -143,6 +145,8 @@ def build(split: str, max_est_tokens: int, source: Path, out_path: Path) -> dict
         "split": split,
         "input": os.path.relpath(source, ROOT),
         "input_sha256": file_sha256(source),
+        "protocol_version": PROTOCOL_VERSION,
+        "protocol_hash": protocol_hash(),
         "system_prompt_sha256": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
         "source_trajectories": source_count,
         "kept": kept,

@@ -33,7 +33,9 @@ sys.path.insert(0, os.path.join(ROOT, "scripts", "harness"))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "sft"))
 
 from executor import Harness                                    # noqa: E402
-from plan import resolve_cond                                  # noqa: E402
+from plan import resolve_cond, TABLE_REF_ARGS                  # noqa: E402
+from memory_semantics import ground_derived_value             # noqa: E402
+from emitter import _cond_refs                                 # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
 from protocol import (SYSTEM_PROMPT, ProtocolError, TOOLS,      # noqa: E402
                       assistant_message, first_user_message, parse_assistant,
@@ -58,24 +60,62 @@ def overview(h: Harness) -> dict:
     return {"tables": tables}
 
 
-def execute_tool(h: Harness, tool: str, args: dict, memory: dict | None = None):
-    """Run one tool call; return (tool_output dict in the emitter's exact shape, created_table|None)."""
+def new_ctx() -> dict:
+    """Online harness state threaded across one trajectory's actions (provenance + memory)."""
+    return {"memory": {}, "history": {}, "handle_to_step": {}, "memid_to_step": {}}
+
+
+def _online_references(tool: str, args: dict, ctx: dict) -> list[dict]:
+    """Harness-derived consumption edges for one action (never model-provided)."""
+    refs: list[dict] = []
+    for key in TABLE_REF_ARGS.get(tool, []):
+        v = args.get(key)
+        if v in ctx["handle_to_step"]:
+            refs.append({"step": ctx["handle_to_step"][v], "as": key})
+        elif v is not None:
+            refs.append({"source": v, "as": key})
+    if tool == "condition_filter":
+        for kind, val in _cond_refs(args.get("conditions")):
+            if kind == "value_ref" and val in ctx["memid_to_step"]:
+                refs.append({"step": ctx["memid_to_step"][val], "via": "value_ref"})
+            elif kind == "in_table" and val in ctx["handle_to_step"]:
+                refs.append({"step": ctx["handle_to_step"][val], "via": "in_table"})
+    if tool == "add_to_memory":
+        refs.append({"step": args.get("source_step_id"), "via": "source"})
+    return refs
+
+
+def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
+    """Run one tool call, threading online provenance/memory in `ctx`. Returns (output, created|None).
+
+    V2a: `add_to_memory` is grounded by the harness from the cited `source_step_id` (the model never
+    supplies value/key/provenance); a predicate's `value_ref` is a harness-issued `memory_id`."""
     if tool not in TOOLS or tool == "answer_from_context":
         raise ProtocolError(f"tool {tool!r} not executable here")
+    references = _online_references(tool, args, ctx)
+
+    if tool == "add_to_memory":
+        grounded = ground_derived_value(ctx["history"], args["source_step_id"])
+        ctx["memory"][grounded["memory_id"]] = grounded["value"]
+        ctx["memid_to_step"][grounded["memory_id"]] = step_id
+        output = {"memory": grounded}
+        ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
+        return output, None
+
     exec_args = dict(args)
     if tool == "condition_filter":
-        exec_args["conditions"] = resolve_cond(
-            exec_args.get("conditions"), {}, memory if memory is not None else {}
-        )
+        exec_args["conditions"] = resolve_cond(exec_args.get("conditions"), {}, ctx["memory"])
     out = getattr(h, tool)(**exec_args)
     if isinstance(out, dict) and "table_name" in out:
-        return {"table": out["table_name"], "kind": out["kind"], **h.preview(out["table_name"])}, out["table_name"]
-    if tool == "add_to_memory":
-        if memory is not None:
-            memory[args["key"]] = args.get("value")
-        return {"memory": out["memory"]}, None
-    rows = out if isinstance(out, list) else [(out,)]
-    return {"result_sample": [list(r) for r in rows[:5]], "row_count": len(rows)}, None
+        output = {"table": out["table_name"], "kind": out["kind"], **h.preview(out["table_name"])}
+        ctx["handle_to_step"][out["table_name"]] = step_id
+        created = out["table_name"]
+    else:
+        rows = out if isinstance(out, list) else [(out,)]
+        output = {"result_sample": [list(r) for r in rows[:5]], "row_count": len(rows)}
+        created = None
+    ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
+    return output, created
 
 
 def score(h: Harness, gold_sql: str, answer_args: dict, created: set) -> tuple[bool, list, list]:
@@ -112,7 +152,7 @@ def fewshot_text(trajectory_ids: list[str]) -> str:
         return ""
     wanted = set(trajectory_ids)
     found = {}
-    with open(os.path.join(ROOT, "data", "trajectories", "spider_train.jsonl")) as f:
+    with open(os.path.join(ROOT, "data", "trajectories", "spider_train_v2.jsonl")) as f:
         for line in f:
             t = json.loads(line)
             if t["trajectory_id"] in wanted:
@@ -132,7 +172,7 @@ def fewshot_text(trajectory_ids: list[str]) -> str:
                 f"{assistant_message(s.get('think', ''), tc['tool'], tc['arguments'])}"
             )
             if i < len(t["steps"]) - 1:
-                lines.append(f"USER: {tool_output_message(s['tool_output'])}")
+                lines.append(f"USER: {tool_output_message(s['step_id'], s['tool_output'])}")
         blocks.append("\n".join(lines))
     return "\n\nEXAMPLE SESSIONS\n" + "\n\n---\n\n".join(blocks)
 
@@ -145,7 +185,7 @@ def run_live(
                 {"role": "user", "content": first_user_message(overview(h), ex["question"])}]
     initial_messages = deepcopy(messages)
     created: set[str] = set()
-    memory: dict = {}
+    ctx = new_ctx()
     steps = errors = consecutive = 0
     text = ""
     turns = []
@@ -192,7 +232,8 @@ def run_live(
                 rec["final_messages"] = messages
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
-            out, tname = execute_tool(h, tool, args, memory)
+            step_id = f"step_{steps + 1}"
+            out, tname = execute_tool(h, tool, args, ctx, step_id)
             turn["tool_output"] = out
         except (ProtocolError, Exception) as e:  # noqa: BLE001 — every failure becomes feedback
             errors += 1
@@ -211,15 +252,16 @@ def run_live(
                 rec["final_messages"] = messages
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
-            messages.append({"role": "user",
-                             "content": json.dumps({"error": error})})
+            messages.append({"role": "user", "content": json.dumps(
+                {"step_id": f"step_{steps + 1}", "status": "error",
+                 "error": {"type": turn["execution_error_type"], "message": error}})})
             continue
         turns.append(turn)
         consecutive = 0
         steps += 1
         if tname:
             created.add(tname)
-        messages.append({"role": "user", "content": tool_output_message(out)})
+        messages.append({"role": "user", "content": tool_output_message(step_id, out)})
 
     rec["failure_type"] = "max_steps"
     rec["fail"] = "max_steps"
@@ -231,8 +273,8 @@ def run_live(
 
 
 # ---------------- replay mode (no model) ----------------
-def run_replay(n: int) -> int:
-    path = os.path.join(ROOT, "data", "trajectories", "spider_dev.jsonl")
+def run_replay(n: int, path: str = "") -> int:
+    path = path or os.path.join(ROOT, "data", "trajectories", "spider_dev_v2.jsonl")
     total = ok_exec = ok_score = 0
     with open(path) as f:
         for line in f:
@@ -242,11 +284,11 @@ def run_replay(n: int) -> int:
             total += 1
             h = Harness(db_path(t["source"]["db_id"]))
             created: set[str] = set()
-            memory: dict = {}
+            ctx = new_ctx()
             try:
                 for s in t["steps"][:-1]:
                     tc = s["tool_call"]
-                    _, tname = execute_tool(h, tc["tool"], tc["arguments"], memory)
+                    _, tname = execute_tool(h, tc["tool"], tc["arguments"], ctx, s["step_id"])
                     if tname:
                         created.add(tname)
                 ok_exec += 1

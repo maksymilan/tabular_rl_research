@@ -12,7 +12,7 @@ abstract tools (relational + perception + memory); the harness translates each c
 SQL over SQLite and verifies results. Training data is built by **compiling Spider/BIRD gold SQL into
 tool-call trajectories** (not LLM-guessed), so every trajectory is execution-verified.
 
-## Current state (2026-06-12)
+## Current state (2026-06-14)
 
 - **v0 SFT done** (Qwen2.5-3B LoRA): exec-acc **63.8%** on full Spider dev vs text-to-SQL parity line
   **64–66%** vs base+few-shot **4%**. Conclusion: SFT = behavior cloning of interface + canonical
@@ -30,14 +30,52 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   this score as pure table-reasoning failure or silently relax the parser when comparing to SFT.
   Full model inputs/outputs and per-case success/failure JSON live under
   `data/results/qwen2.5_7b_baselines/` (gitignored).
-- **Next**: run 7B / v1 SFT and zero-shot tool evaluation. After that, continue with v1-c
-  (`semantic_match` via literal-fuzzing + embedding backend) and RL
-  (`scripts/eval/rollout.py` is the env loop).
-- **7B / v1 SFT running** (started 2026-06-13 00:01 Asia/Shanghai): Qwen2.5-7B QLoRA on GPU 7,
-  PID `3961316`, output `checkpoints/qwen2.5-7b-spider-v1-qlora`. The viable 24G configuration is
+- **7B / v1 SFT done** (2026-06-13 13:03 Asia/Shanghai): Qwen2.5-7B QLoRA completed 2 epochs /
+  830 optimizer steps in 13:01:20. Final train loss is **0.2495**, validation loss **0.2271**.
+  Adapter output is `checkpoints/qwen2.5-7b-spider-v1-qlora`. The viable 24G configuration is
   `cutoff_len=8192`, LoRA rank/alpha 16/32, `paged_adamw_8bit`, bf16, gradient checkpointing,
-  effective batch 16, 2 epochs / 830 optimizer steps. Logs are
-  `logs/qwen2.5_7b_spider_v1_qlora{,_gpu.csv}`. See `scripts/sft/EXPERIMENTS.md`.
+  and effective batch 16. See `scripts/sft/EXPERIMENTS.md`.
+- **7B / v1 zero-shot tool evaluation done** on all 1,034 Spider dev examples: **707/1034 =
+  68.38%**, with 985 legal final answers (95.26%). Failures: 276 wrong answers, 42 execution
+  errors, 8 protocol errors, and 1 max-steps case. On the 998 examples covered by verified v1 dev
+  trajectories, accuracy is **705/998 = 70.64%**. The 36 examples outside v1 coverage score only
+  **2/36 = 5.56%**. The 29-example `add_to_memory` subset scores **9/29 = 31.03%**, versus
+  **696/969 = 71.83%** on the covered non-memory subset; this confirms the known scalar-memory
+  semantics/provenance weakness. Full model I/O and separate success/failure artifacts live under
+  `data/results/qwen2.5_7b_sft_v1/tool_zero_shot_dev1034/` (gitignored).
+- **V2a memory + provenance DONE & verified (2026-06-14)**: the scalar-memory/provenance repair the
+  old "Next" called for is implemented and replaces the v1 memory shape. `add_to_memory` is now
+  harness-grounded — the model emits ONLY `{type:"derived_value", source_step_id}`; it never authors
+  value/key/provenance. The harness extracts the scalar from the cited step, builds a deterministic
+  `derivation`+`key`+`content`, assigns `memory_id = mem_<source_step_id>` and
+  `authority:"harness_grounded"`. Predicates reference the `memory_id` via `value_ref`. Every step
+  carries harness-authored `references`/`produces`; `emitter.backward_slice` reverse-derives the
+  answer's dependency set (through memory too). Strict scalar-source validation rejects
+  NULL/0-row/multi-row/multi-col → manifest `memory_reject_*` buckets (v2a dropped 4). New SHARED
+  module `scripts/harness/memory_semantics.py` is called by BOTH emitter and rollout. Observation
+  envelope is now `{step_id, status, output}` so the model copies a `step_id` as `source_step_id`.
+  Verified: Spider dev replay **998/998**, strict per-tool schema 30,534 calls / **0** fail,
+  backward-slice invariant **7767/7767**, unit 98+6+4, exec-verified **98.4%**, **v1 files byte-identical
+  (untouched)**. Data (gitignored): `data/trajectories/spider_{train,dev}_v2{,_think}.jsonl` (6769+998,
+  `schema_version:"v2a"`), SFT `data/sft/spider_v2_*` (6767+998, `protocol_hash:eedbb946aa0f2cb7`).
+  Full write-up: `draft/v2a_memory_report.md`. Scope: V2a = scalar `derived_value` ONLY;
+  `evidence_pointer` (V2b) and `plan`/`hypothesis` (V2c) are deferred, separately-ablated mixtures.
+- **Next**: run V2a 7B SFT + zero-shot tool eval (compare to v1 707/1034 = 68.38%, esp. the memory
+  subset that was 9/29 = 31%); then v1-c (`semantic_match`) and the process-reward RL bridge (the
+  `references`/`produces` graph is the credit-assignment substrate). Remaining V2a gate: the exact
+  Qwen-tokenizer cutoff audit (server-side; transformers is not in the local venv).
+- **Claude implementation handoff**: read `draft/trajectory_data_generation_v2.md` before changing
+  trajectory generation or starting another SFT/RL run. It records the audited blockers, canonical
+  `add_to_memory(key, source_step_id)` ownership model, deterministic semantic derivations, online
+  harness-authored provenance, diversity sources, implementation order, and acceptance gates.
+  BIRD Mini-Dev is downloaded under `data/bird_mini_dev/` and should initially remain evaluation-only.
+- **Memory decision (2026-06-14)**: memory remains broader than scalar values, but is typed by
+  authority. `derived_value` and non-scalar `evidence_pointer` are harness-grounded from tool
+  history; large lists/tables stay in `data_view`. `plan` and `hypothesis` are model-authored
+  working state and cannot serve as factual evidence or `value_ref`. Plan SFT can be constructed
+  programmatically from the abstract remaining gold Plan, then diversified with verified rollouts;
+  an external LLM is optional and never authoritative. See `final_tool_design.md` §1.1 and the v2
+  handoff document §3.
 - **Long-context OOM result**: the 9,113-token longest record OOMs at cutoff 10,240. At cutoff
   8,192, standard AdamW OOMs only after its first optimizer-state allocation, so a one-step smoke
   is misleading. Rank 16 + paged 8-bit AdamW passed two worst-case updates at 23,646/24,576 MiB.
@@ -51,6 +89,53 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   content-token maximum is 9113 train / 8166 dev (6 train records exceed 8192), so keep
   `cutoff_len: 10240`. The files are synced to `~/tabular_rl_project/data/sft/` on NewGNN.
 
+## Memory v2 design (shared decision, 2026-06-14)
+
+**Status: `derived_value` (scalar) is IMPLEMENTED & verified as V2a — see the Current-state V2a entry
+and `draft/v2a_memory_report.md`.** `evidence_pointer`/`plan`/`hypothesis` remain design-only (V2b/V2c).
+The implemented field names for the scalar case are `key`/`content`/`derivation` (not the design's
+`definition`/`description`); the ownership rules below hold unchanged.
+
+Canonical details live in `tool_design/final_tool_design.md` §1.1 and
+`draft/trajectory_data_generation_v2.md` §3. Claude and Codex must follow these rules when changing
+the compiler, emitter, harness, protocol, trajectory schema, SFT construction, or RL rewards.
+
+- Memory is a typed task-level workspace, not an untyped scalar dictionary.
+- `derived_value`: a scalar or small structured result extracted by the harness from a cited tool
+  output. It has `harness_grounded` authority and may support the final answer. Only this type may
+  be consumed through `condition_filter.value_ref`.
+- `evidence_pointer`: a semantic pointer to a non-scalar intermediate result such as a filtered
+  row set, grouped table, join result, or ranked subset. The actual rows remain in `data_view`;
+  memory stores the table handle, structured operation definition, source step ids, and a compact
+  description. Do not copy large row lists or tables into memory.
+- `plan`: model-authored future goals/subgoals and their statuses. It is control state rather than
+  evidence, cannot support the final answer, and cannot be used as `value_ref`.
+- `hypothesis`: a model-authored tentative claim with `unverified` status. It should be paired with
+  `refine_memory`: later tool evidence may cause the harness to mark it `confirmed`, `rejected`, or
+  `revised`. The model may propose an update, but only the harness may grant `confirmed` status.
+
+For grounded non-scalar memory, separate the fields by ownership:
+
+- `definition`: structured operation semantics copied from the executed tool call, owned by the
+  harness. Example: input table + `condition_filter` + exact conditions + output table.
+- `description`: deterministic readable rendering of `definition`, owned by the harness. Templates
+  may accurately describe what operation produced the result, but must not invent task-level
+  interpretations.
+- `purpose`: optional model-authored explanation of why the result may be useful. It is not factual
+  authority.
+- `source_step_ids` and the `data_view` handle: harness-authored provenance and data authority.
+
+Thus code can reliably render descriptions such as "rows from customers where risk_score > 0.8"
+or "employee counts grouped by department". Claims such as "these are the customers most worth
+contacting" belong in `purpose` or `hypothesis`, not in the grounded description.
+
+Data construction does not require an external LLM by default. Build `derived_value` and
+`evidence_pointer` deterministically from verified Plan steps and tool outputs. Build initial plan
+memory from an abstract form of the remaining gold Plan, without leaking answer values, then add
+diversity from execution-verified rollouts. External LLM output is only a candidate source for
+wording, alternate plans, or hypotheses; execution and provenance checks remain the acceptance
+gate.
+
 ## Architecture (`scripts/harness/`)
 
 - `executor.py` — relational core. Each table-producing tool registers a named SQL view; reading/
@@ -59,26 +144,40 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   (merged old order_limit; table-producing), set_op, derive_column, window, add_to_memory, preview
   (inlines table content for model perception), rows, gold.
 - `plan.py` — Plan IR: `Step(id, tool, args)`. `run_plan` threads step ids → view names; a `values`
-  map threads scalars; `resolve_cond` resolves `value_ref` (scalar parked in memory) and `in_table`
-  (IN-subquery membership table) inside condition trees.
+  map threads scalars (V2a: `add_to_memory` parks the extracted scalar under its own step id, which the
+  predicate's `value_ref` points at); `resolve_cond` resolves `value_ref` and `in_table` in condition trees.
 - `compiler.py` — `Compiler(schema).compile(sql)`: sqlglot AST → Plan, walking FROM/JOIN → WHERE →
-  GROUP → HAVING → ORDER/LIMIT → SELECT → DISTINCT. Scalar subquery → aggregate → add_to_memory →
-  predicate via value_ref. IN/NOT-IN subquery → membership via in_table. Unsupported → CompileError.
+  GROUP → HAVING → ORDER/LIMIT → SELECT → DISTINCT. Scalar subquery → aggregate → `add_to_memory`
+  (emits ONLY `{type:"derived_value", source}`) → predicate `value_ref` = the memory step's id.
+  IN/NOT-IN subquery → membership via in_table. Unsupported → CompileError.
+- `memory_semantics.py` (V2a, SHARED by emitter + rollout) — `ground_derived_value(history,
+  source_step_id)`: strict `extract_scalar` (scalar tool / 1×1 table, non-NULL else `MemoryGroundingError`)
+  + `build_derivation` (classifies the op graph: aggregate_stat / filtered_aggregate / argmax_lookup /
+  group_argmax / filtered_lookup / derived_aggregate, else operation_result) + deterministic
+  `build_memory_key` / `render_memory_content`. The ONLY place a memory value/semantics is produced.
 - `verify.py` — `round_trip`: compile → run → compare to gold SQL on the real DB.
-- `emitter.py` — verified Plan → training trajectory (ReAct steps + terminal answer_from_context;
-  tool_output inlines table content). `validate()` = legality gate.
+- `emitter.py` — verified Plan → training trajectory. Each step gets harness-authored `references`
+  (consumption edges in step_ids/source names) + `produces`; `add_to_memory` is grounded via
+  `memory_semantics`; model-visible memory args = `{type, source_step_id}`. `backward_slice(traj)`
+  reverse-derives the answer's dependency set; `validate()` = legality + reference-integrity gate.
+  Trajectories carry `schema_version`.
 - `run_all.py` (tests + compile coverage), `run_spider.py [N]` (execution-verified on real DBs),
   `gen_trajectories.py [train|dev]` (batch emit → `data/trajectories/spider_*.jsonl`, gitignored).
 
 ## SFT pipeline (`scripts/sft/`, `scripts/eval/`)
 
 - `protocol.py` — SINGLE source of truth for the model↔harness protocol (system prompt + tool specs
-  + `<think>`/`<tool_call>` rendering + parse). Imported by both build_sft_data and rollout so the
-  SFT format and eval format can never drift.
-- `build_sft_data.py` — trajectories → LLaMA-Factory sharegpt jsonl (loss on assistant turns only).
-- `fill_think.py` — replaces templated `think` with grounded reasoning from the external LLM
-  (api.md). Incremental/resumable (appends per trajectory; re-run skips done ids).
-- `rollout.py` — closed-loop eval (live model ↔ harness) + `--replay`. Doubles as the future RL env.
+  + `<think>`/`<tool_call>` rendering + parse). V2a: observation envelope `{step_id, status, output}`
+  (`tool_output_message(step_id, output)`), `validate_arguments` strict per-tool schema, `PROTOCOL_VERSION`
+  + `protocol_hash()`. Imported by both build_sft_data and rollout so SFT and eval can never drift.
+- `build_sft_data.py` — trajectories → LLaMA-Factory sharegpt jsonl (loss on assistant turns only);
+  manifest records `protocol_version`/`protocol_hash`.
+- `fill_think.py` — replaces templated `think` with grounded reasoning from the external LLM (api.md).
+  `splice_think.py` — reuse prior-version `think` for a new schema at ZERO API cost (memory steps get
+  the template; renamed memory keys are substituted).
+- `rollout.py` — closed-loop eval (live model ↔ harness) + `--replay`. V2a: online step_ids +
+  `tool_history` + harness-derived `references`/`produces` (`_online_references`) + memory grounding
+  via `memory_semantics` — model-claimed provenance is never trusted. Doubles as the RL env.
 - Configs: `scripts/sft/configs/qwen2.5_{3b_lora,7b_qlora}_sft.yaml`.
 
 ## How to run (local, Mac)
@@ -129,9 +228,13 @@ Uses the project venv `.venv` (sqlglot 30.9). Spider DBs in `data/spider_data/` 
 - sqlglot 30 uses the `from_` arg key (not `from`).
 - Column qualification for joins is **internalized in `join_tables`** (no separate rename steps);
   the model sees one `join_tables` call, prefixing is harness-internal.
-- Scalar/list threading lives in `plan.resolve_cond`: `value_ref` (scalar via add_to_memory) and
-  `in_table` (IN-subquery set). Trajectory **display keeps value_ref/in_table**; execution resolves
-  them — keep this split when editing emitter/run_plan.
+- Scalar/list threading lives in `plan.resolve_cond`: `value_ref` (V2a: a harness `memory_id` from a
+  grounded `derived_value`) and `in_table` (IN-subquery set). Trajectory **display keeps
+  value_ref(memory_id)/in_table**; execution resolves them — keep this split when editing emitter/run_plan.
+- **Memory trust boundary (V2a):** the model emits only `{type, source_step_id}`; the harness owns
+  value/key/derivation/memory_id/authority via `memory_semantics`. NEVER add a model-visible
+  `value`/`references` to `add_to_memory` (that was the v1 bug that broke replay and is forgeable in RL).
+  `references`/`produces` are harness-authored sidecars, never `tool_call.arguments`.
 - **Verification gate is sound:** unsupported SQL → CompileError (counted, never mis-compiled);
   wrong decompositions → round-trip mismatch → dropped. New datasets lower coverage, never corrupt.
 - **Ceiling:** execution-verified ~98.4% is the hard ceiling — 100% is impossible because
@@ -144,6 +247,7 @@ Uses the project venv `.venv` (sqlglot 30.9). Spider DBs in `data/spider_data/` 
   `~/.claude/projects/<proj>/memory/` (Claude-only working notes). Put anything Codex should know
   HERE.
 - Design discussion notes live in `draft/` (process_reward_density, subtable_vs_memory,
-  table_text_handling, experiment_design, sft_plan, tool_design_summary).
+  table_text_handling, experiment_design, sft_plan, tool_design_summary, trajectory_data_generation_v2,
+  v2a_memory_report).
 - User preference: narrate every executed command + one-line why (the user checks and learns ops).
 - Commit on the user's request; branch off master only if asked (repo convention is direct-to-master).

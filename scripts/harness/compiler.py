@@ -18,6 +18,7 @@ v1 scope-outs: subqueries in WHERE, correlated subqueries.
 from __future__ import annotations
 
 import itertools
+import re
 
 import sqlglot
 from sqlglot import expressions as E
@@ -40,17 +41,38 @@ class Compiler:
         self.schema = schema
         self._ids = itertools.count(1)
         self._qual: dict[str, str] | None = None  # current SELECT's alias -> table (or None = bare)
+        self._memkeys: set[str] = set()           # memory keys minted this compile (uniqueness)
 
     def _id(self) -> str:
         return f"s{next(self._ids)}"
 
     # ---------- public ----------
     def compile(self, sql: str) -> list[Step]:
+        self._memkeys = set()
         try:
             ast = sqlglot.parse_one(sql, read="sqlite")
         except Exception as exc:
             raise CompileError(f"parse error: {exc}") from exc
         return self._node(ast)
+
+    # ---------- semantic memory keys / content (a parked scalar is a named, grounded fact) ----------
+    def _mem_key(self, op: str, col: str) -> str:
+        base = re.sub(r"\W+", "_", f"{op}_{col}").strip("_").lower() or "scalar"
+        key, n = base, 2
+        while key in self._memkeys:
+            key, n = f"{base}_{n}", n + 1
+        self._memkeys.add(key)
+        return key
+
+    def _mem_content(self, inner: E.Select, op: str, col: str) -> str:
+        """Human/model-readable description of WHAT the parked scalar is, grounded in the subquery's
+        own predicate so a later `value_ref` is a meaningful fact, not an opaque slot."""
+        where = inner.args.get("where") if isinstance(inner, E.Select) else None
+        if where is not None:
+            return f"{op}({col}) over rows where {self._bare(where.this)}"
+        frm = inner.args.get("from_") or inner.args.get("from") if isinstance(inner, E.Select) else None
+        tbl = frm.this.name if (frm is not None and isinstance(frm.this, E.Table)) else "the table"
+        return f"{op}({col}) over {tbl}"
 
     _SETOP = {E.Union: "union", E.Intersect: "intersect", E.Except: "except"}
 
@@ -274,11 +296,9 @@ class Compiler:
         col = self._resolve(this_node, colmap)
         if last.tool == "aggregate":          # IN (scalar subquery) == equality to that scalar
             mem = self._id()
-            key = f"v{mem[1:]}"
-            steps.append(Step(mem, "add_to_memory",
-                              {"key": key, "source": last.id,
-                               "content": f"{last.args['op']}({last.args['column']}) from subquery"}))
-            return {"column": col, "op": "=", "value_ref": key}
+            # model cites the source step only; the harness grounds value/key/derivation (V2a).
+            steps.append(Step(mem, "add_to_memory", {"type": "derived_value", "source": last.id}))
+            return {"column": col, "op": "=", "value_ref": mem}
         return {"column": col, "op": "in", "in_table": last.id}
 
     def _scalar_subquery(self, node: E.Expression, steps: list[Step]):
@@ -297,13 +317,10 @@ class Compiler:
         steps.extend(sub)
         last = sub[-1]
         mem = self._id()
-        key = f"v{mem[1:]}"          # distinct namespace from step ids (s*) in the value map
-        # aggregate -> a scalar; otherwise a single-row subquery used as a scalar (= (SELECT ... LIMIT 1)),
-        # whose one cell is extracted at execution — matching SQLite's first-row scalar semantics.
-        content = (f"{last.args['op']}({last.args['column']}) from subquery"
-                   if last.tool == "aggregate" else "single-row value from subquery")
-        steps.append(Step(mem, "add_to_memory", {"key": key, "source": last.id, "content": content}))
-        return key
+        # model cites the source step only; the harness extracts the scalar and builds the
+        # derivation/key/content (V2a). Single-row subqueries are grounded as a 1x1 table.
+        steps.append(Step(mem, "add_to_memory", {"type": "derived_value", "source": last.id}))
+        return mem
 
     def _resolve(self, node: E.Expression, colmap: dict[str, str]) -> str:
         key = self._bare(node)

@@ -1,0 +1,456 @@
+{
+  "trajectory_id": "spider_train_2",
+  "schema_version": "v2a",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT creation ,  name ,  budget_in_billions FROM department"
+  },
+  "question": "List the creation year, name and budget of each department.",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15,
+          "columns": [
+            {
+              "name": "Department_ID",
+              "type": "int"
+            },
+            {
+              "name": "Name",
+              "type": "text"
+            },
+            {
+              "name": "Creation",
+              "type": "text"
+            },
+            {
+              "name": "Ranking",
+              "type": "int"
+            },
+            {
+              "name": "Budget_in_Billions",
+              "type": "real"
+            },
+            {
+              "name": "Num_Employees",
+              "type": "real"
+            }
+          ]
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10,
+          "columns": [
+            {
+              "name": "head_ID",
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "type": "text"
+            },
+            {
+              "name": "born_state",
+              "type": "text"
+            },
+            {
+              "name": "age",
+              "type": "real"
+            }
+          ]
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5,
+          "columns": [
+            {
+              "name": "department_ID",
+              "type": "int"
+            },
+            {
+              "name": "head_ID",
+              "type": "int"
+            },
+            {
+              "name": "temporary_acting",
+              "type": "text"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "department",
+          "expressions": [
+            "creation",
+            "name",
+            "budget_in_billions"
+          ]
+        }
+      },
+      "references": [
+        {
+          "source": "department",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_001"
+      },
+      "tool_output": {
+        "table": "project_001",
+        "kind": "project",
+        "columns": [
+          "creation",
+          "name",
+          "budget_in_billions"
+        ],
+        "row_count": 15,
+        "rows": [
+          [
+            "1789",
+            "State",
+            9.96
+          ],
+          [
+            "1789",
+            "Treasury",
+            11.1
+          ],
+          [
+            "1947",
+            "Defense",
+            439.3
+          ],
+          [
+            "1870",
+            "Justice",
+            23.4
+          ],
+          [
+            "1849",
+            "Interior",
+            10.7
+          ],
+          [
+            "1889",
+            "Agriculture",
+            77.6
+          ],
+          [
+            "1903",
+            "Commerce",
+            6.2
+          ],
+          [
+            "1913",
+            "Labor",
+            59.7
+          ],
+          [
+            "1953",
+            "Health and Human Services",
+            543.2
+          ],
+          [
+            "1965",
+            "Housing and Urban Development",
+            46.2
+          ],
+          [
+            "1966",
+            "Transportation",
+            58.0
+          ],
+          [
+            "1977",
+            "Energy",
+            21.5
+          ],
+          [
+            "1979",
+            "Education",
+            62.8
+          ],
+          [
+            "1989",
+            "Veterans Affairs",
+            73.2
+          ],
+          [
+            "2002",
+            "Homeland Security",
+            44.6
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "1789",
+              "State",
+              9.96
+            ],
+            [
+              "1789",
+              "Treasury",
+              11.1
+            ],
+            [
+              "1947",
+              "Defense",
+              439.3
+            ],
+            [
+              "1870",
+              "Justice",
+              23.4
+            ],
+            [
+              "1849",
+              "Interior",
+              10.7
+            ],
+            [
+              "1889",
+              "Agriculture",
+              77.6
+            ],
+            [
+              "1903",
+              "Commerce",
+              6.2
+            ],
+            [
+              "1913",
+              "Labor",
+              59.7
+            ],
+            [
+              "1953",
+              "Health and Human Services",
+              543.2
+            ],
+            [
+              "1965",
+              "Housing and Urban Development",
+              46.2
+            ],
+            [
+              "1966",
+              "Transportation",
+              58.0
+            ],
+            [
+              "1977",
+              "Energy",
+              21.5
+            ],
+            [
+              "1979",
+              "Education",
+              62.8
+            ],
+            [
+              "1989",
+              "Veterans Affairs",
+              73.2
+            ],
+            [
+              "2002",
+              "Homeland Security",
+              44.6
+            ]
+          ],
+          "evidence": {
+            "table": "project_001"
+          },
+          "supporting_memory_ids": [],
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "step": "step_1"
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "1789",
+            "State",
+            9.96
+          ],
+          [
+            "1789",
+            "Treasury",
+            11.1
+          ],
+          [
+            "1947",
+            "Defense",
+            439.3
+          ],
+          [
+            "1870",
+            "Justice",
+            23.4
+          ],
+          [
+            "1849",
+            "Interior",
+            10.7
+          ],
+          [
+            "1889",
+            "Agriculture",
+            77.6
+          ],
+          [
+            "1903",
+            "Commerce",
+            6.2
+          ],
+          [
+            "1913",
+            "Labor",
+            59.7
+          ],
+          [
+            "1953",
+            "Health and Human Services",
+            543.2
+          ],
+          [
+            "1965",
+            "Housing and Urban Development",
+            46.2
+          ],
+          [
+            "1966",
+            "Transportation",
+            58.0
+          ],
+          [
+            "1977",
+            "Energy",
+            21.5
+          ],
+          [
+            "1979",
+            "Education",
+            62.8
+          ],
+          [
+            "1989",
+            "Veterans Affairs",
+            73.2
+          ],
+          [
+            "2002",
+            "Homeland Security",
+            44.6
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "1789",
+      "State",
+      9.96
+    ],
+    [
+      "1789",
+      "Treasury",
+      11.1
+    ],
+    [
+      "1947",
+      "Defense",
+      439.3
+    ],
+    [
+      "1870",
+      "Justice",
+      23.4
+    ],
+    [
+      "1849",
+      "Interior",
+      10.7
+    ],
+    [
+      "1889",
+      "Agriculture",
+      77.6
+    ],
+    [
+      "1903",
+      "Commerce",
+      6.2
+    ],
+    [
+      "1913",
+      "Labor",
+      59.7
+    ],
+    [
+      "1953",
+      "Health and Human Services",
+      543.2
+    ],
+    [
+      "1965",
+      "Housing and Urban Development",
+      46.2
+    ],
+    [
+      "1966",
+      "Transportation",
+      58.0
+    ],
+    [
+      "1977",
+      "Energy",
+      21.5
+    ],
+    [
+      "1979",
+      "Education",
+      62.8
+    ],
+    [
+      "1989",
+      "Veterans Affairs",
+      73.2
+    ],
+    [
+      "2002",
+      "Homeland Security",
+      44.6
+    ]
+  ]
+}

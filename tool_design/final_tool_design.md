@@ -17,10 +17,11 @@ process-level credit assignment and evidence-grounded answers.
   (`kind`: `source` | `filter` | `group` | `join` | `derive` | `setop` | `window`), each stored
   as a **re-materializable definition**, possibly large, never fully in the prompt. The model
   sees only **handles** (table_name, columns+types, row_count, optional intent).
-- `static_task_memory` (model-visible): model-authored conclusions + harness-authored metadata.
-  Every item **references** `data_view` ground truth (rows/cells) or tool-history steps; at
-  render time the harness **expands** referenced cells inline. Memory never stores verbatim
-  source data as its own authority.
+- `static_task_memory` (model-visible): typed task memory containing both grounded derived results
+  and model-authored working notes. Every item has an explicit authority level. Grounded items are
+  constructed and validated by the harness from `data_view` or tool-history outputs; model-authored
+  plans/hypotheses are never treated as factual evidence until a tool result validates them.
+  Memory stores compact semantics and references, not copied source rows or large result sets.
 - `dataset_overview` (model-visible, init): catalog of source-table handles + `relations`
   (PK/FK with cardinality) + full-table numeric stats.
 - `tool_history` (internal): normalized calls, outputs, provenance; for dedup/analysis/reward.
@@ -35,6 +36,25 @@ auto-compact old row-bearing results.
 output so its rows are addressable; row-returning tools return rows of an existing table with
 that table's row_ids. Derived rows (group/join/window) carry synthetic ids whose provenance
 expands to source rows in tool_history.
+
+### 1.1 Memory types and trust boundary
+
+Memory is not a single undifferentiated scratchpad:
+
+| Type | Meaning | Authority | Construction |
+|---|---|---|---|
+| `derived_value` | Scalar or small structured value computed by tools | `harness_grounded` | Model cites `source_step_id`; harness extracts value and derivation |
+| `evidence_pointer` | Semantic reference to a non-scalar table/row/column result | `harness_grounded` | Harness stores a `data_view` handle plus scope/meaning; rows remain in `data_view` |
+| `plan` | Intended future actions/subgoals | `model_authored` | Model writes structured goals; may be compiled from a gold Plan for SFT |
+| `hypothesis` | Tentative interpretation or expected relation | `model_authored_unverified` | Model/LLM/rollout proposes; later tool evidence must confirm or invalidate |
+
+Only `harness_grounded` memory may be cited as factual answer support. Only a grounded scalar
+`derived_value` may be used by `condition_filter.value_ref`. A `plan` is useful control state, not
+evidence; it receives plan-consistency or completion signals, never factual provenance credit.
+
+For a non-scalar result, memory should not duplicate the complete list/table. Store an
+`evidence_pointer` such as `{table_name, columns, row_scope, source_step_ids, intent}` and keep the
+actual data in `data_view`. This preserves a single ground-truth authority and avoids prompt growth.
 
 ## 2. Tool set
 
@@ -54,7 +74,7 @@ Interaction envelope: ReAct `<think>` / `<tool_call>{json}</tool_call>` / `<tool
 | 9 | `set_op` | (left, right, op[union\|intersect\|except]) | **creates `setop` table** (also merges selections) | low |
 | 10 | `aggregate` | (table, column\|expression, op[sum\|count\|count_distinct\|mean\|min\|max\|stddev\|variance\|median\|...]) | scalar | high |
 | 11 | `window` | (table, partition_by[...], order_by[...], fn[row_number\|rank\|dense_rank\|lag\|lead\|running_sum\|...], as) | **creates `window` table** (adds window column) | low / scopeable |
-| 12 | `add_to_memory` | (items[{type, content, references, confidence_or_check, [invalidating_condition]}]) | memory update | high |
+| 12 | `add_to_memory` | (items with type-specific payload; grounded result: `{type, key, source_step_id, [extract]}`; plan/hypothesis: `{type, key, content}`) | typed memory update; harness assigns authority/provenance | high |
 | 13 | `refine_memory` | (operations[{op[compress\|remove\|update], source_ids, ...}]) | memory update | low |
 | 14 | `answer_from_context` | (answer, evidence[{table, rows, columns}\|passages], supporting_memory_ids, reason) | final answer; citation checked | 1× |
 
@@ -108,6 +128,19 @@ simple/medium Spider subset for v1 (skip window/nested set-ops) to shrink the ef
 - **Sample-and-filter mode** (only gold answer, e.g. WTQ/TableBench): strong model proposes a
   tool trajectory → execute → keep iff answer == gold (rejection sampling + multi-model consensus).
 - **Fuzzy-matching data** (so `semantic_match` is exercised — SQL never uses it): see §8.
+
+Memory data does not require an external LLM by default:
+
+- `derived_value`: deterministically constructed from scalar-producing Plan steps.
+- `evidence_pointer`: deterministically constructed from table-producing Plan steps and their
+  downstream uses.
+- `plan`: compile a structured, abstraction-level outline from the remaining gold Plan for SFT;
+  later add alternate plans from execution-verified model rollouts.
+- `hypothesis`: optional and deferred; obtain from model rollouts, multi-turn datasets, or an
+  external LLM, but keep only after explicit validation or label it unverified.
+
+External models may improve wording or propose alternate plans, but they are candidate generators,
+not authorities. Tool execution and harness provenance remain the acceptance gate.
 
 ## 8. Constructing semantic_match (fuzzy) data
 

@@ -68,8 +68,8 @@ def run():
     filt = next(s for s in psub if s.tool == "condition_filter")
     t.check("scalar subquery -> aggregate+add_to_memory+value_ref",
             tools[:3] == ["aggregate", "add_to_memory", "condition_filter"]
-            and mem.args["source"] == "s1"
-            and filt.args["conditions"].get("value_ref") == mem.args["key"], str(tools))
+            and mem.args["source"] == "s1" and mem.args["type"] == "derived_value"
+            and filt.args["conditions"].get("value_ref") == mem.id, str(tools))
 
     # IN (subquery) -> compile the subquery to a table, test membership via in_table
     pin = Compiler().compile("SELECT a FROM t WHERE a IN (SELECT b FROM s)")
