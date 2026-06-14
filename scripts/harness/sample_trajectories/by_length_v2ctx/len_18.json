@@ -1,0 +1,1224 @@
+{
+  "trajectory_id": "spider_train_3293",
+  "schema_version": "v2-ctx",
+  "source": {
+    "dataset": "spider",
+    "db_id": "college_1",
+    "gold_sql": "SELECT T1.stu_fname FROM student AS T1 JOIN enroll AS T2 ON T1.stu_num  =  T2.stu_num JOIN CLASS AS T3 ON T2.class_code  =  T3.class_code JOIN course AS T4 ON T3.crs_code  =  T4.crs_code JOIN department AS T5 ON T5.dept_code  =  T4.dept_code WHERE T5.dept_name  =  'Accounting' INTERSECT SELECT T1.stu_fname FROM student AS T1 JOIN enroll AS T2 ON T1.stu_num  =  T2.stu_num JOIN CLASS AS T3 ON T2.class_code  =  T3.class_code JOIN course AS T4 ON T3.crs_code  =  T4.crs_code JOIN department AS T5 ON T5.dept_code  =  T4.dept_code WHERE T5.dept_name  =  'Computer Info. Systems'"
+  },
+  "question": "Find the first name of student who is taking classes from accounting and Computer Info. Systems departments",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "CLASS",
+          "num_rows": 13
+        },
+        {
+          "table_name": "COURSE",
+          "num_rows": 6
+        },
+        {
+          "table_name": "DEPARTMENT",
+          "num_rows": 11
+        },
+        {
+          "table_name": "EMPLOYEE",
+          "num_rows": 37
+        },
+        {
+          "table_name": "ENROLL",
+          "num_rows": 6
+        },
+        {
+          "table_name": "PROFESSOR",
+          "num_rows": 22
+        },
+        {
+          "table_name": "STUDENT",
+          "num_rows": 8
+        }
+      ],
+      "relations": [
+        {
+          "from": "CLASS.PROF_NUM",
+          "to": "EMPLOYEE.EMP_NUM"
+        },
+        {
+          "from": "CLASS.CRS_CODE",
+          "to": "COURSE.CRS_CODE"
+        },
+        {
+          "from": "COURSE.DEPT_CODE",
+          "to": "DEPARTMENT.DEPT_CODE"
+        },
+        {
+          "from": "DEPARTMENT.EMP_NUM",
+          "to": "EMPLOYEE.EMP_NUM"
+        },
+        {
+          "from": "ENROLL.STU_NUM",
+          "to": "STUDENT.STU_NUM"
+        },
+        {
+          "from": "ENROLL.CLASS_CODE",
+          "to": "CLASS.CLASS_CODE"
+        },
+        {
+          "from": "PROFESSOR.DEPT_CODE",
+          "to": "DEPARTMENT.DEPT_CODE"
+        },
+        {
+          "from": "PROFESSOR.EMP_NUM",
+          "to": "EMPLOYEE.EMP_NUM"
+        },
+        {
+          "from": "STUDENT.DEPT_CODE",
+          "to": "DEPARTMENT.DEPT_CODE"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "student",
+            "enroll",
+            "class",
+            "course",
+            "department"
+          ]
+        }
+      },
+      "references": [
+        {
+          "source": "student",
+          "as": "table"
+        },
+        {
+          "source": "enroll",
+          "as": "table"
+        },
+        {
+          "source": "class",
+          "as": "table"
+        },
+        {
+          "source": "course",
+          "as": "table"
+        },
+        {
+          "source": "department",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "student",
+            "row_count": 8,
+            "columns": [
+              {
+                "name": "STU_NUM",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "STU_LNAME",
+                "type": "varchar(15)",
+                "pk": false
+              },
+              {
+                "name": "STU_FNAME",
+                "type": "varchar(15)",
+                "pk": false
+              },
+              {
+                "name": "STU_INIT",
+                "type": "varchar(1)",
+                "pk": false
+              },
+              {
+                "name": "STU_DOB",
+                "type": "datetime",
+                "pk": false
+              },
+              {
+                "name": "STU_HRS",
+                "type": "int",
+                "pk": false
+              },
+              {
+                "name": "STU_CLASS",
+                "type": "varchar(2)",
+                "pk": false
+              },
+              {
+                "name": "STU_GPA",
+                "type": "float(8)",
+                "pk": false
+              },
+              {
+                "name": "STU_TRANSFER",
+                "type": "numeric",
+                "pk": false
+              },
+              {
+                "name": "DEPT_CODE",
+                "type": "varchar(18)",
+                "pk": false
+              },
+              {
+                "name": "STU_PHONE",
+                "type": "varchar(4)",
+                "pk": false
+              },
+              {
+                "name": "PROF_NUM",
+                "type": "int",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "DEPT_CODE",
+                "references": "DEPARTMENT.DEPT_CODE"
+              }
+            ]
+          },
+          {
+            "table_name": "enroll",
+            "row_count": 6,
+            "columns": [
+              {
+                "name": "CLASS_CODE",
+                "type": "varchar(5)",
+                "pk": false
+              },
+              {
+                "name": "STU_NUM",
+                "type": "int",
+                "pk": false
+              },
+              {
+                "name": "ENROLL_GRADE",
+                "type": "varchar(50)",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "STU_NUM",
+                "references": "STUDENT.STU_NUM"
+              },
+              {
+                "column": "CLASS_CODE",
+                "references": "CLASS.CLASS_CODE"
+              }
+            ]
+          },
+          {
+            "table_name": "class",
+            "row_count": 13,
+            "columns": [
+              {
+                "name": "CLASS_CODE",
+                "type": "varchar(5)",
+                "pk": true
+              },
+              {
+                "name": "CRS_CODE",
+                "type": "varchar(10)",
+                "pk": false
+              },
+              {
+                "name": "CLASS_SECTION",
+                "type": "varchar(2)",
+                "pk": false
+              },
+              {
+                "name": "CLASS_TIME",
+                "type": "varchar(20)",
+                "pk": false
+              },
+              {
+                "name": "CLASS_ROOM",
+                "type": "varchar(8)",
+                "pk": false
+              },
+              {
+                "name": "PROF_NUM",
+                "type": "int",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "PROF_NUM",
+                "references": "EMPLOYEE.EMP_NUM"
+              },
+              {
+                "column": "CRS_CODE",
+                "references": "COURSE.CRS_CODE"
+              }
+            ]
+          },
+          {
+            "table_name": "course",
+            "row_count": 6,
+            "columns": [
+              {
+                "name": "CRS_CODE",
+                "type": "varchar(10)",
+                "pk": true
+              },
+              {
+                "name": "DEPT_CODE",
+                "type": "varchar(10)",
+                "pk": false
+              },
+              {
+                "name": "CRS_DESCRIPTION",
+                "type": "varchar(35)",
+                "pk": false
+              },
+              {
+                "name": "CRS_CREDIT",
+                "type": "float(8)",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "DEPT_CODE",
+                "references": "DEPARTMENT.DEPT_CODE"
+              }
+            ]
+          },
+          {
+            "table_name": "department",
+            "row_count": 11,
+            "columns": [
+              {
+                "name": "DEPT_CODE",
+                "type": "varchar(10)",
+                "pk": true
+              },
+              {
+                "name": "DEPT_NAME",
+                "type": "varchar(30)",
+                "pk": false
+              },
+              {
+                "name": "SCHOOL_CODE",
+                "type": "varchar(8)",
+                "pk": false
+              },
+              {
+                "name": "EMP_NUM",
+                "type": "int",
+                "pk": false
+              },
+              {
+                "name": "DEPT_ADDRESS",
+                "type": "varchar(20)",
+                "pk": false
+              },
+              {
+                "name": "DEPT_EXTENSION",
+                "type": "varchar(4)",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "EMP_NUM",
+                "references": "EMPLOYEE.EMP_NUM"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "student",
+          "right": "enroll",
+          "on": [
+            {
+              "left": "stu_num",
+              "right": "stu_num"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "source": "student",
+          "as": "left"
+        },
+        {
+          "source": "enroll",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__STU_NUM",
+          "T1__STU_LNAME",
+          "T1__STU_FNAME",
+          "T1__STU_INIT",
+          "T1__STU_DOB",
+          "T1__STU_HRS",
+          "T1__STU_CLASS",
+          "T1__STU_GPA",
+          "T1__STU_TRANSFER",
+          "T1__DEPT_CODE",
+          "T1__STU_PHONE",
+          "T1__PROF_NUM",
+          "T2__CLASS_CODE",
+          "T2__STU_NUM",
+          "T2__ENROLL_GRADE"
+        ],
+        "row_count": 6
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "join_001",
+          "right": "class",
+          "on": [
+            {
+              "left": "T2__class_code",
+              "right": "class_code"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": null,
+          "right_prefix": "T3"
+        }
+      },
+      "references": [
+        {
+          "step": "step_2",
+          "as": "left"
+        },
+        {
+          "source": "class",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_002"
+      },
+      "tool_output": {
+        "table": "join_002",
+        "kind": "join",
+        "columns": [
+          "T1__STU_NUM",
+          "T1__STU_LNAME",
+          "T1__STU_FNAME",
+          "T1__STU_INIT",
+          "T1__STU_DOB",
+          "T1__STU_HRS",
+          "T1__STU_CLASS",
+          "T1__STU_GPA",
+          "T1__STU_TRANSFER",
+          "T1__DEPT_CODE",
+          "T1__STU_PHONE",
+          "T1__PROF_NUM",
+          "T2__CLASS_CODE",
+          "T2__STU_NUM",
+          "T2__ENROLL_GRADE",
+          "T3__CLASS_CODE",
+          "T3__CRS_CODE",
+          "T3__CLASS_SECTION",
+          "T3__CLASS_TIME",
+          "T3__CLASS_ROOM",
+          "T3__PROF_NUM"
+        ],
+        "row_count": 6
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "join_002",
+          "right": "course",
+          "on": [
+            {
+              "left": "T3__crs_code",
+              "right": "crs_code"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": null,
+          "right_prefix": "T4"
+        }
+      },
+      "references": [
+        {
+          "step": "step_3",
+          "as": "left"
+        },
+        {
+          "source": "course",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_003"
+      },
+      "tool_output": {
+        "table": "join_003",
+        "kind": "join",
+        "columns": [
+          "T1__STU_NUM",
+          "T1__STU_LNAME",
+          "T1__STU_FNAME",
+          "T1__STU_INIT",
+          "T1__STU_DOB",
+          "T1__STU_HRS",
+          "T1__STU_CLASS",
+          "T1__STU_GPA",
+          "T1__STU_TRANSFER",
+          "T1__DEPT_CODE",
+          "T1__STU_PHONE",
+          "T1__PROF_NUM",
+          "T2__CLASS_CODE",
+          "T2__STU_NUM",
+          "T2__ENROLL_GRADE",
+          "T3__CLASS_CODE",
+          "T3__CRS_CODE",
+          "T3__CLASS_SECTION",
+          "T3__CLASS_TIME",
+          "T3__CLASS_ROOM",
+          "T3__PROF_NUM",
+          "T4__CRS_CODE",
+          "T4__DEPT_CODE",
+          "T4__CRS_DESCRIPTION",
+          "T4__CRS_CREDIT"
+        ],
+        "row_count": 6
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "join_003",
+          "right": "department",
+          "on": [
+            {
+              "left": "T4__dept_code",
+              "right": "dept_code"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": null,
+          "right_prefix": "T5"
+        }
+      },
+      "references": [
+        {
+          "step": "step_4",
+          "as": "left"
+        },
+        {
+          "source": "department",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_004"
+      },
+      "tool_output": {
+        "table": "join_004",
+        "kind": "join",
+        "columns": [
+          "T1__STU_NUM",
+          "T1__STU_LNAME",
+          "T1__STU_FNAME",
+          "T1__STU_INIT",
+          "T1__STU_DOB",
+          "T1__STU_HRS",
+          "T1__STU_CLASS",
+          "T1__STU_GPA",
+          "T1__STU_TRANSFER",
+          "T1__DEPT_CODE",
+          "T1__STU_PHONE",
+          "T1__PROF_NUM",
+          "T2__CLASS_CODE",
+          "T2__STU_NUM",
+          "T2__ENROLL_GRADE",
+          "T3__CLASS_CODE",
+          "T3__CRS_CODE",
+          "T3__CLASS_SECTION",
+          "T3__CLASS_TIME",
+          "T3__CLASS_ROOM",
+          "T3__PROF_NUM",
+          "T4__CRS_CODE",
+          "T4__DEPT_CODE",
+          "T4__CRS_DESCRIPTION",
+          "T4__CRS_CREDIT",
+          "T5__DEPT_CODE",
+          "T5__DEPT_NAME",
+          "T5__SCHOOL_CODE",
+          "T5__EMP_NUM",
+          "T5__DEPT_ADDRESS",
+          "T5__DEPT_EXTENSION"
+        ],
+        "row_count": 6
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Check the actual values in this column so the filter literal is grounded.",
+      "tool_call": {
+        "tool": "inspect_column",
+        "arguments": {
+          "table": "join_004",
+          "column": "T5__dept_name"
+        }
+      },
+      "references": [
+        {
+          "step": "step_5"
+        }
+      ],
+      "produces": {
+        "kind": "column_domain"
+      },
+      "tool_output": {
+        "column": "T5__dept_name",
+        "distinct_count": 2,
+        "has_null": false,
+        "frequent_values": [
+          "Computer Info. Systems",
+          "Accounting"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_004",
+          "conditions": {
+            "column": "T5__dept_name",
+            "op": "=",
+            "value": "Accounting"
+          }
+        }
+      },
+      "references": [
+        {
+          "step": "step_5",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_005"
+      },
+      "tool_output": {
+        "table": "filter_005",
+        "kind": "filter",
+        "columns": [
+          "T1__STU_NUM",
+          "T1__STU_LNAME",
+          "T1__STU_FNAME",
+          "T1__STU_INIT",
+          "T1__STU_DOB",
+          "T1__STU_HRS",
+          "T1__STU_CLASS",
+          "T1__STU_GPA",
+          "T1__STU_TRANSFER",
+          "T1__DEPT_CODE",
+          "T1__STU_PHONE",
+          "T1__PROF_NUM",
+          "T2__CLASS_CODE",
+          "T2__STU_NUM",
+          "T2__ENROLL_GRADE",
+          "T3__CLASS_CODE",
+          "T3__CRS_CODE",
+          "T3__CLASS_SECTION",
+          "T3__CLASS_TIME",
+          "T3__CLASS_ROOM",
+          "T3__PROF_NUM",
+          "T4__CRS_CODE",
+          "T4__DEPT_CODE",
+          "T4__CRS_DESCRIPTION",
+          "T4__CRS_CREDIT",
+          "T5__DEPT_CODE",
+          "T5__DEPT_NAME",
+          "T5__SCHOOL_CODE",
+          "T5__EMP_NUM",
+          "T5__DEPT_ADDRESS",
+          "T5__DEPT_EXTENSION"
+        ],
+        "row_count": 2
+      }
+    },
+    {
+      "step_id": "step_8",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_005",
+          "expressions": [
+            "T1__stu_fname"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_7",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_006"
+      },
+      "tool_output": {
+        "table": "project_006",
+        "kind": "project",
+        "columns": [
+          "T1__stu_fname"
+        ],
+        "row_count": 2
+      }
+    },
+    {
+      "step_id": "step_9",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "student",
+          "right": "enroll",
+          "on": [
+            {
+              "left": "stu_num",
+              "right": "stu_num"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "source": "student",
+          "as": "left"
+        },
+        {
+          "source": "enroll",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_007"
+      },
+      "tool_output": {
+        "table": "join_007",
+        "kind": "join",
+        "columns": [
+          "T1__STU_NUM",
+          "T1__STU_LNAME",
+          "T1__STU_FNAME",
+          "T1__STU_INIT",
+          "T1__STU_DOB",
+          "T1__STU_HRS",
+          "T1__STU_CLASS",
+          "T1__STU_GPA",
+          "T1__STU_TRANSFER",
+          "T1__DEPT_CODE",
+          "T1__STU_PHONE",
+          "T1__PROF_NUM",
+          "T2__CLASS_CODE",
+          "T2__STU_NUM",
+          "T2__ENROLL_GRADE"
+        ],
+        "row_count": 6
+      }
+    },
+    {
+      "step_id": "step_10",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "join_007",
+          "right": "class",
+          "on": [
+            {
+              "left": "T2__class_code",
+              "right": "class_code"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": null,
+          "right_prefix": "T3"
+        }
+      },
+      "references": [
+        {
+          "step": "step_9",
+          "as": "left"
+        },
+        {
+          "source": "class",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_008"
+      },
+      "tool_output": {
+        "table": "join_008",
+        "kind": "join",
+        "columns": [
+          "T1__STU_NUM",
+          "T1__STU_LNAME",
+          "T1__STU_FNAME",
+          "T1__STU_INIT",
+          "T1__STU_DOB",
+          "T1__STU_HRS",
+          "T1__STU_CLASS",
+          "T1__STU_GPA",
+          "T1__STU_TRANSFER",
+          "T1__DEPT_CODE",
+          "T1__STU_PHONE",
+          "T1__PROF_NUM",
+          "T2__CLASS_CODE",
+          "T2__STU_NUM",
+          "T2__ENROLL_GRADE",
+          "T3__CLASS_CODE",
+          "T3__CRS_CODE",
+          "T3__CLASS_SECTION",
+          "T3__CLASS_TIME",
+          "T3__CLASS_ROOM",
+          "T3__PROF_NUM"
+        ],
+        "row_count": 6
+      }
+    },
+    {
+      "step_id": "step_11",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "join_008",
+          "right": "course",
+          "on": [
+            {
+              "left": "T3__crs_code",
+              "right": "crs_code"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": null,
+          "right_prefix": "T4"
+        }
+      },
+      "references": [
+        {
+          "step": "step_10",
+          "as": "left"
+        },
+        {
+          "source": "course",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_009"
+      },
+      "tool_output": {
+        "table": "join_009",
+        "kind": "join",
+        "columns": [
+          "T1__STU_NUM",
+          "T1__STU_LNAME",
+          "T1__STU_FNAME",
+          "T1__STU_INIT",
+          "T1__STU_DOB",
+          "T1__STU_HRS",
+          "T1__STU_CLASS",
+          "T1__STU_GPA",
+          "T1__STU_TRANSFER",
+          "T1__DEPT_CODE",
+          "T1__STU_PHONE",
+          "T1__PROF_NUM",
+          "T2__CLASS_CODE",
+          "T2__STU_NUM",
+          "T2__ENROLL_GRADE",
+          "T3__CLASS_CODE",
+          "T3__CRS_CODE",
+          "T3__CLASS_SECTION",
+          "T3__CLASS_TIME",
+          "T3__CLASS_ROOM",
+          "T3__PROF_NUM",
+          "T4__CRS_CODE",
+          "T4__DEPT_CODE",
+          "T4__CRS_DESCRIPTION",
+          "T4__CRS_CREDIT"
+        ],
+        "row_count": 6
+      }
+    },
+    {
+      "step_id": "step_12",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "join_009",
+          "right": "department",
+          "on": [
+            {
+              "left": "T4__dept_code",
+              "right": "dept_code"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": null,
+          "right_prefix": "T5"
+        }
+      },
+      "references": [
+        {
+          "step": "step_11",
+          "as": "left"
+        },
+        {
+          "source": "department",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_010"
+      },
+      "tool_output": {
+        "table": "join_010",
+        "kind": "join",
+        "columns": [
+          "T1__STU_NUM",
+          "T1__STU_LNAME",
+          "T1__STU_FNAME",
+          "T1__STU_INIT",
+          "T1__STU_DOB",
+          "T1__STU_HRS",
+          "T1__STU_CLASS",
+          "T1__STU_GPA",
+          "T1__STU_TRANSFER",
+          "T1__DEPT_CODE",
+          "T1__STU_PHONE",
+          "T1__PROF_NUM",
+          "T2__CLASS_CODE",
+          "T2__STU_NUM",
+          "T2__ENROLL_GRADE",
+          "T3__CLASS_CODE",
+          "T3__CRS_CODE",
+          "T3__CLASS_SECTION",
+          "T3__CLASS_TIME",
+          "T3__CLASS_ROOM",
+          "T3__PROF_NUM",
+          "T4__CRS_CODE",
+          "T4__DEPT_CODE",
+          "T4__CRS_DESCRIPTION",
+          "T4__CRS_CREDIT",
+          "T5__DEPT_CODE",
+          "T5__DEPT_NAME",
+          "T5__SCHOOL_CODE",
+          "T5__EMP_NUM",
+          "T5__DEPT_ADDRESS",
+          "T5__DEPT_EXTENSION"
+        ],
+        "row_count": 6
+      }
+    },
+    {
+      "step_id": "step_13",
+      "think": "Check the actual values in this column so the filter literal is grounded.",
+      "tool_call": {
+        "tool": "inspect_column",
+        "arguments": {
+          "table": "join_010",
+          "column": "T5__dept_name"
+        }
+      },
+      "references": [
+        {
+          "step": "step_12"
+        }
+      ],
+      "produces": {
+        "kind": "column_domain"
+      },
+      "tool_output": {
+        "column": "T5__dept_name",
+        "distinct_count": 2,
+        "has_null": false,
+        "frequent_values": [
+          "Computer Info. Systems",
+          "Accounting"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "step_id": "step_14",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_010",
+          "conditions": {
+            "column": "T5__dept_name",
+            "op": "=",
+            "value": "Computer Info. Systems"
+          }
+        }
+      },
+      "references": [
+        {
+          "step": "step_12",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_011"
+      },
+      "tool_output": {
+        "table": "filter_011",
+        "kind": "filter",
+        "columns": [
+          "T1__STU_NUM",
+          "T1__STU_LNAME",
+          "T1__STU_FNAME",
+          "T1__STU_INIT",
+          "T1__STU_DOB",
+          "T1__STU_HRS",
+          "T1__STU_CLASS",
+          "T1__STU_GPA",
+          "T1__STU_TRANSFER",
+          "T1__DEPT_CODE",
+          "T1__STU_PHONE",
+          "T1__PROF_NUM",
+          "T2__CLASS_CODE",
+          "T2__STU_NUM",
+          "T2__ENROLL_GRADE",
+          "T3__CLASS_CODE",
+          "T3__CRS_CODE",
+          "T3__CLASS_SECTION",
+          "T3__CLASS_TIME",
+          "T3__CLASS_ROOM",
+          "T3__PROF_NUM",
+          "T4__CRS_CODE",
+          "T4__DEPT_CODE",
+          "T4__CRS_DESCRIPTION",
+          "T4__CRS_CREDIT",
+          "T5__DEPT_CODE",
+          "T5__DEPT_NAME",
+          "T5__SCHOOL_CODE",
+          "T5__EMP_NUM",
+          "T5__DEPT_ADDRESS",
+          "T5__DEPT_EXTENSION"
+        ],
+        "row_count": 4
+      }
+    },
+    {
+      "step_id": "step_15",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_011",
+          "expressions": [
+            "T1__stu_fname"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_14",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_012"
+      },
+      "tool_output": {
+        "table": "project_012",
+        "kind": "project",
+        "columns": [
+          "T1__stu_fname"
+        ],
+        "row_count": 4
+      }
+    },
+    {
+      "step_id": "step_16",
+      "think": "Combine the two row sets with the set operation.",
+      "tool_call": {
+        "tool": "set_op",
+        "arguments": {
+          "left": "project_006",
+          "right": "project_012",
+          "op": "intersect"
+        }
+      },
+      "references": [
+        {
+          "step": "step_8",
+          "as": "left"
+        },
+        {
+          "step": "step_15",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "setop_013"
+      },
+      "tool_output": {
+        "table": "setop_013",
+        "kind": "setop",
+        "columns": [
+          "T1__stu_fname"
+        ],
+        "row_count": 2
+      }
+    },
+    {
+      "step_id": "step_17",
+      "think": "Read the evidence rows so the answer is grounded in real data.",
+      "tool_call": {
+        "tool": "read_subtable",
+        "arguments": {
+          "table": "setop_013",
+          "limit": 20
+        }
+      },
+      "references": [
+        {
+          "step": "step_16"
+        }
+      ],
+      "produces": {
+        "kind": "rows"
+      },
+      "tool_output": {
+        "table": "setop_013",
+        "rows": [
+          [
+            "Anne"
+          ],
+          [
+            "William"
+          ]
+        ],
+        "row_count": 2
+      }
+    },
+    {
+      "step_id": "step_18",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "Anne"
+            ],
+            [
+              "William"
+            ]
+          ],
+          "evidence": {
+            "table": "setop_013"
+          },
+          "supporting_memory_ids": [],
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "step": "step_16"
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "Anne"
+          ],
+          [
+            "William"
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "Anne"
+    ],
+    [
+      "William"
+    ]
+  ]
+}

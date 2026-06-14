@@ -1,0 +1,590 @@
+{
+  "trajectory_id": "spider_train_143",
+  "schema_version": "v2-ctx",
+  "source": {
+    "dataset": "spider",
+    "db_id": "bike_1",
+    "gold_sql": "SELECT T1.name ,  T1.id FROM station AS T1 JOIN status AS T2 ON T1.id  =  T2.station_id GROUP BY T2.station_id HAVING avg(T2.bikes_available)  >  14 UNION SELECT name ,  id FROM station WHERE installation_date LIKE \"12/%\""
+  },
+  "question": "What are the names and ids of stations that had more than 14 bikes available on average or were installed in December?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "station",
+          "num_rows": 70
+        },
+        {
+          "table_name": "status",
+          "num_rows": 8487
+        },
+        {
+          "table_name": "trip",
+          "num_rows": 9959
+        },
+        {
+          "table_name": "weather",
+          "num_rows": 3665
+        }
+      ],
+      "relations": [
+        {
+          "from": "status.station_id",
+          "to": "station.id"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "station",
+            "status"
+          ]
+        }
+      },
+      "references": [
+        {
+          "source": "station",
+          "as": "table"
+        },
+        {
+          "source": "status",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "station",
+            "row_count": 70,
+            "columns": [
+              {
+                "name": "id",
+                "type": "integer",
+                "pk": true
+              },
+              {
+                "name": "name",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "lat",
+                "type": "numeric",
+                "pk": false
+              },
+              {
+                "name": "long",
+                "type": "numeric",
+                "pk": false
+              },
+              {
+                "name": "dock_count",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "city",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "installation_date",
+                "type": "text",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          },
+          {
+            "table_name": "status",
+            "row_count": 8487,
+            "columns": [
+              {
+                "name": "station_id",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "bikes_available",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "docks_available",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "time",
+                "type": "text",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "station_id",
+                "references": "station.id"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "station",
+          "right": "status",
+          "on": [
+            {
+              "left": "id",
+              "right": "station_id"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "source": "station",
+          "as": "left"
+        },
+        {
+          "source": "status",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__id",
+          "T1__name",
+          "T1__lat",
+          "T1__long",
+          "T1__dock_count",
+          "T1__city",
+          "T1__installation_date",
+          "T2__station_id",
+          "T2__bikes_available",
+          "T2__docks_available",
+          "T2__time"
+        ],
+        "row_count": 8487
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "join_001",
+          "group_by": [
+            "T2__station_id"
+          ],
+          "aggregations": [
+            {
+              "op": "mean",
+              "column": "T2__bikes_available",
+              "as": "mean_1"
+            }
+          ],
+          "passthrough": [
+            "T1__name",
+            "T1__id"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_2",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "group_002"
+      },
+      "tool_output": {
+        "table": "group_002",
+        "kind": "group",
+        "columns": [
+          "T2__station_id",
+          "T1__name",
+          "T1__id",
+          "mean_1"
+        ],
+        "row_count": 69
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "group_002",
+          "conditions": {
+            "column": "mean_1",
+            "op": ">",
+            "value": 14
+          }
+        }
+      },
+      "references": [
+        {
+          "step": "step_3",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_003"
+      },
+      "tool_output": {
+        "table": "filter_003",
+        "kind": "filter",
+        "columns": [
+          "T2__station_id",
+          "T1__name",
+          "T1__id",
+          "mean_1"
+        ],
+        "row_count": 2
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_003",
+          "expressions": [
+            "T1__name",
+            "T1__id"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_4",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_004"
+      },
+      "tool_output": {
+        "table": "project_004",
+        "kind": "project",
+        "columns": [
+          "T1__name",
+          "T1__id"
+        ],
+        "row_count": 2
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Check the actual values in this column so the filter literal is grounded.",
+      "tool_call": {
+        "tool": "inspect_column",
+        "arguments": {
+          "table": "station",
+          "column": "installation_date"
+        }
+      },
+      "references": [
+        {
+          "source": "station"
+        }
+      ],
+      "produces": {
+        "kind": "column_domain"
+      },
+      "tool_output": {
+        "column": "installation_date",
+        "distinct_count": 17,
+        "has_null": false,
+        "frequent_values": [
+          "8/23/2013",
+          "8/20/2013",
+          "8/19/2013",
+          "8/6/2013",
+          "8/5/2013",
+          "8/25/2013",
+          "8/22/2013",
+          "8/21/2013",
+          "8/15/2013",
+          "8/7/2013"
+        ],
+        "truncated": true
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "station",
+          "conditions": {
+            "column": "installation_date",
+            "op": "like",
+            "value": "12/%"
+          }
+        }
+      },
+      "references": [
+        {
+          "source": "station",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_005"
+      },
+      "tool_output": {
+        "table": "filter_005",
+        "kind": "filter",
+        "columns": [
+          "id",
+          "name",
+          "lat",
+          "long",
+          "dock_count",
+          "city",
+          "installation_date"
+        ],
+        "row_count": 3
+      }
+    },
+    {
+      "step_id": "step_8",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_005",
+          "expressions": [
+            "name",
+            "id"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_7",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_006"
+      },
+      "tool_output": {
+        "table": "project_006",
+        "kind": "project",
+        "columns": [
+          "name",
+          "id"
+        ],
+        "row_count": 3
+      }
+    },
+    {
+      "step_id": "step_9",
+      "think": "Combine the two row sets with the set operation.",
+      "tool_call": {
+        "tool": "set_op",
+        "arguments": {
+          "left": "project_004",
+          "right": "project_006",
+          "op": "union"
+        }
+      },
+      "references": [
+        {
+          "step": "step_5",
+          "as": "left"
+        },
+        {
+          "step": "step_8",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "setop_007"
+      },
+      "tool_output": {
+        "table": "setop_007",
+        "kind": "setop",
+        "columns": [
+          "T1__name",
+          "T1__id"
+        ],
+        "row_count": 5
+      }
+    },
+    {
+      "step_id": "step_10",
+      "think": "Read the evidence rows so the answer is grounded in real data.",
+      "tool_call": {
+        "tool": "read_subtable",
+        "arguments": {
+          "table": "setop_007",
+          "limit": 20
+        }
+      },
+      "references": [
+        {
+          "step": "step_9"
+        }
+      ],
+      "produces": {
+        "kind": "rows"
+      },
+      "tool_output": {
+        "table": "setop_007",
+        "rows": [
+          [
+            "Castro Street and El Camino Real",
+            32
+          ],
+          [
+            "Civic Center BART (7th at Market)",
+            72
+          ],
+          [
+            "Market at Sansome",
+            77
+          ],
+          [
+            "San Antonio Shopping Center",
+            31
+          ],
+          [
+            "Santa Clara County Civic Center",
+            80
+          ]
+        ],
+        "row_count": 5
+      }
+    },
+    {
+      "step_id": "step_11",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "Castro Street and El Camino Real",
+              32
+            ],
+            [
+              "Civic Center BART (7th at Market)",
+              72
+            ],
+            [
+              "Market at Sansome",
+              77
+            ],
+            [
+              "San Antonio Shopping Center",
+              31
+            ],
+            [
+              "Santa Clara County Civic Center",
+              80
+            ]
+          ],
+          "evidence": {
+            "table": "setop_007"
+          },
+          "supporting_memory_ids": [],
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "step": "step_9"
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "Castro Street and El Camino Real",
+            32
+          ],
+          [
+            "Civic Center BART (7th at Market)",
+            72
+          ],
+          [
+            "Market at Sansome",
+            77
+          ],
+          [
+            "San Antonio Shopping Center",
+            31
+          ],
+          [
+            "Santa Clara County Civic Center",
+            80
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "Castro Street and El Camino Real",
+      32
+    ],
+    [
+      "Civic Center BART (7th at Market)",
+      72
+    ],
+    [
+      "Market at Sansome",
+      77
+    ],
+    [
+      "San Antonio Shopping Center",
+      31
+    ],
+    [
+      "Santa Clara County Civic Center",
+      80
+    ]
+  ]
+}

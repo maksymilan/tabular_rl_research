@@ -1,0 +1,197 @@
+{
+  "trajectory_id": "spider_train_0",
+  "schema_version": "v2-ctx",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT count(*) FROM head WHERE age  >  56"
+  },
+  "question": "How many heads of the departments are older than 56 ?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5
+        }
+      ],
+      "relations": [
+        {
+          "from": "management.head_ID",
+          "to": "head.head_ID"
+        },
+        {
+          "from": "management.department_ID",
+          "to": "department.Department_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "head"
+          ]
+        }
+      },
+      "references": [
+        {
+          "source": "head",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "head",
+            "row_count": 10,
+            "columns": [
+              {
+                "name": "head_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "name",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "born_state",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "age",
+                "type": "real",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "head",
+          "conditions": {
+            "column": "age",
+            "op": ">",
+            "value": 56
+          }
+        }
+      },
+      "references": [
+        {
+          "source": "head",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_001"
+      },
+      "tool_output": {
+        "table": "filter_001",
+        "kind": "filter",
+        "columns": [
+          "head_ID",
+          "name",
+          "born_state",
+          "age"
+        ],
+        "row_count": 5
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Compute the scalar aggregate that answers the question.",
+      "tool_call": {
+        "tool": "aggregate",
+        "arguments": {
+          "table": "filter_001",
+          "column": "*",
+          "op": "count"
+        }
+      },
+      "references": [
+        {
+          "step": "step_2",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "scalar"
+      },
+      "tool_output": {
+        "result_sample": [
+          [
+            5
+          ]
+        ],
+        "row_count": 1
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              5
+            ]
+          ],
+          "evidence": {
+            "table": null
+          },
+          "supporting_memory_ids": [],
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "step": "step_3"
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            5
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      5
+    ]
+  ]
+}

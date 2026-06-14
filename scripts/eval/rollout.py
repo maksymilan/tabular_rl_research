@@ -102,6 +102,12 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
         ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
         return output, None
 
+    if tool in ("describe_table", "inspect_column", "read_subtable"):   # read-only perception; no table
+        out = getattr(h, tool)(**args)
+        output = out if isinstance(out, dict) else {"rows": [list(r) for r in out], "row_count": len(out)}
+        ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
+        return output, None
+
     exec_args = dict(args)
     if tool == "condition_filter":
         exec_args["conditions"] = resolve_cond(exec_args.get("conditions"), {}, ctx["memory"])
@@ -274,7 +280,7 @@ def run_live(
 
 # ---------------- replay mode (no model) ----------------
 def run_replay(n: int, path: str = "") -> int:
-    path = path or os.path.join(ROOT, "data", "trajectories", "spider_dev_v2.jsonl")
+    path = path or os.path.join(ROOT, "data", "trajectories", "spider_dev_v2ctx.jsonl")
     total = ok_exec = ok_score = 0
     with open(path) as f:
         for line in f:

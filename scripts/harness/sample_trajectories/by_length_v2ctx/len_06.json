@@ -1,30 +1,39 @@
 {
-  "trajectory_id": "sample_having",
+  "trajectory_id": "spider_train_7",
   "schema_version": "v2-ctx",
   "source": {
-    "dataset": "synthetic",
-    "db_id": "employees",
-    "gold_sql": "SELECT dept FROM employees GROUP BY dept HAVING COUNT(*) > 1"
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT born_state FROM head GROUP BY born_state HAVING count(*)  >=  3"
   },
-  "question": "Which departments have more than one employee?",
+  "question": "What are the names of the states where at least 3 heads were born?",
   "label_status": "verified",
   "initial_state": {
     "dataset_overview": {
       "tables": [
         {
-          "table_name": "employees",
-          "num_rows": 6
+          "table_name": "department",
+          "num_rows": 15
         },
         {
-          "table_name": "depts",
-          "num_rows": 3
+          "table_name": "head",
+          "num_rows": 10
         },
         {
-          "table_name": "sales",
-          "num_rows": 3
+          "table_name": "management",
+          "num_rows": 5
         }
       ],
-      "relations": []
+      "relations": [
+        {
+          "from": "management.head_ID",
+          "to": "head.head_ID"
+        },
+        {
+          "from": "management.department_ID",
+          "to": "department.Department_ID"
+        }
+      ]
     }
   },
   "steps": [
@@ -35,13 +44,13 @@
         "tool": "describe_table",
         "arguments": {
           "tables": [
-            "employees"
+            "head"
           ]
         }
       },
       "references": [
         {
-          "source": "employees",
+          "source": "head",
           "as": "table"
         }
       ],
@@ -51,13 +60,13 @@
       "tool_output": {
         "tables": [
           {
-            "table_name": "employees",
-            "row_count": 6,
+            "table_name": "head",
+            "row_count": 10,
             "columns": [
               {
-                "name": "id",
+                "name": "head_ID",
                 "type": "int",
-                "pk": false
+                "pk": true
               },
               {
                 "name": "name",
@@ -65,18 +74,13 @@
                 "pk": false
               },
               {
-                "name": "dept",
+                "name": "born_state",
                 "type": "text",
                 "pk": false
               },
               {
-                "name": "salary",
-                "type": "int",
-                "pk": false
-              },
-              {
                 "name": "age",
-                "type": "int",
+                "type": "real",
                 "pk": false
               }
             ],
@@ -91,9 +95,9 @@
       "tool_call": {
         "tool": "group_aggregate",
         "arguments": {
-          "table": "employees",
+          "table": "head",
           "group_by": [
-            "dept"
+            "born_state"
           ],
           "aggregations": [
             {
@@ -106,7 +110,7 @@
       },
       "references": [
         {
-          "source": "employees",
+          "source": "head",
           "as": "table"
         }
       ],
@@ -118,10 +122,10 @@
         "table": "group_001",
         "kind": "group",
         "columns": [
-          "dept",
+          "born_state",
           "count_1"
         ],
-        "row_count": 3
+        "row_count": 5
       }
     },
     {
@@ -133,8 +137,8 @@
           "table": "group_001",
           "conditions": {
             "column": "count_1",
-            "op": ">",
-            "value": 1
+            "op": ">=",
+            "value": 3
           }
         }
       },
@@ -152,10 +156,10 @@
         "table": "filter_002",
         "kind": "filter",
         "columns": [
-          "dept",
+          "born_state",
           "count_1"
         ],
-        "row_count": 2
+        "row_count": 1
       }
     },
     {
@@ -166,7 +170,7 @@
         "arguments": {
           "table": "filter_002",
           "expressions": [
-            "dept"
+            "born_state"
           ]
         }
       },
@@ -184,9 +188,14 @@
         "table": "project_003",
         "kind": "project",
         "columns": [
-          "dept"
+          "born_state"
         ],
-        "row_count": 2
+        "row_count": 1,
+        "rows": [
+          [
+            "California"
+          ]
+        ]
       }
     },
     {
@@ -211,13 +220,10 @@
         "table": "project_003",
         "rows": [
           [
-            "eng"
-          ],
-          [
-            "sales"
+            "California"
           ]
         ],
-        "row_count": 2
+        "row_count": 1
       }
     },
     {
@@ -228,10 +234,7 @@
         "arguments": {
           "answer": [
             [
-              "eng"
-            ],
-            [
-              "sales"
+              "California"
             ]
           ],
           "evidence": {
@@ -252,10 +255,7 @@
       "tool_output": {
         "final_answer": [
           [
-            "eng"
-          ],
-          [
-            "sales"
+            "California"
           ]
         ]
       }
@@ -263,10 +263,7 @@
   ],
   "final_answer": [
     [
-      "eng"
-    ],
-    [
-      "sales"
+      "California"
     ]
   ]
 }

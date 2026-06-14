@@ -1,0 +1,491 @@
+{
+  "trajectory_id": "spider_train_6",
+  "schema_version": "v2-ctx",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT DISTINCT T1.creation FROM department AS T1 JOIN management AS T2 ON T1.department_id  =  T2.department_id JOIN head AS T3 ON T2.head_id  =  T3.head_id WHERE T3.born_state  =  'Alabama'"
+  },
+  "question": "What are the distinct creation years of the departments managed by a secretary born in state 'Alabama'?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5
+        }
+      ],
+      "relations": [
+        {
+          "from": "management.head_ID",
+          "to": "head.head_ID"
+        },
+        {
+          "from": "management.department_ID",
+          "to": "department.Department_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "department",
+            "management",
+            "head"
+          ]
+        }
+      },
+      "references": [
+        {
+          "source": "department",
+          "as": "table"
+        },
+        {
+          "source": "management",
+          "as": "table"
+        },
+        {
+          "source": "head",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "department",
+            "row_count": 15,
+            "columns": [
+              {
+                "name": "Department_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "Name",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "Creation",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "Ranking",
+                "type": "int",
+                "pk": false
+              },
+              {
+                "name": "Budget_in_Billions",
+                "type": "real",
+                "pk": false
+              },
+              {
+                "name": "Num_Employees",
+                "type": "real",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          },
+          {
+            "table_name": "management",
+            "row_count": 5,
+            "columns": [
+              {
+                "name": "department_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "head_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "temporary_acting",
+                "type": "text",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "head_ID",
+                "references": "head.head_ID"
+              },
+              {
+                "column": "department_ID",
+                "references": "department.Department_ID"
+              }
+            ]
+          },
+          {
+            "table_name": "head",
+            "row_count": 10,
+            "columns": [
+              {
+                "name": "head_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "name",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "born_state",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "age",
+                "type": "real",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "department",
+          "right": "management",
+          "on": [
+            {
+              "left": "department_id",
+              "right": "department_id"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "source": "department",
+          "as": "left"
+        },
+        {
+          "source": "management",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__Department_ID",
+          "T1__Name",
+          "T1__Creation",
+          "T1__Ranking",
+          "T1__Budget_in_Billions",
+          "T1__Num_Employees",
+          "T2__department_ID",
+          "T2__head_ID",
+          "T2__temporary_acting"
+        ],
+        "row_count": 5
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "join_001",
+          "right": "head",
+          "on": [
+            {
+              "left": "T2__head_id",
+              "right": "head_id"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": null,
+          "right_prefix": "T3"
+        }
+      },
+      "references": [
+        {
+          "step": "step_2",
+          "as": "left"
+        },
+        {
+          "source": "head",
+          "as": "right"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_002"
+      },
+      "tool_output": {
+        "table": "join_002",
+        "kind": "join",
+        "columns": [
+          "T1__Department_ID",
+          "T1__Name",
+          "T1__Creation",
+          "T1__Ranking",
+          "T1__Budget_in_Billions",
+          "T1__Num_Employees",
+          "T2__department_ID",
+          "T2__head_ID",
+          "T2__temporary_acting",
+          "T3__head_ID",
+          "T3__name",
+          "T3__born_state",
+          "T3__age"
+        ],
+        "row_count": 5
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Check the actual values in this column so the filter literal is grounded.",
+      "tool_call": {
+        "tool": "inspect_column",
+        "arguments": {
+          "table": "join_002",
+          "column": "T3__born_state"
+        }
+      },
+      "references": [
+        {
+          "step": "step_3"
+        }
+      ],
+      "produces": {
+        "kind": "column_domain"
+      },
+      "tool_output": {
+        "column": "T3__born_state",
+        "distinct_count": 4,
+        "has_null": false,
+        "frequent_values": [
+          "California",
+          "Delaware",
+          "Connecticut",
+          "Alabama"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_002",
+          "conditions": {
+            "column": "T3__born_state",
+            "op": "=",
+            "value": "Alabama"
+          }
+        }
+      },
+      "references": [
+        {
+          "step": "step_3",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_003"
+      },
+      "tool_output": {
+        "table": "filter_003",
+        "kind": "filter",
+        "columns": [
+          "T1__Department_ID",
+          "T1__Name",
+          "T1__Creation",
+          "T1__Ranking",
+          "T1__Budget_in_Billions",
+          "T1__Num_Employees",
+          "T2__department_ID",
+          "T2__head_ID",
+          "T2__temporary_acting",
+          "T3__head_ID",
+          "T3__name",
+          "T3__born_state",
+          "T3__age"
+        ],
+        "row_count": 1
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_003",
+          "expressions": [
+            "T1__creation"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_5",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_004"
+      },
+      "tool_output": {
+        "table": "project_004",
+        "kind": "project",
+        "columns": [
+          "T1__creation"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            "1903"
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "project_004",
+          "group_by": [
+            "T1__creation"
+          ],
+          "aggregations": []
+        }
+      },
+      "references": [
+        {
+          "step": "step_6",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "group_005"
+      },
+      "tool_output": {
+        "table": "group_005",
+        "kind": "group",
+        "columns": [
+          "T1__creation"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            "1903"
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_8",
+      "think": "Read the evidence rows so the answer is grounded in real data.",
+      "tool_call": {
+        "tool": "read_subtable",
+        "arguments": {
+          "table": "group_005",
+          "limit": 20
+        }
+      },
+      "references": [
+        {
+          "step": "step_7"
+        }
+      ],
+      "produces": {
+        "kind": "rows"
+      },
+      "tool_output": {
+        "table": "group_005",
+        "rows": [
+          [
+            "1903"
+          ]
+        ],
+        "row_count": 1
+      }
+    },
+    {
+      "step_id": "step_9",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "1903"
+            ]
+          ],
+          "evidence": {
+            "table": "group_005"
+          },
+          "supporting_memory_ids": [],
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "step": "step_7"
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "1903"
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "1903"
+    ]
+  ]
+}

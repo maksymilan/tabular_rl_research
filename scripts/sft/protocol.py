@@ -62,6 +62,18 @@ TOOL_SPECS: dict[str, str] = {
     "set_op":
         'set_op(left, right, op) -> new table combining two tables with op: '
         'union|union_all|intersect|except (their columns must align).',
+    "describe_table":
+        'describe_table(tables) -> the columns, types, primary keys and foreign keys of one or more '
+        'tables (tables is a list; pass several at once). The opening overview lists only table names '
+        'and relations, so read the schema of the tables you need before operating on them.',
+    "inspect_column":
+        'inspect_column(table, column) -> the distinct count, most frequent values and NULL flag of a '
+        'column. Use it to ground a filter literal (does "France" exist? what is the exact spelling?) '
+        'before condition_filter.',
+    "read_subtable":
+        'read_subtable(table, limit=20) -> the actual rows of a table (bounded). Tool results otherwise '
+        'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
+        'the evidence rows before answering.',
     "answer_from_context":
         'answer_from_context(answer, evidence, supporting_memory_ids, reason) -> TERMINAL. answer: the '
         'result rows as a list of rows (each row a list of cells; at most 50 rows). evidence: {"table": '
@@ -85,6 +97,9 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "extreme_value_select": ({"table", "order_by"}, {"top_k", "return_columns"}),
     "set_op": ({"left", "right", "op"}, set()),
     "derive_column": ({"table", "new_column", "expression"}, set()),
+    "describe_table": ({"tables"}, set()),
+    "inspect_column": ({"table", "column"}, {"top_k"}),
+    "read_subtable": ({"table"}, {"limit", "columns"}),
     "add_to_memory": ({"type", "source_step_id"}, {"alias"}),
     "answer_from_context": ({"answer", "evidence"}, {"supporting_memory_ids", "reason"}),
 }
@@ -116,18 +131,20 @@ def protocol_hash() -> str:
 
 SYSTEM_PROMPT = (
     "You are a table-reasoning agent. You answer questions over a relational dataset by calling "
-    "tools, one call per turn. Tables (sources and the new tables your calls create) are referred "
-    "to by name. Each tool result is an observation {\"step_id\", \"status\", \"output\"}: step_id "
-    "names that step so you can cite it later (e.g. as add_to_memory's source_step_id); output holds "
-    "the created table's name and content (truncated when large, with is_truncated=true).\n\n"
+    "tools, one call per turn. The opening overview is a CATALOG: table names + row counts + "
+    "foreign-key relations only (no columns) — so it stays small on large databases. Read the "
+    "columns of the tables you need with describe_table before operating. Each tool result is an "
+    "observation {\"step_id\", \"status\", \"output\"}: step_id names that step so you can cite it "
+    "later (e.g. as add_to_memory's source_step_id); a table-creating tool's output is only a HANDLE "
+    "(table name, columns, row_count) — use read_subtable to SEE its rows.\n\n"
     "TOOLS\n" + "\n".join(TOOL_SPECS.values()) + "\n\n"
     "RULES\n"
     "1. Each turn, output exactly: <think>brief reasoning</think> then "
     '<tool_call>{"tool": "<name>", "arguments": {...}}</tool_call>. Nothing else.\n'
-    "2. Use exact table and column names as given by the overview and previous tool results.\n"
+    "2. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
     "3. To reuse a computed scalar as a threshold, add_to_memory with its source_step_id, then "
     'reference the returned memory_id via {"value_ref": memory_id}.\n'
-    "4. Finish with answer_from_context, citing the table that holds the answer rows.\n"
+    "4. read_subtable the evidence table, then finish with answer_from_context citing that table.\n"
 )
 
 

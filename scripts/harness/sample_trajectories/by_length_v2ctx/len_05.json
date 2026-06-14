@@ -1,0 +1,418 @@
+{
+  "trajectory_id": "spider_train_1",
+  "schema_version": "v2-ctx",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT name ,  born_state ,  age FROM head ORDER BY age"
+  },
+  "question": "List the name, born state and age of the heads of departments ordered by age.",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5
+        }
+      ],
+      "relations": [
+        {
+          "from": "management.head_ID",
+          "to": "head.head_ID"
+        },
+        {
+          "from": "management.department_ID",
+          "to": "department.Department_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "head"
+          ]
+        }
+      },
+      "references": [
+        {
+          "source": "head",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "head",
+            "row_count": 10,
+            "columns": [
+              {
+                "name": "head_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "name",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "born_state",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "age",
+                "type": "real",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Order the rows and keep the top ones (the extreme values).",
+      "tool_call": {
+        "tool": "extreme_value_select",
+        "arguments": {
+          "table": "head",
+          "order_by": [
+            "age"
+          ],
+          "top_k": null
+        }
+      },
+      "references": [
+        {
+          "source": "head",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "top_001"
+      },
+      "tool_output": {
+        "table": "top_001",
+        "kind": "top",
+        "columns": [
+          "head_ID",
+          "name",
+          "born_state",
+          "age"
+        ],
+        "row_count": 10
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "top_001",
+          "expressions": [
+            "name",
+            "born_state",
+            "age"
+          ]
+        }
+      },
+      "references": [
+        {
+          "step": "step_2",
+          "as": "table"
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_002"
+      },
+      "tool_output": {
+        "table": "project_002",
+        "kind": "project",
+        "columns": [
+          "name",
+          "born_state",
+          "age"
+        ],
+        "row_count": 10
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Read the evidence rows so the answer is grounded in real data.",
+      "tool_call": {
+        "tool": "read_subtable",
+        "arguments": {
+          "table": "project_002",
+          "limit": 20
+        }
+      },
+      "references": [
+        {
+          "step": "step_3"
+        }
+      ],
+      "produces": {
+        "kind": "rows"
+      },
+      "tool_output": {
+        "table": "project_002",
+        "rows": [
+          [
+            "P\u00e1draig Harrington",
+            "Connecticut",
+            43.0
+          ],
+          [
+            "Stewart Cink",
+            "Florida",
+            50.0
+          ],
+          [
+            "Dudley Hart",
+            "California",
+            52.0
+          ],
+          [
+            "Jeff Maggert",
+            "Delaware",
+            53.0
+          ],
+          [
+            "Nick Faldo",
+            "California",
+            56.0
+          ],
+          [
+            "Tiger Woods",
+            "Alabama",
+            67.0
+          ],
+          [
+            "Franklin Langham",
+            "Connecticut",
+            67.0
+          ],
+          [
+            "Sergio Garc\u00eda",
+            "California",
+            68.0
+          ],
+          [
+            "K. J. Choi",
+            "Alabama",
+            69.0
+          ],
+          [
+            "Billy Mayfair",
+            "California",
+            69.0
+          ]
+        ],
+        "row_count": 10
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "P\u00e1draig Harrington",
+              "Connecticut",
+              43.0
+            ],
+            [
+              "Stewart Cink",
+              "Florida",
+              50.0
+            ],
+            [
+              "Dudley Hart",
+              "California",
+              52.0
+            ],
+            [
+              "Jeff Maggert",
+              "Delaware",
+              53.0
+            ],
+            [
+              "Nick Faldo",
+              "California",
+              56.0
+            ],
+            [
+              "Tiger Woods",
+              "Alabama",
+              67.0
+            ],
+            [
+              "Franklin Langham",
+              "Connecticut",
+              67.0
+            ],
+            [
+              "Sergio Garc\u00eda",
+              "California",
+              68.0
+            ],
+            [
+              "K. J. Choi",
+              "Alabama",
+              69.0
+            ],
+            [
+              "Billy Mayfair",
+              "California",
+              69.0
+            ]
+          ],
+          "evidence": {
+            "table": "project_002"
+          },
+          "supporting_memory_ids": [],
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "step": "step_3"
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "P\u00e1draig Harrington",
+            "Connecticut",
+            43.0
+          ],
+          [
+            "Stewart Cink",
+            "Florida",
+            50.0
+          ],
+          [
+            "Dudley Hart",
+            "California",
+            52.0
+          ],
+          [
+            "Jeff Maggert",
+            "Delaware",
+            53.0
+          ],
+          [
+            "Nick Faldo",
+            "California",
+            56.0
+          ],
+          [
+            "Tiger Woods",
+            "Alabama",
+            67.0
+          ],
+          [
+            "Franklin Langham",
+            "Connecticut",
+            67.0
+          ],
+          [
+            "Sergio Garc\u00eda",
+            "California",
+            68.0
+          ],
+          [
+            "K. J. Choi",
+            "Alabama",
+            69.0
+          ],
+          [
+            "Billy Mayfair",
+            "California",
+            69.0
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "P\u00e1draig Harrington",
+      "Connecticut",
+      43.0
+    ],
+    [
+      "Stewart Cink",
+      "Florida",
+      50.0
+    ],
+    [
+      "Dudley Hart",
+      "California",
+      52.0
+    ],
+    [
+      "Jeff Maggert",
+      "Delaware",
+      53.0
+    ],
+    [
+      "Nick Faldo",
+      "California",
+      56.0
+    ],
+    [
+      "Tiger Woods",
+      "Alabama",
+      67.0
+    ],
+    [
+      "Franklin Langham",
+      "Connecticut",
+      67.0
+    ],
+    [
+      "Sergio Garc\u00eda",
+      "California",
+      68.0
+    ],
+    [
+      "K. J. Choi",
+      "Alabama",
+      69.0
+    ],
+    [
+      "Billy Mayfair",
+      "California",
+      69.0
+    ]
+  ]
+}
