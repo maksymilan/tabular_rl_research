@@ -11,3 +11,7 @@ api_usage.md
 .claude/
 api.md
 *.log
+
+# Experiment dashboard frontend dependencies/build output
+experiment_dashboard/frontend/node_modules/
+experiment_dashboard/frontend/dist/

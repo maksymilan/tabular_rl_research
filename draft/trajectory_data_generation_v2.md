@@ -4,6 +4,10 @@ Status: implementation handoff for Claude. Read this document before changing th
 emitter, protocol, rollout environment, or SFT data. Do not start a new SFT run until all blocking
 acceptance checks in section 8 pass.
 
+The V2a memory repair and V2-ctx context layer described here have now been implemented and
+evaluated. The next data iteration focuses on observation-guided planning and recovery; read
+`draft/reflection_trajectory_data_plan.md` before generating correction or reflection trajectories.
+
 ## 1. Objective
 
 Generate execution-verified trajectories that support both:

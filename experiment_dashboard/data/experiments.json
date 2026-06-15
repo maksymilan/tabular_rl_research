@@ -1,0 +1,156 @@
+[
+  {
+    "id": "qwen25-7b-base-sql",
+    "name": "Qwen2.5-7B · Direct SQL Baseline",
+    "short_name": "Base SQL",
+    "kind": "baseline",
+    "status": "completed",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "method": "Zero-shot direct SQL",
+    "dataset_version": "Spider dev",
+    "description": "Base model generates one SQLite query directly, without gold SQL or execution feedback.",
+    "completed_at": "2026-06-12T23:03:47+08:00",
+    "tags": ["baseline", "direct-sql", "zero-shot"],
+    "evaluation": {
+      "directory": "data/results/qwen2.5_7b_baselines/sql_zero_shot_dev1034"
+    },
+    "related_evaluations": [
+      {
+        "label": "Smoke 50",
+        "directory": "data/results/qwen2.5_7b_baselines/sql_zero_shot_smoke50"
+      }
+    ],
+    "notes": "Direct-SQL capability reference. This is the primary accuracy baseline for judging whether tool use preserves answer quality."
+  },
+  {
+    "id": "qwen25-7b-base-tool-2shot",
+    "name": "Qwen2.5-7B · Tool 2-shot Baseline",
+    "short_name": "Base Tool",
+    "kind": "baseline",
+    "status": "completed",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "method": "Two-shot tool rollout",
+    "dataset_version": "Spider dev",
+    "description": "Base model receives two tool-use demonstrations and answers through the original tool protocol.",
+    "completed_at": "2026-06-12T23:23:30+08:00",
+    "tags": ["baseline", "tool-use", "few-shot"],
+    "evaluation": {
+      "directory": "data/results/qwen2.5_7b_baselines/tool_2shot_dev1034"
+    },
+    "related_evaluations": [
+      {
+        "label": "Smoke 50",
+        "directory": "data/results/qwen2.5_7b_baselines/tool_2shot_smoke50"
+      }
+    ],
+    "notes": "Strict parser baseline. Most failures are incomplete tool-call formatting, so this run measures both protocol acquisition and reasoning."
+  },
+  {
+    "id": "qwen25-7b-v1",
+    "name": "Qwen2.5-7B · SFT v1",
+    "short_name": "7B v1",
+    "status": "completed",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "method": "QLoRA SFT",
+    "dataset_version": "Spider tools v1",
+    "description": "Original tool-use SFT run with inline intermediate-table previews.",
+    "started_at": "2026-06-13T00:01:00+08:00",
+    "completed_at": "2026-06-13T13:03:38+08:00",
+    "tags": ["baseline-sft", "inline-preview"],
+    "dataset": {
+      "train": "data/sft/spider_v1_train.jsonl",
+      "dev": "data/sft/spider_v1_dev.jsonl",
+      "train_manifest": "data/sft/spider_v1_train.manifest.json",
+      "dev_manifest": "data/sft/spider_v1_dev.manifest.json"
+    },
+    "training": {
+      "trainer_state": "experiment_dashboard/data/trainer_states/v1.json",
+      "remote_trainer_state": "/home/dengyan/tabular_rl_project/checkpoints/qwen2.5-7b-spider-v1-qlora/trainer_state.json",
+      "checkpoint": "/home/dengyan/tabular_rl_project/checkpoints/qwen2.5-7b-spider-v1-qlora",
+      "epochs": 2,
+      "cutoff_len": 8192,
+      "effective_batch_size": 16,
+      "learning_rate": 0.0001,
+      "lora_rank": 16,
+      "lora_alpha": 32
+    },
+    "evaluation": {
+      "directory": "data/results/qwen2.5_7b_sft_v1/tool_zero_shot_dev1034"
+    },
+    "related_evaluations": [
+      {
+        "label": "Smoke 20",
+        "directory": "data/results/qwen2.5_7b_sft_v1/tool_zero_shot_smoke20"
+      }
+    ],
+    "notes": "Reached direct-SQL baseline range, but scalar-memory subset remained weak."
+  },
+  {
+    "id": "qwen25-7b-v2a",
+    "name": "Qwen2.5-7B · SFT v2a",
+    "short_name": "7B v2a",
+    "status": "completed",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "method": "QLoRA SFT",
+    "dataset_version": "Spider tools v2a",
+    "description": "Harness-grounded scalar memory and explicit step-level provenance.",
+    "started_at": "2026-06-14T11:59:10+08:00",
+    "completed_at": "2026-06-15T00:14:03+08:00",
+    "tags": ["grounded-memory", "provenance"],
+    "dataset": {
+      "train": "data/sft/spider_v2_train.jsonl",
+      "dev": "data/sft/spider_v2_dev.jsonl",
+      "train_manifest": "data/sft/spider_v2_train.manifest.json",
+      "dev_manifest": "data/sft/spider_v2_dev.manifest.json"
+    },
+    "training": {
+      "trainer_state": "experiment_dashboard/data/trainer_states/v2a.json",
+      "remote_trainer_state": "/home/dengyan/tabular_rl_project/checkpoints/qwen2.5-7b-spider-v2a-qlora/trainer_state.json",
+      "checkpoint": "/home/dengyan/tabular_rl_project/checkpoints/qwen2.5-7b-spider-v2a-qlora",
+      "epochs": 2,
+      "cutoff_len": 8192,
+      "effective_batch_size": 16,
+      "learning_rate": 0.0001,
+      "lora_rank": 16,
+      "lora_alpha": 32
+    },
+    "evaluation": {
+      "directory": "data/results/qwen2.5_7b_sft_v2a/tool_zero_shot_dev1034"
+    },
+    "notes": "First run with harness-owned memory values, deterministic semantics, and source-step citations."
+  },
+  {
+    "id": "qwen25-7b-v2ctx",
+    "name": "Qwen2.5-7B · SFT v2-context",
+    "short_name": "7B v2ctx",
+    "status": "completed",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "method": "QLoRA SFT",
+    "dataset_version": "Spider tools v2-context",
+    "description": "Lazy schemas, metadata-only table handles, and explicit perception tools.",
+    "started_at": "2026-06-14T16:30:32+08:00",
+    "completed_at": "2026-06-15T05:00:00+08:00",
+    "tags": ["context-compression", "large-db", "perception"],
+    "dataset": {
+      "train": "data/sft/spider_v2ctx_train.jsonl",
+      "dev": "data/sft/spider_v2ctx_dev.jsonl",
+      "train_manifest": "data/sft/spider_v2ctx_train.manifest.json",
+      "dev_manifest": "data/sft/spider_v2ctx_dev.manifest.json"
+    },
+    "training": {
+      "trainer_state": "experiment_dashboard/data/trainer_states/v2ctx.json",
+      "remote_trainer_state": "/home/dengyan/tabular_rl_project/checkpoints/qwen2.5-7b-spider-v2ctx-qlora/trainer_state.json",
+      "checkpoint": "/home/dengyan/tabular_rl_project/checkpoints/qwen2.5-7b-spider-v2ctx-qlora",
+      "epochs": 2,
+      "cutoff_len": 8192,
+      "effective_batch_size": 16,
+      "learning_rate": 0.0001,
+      "lora_rank": 16,
+      "lora_alpha": 32
+    },
+    "evaluation": {
+      "directory": "data/results/qwen2.5_7b_sft_v2ctx/tool_zero_shot_dev1034"
+    },
+    "notes": "Full Spider dev evaluation is complete. Compare the context-compression accuracy drop against the large-database context savings."
+  }
+]

@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 from executor import Harness                                    # noqa: E402
 from plan import resolve_cond, TABLE_REF_ARGS                  # noqa: E402
 from memory_semantics import ground_derived_value             # noqa: E402
-from emitter import _cond_refs                                 # noqa: E402
+from emitter import _cond_refs, _catalog                      # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
 from protocol import (SYSTEM_PROMPT, ProtocolError, TOOLS,      # noqa: E402
                       assistant_message, first_user_message, parse_assistant,
@@ -51,13 +51,9 @@ def db_path(db_id: str) -> str:
 
 
 def overview(h: Harness) -> dict:
-    tables = []
-    for (name,) in h.conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
-        cols = [{"name": r[1], "type": (r[2] or "text").lower()}
-                for r in h.conn.execute(f'PRAGMA table_info("{name}")')]
-        n = h.conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
-        tables.append({"table_name": name, "num_rows": n, "columns": cols})
-    return {"tables": tables}
+    # V2-ctx: the opening overview is the lazy catalog (names + row_counts + FK relations, no columns)
+    # — the SAME renderer the emitter uses, so eval matches training. describe_table acquires schema.
+    return _catalog(h)
 
 
 def new_ctx() -> dict:
@@ -113,7 +109,10 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
         exec_args["conditions"] = resolve_cond(exec_args.get("conditions"), {}, ctx["memory"])
     out = getattr(h, tool)(**exec_args)
     if isinstance(out, dict) and "table_name" in out:
-        output = {"table": out["table_name"], "kind": out["kind"], **h.preview(out["table_name"])}
+        output = {"table": out["table_name"], "kind": out["kind"],     # V2-ctx: metadata-only handle
+                  "columns": out["columns"], "row_count": out["row_count"]}
+        if out["row_count"] == 1 and len(out["columns"]) == 1:         # scalar-shaped result keeps its cell
+            output["rows"] = [list(r) for r in h.rows(out["table_name"])]
         ctx["handle_to_step"][out["table_name"]] = step_id
         created = out["table_name"]
     else:

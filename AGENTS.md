@@ -12,7 +12,7 @@ abstract tools (relational + perception + memory); the harness translates each c
 SQL over SQLite and verifies results. Training data is built by **compiling Spider/BIRD gold SQL into
 tool-call trajectories** (not LLM-guessed), so every trajectory is execution-verified.
 
-## Current state (2026-06-14)
+## Current state (2026-06-15)
 
 - **v0 SFT done** (Qwen2.5-3B LoRA): exec-acc **63.8%** on full Spider dev vs text-to-SQL parity line
   **64–66%** vs base+few-shot **4%**. Conclusion: SFT = behavior cloning of interface + canonical
@@ -60,10 +60,19 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   `schema_version:"v2a"`), SFT `data/sft/spider_v2_*` (6767+998, `protocol_hash:eedbb946aa0f2cb7`).
   Full write-up: `draft/v2a_memory_report.md`. Scope: V2a = scalar `derived_value` ONLY;
   `evidence_pointer` (V2b) and `plan`/`hypothesis` (V2c) are deferred, separately-ablated mixtures.
-- **Next**: run V2a 7B SFT + zero-shot tool eval (compare to v1 707/1034 = 68.38%, esp. the memory
-  subset that was 9/29 = 31%); then v1-c (`semantic_match`) and the process-reward RL bridge (the
-  `references`/`produces` graph is the credit-assignment substrate). Remaining V2a gate: the exact
-  Qwen-tokenizer cutoff audit (server-side; transformers is not in the local venv).
+- **7B / V2a and V2-ctx evaluations done (2026-06-15)**: V2a scores **66.83%** and V2-ctx scores
+  **62.77%** on the full 1,034-example Spider dev set, versus v1 **68.38%** and direct SQL
+  **69.25%**. V2-ctx preserves the large-database context invariant but exposes a planning weakness:
+  current trajectories teach perception as a fixed ritual rather than evidence that can change the
+  next action. In all 7,767 V2-ctx train+dev trajectories, every one of the 6,361
+  `read_subtable` calls is penultimate and immediately followed by `answer_from_context`.
+- **Next data iteration (design only)**: construct observation-guided correction trajectories from
+  verified gold Plans. Start with pre-action rejection of unsupported operations, then add a small
+  mixture of post-action and executor-error recovery. Do not force observation before every action;
+  require it when a schema, literal, join, cardinality, or intermediate-result precondition is
+  unresolved. Decision/reflection state is model-authored control information, while observations,
+  step IDs, execution status, and provenance remain harness-owned. Canonical plan and acceptance
+  gates: `draft/reflection_trajectory_data_plan.md`.
 - **Claude implementation handoff**: read `draft/trajectory_data_generation_v2.md` before changing
   trajectory generation or starting another SFT/RL run. It records the audited blockers, canonical
   `add_to_memory(key, source_step_id)` ownership model, deterministic semantic derivations, online
@@ -180,6 +189,28 @@ gate.
   via `memory_semantics` — model-claimed provenance is never trusted. Doubles as the RL env.
 - Configs: `src/sft/configs/qwen2.5_{3b_lora,7b_qlora}_sft.yaml`.
 
+## Experiment dashboard
+
+- `experiment_dashboard/` is the local React experiment console. It records the dataset, training
+  configuration, loss history, elapsed time, evaluation summaries, and per-case JSON for each run.
+- `experiment_dashboard/data/experiments.json` is the editable experiment registry;
+  `data/trainer_states/*.json` are local snapshots of remote LLaMA-Factory trainer states.
+- The registry includes the complete direct-SQL and two-shot tool baselines as first-class
+  experiments. The backend dynamically enumerates every existing artifact for each experiment
+  (including `all.jsonl`, manifests, summaries, trainer state, and smoke runs); do not restore a
+  hard-coded frontend source list.
+- JSON records use a structure-aware viewer (conversation, tool trajectory, direct-SQL comparison,
+  or generic collapsible tree) with raw JSON as an alternate view.
+- The dependency-free Python API scans repository JSONL/manifests, refreshes trainer state through
+  `ssh NewGNN`, serves the built React app, and proxies OpenAI-compatible requests to
+  `VLLM_BASE_URL` (default `http://127.0.0.1:18000/v1`).
+- The Playground system prompt is loaded directly from `src/sft/protocol.py`; do not duplicate or
+  hand-maintain a second prompt in React. Its service controller may start only registry-backed
+  LoRA adapters on an actually idle NewGNN GPU. It tracks its own PID/metadata under remote
+  `logs/dashboard_vllm.*` and must never stop an unowned process.
+- Run the API with `.venv/bin/python experiment_dashboard/backend/server.py`; run the frontend with
+  `cd experiment_dashboard/frontend && npm run dev`, or `npm run build` and use the API server alone.
+
 ## How to run (local, Mac)
 
 ```
@@ -222,6 +253,10 @@ Uses the project venv `.venv` (sqlglot 30.9). Spider DBs in `data/spider_data/` 
   truly-idle card (cards get grabbed between checks; in-process GPU 0 = the physical card you pinned).
   OOM from long samples / fragmentation → tune `cutoff_len` + `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`;
   7B on 24G needs QLoRA (4-bit).
+- **vLLM cleanup is mandatory:** after every inference/evaluation test, stop the vLLM server and
+  verify with `nvidia-smi` that its GPU memory is released. Do not leave an idle vLLM process
+  reserving GPUs. Before killing anything, confirm the PID belongs to user `dengyan` and its command
+  is the vLLM instance started for this project.
 - Tunnel dies when the Mac sleeps; `tunnel.sh` reconnects and `caffeinate` keeps the Mac awake.
 
 **Code / compiler:**

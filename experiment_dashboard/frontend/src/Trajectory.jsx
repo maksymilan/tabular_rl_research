@@ -1,0 +1,232 @@
+/* eslint-disable react-refresh/only-export-components */
+import { useEffect, useState } from "react";
+import { Check, Eye, Search, Table2, Target, Wrench, X } from "lucide-react";
+
+// Perception tools (read-only probes). Highlighted distinctly in the trajectory because the
+// research question is whether the model probes the data at a DECISION point or only as a
+// scripted pre-answer ritual.
+const PERCEPTION = new Set(["describe_table", "inspect_column", "read_subtable"]);
+const TOOL_ICON = {
+  describe_table: Table2,
+  inspect_column: Search,
+  read_subtable: Eye,
+  answer_from_context: Target,
+};
+
+// Bucket → display label + accent colour (CSS theme variables from styles.css).
+export const BUCKET_META = {
+  correct: { label: "正确", color: "var(--green)" },
+  empty_pred: { label: "空结果 · 过滤过头", color: "var(--red)" },
+  arity_mismatch: { label: "投影错列 · 列数不符", color: "var(--amber)" },
+  cardinality_mismatch: { label: "行数不符", color: "var(--blue)" },
+  value_mismatch: { label: "取值错 · 列/值/聚合", color: "var(--red)" },
+  execution_error: { label: "执行错误", color: "var(--amber)" },
+  protocol_error: { label: "协议/格式错误", color: "var(--muted)" },
+  api_error: { label: "API 错误", color: "var(--muted)" },
+  max_steps: { label: "超出最大步数", color: "var(--muted)" },
+  unknown: { label: "未知", color: "var(--muted)" },
+};
+
+function sampleShape(sample) {
+  if (!sample || !sample.length) return [0, 0];
+  const rows = sample.map((r) => (Array.isArray(r) ? r : [r]));
+  return [rows.length, Math.max(...rows.map((r) => r.length))];
+}
+
+// Client-side mirror of backend/attribution.py:attribute_record — classifies one eval case
+// from its own fields so each browsed record can show a bucket badge without an extra fetch.
+export function attributeRecord(record) {
+  const tools = (record.turns || [])
+    .map((t) => (t.parsed && t.parsed.tool) || null)
+    .filter(Boolean);
+  const usedRead = tools.includes("read_subtable");
+  const decisionRead = tools.some((t, i) => t === "read_subtable" && i < tools.length - 2);
+  const base = { tools, usedRead, decisionRead };
+  if (record.correct === true) return { ...base, bucket: "correct" };
+  if (record.failure_type !== "wrong_answer") {
+    return { ...base, bucket: record.failure_type || "unknown" };
+  }
+  const predShape = sampleShape(record.pred_sample);
+  const goldShape = sampleShape(record.gold_sample);
+  let bucket;
+  if (predShape[0] === 0 && goldShape[0] > 0) bucket = "empty_pred";
+  else if (predShape[1] !== goldShape[1]) bucket = "arity_mismatch";
+  else if (predShape[0] !== goldShape[0]) bucket = "cardinality_mismatch";
+  else bucket = "value_mismatch";
+  return { ...base, bucket, predShape, goldShape };
+}
+
+function outputSummary(output) {
+  if (output == null) return "";
+  if (Array.isArray(output)) return `${output.length} 项`;
+  if (typeof output !== "object") return String(output);
+  if (Array.isArray(output.tables)) return `表 ${output.tables.map((t) => t.table_name).join(", ")}`;
+  if (Array.isArray(output.rows)) return `${output.row_count ?? output.rows.length} 行`;
+  if (output.row_count != null) {
+    const cols = Array.isArray(output.columns) ? output.columns.length : "?";
+    return `${output.kind || output.table || "result"} · ${output.row_count} 行 · ${cols} 列`;
+  }
+  if (output.distinct_count != null) return `distinct ${output.distinct_count}`;
+  return "";
+}
+
+function Sample({ title, rows, tone }) {
+  const preview = (rows || []).slice(0, 6).map((r) => (Array.isArray(r) ? r : [r]));
+  return (
+    <div className={`traj-sample ${tone}`}>
+      <span className="traj-sample-title">{title}</span>
+      {preview.length ? (
+        <table>
+          <tbody>
+            {preview.map((row, i) => (
+              <tr key={i}>
+                {row.map((cell, j) => (
+                  <td key={j}>{cell === null ? "NULL" : String(cell)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <em>空结果</em>
+      )}
+      {(rows || []).length > 6 ? <span className="traj-more">… 共 {rows.length} 行</span> : null}
+    </div>
+  );
+}
+
+// Step-by-step view of one rollout: think → tool call → tool output, per turn.
+export function TrajectoryView({ record }) {
+  const attr = attributeRecord(record);
+  const meta = BUCKET_META[attr.bucket] || BUCKET_META.unknown;
+  const turns = record.turns || [];
+  return (
+    <div className="trajectory">
+      <div className="traj-head">
+        <span className={`traj-verdict ${record.correct ? "ok" : "bad"}`}>
+          {record.correct ? <Check size={13} /> : <X size={13} />}
+          {record.correct ? "正确" : "失败"}
+        </span>
+        <span className="bucket-badge" style={{ "--badge": meta.color }}>
+          {meta.label}
+        </span>
+        <span className="traj-db">{record.db_id}</span>
+        <span className="traj-stepcount">{turns.length} 步</span>
+      </div>
+      <p className="traj-question">{record.question}</p>
+      {record.gold_sql ? <code className="traj-gold">{record.gold_sql}</code> : null}
+      {!record.correct ? (
+        <div className="traj-samples">
+          <Sample title={`预测 ${attr.predShape ? attr.predShape.join("×") : ""}`} rows={record.pred_sample} tone="bad" />
+          <Sample title={`金标 ${attr.goldShape ? attr.goldShape.join("×") : ""}`} rows={record.gold_sample} tone="ok" />
+        </div>
+      ) : null}
+      <ol className="traj-steps">
+        {turns.map((turn, i) => {
+          const tool = turn.parsed && turn.parsed.tool;
+          const Icon = TOOL_ICON[tool] || Wrench;
+          const isPerception = PERCEPTION.has(tool);
+          const isRitualRead = tool === "read_subtable" && i >= turns.length - 2;
+          return (
+            <li key={i} className={`traj-step${isPerception ? " perception" : ""}`}>
+              <div className="traj-step-head">
+                <Icon size={13} />
+                <strong>{tool || "—"}</strong>
+                {isPerception ? (
+                  <span className={`traj-tag${isRitualRead ? " ritual" : ""}`}>
+                    {tool === "read_subtable" ? (isRitualRead ? "答案前固定读" : "决策点主动读") : "感知"}
+                  </span>
+                ) : null}
+                <span className="traj-step-no">#{i}</span>
+              </div>
+              {turn.parsed && turn.parsed.think ? <p className="traj-think">{turn.parsed.think}</p> : null}
+              {turn.parsed && turn.parsed.arguments ? (
+                <code className="traj-args">{JSON.stringify(turn.parsed.arguments)}</code>
+              ) : null}
+              {turn.tool_output != null ? (
+                <details className="traj-output">
+                  <summary>{outputSummary(turn.tool_output) || "tool_output"}</summary>
+                  <pre>{JSON.stringify(turn.tool_output, null, 2)}</pre>
+                </details>
+              ) : null}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+// Aggregate error-attribution panel for a whole run: bucket distribution + the probe diagnosis.
+export function AttributionPanel({ experimentId }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setData(null);
+    setError("");
+    fetch(`/api/experiments/${experimentId}/attribution`)
+      .then((r) => r.json())
+      .then((payload) => {
+        if (payload.error) throw new Error(payload.error);
+        setData(payload);
+      })
+      .catch((reason) => setError(reason.message));
+  }, [experimentId]);
+
+  if (error) return <p className="traj-empty">归因端点不可用:{error}</p>;
+  if (!data) return <div className="loading-line" />;
+  if (!data.available) return <p className="traj-empty">该实验暂无评测产物(all.jsonl)。</p>;
+
+  const wa = data.wrong_answer;
+  const failTotal = data.total - (data.buckets.correct || 0);
+  const failBuckets = Object.entries(data.buckets)
+    .filter(([key]) => key !== "correct")
+    .sort((a, b) => b[1] - a[1]);
+  const pct = (n) => (wa.total ? Math.round((n / wa.total) * 100) : 0);
+
+  return (
+    <div className="attribution">
+      <div className="attr-headline">
+        <div>
+          <strong>{data.buckets.correct || 0}</strong> / {data.total} 正确
+        </div>
+        <span>失败 {failTotal} 例,按错误发生的位置归因</span>
+      </div>
+      <div className="failure-bars">
+        {failBuckets.map(([key, count]) => {
+          const meta = BUCKET_META[key] || BUCKET_META.unknown;
+          return (
+            <div key={key}>
+              <div className="failure-label">
+                <span>{meta.label}</span>
+                <strong>{count}</strong>
+              </div>
+              <div className="progress">
+                <span style={{ width: `${(count / Math.max(1, failTotal)) * 100}%`, background: meta.color }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="insight-callout">
+        <Eye size={16} />
+        <div>
+          <strong>主动查表诊断（wrong_answer 子集）</strong>
+          {wa.read_subtable === 0 ? (
+            <p>
+              该数据形态下模型不调用 read_subtable —— 中间结果以行内联呈现,无需主动读。
+              {wa.total} 个错误答案均为推理/取值错,而非可见性缺口。
+            </p>
+          ) : (
+            <p>
+              {wa.total} 个错误答案中,{wa.read_subtable} 个（{pct(wa.read_subtable)}%）调用过 read_subtable,
+              但只有 <b>{wa.decision_point_read}</b> 个（{pct(wa.decision_point_read)}%）在<b>决策点</b>读表;
+              其余都是答案前的固定读,救不了上游已经选错的列/过滤。inspect_column 使用 {wa.inspect_column} 次。
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
