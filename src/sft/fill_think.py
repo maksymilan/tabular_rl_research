@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -83,12 +84,21 @@ def build_messages(traj: dict) -> list[dict]:
 
 
 def call(base: str, key: str, model: str, messages: list[dict], timeout: int = 120):
-    body = json.dumps({"model": model, "messages": messages, "temperature": 0.3}).encode()
+    payload = {"model": model, "messages": messages}
+    if not model.startswith("claude-"):
+        payload["temperature"] = 0.3
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(base.rstrip("/") + "/chat/completions", data=body,
                                  headers={"Content-Type": "application/json",
                                           "Authorization": f"Bearer {key}"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        d = json.loads(r.read())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace").strip()
+        if len(detail) > 1000:
+            detail = detail[:1000] + "..."
+        raise RuntimeError(f"HTTP {e.code}: {detail}") from e
     return d["choices"][0]["message"]["content"], d.get("usage", {})
 
 

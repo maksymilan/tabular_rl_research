@@ -143,8 +143,14 @@ def score(h: Harness, gold_sql: str, answer_args: dict, created: set) -> tuple[b
 
 # ---------------- live mode ----------------
 def chat(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048) -> str:
-    body = json.dumps({"model": model, "messages": messages,
-                       "temperature": 0, "max_tokens": max_tokens}).encode()
+    payload = {"model": model, "messages": messages, "temperature": 0, "max_tokens": max_tokens}
+    # Qwen3.5 is a thinking model. EVAL_ENABLE_THINKING=0 disables chain-of-thought via the chat
+    # template so the baseline is directly comparable to the non-thinking Qwen2.5 runs and stays
+    # within max_tokens; =1 forces it on; unset leaves the model/template default.
+    think = os.environ.get("EVAL_ENABLE_THINKING")
+    if think is not None:
+        payload["chat_template_kwargs"] = {"enable_thinking": think == "1"}
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(f"{base_url.rstrip('/')}/chat/completions", data=body,
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=300) as r:

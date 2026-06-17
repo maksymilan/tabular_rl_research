@@ -23,13 +23,19 @@ from rollout import chat, db_path, overview                   # noqa: E402
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 SYSTEM_PROMPT = (
-    "You translate natural-language questions into SQLite. Return exactly one read-only "
-    "SELECT or WITH query and no explanation, markdown fence, or additional text."
+    "You translate natural-language questions into SQLite. Put your final query inside "
+    "<answer></answer> tags, e.g. <answer>SELECT ...</answer>. It must be exactly one read-only "
+    "SELECT or WITH query. You may reason before the tags; only the query inside them is graded."
 )
 
 
 def extract_sql(text: str) -> str | None:
-    cleaned = re.sub(r"```(?:sql)?", "", text, flags=re.I).strip()
+    # Thinking models reason first, so grade only the query inside <answer></answer> when present;
+    # otherwise fall back to scanning the whole reply (also covers non-thinking direct output).
+    answer = re.search(r"<answer>(.*?)</answer>", text, re.S | re.I)
+    candidate = answer.group(1) if answer else text
+    candidate = re.sub(r"<think>.*?</think>", " ", candidate, flags=re.S | re.I)
+    cleaned = re.sub(r"```(?:sql)?", "", candidate, flags=re.I).strip()
     match = re.search(r"\b(?:WITH|SELECT)\b.*", cleaned, re.S | re.I)
     if not match:
         return None
@@ -40,12 +46,16 @@ def extract_sql(text: str) -> str | None:
     return sql if re.match(r"^(WITH|SELECT)\b", sql, re.I) else None
 
 
-def run_one(ex: dict, example_index: int, base_url: str, model: str) -> dict:
+def run_one(ex: dict, example_index: int, base_url: str, model: str, max_tokens: int = 512) -> dict:
     h = Harness(db_path(ex["db_id"]))
     h.conn.execute("PRAGMA query_only = ON")
+    # Direct-SQL needs the FULL schema (columns/types/PK/FK) up front — the model cannot probe with
+    # tools here. overview()/_catalog is the v2-ctx lazy catalog (names + row counts only), which
+    # starves text-to-SQL and forces column hallucination; describe_table gives the complete schema.
+    table_names = [t["table_name"] for t in overview(h)["tables"]]
     user_prompt = (
         "DATABASE SCHEMA\n"
-        + json.dumps(overview(h), ensure_ascii=False, separators=(",", ":"))
+        + json.dumps(h.describe_table(table_names), ensure_ascii=False, separators=(",", ":"))
         + "\n\nQUESTION\n"
         + ex["question"]
     )
@@ -64,7 +74,7 @@ def run_one(ex: dict, example_index: int, base_url: str, model: str) -> dict:
         "failure_type": None,
     }
     try:
-        output = chat(base_url, model, messages, max_tokens=512)
+        output = chat(base_url, model, messages, max_tokens=max_tokens)
     except Exception as exc:  # noqa: BLE001
         record["failure_type"] = "api_error"
         record["error"] = f"{type(exc).__name__}: {exc}"
@@ -104,6 +114,7 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--result-dir", required=True)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--max-tokens", type=int, default=512)
     args = parser.parse_args()
 
     writer = ArtifactWriter(args.result_dir, {
@@ -112,7 +123,8 @@ def main() -> int:
         "base_url": args.base_url,
         "dev_size": args.n,
         "temperature": 0,
-        "max_tokens": 512,
+        "max_tokens": args.max_tokens,
+        "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
         "execution_feedback": False,
         "system_prompt": SYSTEM_PROMPT,
     }, args.resume)
@@ -120,7 +132,7 @@ def main() -> int:
     pending = [(i, ex) for i, ex in indexed_dev if i not in writer.completed]
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = [pool.submit(run_one, ex, i, args.base_url, args.model) for i, ex in pending]
+        futures = [pool.submit(run_one, ex, i, args.base_url, args.model, args.max_tokens) for i, ex in pending]
         for position, future in enumerate(as_completed(futures), 1):
             record = future.result()
             writer.append(record)

@@ -89,17 +89,34 @@ def find_experiment(experiment_id: str) -> dict:
     raise KeyError(experiment_id)
 
 
-def jsonl_page(path: Path, page: int, page_size: int) -> dict:
+def jsonl_page(
+    path: Path,
+    page: int,
+    page_size: int,
+    min_steps: int | None = None,
+    max_steps: int | None = None,
+) -> dict:
     start = (page - 1) * page_size
     records = []
     total = 0
+    has_filter = min_steps is not None or max_steps is not None
     with path.open(encoding="utf-8") as source:
-        for index, line in enumerate(source):
+        for line in source:
             if not line.strip():
                 continue
+            # When filtering by trajectory length we must parse every line to count its steps;
+            # otherwise keep the cheap path that only deserialises the records on the current page.
+            record = json.loads(line) if has_filter else None
+            if has_filter:
+                steps = ATTRIBUTION.record_step_count(record)
+                if (min_steps is not None and steps < min_steps) or (
+                    max_steps is not None and steps > max_steps
+                ):
+                    continue
             if start <= total < start + page_size:
-                record = json.loads(line)
-                records.append({"index": total, "record": record})
+                records.append(
+                    {"index": total, "record": record if record is not None else json.loads(line)}
+                )
             total += 1
     return {
         "records": records,
@@ -756,6 +773,20 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if parsed.path == "/api/experiments":
                 return self.send_json([enrich_experiment(item) for item in load_registry()])
+            if parsed.path == "/api/construction":
+                # Enriched reflection/perception trajectories under data/trajectories/. No file param
+                # lists the available *enriched*.jsonl files; with a file param it pages records.
+                query = parse_qs(parsed.query)
+                fname = query.get("file", [""])[0]
+                tdir = REPO_ROOT / "data" / "trajectories"
+                if not fname:
+                    files = sorted(f for f in (os.listdir(tdir) if tdir.exists() else [])
+                                   if "enriched" in f and f.endswith(".jsonl"))
+                    return self.send_json({"files": files})
+                page = max(1, int(query.get("page", ["1"])[0]))
+                page_size = min(50, max(1, int(query.get("page_size", ["8"])[0])))
+                path = resolve_repo_path(f"data/trajectories/{os.path.basename(fname)}")
+                return self.send_json(jsonl_page(path, page, page_size))
             if parsed.path == "/api/playground/config":
                 return self.send_json(playground_config())
             if parsed.path == "/api/vllm/models":
@@ -785,12 +816,16 @@ class Handler(BaseHTTPRequestHandler):
                     source = query.get("source", [default_source])[0]
                     page = max(1, int(query.get("page", ["1"])[0]))
                     page_size = min(50, max(1, int(query.get("page_size", ["10"])[0])))
+                    min_raw = query.get("min_steps", [""])[0]
+                    max_raw = query.get("max_steps", [""])[0]
+                    min_steps = int(min_raw) if min_raw else None
+                    max_steps = int(max_raw) if max_raw else None
                     descriptor = sources.get(source)
                     if descriptor is None:
                         raise ValueError(f"unknown record source {source!r}")
                     path = resolve_repo_path(descriptor["path"])
                     payload = (
-                        jsonl_page(path, page, page_size)
+                        jsonl_page(path, page, page_size, min_steps, max_steps)
                         if descriptor["format"] == "jsonl"
                         else json_page(path)
                     )

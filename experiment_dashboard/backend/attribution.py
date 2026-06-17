@@ -66,6 +66,24 @@ def _tool_sequence(record: dict) -> list[str]:
     ]
 
 
+def record_step_count(record: dict) -> int:
+    """Trajectory length (number of tool-call steps), across both record formats:
+
+    * eval rollout record  → ``len(turns)``
+    * sharegpt training record (LLaMA-Factory) → number of ``gpt`` (assistant) turns
+
+    This matches the manifest's ``trajectory_length_hist`` bucketing, so a histogram bar of
+    length N and a ``min_steps=max_steps=N`` filter select the same trajectories.
+    """
+    turns = record.get("turns")
+    if isinstance(turns, list):
+        return len(turns)
+    conversations = record.get("conversations")
+    if isinstance(conversations, list):
+        return sum(1 for c in conversations if isinstance(c, dict) and c.get("from") == "gpt")
+    return 0
+
+
 def attribute_record(record: dict) -> dict:
     """Classify a single eval case. Pure; safe on success and non-wrong_answer failures."""
     tools = _tool_sequence(record)

@@ -51,8 +51,15 @@ def convert(traj: dict) -> dict:
         conv.append({"from": "gpt",
                      "value": assistant_message(s.get("think", ""), tc["tool"], tc["arguments"])})
         if i < len(steps) - 1:  # terminal call has no observation
+            status = s.get("tool_status", "success")
+            output = s["tool_output"]
+            # Backward compatibility for older enriched smoke files that stored a whole observation
+            # envelope inside tool_output.
+            if isinstance(output, dict) and {"step_id", "status"} <= set(output):
+                status = output.get("status", status)
+                output = output.get("output", {"error": output.get("error")})
             conv.append({"from": "observation",
-                         "value": tool_output_message(s["step_id"], s["tool_output"])})
+                         "value": tool_output_message(s["step_id"], output, status=status)})
     return {"system": SYSTEM_PROMPT, "conversations": conv}
 
 

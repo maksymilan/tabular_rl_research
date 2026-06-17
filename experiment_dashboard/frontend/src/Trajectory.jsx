@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useEffect, useState } from "react";
-import { Check, Eye, Search, Table2, Target, Wrench, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Eye, Search, Table2, Target, Wrench, X } from "lucide-react";
 
 // Perception tools (read-only probes). Highlighted distinctly in the trajectory because the
 // research question is whether the model probes the data at a DECISION point or only as a
@@ -95,6 +95,36 @@ function Sample({ title, rows, tone }) {
   );
 }
 
+// The opening DATASET OVERVIEW catalog (lazy: table names + row counts + FK relations only).
+function CatalogPreview({ overview }) {
+  const tables = overview.tables || [];
+  const relations = overview.relations || [];
+  return (
+    <details className="traj-catalog">
+      <summary>
+        开场目录 · {tables.length} 表{relations.length ? ` · ${relations.length} 关系` : ""}
+      </summary>
+      <div className="catalog-tables">
+        {tables.map((t, i) => (
+          <span key={i} className="catalog-table">
+            {t.table_name}
+            <em>{t.num_rows ?? t.row_count ?? "?"} 行</em>
+          </span>
+        ))}
+      </div>
+      {relations.length ? (
+        <div className="catalog-rels">
+          {relations.map((r, i) => (
+            <code key={i}>
+              {r.from} → {r.to}
+            </code>
+          ))}
+        </div>
+      ) : null}
+    </details>
+  );
+}
+
 // Step-by-step view of one rollout: think → tool call → tool output, per turn.
 export function TrajectoryView({ record }) {
   const attr = attributeRecord(record);
@@ -103,36 +133,47 @@ export function TrajectoryView({ record }) {
   return (
     <div className="trajectory">
       <div className="traj-head">
-        <span className={`traj-verdict ${record.correct ? "ok" : "bad"}`}>
-          {record.correct ? <Check size={13} /> : <X size={13} />}
-          {record.correct ? "正确" : "失败"}
-        </span>
-        <span className="bucket-badge" style={{ "--badge": meta.color }}>
-          {meta.label}
-        </span>
-        <span className="traj-db">{record.db_id}</span>
+        {record.isTraining ? (
+          <span className="traj-verdict train">gold 轨迹</span>
+        ) : (
+          <>
+            <span className={`traj-verdict ${record.correct ? "ok" : "bad"}`}>
+              {record.correct ? <Check size={13} /> : <X size={13} />}
+              {record.correct ? "正确" : "失败"}
+            </span>
+            <span className="bucket-badge" style={{ "--badge": meta.color }}>
+              {meta.label}
+            </span>
+          </>
+        )}
+        {record.db_id ? <span className="traj-db">{record.db_id}</span> : null}
         <span className="traj-stepcount">{turns.length} 步</span>
       </div>
       <p className="traj-question">{record.question}</p>
       {record.gold_sql ? <code className="traj-gold">{record.gold_sql}</code> : null}
+      {record.db_overview ? <CatalogPreview overview={record.db_overview} /> : null}
       {!record.correct ? (
         <div className="traj-samples">
           <Sample title={`预测 ${attr.predShape ? attr.predShape.join("×") : ""}`} rows={record.pred_sample} tone="bad" />
-          <Sample title={`金标 ${attr.goldShape ? attr.goldShape.join("×") : ""}`} rows={record.gold_sample} tone="ok" />
+          <Sample title={`答案 ${attr.goldShape ? attr.goldShape.join("×") : ""}`} rows={record.gold_sample} tone="ok" />
         </div>
       ) : null}
       <ol className="traj-steps">
         {turns.map((turn, i) => {
           const tool = turn.parsed && turn.parsed.tool;
           const Icon = TOOL_ICON[tool] || Wrench;
-          const isPerception = PERCEPTION.has(tool);
+          const isError = !!turn.error_attempt;
+          const isPerception = !isError && (turn.perception != null ? turn.perception : PERCEPTION.has(tool));
           const isRitualRead = tool === "read_subtable" && i >= turns.length - 2;
+          const cls = isError ? " error-attempt" : isPerception ? " perception" : "";
           return (
-            <li key={i} className={`traj-step${isPerception ? " perception" : ""}`}>
+            <li key={i} className={`traj-step${cls}`}>
               <div className="traj-step-head">
                 <Icon size={13} />
                 <strong>{tool || "—"}</strong>
-                {isPerception ? (
+                {isError ? (
+                  <span className="traj-tag err">纠错 · 错误尝试</span>
+                ) : isPerception ? (
                   <span className={`traj-tag${isRitualRead ? " ritual" : ""}`}>
                     {tool === "read_subtable" ? (isRitualRead ? "答案前固定读" : "决策点主动读") : "感知"}
                   </span>
@@ -228,5 +269,384 @@ export function AttributionPanel({ experimentId }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// ---- Training data (LLaMA-Factory sharegpt) → trajectory ---------------------------------------
+// The SFT record is {system, conversations:[{from:"human"|"gpt"|"observation", value}]}. The first
+// human turn is "DATASET OVERVIEW\n{json}\n\nQUESTION\n{q}"; each gpt turn is
+// "<think>..</think><tool_call>{json}</tool_call>"; each observation is the tool output envelope.
+
+function parseAssistantTurn(value) {
+  const think = (value.match(/<think>([\s\S]*?)<\/think>/) || [])[1] || "";
+  const call = (value.match(/<tool_call>([\s\S]*?)<\/tool_call>/) || [])[1];
+  let tool = null;
+  let args = null;
+  if (call) {
+    try {
+      const parsed = JSON.parse(call.trim());
+      tool = parsed.tool;
+      args = parsed.arguments;
+    } catch {
+      /* leave unparsed */
+    }
+  }
+  return { think: think.trim(), tool, arguments: args };
+}
+
+export function extractQuestion(record) {
+  const human = (record.conversations || []).find((c) => c.from === "human");
+  if (!human) return record.question || "训练样例";
+  const match = human.value.match(/QUESTION\s*\n([\s\S]*)$/);
+  return match ? match[1].trim() : human.value.slice(0, 80);
+}
+
+// Normalise a sharegpt training record into the shape TrajectoryView already renders.
+export function sftToTrajectory(record) {
+  const conv = record.conversations || [];
+  const human = conv.find((c) => c.from === "human");
+  let question = "";
+  let overview = null;
+  if (human) {
+    const q = human.value.match(/QUESTION\s*\n([\s\S]*)$/);
+    question = q ? q[1].trim() : human.value.slice(0, 200);
+    const o = human.value.match(/DATASET OVERVIEW\s*\n([\s\S]*?)\n\s*QUESTION/);
+    if (o) {
+      try {
+        overview = JSON.parse(o[1].trim());
+      } catch {
+        overview = null;
+      }
+    }
+  }
+  const turns = [];
+  for (let i = 0; i < conv.length; i += 1) {
+    if (conv[i].from !== "gpt") continue;
+    const parsed = parseAssistantTurn(conv[i].value);
+    let tool_output = null;
+    const next = conv[i + 1];
+    if (next && next.from === "observation") {
+      try {
+        const envelope = JSON.parse(next.value);
+        tool_output = envelope.output ?? envelope;
+      } catch {
+        tool_output = next.value;
+      }
+    }
+    turns.push({ parsed, tool_output });
+  }
+  return { question, db_overview: overview, correct: true, isTraining: true, turns };
+}
+
+function LengthHistogram({ hist, active, onSelect }) {
+  const entries = Object.entries(hist || {})
+    .map(([k, v]) => [Number(k), v])
+    .sort((a, b) => a[0] - b[0]);
+  if (!entries.length) return null;
+  const max = Math.max(1, ...entries.map((e) => e[1]));
+  return (
+    <div className="len-hist">
+      <span className="len-hist-title">轨迹步数分布{onSelect ? " · 点击筛选" : ""}</span>
+      <div className="len-hist-bars">
+        {entries.map(([len, count]) => (
+          <button
+            key={len}
+            type="button"
+            className={`len-bar${active === len ? " active" : ""}`}
+            title={`${len} 步 · ${count} 条`}
+            onClick={onSelect ? () => onSelect(len) : undefined}
+          >
+            <span style={{ height: `${(count / max) * 100}%` }} />
+            <em>{len}</em>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Training-data board: manifest aggregates + a per-example trajectory browser (train / dev).
+export function TrainingBoard({ experiment }) {
+  const manifest = experiment.dataset_summary?.train || {};
+  const [source, setSource] = useState("train");
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useState(0);
+  const [view, setView] = useState("traj");
+  const [lengthFilter, setLengthFilter] = useState(null); // exact trajectory length, or null
+
+  useEffect(() => {
+    setData(null);
+    setError("");
+    const lengthQuery = lengthFilter == null ? "" : `&min_steps=${lengthFilter}&max_steps=${lengthFilter}`;
+    fetch(`/api/experiments/${experiment.id}/records?source=${source}&page=${page}&page_size=8${lengthQuery}`)
+      .then((r) => r.json())
+      .then((payload) => {
+        if (payload.error) throw new Error(payload.error);
+        setData(payload);
+        setSelected(0);
+      })
+      .catch((reason) => setError(reason.message));
+  }, [experiment.id, source, page, lengthFilter]);
+
+  const selectLength = (len) => {
+    setLengthFilter((current) => (current === len ? null : len));
+    setPage(1);
+  };
+
+  const active = data?.records?.[selected];
+  const traj = active ? sftToTrajectory(active.record) : null;
+  const tokens = manifest.est_tokens || {};
+
+  return (
+    <div className="training-board">
+      <div className="train-stats">
+        <div className="train-stat">
+          <strong>{(manifest.kept ?? 0).toLocaleString()}</strong>
+          <span>训练轨迹</span>
+        </div>
+        <div className="train-stat">
+          <strong>{tokens.p50 ?? "—"}</strong>
+          <span>tokens p50</span>
+        </div>
+        <div className="train-stat">
+          <strong>{tokens.max ?? "—"}</strong>
+          <span>tokens max</span>
+        </div>
+        <div className="train-stat">
+          <strong>{manifest.dropped_overlong ?? 0}</strong>
+          <span>超长丢弃</span>
+        </div>
+        <LengthHistogram
+          hist={manifest.trajectory_length_hist}
+          active={lengthFilter}
+          onSelect={selectLength}
+        />
+      </div>
+
+      <div className="train-controls">
+        <div className="segmented" aria-label="数据划分">
+          {[
+            ["train", "训练集"],
+            ["dev", "验证集"],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              className={source === value ? "active" : ""}
+              onClick={() => {
+                setSource(value);
+                setPage(1);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {lengthFilter != null ? (
+          <button type="button" className="length-chip" onClick={() => selectLength(lengthFilter)}>
+            仅 {lengthFilter} 步轨迹
+            {data ? ` · ${data.total} 条` : ""}
+            <X size={12} />
+          </button>
+        ) : null}
+      </div>
+
+      {error ? <p className="traj-empty">读取失败:{error}</p> : null}
+      {!data && !error ? <div className="loading-line" /> : null}
+      {data ? (
+        <>
+          <div className="record-layout">
+            <div className="record-index">
+              {data.records.map((item, index) => (
+                <button
+                  key={item.index}
+                  className={selected === index ? "active" : ""}
+                  onClick={() => setSelected(index)}
+                >
+                  <span>#{item.index + 1}</span>
+                  <strong>{extractQuestion(item.record)}</strong>
+                </button>
+              ))}
+            </div>
+            <div className={view === "traj" ? "record-json light" : "record-json"}>
+              <div className="json-toolbar">
+                <div className="view-toggle">
+                  <button className={view === "traj" ? "active" : ""} onClick={() => setView("traj")}>
+                    动作轨迹
+                  </button>
+                  <button className={view === "json" ? "active" : ""} onClick={() => setView("json")}>
+                    JSON
+                  </button>
+                </div>
+                <span>{data.total} 条</span>
+              </div>
+              {active ? (
+                view === "traj" ? (
+                  <TrajectoryView record={traj} />
+                ) : (
+                  <pre className="json-block">{JSON.stringify(active.record, null, 2)}</pre>
+                )
+              ) : null}
+            </div>
+          </div>
+          <div className="pagination">
+            <button
+              className="icon-button"
+              title="上一页"
+              disabled={page <= 1}
+              onClick={() => setPage((value) => value - 1)}
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <span>第 {data.page} / {data.pages} 页</span>
+            <button
+              className="icon-button"
+              title="下一页"
+              disabled={page >= data.pages}
+              onClick={() => setPage((value) => value + 1)}
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+// ---- Data-construction review: LLM-enriched reflection/perception trajectories ------------------
+const MODE_META = {
+  full: { label: "感知+纠错", color: "var(--green)" },
+  perception_only: { label: "仅感知", color: "var(--blue)" },
+  semantic_rewrite: { label: "语义重写", color: "var(--blue)" },
+  skeleton: { label: "未富化·骨架", color: "var(--muted)" },
+};
+
+function enrichmentField(record, field, fallback = undefined) {
+  return record?.[field] ?? record?.enrichment?.[field] ?? fallback;
+}
+
+// Enriched record {steps:[{step_id,think,tool_call,tool_output,perception?,error_attempt?}]} -> the
+// shape TrajectoryView renders, carrying per-step perception/error flags for highlighting.
+export function enrichedToTrajectory(record) {
+  return {
+    question: record.question,
+    db_id: record.db_id || record.source?.db_id,
+    gold_sql: record.source?.gold_sql,
+    db_overview: record.initial_state?.dataset_overview,
+    isTraining: true,
+    correct: true,
+    turns: (record.steps || []).map((s) => ({
+      parsed: { think: s.think, tool: s.tool_call.tool, arguments: s.tool_call.arguments },
+      tool_output: s.tool_output,
+      perception: !!s.perception,
+      error_attempt: !!s.error_attempt,
+    })),
+  };
+}
+
+export function ConstructionPanel() {
+  const [files, setFiles] = useState([]);
+  const [file, setFile] = useState("");
+  const [data, setData] = useState(null);
+  const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState(0);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch("/api/construction")
+      .then((r) => r.json())
+      .then((d) => {
+        const fs = d.files || [];
+        setFiles(fs);
+        setFile((cur) => cur || (fs.length ? fs[fs.length - 1] : ""));
+      })
+      .catch((e) => setError(e.message));
+  }, []);
+
+  useEffect(() => {
+    if (!file) return;
+    setData(null);
+    setError("");
+    fetch(`/api/construction?file=${encodeURIComponent(file)}&page=${page}&page_size=8`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.error) throw new Error(d.error);
+        setData(d);
+        setSelected(0);
+      })
+      .catch((e) => setError(e.message));
+  }, [file, page]);
+
+  const active = data?.records?.[selected]?.record;
+  const modeName = active ? enrichmentField(active, "mode", "skeleton") : null;
+  const mode = active ? MODE_META[modeName] || MODE_META.skeleton : null;
+
+  return (
+    <main className="content">
+      <header className="page-header">
+        <div>
+          <p className="eyebrow">DATA CONSTRUCTION</p>
+          <h1>数据构造审核</h1>
+          <p>反思/感知富化轨迹:开场目录 → describe_table 取列 → inspect_column 确认字面量 → 纠错(错误→观察→改正) → 执行</p>
+        </div>
+        <select value={file} onChange={(e) => { setFile(e.target.value); setPage(1); }}>
+          {files.map((f) => <option key={f} value={f}>{f}</option>)}
+        </select>
+      </header>
+      <section className="panel browser-panel">
+        {error ? <p className="traj-empty">读取失败:{error}</p> : null}
+        {!data && !error ? <div className="loading-line" /> : null}
+        {data ? (
+          <>
+            <div className="record-layout">
+              <div className="record-index">
+                {data.records.map((item, index) => {
+                  const r = item.record;
+                  const m = MODE_META[enrichmentField(r, "mode", "skeleton")] || MODE_META.skeleton;
+                  return (
+                    <button
+                      key={item.index}
+                      className={selected === index ? "active" : ""}
+                      onClick={() => setSelected(index)}
+                    >
+                      <span>#{item.index + 1}</span>
+                      <strong>{r.question || r.trajectory_id}</strong>
+                      <em className="case-bucket" style={{ color: m.color }}>
+                        {m.label} · 感{enrichmentField(r, "n_perception", 0)}/纠{enrichmentField(r, "n_error", 0)}
+                      </em>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="record-json light">
+                <div className="json-toolbar">
+                  <span>
+                    {active ? (
+                      <>
+                        <span className="bucket-badge" style={{ "--badge": mode.color }}>{mode.label}</span>
+                        {" "}感知 {enrichmentField(active, "n_perception", 0)} · 纠错 {enrichmentField(active, "n_error", 0)}
+                      </>
+                    ) : "—"}
+                  </span>
+                  <span>{data.total} 条</span>
+                </div>
+                {active ? <TrajectoryView record={enrichedToTrajectory(active)} /> : null}
+              </div>
+            </div>
+            <div className="pagination">
+              <button className="icon-button" disabled={page <= 1} onClick={() => setPage((v) => v - 1)}>
+                <ChevronLeft size={18} />
+              </button>
+              <span>第 {data.page} / {data.pages} 页</span>
+              <button className="icon-button" disabled={page >= data.pages} onClick={() => setPage((v) => v + 1)}>
+                <ChevronRight size={18} />
+              </button>
+            </div>
+          </>
+        ) : null}
+      </section>
+    </main>
   );
 }

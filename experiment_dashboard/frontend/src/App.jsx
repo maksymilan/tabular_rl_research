@@ -39,7 +39,14 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { AttributionPanel, attributeRecord, BUCKET_META, TrajectoryView } from "./Trajectory";
+import {
+  AttributionPanel,
+  attributeRecord,
+  BUCKET_META,
+  ConstructionPanel,
+  TrainingBoard,
+  TrajectoryView,
+} from "./Trajectory";
 import { StructuredRecord } from "./JsonViewer";
 
 const api = {
@@ -508,8 +515,10 @@ function ExperimentDetail({ experiment, onBack, onUpdated }) {
   const trainManifest = experiment.dataset_summary?.train || {};
   const tabs = [
     ...(hasTraining ? [["training", "训练过程"]] : []),
+    ...(hasTraining ? [["training_data", "训练数据"]] : []),
     ["data", `全部数据 (${experiment.data_sources?.length || 0})`],
     ["evaluation", "评测结果"],
+    ...(evaluation?.available ? [["attribution", "错误归因"]] : []),
     ["settings", "实验记录"],
   ];
 
@@ -604,6 +613,30 @@ function ExperimentDetail({ experiment, onBack, onUpdated }) {
           </button>
         ))}
       </div>
+
+      {tab === "training_data" ? (
+        <section className="panel browser-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>训练数据看板</h2>
+              <p>模型实际训练的工具轨迹:开场目录、每步 think、工具调用与观测</p>
+            </div>
+          </div>
+          <TrainingBoard experiment={experiment} />
+        </section>
+      ) : null}
+
+      {tab === "attribution" ? (
+        <section className="panel browser-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>错误归因</h2>
+              <p>按错误发生的位置归因,并诊断模型是否在决策点主动查表</p>
+            </div>
+          </div>
+          <AttributionPanel experimentId={experiment.id} />
+        </section>
+      ) : null}
 
       {tab === "training" ? (
         <section className="detail-grid">
@@ -1108,6 +1141,10 @@ function Sidebar({ view, onView, collapsed, onToggle, mobileOpen, onMobileClose 
             <Bot size={19} />
             {!collapsed ? <span>模型测试</span> : null}
           </button>
+          <button className={view === "construction" ? "active" : ""} onClick={() => onView("construction")}>
+            <FlaskConical size={19} />
+            {!collapsed ? <span>数据构造</span> : null}
+          </button>
         </nav>
         <button className="collapse-button" onClick={onToggle} title={collapsed ? "展开侧栏" : "收起侧栏"}>
           <PanelLeftClose size={18} className={collapsed ? "flip" : ""} />
@@ -1169,6 +1206,8 @@ export default function App() {
         <ExperimentDetail experiment={selected} onBack={() => setSelectedId(null)} onUpdated={load} />
       ) : view === "playground" ? (
         <Playground />
+      ) : view === "construction" ? (
+        <ConstructionPanel />
       ) : (
         <Overview experiments={experiments} onOpen={setSelectedId} />
       )}
