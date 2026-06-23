@@ -156,6 +156,43 @@ def expected_semantic_terms(tool: str, args: dict) -> set[str]:
     return {t for t in terms if t and t != "*"}
 
 
+def expected_column_terms(tool: str, args: dict) -> set[str]:
+    """Exact column identifiers that must appear verbatim in the generated think.
+
+    Table names and natural-language aliases are useful context, but they cannot replace the actual
+    schema identifiers. For example, a filter on `T2__Time_of_day` must say `Time_of_day`; "broadcast
+    time" is readable but too ambiguous for this training signal.
+    """
+    cols: set[str] = set()
+    if tool == "condition_filter":
+        cols |= condition_columns(args.get("conditions"))
+    elif tool == "project":
+        for expr in args.get("expressions", []):
+            cols |= expression_columns(expr)
+    elif tool == "aggregate":
+        if args.get("column") != "*":
+            cols.add(_base_col(args.get("column", "")))
+    elif tool == "group_aggregate":
+        cols |= {_base_col(c) for c in args.get("group_by", [])}
+        for agg in args.get("aggregations", []):
+            if agg.get("column") != "*":
+                cols.add(_base_col(agg.get("column", "")))
+            if agg.get("as"):
+                cols.add(_base_col(agg["as"]))
+    elif tool == "extreme_value_select":
+        for item in args.get("order_by", []):
+            cols |= expression_columns(str(item).replace(" DESC", "").replace(" ASC", ""))
+        for item in args.get("return_columns") or []:
+            cols |= expression_columns(item)
+    elif tool == "join_tables":
+        for item in args.get("on", []):
+            cols.add(_base_col(item.get("left", "")))
+            cols.add(_base_col(item.get("right", "")))
+    elif tool == "inspect_column" and args.get("column"):
+        cols.add(_base_col(args["column"]))
+    return {c for c in cols if c and c != "*"}
+
+
 def column_domains(h: Harness, overview: dict, base_cols: set[str]) -> dict[str, list]:
     """Real distinct values for each string-filter column, located on its SOURCE table (the backbone
     may filter it post-join under a prefix), so the LLM's reasons/literals are grounded."""
@@ -234,6 +271,9 @@ SYS = (
     "- Mention exact column names when choosing them, e.g. `Song_Name` because the question asks for "
     "song names, `Song_release_year` because it asks for release years, `Age` because it asks for "
     "the youngest singer.\n"
+    "- Exact means the literal schema/tool identifier with underscores and prefixes stripped when "
+    "needed. If the tool uses `T2__Time_of_day`, your think must explicitly say `Time_of_day`; "
+    "phrases like 'broadcast time' or 'time column' are NOT acceptable substitutes.\n"
     "- The trajectory should look like a human reading a table: first get global structure "
     "(candidate tables and columns), then local evidence (values or intermediate rows), then act.\n\n"
     "Perception tools:\n"
@@ -261,7 +301,9 @@ SYS = (
     "4. All `think` and `recovery_think` strings must be first person. Bad: \"The model might guess "
     "acting\". Good: \"I have not checked the schema yet, so I first need to inspect the table instead "
     "of guessing a column name.\"\n"
-    "5. Output ONLY a JSON object with two keys: `rewrites` and `insertions`.\n"
+    "5. Every action think must include every exact column identifier used by that action. Do not "
+    "paraphrase schema names.\n"
+    "6. Output ONLY a JSON object with two keys: `rewrites` and `insertions`.\n"
     "`rewrites` must contain one entry for EVERY backbone step: "
     "{\"step\": <backbone index>, \"think\": <first-person semantic reason>}.\n"
     "`insertions` contains optional perception/correction steps. Perception element: "
@@ -274,9 +316,17 @@ SYS = (
 )
 
 
-def build_prompt(traj: dict, domains: dict) -> list[dict]:
+def build_prompt(traj: dict, domains: dict, allow_errors: bool = True) -> list[dict]:
     ov = traj["initial_state"]["dataset_overview"]
     h = Harness(db_path(traj["source"]["db_id"]))
+    system = SYS
+    if not allow_errors:
+        system += (
+            "\n\nCURRENT RUN MODE: OBSERVATION ONLY. Do NOT add correction paths and do NOT output "
+            "any insertion with tool='error'. Insertions may contain only describe_table, "
+            "inspect_column, and read_subtable. The goal is to teach information acquisition before "
+            "action; correction trajectories will be generated in a separate dataset."
+        )
     user = (
         f"QUESTION: {traj['question']}\n\n"
         f"MODEL'S INITIAL CATALOG (what the model sees at turn 0; no columns):\n"
@@ -292,7 +342,7 @@ def build_prompt(traj: dict, domains: dict) -> list[dict]:
     )
     if domains.get("_feedback"):
         user += f"\n\nPREVIOUS ATTEMPT FAILED VALIDATION: {domains['_feedback']}\nFix and re-output."
-    return [{"role": "system", "content": SYS}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 REWRITE_SYS = (
@@ -644,8 +694,15 @@ def quality_check(enriched_steps: list[dict]) -> tuple[bool, list[str]]:
         if issue:
             issues.append(issue)
         terms = expected_semantic_terms(tool, args)
+        column_terms = expected_column_terms(tool, args)
         low = think.lower()
-        if terms and not any(term.lower() in low for term in terms):
+        missing_columns = [term for term in sorted(column_terms) if term.lower() not in low]
+        if missing_columns:
+            issues.append(
+                f"step {i + 1} think must mention exact column name(s) {missing_columns}; "
+                "natural-language aliases are not enough"
+            )
+        elif terms and not any(term.lower() in low for term in terms):
             issues.append(
                 f"step {i + 1} think does not justify its concrete table/column choice; "
                 f"expected one of {sorted(terms)[:8]}"
@@ -707,7 +764,8 @@ def call_retry(base: str, key: str, model: str, messages: list[dict], tries: int
 
 
 def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 3,
-               api_timeout: int = 180, api_retries: int = 4) -> dict:
+               api_timeout: int = 180, api_retries: int = 4,
+               allow_errors: bool = True) -> dict:
     h = Harness(db_path(traj["source"]["db_id"]))
     overview = traj["initial_state"]["dataset_overview"]
     domains = column_domains(h, overview, string_filter_cols(traj["steps"]))
@@ -719,8 +777,8 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
         if feedback:
             ctx_domains["_feedback"] = feedback
         try:
-            text, _ = call_retry(
-                base, key, model, build_prompt(traj, ctx_domains),
+            text, usage = call_retry(
+                base, key, model, build_prompt(traj, ctx_domains, allow_errors=allow_errors),
                 tries=api_retries, timeout=api_timeout,
             )
         except Exception as e:  # noqa: BLE001
@@ -737,33 +795,46 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
                 f"{missing_rewrites}; rewrite every original step and explain exact table/column choices"
             )
             history.append({"attempt": attempt, "perc": 0, "errs": 0,
-                            "perception_ok": False, "issues": feedback})
+                            "perception_ok": False, "issues": feedback,
+                            "model_output": text, "usage": usage})
             continue
         perc = [a for a in ann if a.get("tool") in PERCEPTION]
         errs = [a for a in ann if a.get("tool") == "error"]
+        if errs and not allow_errors:
+            feedback = (
+                "this generation run is perception_only; do not output error/correction insertions"
+            )
+            history.append({"attempt": attempt, "perc": len(perc), "errs": len(errs),
+                            "perception_ok": False, "issues": feedback,
+                            "model_output": text, "usage": usage})
+            continue
         l2_ok, l2_issues = check_load_bearing(traj, perc)
         l1p_ok, l1p_err, enr_p = replay_validate(traj, spliced_sequence(traj, perc, rewrites))
         q_ok, q_issues = quality_check(enr_p)
         if not (l1p_ok and l2_ok and q_ok):
             feedback = "; ".join(([l1p_err] if not l1p_ok else []) + l2_issues + q_issues) or "no valid perception"
             history.append({"attempt": attempt, "perc": len(perc), "errs": len(errs),
-                            "perception_ok": False, "issues": feedback})
+                            "perception_ok": False, "issues": feedback,
+                            "model_output": text, "usage": usage})
             continue
         best = {"steps": enr_p, "mode": "perception_only", "n_perception": len(perc), "n_error": 0}
         if not errs:
-            history.append({"attempt": attempt, "perc": len(perc), "errs": 0, "ok": True})
+            history.append({"attempt": attempt, "perc": len(perc), "errs": 0, "ok": True,
+                            "model_output": text, "usage": usage})
             break
         l1f_ok, l1f_err, enr_f = replay_validate(traj, spliced_sequence(traj, perc + errs, rewrites))
         qf_ok, qf_issues = quality_check(enr_f)
         if l1f_ok and qf_ok:
             best = {"steps": enr_f, "mode": "full", "n_perception": len(perc), "n_error": len(errs)}
-            history.append({"attempt": attempt, "perc": len(perc), "errs": len(errs), "ok": True})
+            history.append({"attempt": attempt, "perc": len(perc), "errs": len(errs), "ok": True,
+                            "model_output": text, "usage": usage})
             break
         feedback = "perception is correct; fix ONLY the error attempts: " + "; ".join(
             ([l1f_err] if not l1f_ok else []) + qf_issues
         )
         history.append({"attempt": attempt, "perc": len(perc), "errs": len(errs),
-                        "perception_ok": True, "errors_ok": False, "issues": feedback})
+                        "perception_ok": True, "errors_ok": False, "issues": feedback,
+                        "model_output": text, "usage": usage})
     if best:
         out = copy.deepcopy(traj)
         out["schema_version"] = "v2-ctx-enriched"
@@ -771,6 +842,8 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
         out["initial_state"]["dataset_overview"] = catalog_snapshot(h)
         out["steps"] = best["steps"]
         out["enrichment"] = {"status": "enriched", "mode": best["mode"],
+                             "generator": {"model": model,
+                                           "mode_requested": "full" if allow_errors else "perception_only"},
                              "n_perception": best["n_perception"], "n_error": best["n_error"],
                              "annotation_history": history}
         return out
@@ -781,6 +854,8 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
     out["initial_state"]["dataset_overview"] = catalog_snapshot(h)
     out["steps"] = base_steps
     out["enrichment"] = {"status": "fallback_skeleton", "mode": "skeleton",
+                         "generator": {"model": model,
+                                       "mode_requested": "full" if allow_errors else "perception_only"},
                          "n_perception": 0, "n_error": 0, "annotation_history": history}
     return out
 
@@ -792,7 +867,7 @@ def enrich_one_rewrite_only(traj: dict, base: str, key: str, model: str,
     h = Harness(db_path(traj["source"]["db_id"]))
     history: list[dict] = []
     try:
-        text, _ = call_retry(
+        text, usage = call_retry(
             base, key, model, build_rewrite_prompt(traj),
             tries=api_retries, timeout=api_timeout,
         )
@@ -808,6 +883,8 @@ def enrich_one_rewrite_only(traj: dict, base: str, key: str, model: str,
         out["initial_state"]["dataset_overview"] = catalog_snapshot(h)
         out["steps"] = base_steps
         out["enrichment"] = {"status": "fallback_skeleton", "mode": "skeleton",
+                             "generator": {"model": model,
+                                           "mode_requested": "semantic_rewrite"},
                              "n_perception": 0, "n_error": 0, "annotation_history": history}
         return out
 
@@ -821,16 +898,22 @@ def enrich_one_rewrite_only(traj: dict, base: str, key: str, model: str,
     if ok and qok:
         out["steps"] = steps
         out["enrichment"] = {"status": "enriched", "mode": "semantic_rewrite",
+                             "generator": {"model": model,
+                                           "mode_requested": "semantic_rewrite"},
                              "n_perception": len(insertions), "n_error": 0,
                              "annotation_history": [{"attempt": 1, "ok": True,
-                                                      "insertions": len(insertions)}]}
+                                                      "insertions": len(insertions),
+                                                      "model_output": text, "usage": usage}]}
     else:
         _, _, base_steps = replay_validate(traj, spliced_sequence(traj, []))
         out["steps"] = base_steps
         out["enrichment"] = {"status": "fallback_skeleton", "mode": "skeleton",
+                             "generator": {"model": model,
+                                           "mode_requested": "semantic_rewrite"},
                              "n_perception": 0, "n_error": 0,
                              "annotation_history": [{"attempt": 1, "ok": False,
-                                                      "issues": "; ".join(([err] if not ok else []) + qissues)}]}
+                                                      "issues": "; ".join(([err] if not ok else []) + qissues),
+                                                      "model_output": text, "usage": usage}]}
     return out
 
 
@@ -841,8 +924,10 @@ def main() -> int:
     ap.add_argument("--subset-file", default=os.path.join(ROOT, "data", "trajectories", "subset_180.jsonl"))
     ap.add_argument("--model", default="deepseek-v4-pro")
     ap.add_argument("--out", default=os.path.join(ROOT, "data", "trajectories", "smoke_enriched.jsonl"))
-    ap.add_argument("--mode", choices=["full", "semantic_rewrite"], default="full",
-                    help="full asks the LLM for rewrites+insertions; semantic_rewrite uses a deterministic observation scaffold and asks only for semantic thinks")
+    ap.add_argument("--mode", choices=["full", "perception_only", "semantic_rewrite"], default="full",
+                    help=("full asks the LLM for rewrites+perception+optional corrections; "
+                          "perception_only forbids correction/error insertions; semantic_rewrite "
+                          "uses a deterministic observation scaffold and asks only for semantic thinks"))
     ap.add_argument("--limit", type=int, default=0,
                     help="optional cap for quick smoke generation")
     ap.add_argument("--api-timeout", type=int, default=180,
@@ -874,6 +959,7 @@ def main() -> int:
                     t, base, key, args.model,
                     max_attempts=args.max_attempts,
                     api_timeout=args.api_timeout, api_retries=args.api_retries,
+                    allow_errors=args.mode == "full",
                 )
             results.append(r)
             f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")

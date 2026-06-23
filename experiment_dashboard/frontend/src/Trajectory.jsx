@@ -527,6 +527,40 @@ function enrichmentField(record, field, fallback = undefined) {
   return record?.[field] ?? record?.enrichment?.[field] ?? fallback;
 }
 
+function GeneratorTrace({ record }) {
+  const enrichment = record?.enrichment || {};
+  const generator = enrichment.generator || {};
+  const history = enrichment.annotation_history || [];
+  if (!generator.model && !history.length) return null;
+  return (
+    <details className="generator-trace">
+      <summary>
+        生成模型 · {generator.model || "unknown"}
+        {generator.mode_requested ? ` · ${generator.mode_requested}` : ""}
+      </summary>
+      {history.map((item, index) => (
+        <div className="generator-attempt" key={index}>
+          <div className="generator-attempt-head">
+            <strong>Attempt {item.attempt ?? index + 1}</strong>
+            {item.ok ? <span className="text-ok">accepted</span> : null}
+            {item.issues ? <span className="text-warn">{item.issues}</span> : null}
+            {item.error ? <span className="text-warn">{item.error}</span> : null}
+          </div>
+          {item.usage ? (
+            <code className="traj-args">usage {JSON.stringify(item.usage)}</code>
+          ) : null}
+          {item.model_output ? (
+            <details className="traj-output" open={history.length === 1}>
+              <summary>外部模型原始输出</summary>
+              <pre>{item.model_output}</pre>
+            </details>
+          ) : null}
+        </div>
+      ))}
+    </details>
+  );
+}
+
 // Enriched record {steps:[{step_id,think,tool_call,tool_output,perception?,error_attempt?}]} -> the
 // shape TrajectoryView renders, carrying per-step perception/error flags for highlighting.
 export function enrichedToTrajectory(record) {
@@ -627,12 +661,18 @@ export function ConstructionPanel() {
                       <>
                         <span className="bucket-badge" style={{ "--badge": mode.color }}>{mode.label}</span>
                         {" "}感知 {enrichmentField(active, "n_perception", 0)} · 纠错 {enrichmentField(active, "n_error", 0)}
+                        {active.enrichment?.generator?.model ? ` · ${active.enrichment.generator.model}` : ""}
                       </>
                     ) : "—"}
                   </span>
                   <span>{data.total} 条</span>
                 </div>
-                {active ? <TrajectoryView record={enrichedToTrajectory(active)} /> : null}
+                {active ? (
+                  <>
+                    <GeneratorTrace record={active} />
+                    <TrajectoryView record={enrichedToTrajectory(active)} />
+                  </>
+                ) : null}
               </div>
             </div>
             <div className="pagination">

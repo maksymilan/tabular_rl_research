@@ -487,3 +487,8 @@ details .json-block { max-height: 360px; }
 .traj-step.error-attempt { border-left-color: var(--red); background: #fdf3f2; }
 .traj-tag.err { color: var(--red); background: #fbeceb; }
 .page-header select, .panel-heading select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 12px; }
+.generator-trace { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.generator-trace summary { cursor: pointer; color: var(--ink); font-size: 12px; font-weight: 700; }
+.generator-attempt { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.generator-attempt-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 7px; font-size: 11px; }
+.generator-attempt .traj-output pre { max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
