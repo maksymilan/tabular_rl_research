@@ -271,13 +271,6 @@ def validate_step(step: dict, table_columns: dict[str, set[str]], location: str)
         register_created_table(output["created_table"], table_columns, location)
         return
 
-    if tool_name == "add_to_memory":
-        for item in arguments["items"]:
-            validate_memory_item(item, False, f"{location}.items")
-        for item in output["task_memory"]:
-            validate_memory_item(item, True, f"{location}.task_memory")
-        return
-
     if tool_name == "answer_from_context":
         require_fields(output["evidence"], set(STATE["answer_evidence"]), f"{location}.evidence")
         return

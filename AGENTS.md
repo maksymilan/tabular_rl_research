@@ -60,6 +60,22 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   `schema_version:"v2a"`), SFT `data/sft/spider_v2_*` (6767+998, `protocol_hash:eedbb946aa0f2cb7`).
   Full write-up: `draft/v2a_memory_report.md`. Scope: V2a = scalar `derived_value` ONLY;
   `evidence_pointer` (V2b) and `plan`/`hypothesis` (V2c) are deferred, separately-ablated mixtures.
+- **V2b memory removal + unified references DONE & verified (2026-06-23)**: `add_to_memory` is GONE as
+  a tool/concept (it was a redundant wrapper — `memory_id == mem_<source_step_id>`, and the aggregate
+  step already parked its scalar). A predicate's `value_ref` now cites the producing `step_id`
+  DIRECTLY; the harness grounds the scalar from history with strict validation at resolve time
+  (online: an illegal `value_ref` → `execution_error`, never a silent value). New SHARED
+  `src/harness/provenance.py::build_references` builds typed `references` edges (`type=data|value`,
+  structured `target`) for BOTH emitter and rollout; `backward_slice(reference_type=…)` is
+  parameterized (default data+value). `memory_semantics.py` → `scalar_grounding.py` (just
+  `extract_scalar` + neutral `ground_scalar_reference`; no memory_id/key/content/derivation).
+  `supporting_memory_ids` deleted; `refine_memory` placeholder removed. PROTOCOL_VERSION v2a→**v2b**
+  (hash `95c58d18ea4cca28`), `schema_version` v2-ctx→**v3**. Verified: run_all unit **98/98** + compile
+  1998/2000, emit 296/300 verified, **online replay 296/296 = 100%** (incl. 5 scalar-subquery value
+  edges), SFT build 296/296 with **0 memory residue**. SSOT + impl log: `draft/provenance_redesign.md`
+  §5. Deferred (in SSOT §2): C (perception grounding edges + reward), F (subtable consolidation —
+  empirically triggered by the first perception-SFT failure modes), D-3/D-4 (regenerate perception
+  data + SFT).
 - **7B / V2a and V2-ctx evaluations done (2026-06-15)**: V2a scores **66.83%** and V2-ctx scores
   **62.77%** on the full 1,034-example Spider dev set, versus v1 **68.38%** and direct SQL
   **69.25%**. V2-ctx preserves the large-database context invariant but exposes a planning weakness:
@@ -150,25 +166,27 @@ gate.
 - `executor.py` — relational core. Each table-producing tool registers a named SQL view; reading/
   scalar tools run a SELECT. Tools: condition_filter, project, join_tables (prefixes columns
   internally via left_prefix/right_prefix), group_aggregate, aggregate, extreme_value_select
-  (merged old order_limit; table-producing), set_op, derive_column, window, add_to_memory, preview
+  (merged old order_limit; table-producing), set_op, derive_column, window, preview
   (inlines table content for model perception), rows, gold.
 - `plan.py` — Plan IR: `Step(id, tool, args)`. `run_plan` threads step ids → view names; a `values`
-  map threads scalars (V2a: `add_to_memory` parks the extracted scalar under its own step id, which the
-  predicate's `value_ref` points at); `resolve_cond` resolves `value_ref` and `in_table` in condition trees.
+  map threads scalars (V2b: aggregate parks its scalar under its step id; a predicate's `value_ref`
+  points at the producing step directly); `resolve_cond` resolves `value_ref` and `in_table` in condition trees.
 - `compiler.py` — `Compiler(schema).compile(sql)`: sqlglot AST → Plan, walking FROM/JOIN → WHERE →
-  GROUP → HAVING → ORDER/LIMIT → SELECT → DISTINCT. Scalar subquery → aggregate → `add_to_memory`
-  (emits ONLY `{type:"derived_value", source}`) → predicate `value_ref` = the memory step's id.
-  IN/NOT-IN subquery → membership via in_table. Unsupported → CompileError.
-- `memory_semantics.py` (V2a, SHARED by emitter + rollout) — `ground_derived_value(history,
-  source_step_id)`: strict `extract_scalar` (scalar tool / 1×1 table, non-NULL else `MemoryGroundingError`)
-  + `build_derivation` (classifies the op graph: aggregate_stat / filtered_aggregate / argmax_lookup /
-  group_argmax / filtered_lookup / derived_aggregate, else operation_result) + deterministic
-  `build_memory_key` / `render_memory_content`. The ONLY place a memory value/semantics is produced.
+  GROUP → HAVING → ORDER/LIMIT → SELECT → DISTINCT. Scalar subquery → aggregate → predicate
+  `value_ref` = that aggregate step's id (no add_to_memory). IN/NOT-IN subquery → membership via
+  in_table. Unsupported → CompileError.
+- `scalar_grounding.py` (V2b, SHARED by emitter + rollout) — `extract_scalar(history, source_step_id)`
+  / `ground_scalar_reference`: strict scalar extraction (scalar tool / 1×1 table, non-NULL else
+  `ScalarGroundingError`). The ONLY place a `value_ref`'s scalar is produced; no memory_id/key/content.
+- `provenance.py` (V2b, SHARED by emitter + rollout) — `build_references(tool, args, resolve_step)`
+  builds typed `references` edges (`type=data|value`, structured `target`) over the model-facing arg
+  shape; `backward_slice(traj, reference_type=("data","value"))` is parameterized (grounding excluded
+  by default). `col_lineage` + `grounding` edges land in V2c (阶段 C).
 - `verify.py` — `round_trip`: compile → run → compare to gold SQL on the real DB.
-- `emitter.py` — verified Plan → training trajectory. Each step gets harness-authored `references`
-  (consumption edges in step_ids/source names) + `produces`; `add_to_memory` is grounded via
-  `memory_semantics`; model-visible memory args = `{type, source_step_id}`. `backward_slice(traj)`
-  reverse-derives the answer's dependency set; `validate()` = legality + reference-integrity gate.
+- `emitter.py` — verified Plan → training trajectory. Each step gets harness-authored typed
+  `references` (via `provenance.build_references`) + `produces`; a predicate's `value_ref` cites the
+  producing step directly (no add_to_memory step). `provenance.backward_slice(traj)` reverse-derives
+  the answer's dependency set; `validate()` = legality + reference-integrity gate.
   Trajectories carry `schema_version`.
 - `run_all.py` (tests + compile coverage), `run_spider.py [N]` (execution-verified on real DBs),
   `gen_trajectories.py [train|dev]` (batch emit → `data/trajectories/spider_*.jsonl`, gitignored).
@@ -184,9 +202,10 @@ gate.
 - `fill_think.py` — replaces templated `think` with grounded reasoning from the external LLM (api.md).
   `splice_think.py` — reuse prior-version `think` for a new schema at ZERO API cost (memory steps get
   the template; renamed memory keys are substituted).
-- `rollout.py` — closed-loop eval (live model ↔ harness) + `--replay`. V2a: online step_ids +
-  `tool_history` + harness-derived `references`/`produces` (`_online_references`) + memory grounding
-  via `memory_semantics` — model-claimed provenance is never trusted. Doubles as the RL env.
+- `rollout.py` — closed-loop eval (live model ↔ harness) + `--replay`. V2b: online step_ids +
+  `tool_history` + harness-derived typed `references` (`provenance.build_references`) + online
+  `value_ref` grounding via `scalar_grounding.extract_scalar` (illegal ref → execution_error) —
+  model-claimed provenance is never trusted. Doubles as the RL env.
 - Configs: `src/sft/configs/qwen2.5_{3b_lora,7b_qlora}_sft.yaml`.
 
 ## Experiment dashboard
@@ -263,13 +282,13 @@ Uses the project venv `.venv` (sqlglot 30.9). Spider DBs in `data/spider_data/` 
 - sqlglot 30 uses the `from_` arg key (not `from`).
 - Column qualification for joins is **internalized in `join_tables`** (no separate rename steps);
   the model sees one `join_tables` call, prefixing is harness-internal.
-- Scalar/list threading lives in `plan.resolve_cond`: `value_ref` (V2a: a harness `memory_id` from a
-  grounded `derived_value`) and `in_table` (IN-subquery set). Trajectory **display keeps
-  value_ref(memory_id)/in_table**; execution resolves them — keep this split when editing emitter/run_plan.
-- **Memory trust boundary (V2a):** the model emits only `{type, source_step_id}`; the harness owns
-  value/key/derivation/memory_id/authority via `memory_semantics`. NEVER add a model-visible
-  `value`/`references` to `add_to_memory` (that was the v1 bug that broke replay and is forgeable in RL).
-  `references`/`produces` are harness-authored sidecars, never `tool_call.arguments`.
+- Scalar/list threading lives in `plan.resolve_cond`: `value_ref` (V2b: the producing `step_id`,
+  grounded to its scalar at execution) and `in_table` (IN-subquery set). Trajectory **display keeps
+  value_ref(step_id)/in_table**; execution resolves them — keep this split when editing emitter/run_plan.
+- **Scalar trust boundary (V2b):** a predicate's `value_ref` cites only a `step_id`; the harness owns
+  the value via `scalar_grounding.extract_scalar` (strict 1×1 non-NULL; online illegal ref →
+  execution_error). NEVER let the model write a literal threshold value (the v1 bug that broke replay
+  and is forgeable in RL). `references`/`produces` are harness-authored sidecars, never `tool_call.arguments`.
 - **Verification gate is sound:** unsupported SQL → CompileError (counted, never mis-compiled);
   wrong decompositions → round-trip mismatch → dropped. New datasets lower coverage, never corrupt.
 - **Ceiling:** execution-verified ~98.4% is the hard ceiling — 100% is impossible because

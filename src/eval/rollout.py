@@ -33,9 +33,10 @@ sys.path.insert(0, os.path.join(ROOT, "src", "harness"))
 sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 
 from executor import Harness                                    # noqa: E402
-from plan import resolve_cond, TABLE_REF_ARGS                  # noqa: E402
-from memory_semantics import ground_derived_value             # noqa: E402
-from emitter import _cond_refs, _catalog                      # noqa: E402
+from plan import resolve_cond, _value_ref_ids                  # noqa: E402
+from scalar_grounding import extract_scalar                    # noqa: E402
+from provenance import build_references                        # noqa: E402
+from emitter import _catalog                                   # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
 from protocol import (SYSTEM_PROMPT, ProtocolError, TOOLS,      # noqa: E402
                       assistant_message, first_user_message, parse_assistant,
@@ -57,46 +58,26 @@ def overview(h: Harness) -> dict:
 
 
 def new_ctx() -> dict:
-    """Online harness state threaded across one trajectory's actions (provenance + memory)."""
-    return {"memory": {}, "history": {}, "handle_to_step": {}, "memid_to_step": {}}
-
-
-def _online_references(tool: str, args: dict, ctx: dict) -> list[dict]:
-    """Harness-derived consumption edges for one action (never model-provided)."""
-    refs: list[dict] = []
-    for key in TABLE_REF_ARGS.get(tool, []):
-        v = args.get(key)
-        if v in ctx["handle_to_step"]:
-            refs.append({"step": ctx["handle_to_step"][v], "as": key})
-        elif v is not None:
-            refs.append({"source": v, "as": key})
-    if tool == "condition_filter":
-        for kind, val in _cond_refs(args.get("conditions")):
-            if kind == "value_ref" and val in ctx["memid_to_step"]:
-                refs.append({"step": ctx["memid_to_step"][val], "via": "value_ref"})
-            elif kind == "in_table" and val in ctx["handle_to_step"]:
-                refs.append({"step": ctx["handle_to_step"][val], "via": "in_table"})
-    if tool == "add_to_memory":
-        refs.append({"step": args.get("source_step_id"), "via": "source"})
-    return refs
+    """Online harness state threaded across one trajectory's actions (history + provenance)."""
+    return {"history": {}, "handle_to_step": {}}
 
 
 def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
-    """Run one tool call, threading online provenance/memory in `ctx`. Returns (output, created|None).
+    """Run one tool call, threading online provenance in `ctx`. Returns (output, created|None).
 
-    V2a: `add_to_memory` is grounded by the harness from the cited `source_step_id` (the model never
-    supplies value/key/provenance); a predicate's `value_ref` is a harness-issued `memory_id`."""
+    V2b: a predicate's `value_ref` cites the producing step_id directly (no add_to_memory); the
+    harness grounds the scalar from `ctx["history"]` with strict validation. An illegal value_ref
+    (unknown step / non-scalar source) raises ScalarGroundingError -> surfaced as an execution_error."""
     if tool not in TOOLS or tool == "answer_from_context":
         raise ProtocolError(f"tool {tool!r} not executable here")
-    references = _online_references(tool, args, ctx)
 
-    if tool == "add_to_memory":
-        grounded = ground_derived_value(ctx["history"], args["source_step_id"])
-        ctx["memory"][grounded["memory_id"]] = grounded["value"]
-        ctx["memid_to_step"][grounded["memory_id"]] = step_id
-        output = {"memory": grounded}
-        ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
-        return output, None
+    def resolve_step(ref):
+        if ref in ctx["handle_to_step"]:
+            return ctx["handle_to_step"][ref]
+        if ref in ctx["history"]:            # already a step_id (a value_ref)
+            return ref
+        return None
+    references = build_references(tool, args, resolve_step)
 
     if tool in ("describe_table", "inspect_column", "read_subtable"):   # read-only perception; no table
         out = getattr(h, tool)(**args)
@@ -106,7 +87,10 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
 
     exec_args = dict(args)
     if tool == "condition_filter":
-        exec_args["conditions"] = resolve_cond(exec_args.get("conditions"), {}, ctx["memory"])
+        # resolve each value_ref (a producing step_id) to its grounded scalar; a bad reference raises
+        values = {ref: extract_scalar(ctx["history"], ref)
+                  for ref in _value_ref_ids(exec_args.get("conditions"))}
+        exec_args["conditions"] = resolve_cond(exec_args.get("conditions"), {}, values)
     out = getattr(h, tool)(**exec_args)
     if isinstance(out, dict) and "table_name" in out:
         output = {"table": out["table_name"], "kind": out["kind"],     # V2-ctx: metadata-only handle

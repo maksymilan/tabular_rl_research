@@ -1,6 +1,6 @@
 {
   "trajectory_id": "sample_having",
-  "schema_version": "v2-ctx",
+  "schema_version": "v3",
   "source": {
     "dataset": "synthetic",
     "db_id": "employees",
@@ -41,8 +41,12 @@
       },
       "references": [
         {
+          "type": "data",
           "source": "employees",
-          "as": "table"
+          "role": "table",
+          "target": {
+            "table": "employees"
+          }
         }
       ],
       "produces": {
@@ -106,8 +110,12 @@
       },
       "references": [
         {
+          "type": "data",
           "source": "employees",
-          "as": "table"
+          "role": "table",
+          "target": {
+            "table": "employees"
+          }
         }
       ],
       "produces": {
@@ -140,8 +148,12 @@
       },
       "references": [
         {
+          "type": "data",
           "step": "step_2",
-          "as": "table"
+          "role": "table",
+          "target": {
+            "handle": "group_001"
+          }
         }
       ],
       "produces": {
@@ -172,8 +184,12 @@
       },
       "references": [
         {
+          "type": "data",
           "step": "step_3",
-          "as": "table"
+          "role": "table",
+          "target": {
+            "handle": "filter_002"
+          }
         }
       ],
       "produces": {
@@ -201,7 +217,12 @@
       },
       "references": [
         {
-          "step": "step_4"
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "project_003"
+          }
         }
       ],
       "produces": {
@@ -237,13 +258,17 @@
           "evidence": {
             "table": "project_003"
           },
-          "supporting_memory_ids": [],
           "reason": "Derived by the verified tool chain."
         }
       },
       "references": [
         {
-          "step": "step_4"
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "project_003"
+          }
         }
       ],
       "produces": {

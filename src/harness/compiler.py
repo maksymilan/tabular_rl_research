@@ -264,28 +264,27 @@ class Compiler:
 
     def _in_subquery(self, this_node: E.Expression, sub: E.Expression, steps: list[Step], colmap):
         """`col IN (subquery)` -> compile the subquery to a single-column table and test membership
-        against it (`in_table`); a set-valued subquery stays a table, NOT memory. If the subquery is
-        scalar (ends in `aggregate`), `IN` degenerates to equality, routed through memory like any
-        scalar subquery. `NOT IN` is the parser's `Not(In(...))`, rendered as `NOT (col IN ...)`."""
+        against it (`in_table`); a set-valued subquery stays a table. If the subquery is scalar
+        (ends in `aggregate`), `IN` degenerates to equality whose `value_ref` cites that aggregate
+        step directly. `NOT IN` is the parser's `Not(In(...))`, rendered as `NOT (col IN ...)`."""
         inner = sub.this if isinstance(sub, (E.Subquery, E.Paren)) else sub
         sub_steps = self._node(inner)   # SELECT or a set-op (UNION/INTERSECT/EXCEPT) -> a table
         steps.extend(sub_steps)
         last = sub_steps[-1]
         col = self._resolve(this_node, colmap)
         if last.tool == "aggregate":          # IN (scalar subquery) == equality to that scalar
-            mem = self._id()
-            # model cites the source step only; the harness grounds value/key/derivation (V2a).
-            steps.append(Step(mem, "add_to_memory", {"type": "derived_value", "source": last.id}))
-            return {"column": col, "op": "=", "value_ref": mem}
+            # the predicate cites the aggregate step directly; the harness grounds the scalar from it
+            # at resolve time (no separate add_to_memory step).
+            return {"column": col, "op": "=", "value_ref": last.id}
         return {"column": col, "op": "in", "in_table": last.id}
 
     def _scalar_subquery(self, node: E.Expression, steps: list[Step]):
-        """Uncorrelated scalar subquery in a predicate -> compile it to an `aggregate` step, park the
-        scalar with `add_to_memory` (the memory entry cites the aggregate, the predicate cites the
-        memory entry -> an explicit provenance chain for the process reward), and return the memory
-        key for the predicate's `value_ref`. Returns None if `node` is not a subquery, so the caller
-        falls through to its normal 'unsupported RHS' error. Correlated / non-scalar subqueries
-        either raise here or fail round-trip verification and are dropped (never mis-compiled)."""
+        """Uncorrelated scalar subquery in a predicate -> compile it to its producing step(s) and
+        return that step id, which the predicate cites directly via `value_ref` (the harness grounds
+        the scalar from that step at resolve time -> a forge-proof provenance edge for the process
+        reward). Returns None if `node` is not a subquery, so the caller falls through to its normal
+        'unsupported RHS' error. Correlated / non-scalar subqueries either raise here or fail
+        round-trip verification and are dropped (never mis-compiled)."""
         inner = node.this if isinstance(node, (E.Subquery, E.Paren)) else node
         if not isinstance(inner, E.Select):
             return None
@@ -294,11 +293,10 @@ class Compiler:
             return None
         steps.extend(sub)
         last = sub[-1]
-        mem = self._id()
-        # model cites the source step only; the harness extracts the scalar and builds the
-        # derivation/key/content (V2a). Single-row subqueries are grounded as a 1x1 table.
-        steps.append(Step(mem, "add_to_memory", {"type": "derived_value", "source": last.id}))
-        return mem
+        # the predicate cites the producing step directly via `value_ref`; the harness grounds the
+        # scalar from it at resolve time (an aggregate scalar, or a single-row subquery as a 1x1
+        # table). No separate add_to_memory step.
+        return last.id
 
     def _resolve(self, node: E.Expression, colmap: dict[str, str]) -> str:
         key = self._bare(node)
@@ -364,7 +362,7 @@ class Compiler:
 
         where = sel.args.get("where")
         if where is not None:
-            conds = self._condition(where.this, steps)   # may append subquery + add_to_memory steps
+            conds = self._condition(where.this, steps)   # may append subquery steps (value_ref cites them)
             sid = self._id()
             steps.append(Step(sid, "condition_filter", {"table": cur, "conditions": conds}))
             cur = sid

@@ -61,15 +61,14 @@ def run():
     pm = Compiler().compile("SELECT MAX(salary), MIN(salary) FROM employees")
     t.check("multi scalar agg", pm[-1].tool == "group_aggregate" and pm[-1].args["group_by"] == [], str(pm[-1]))
 
-    # scalar subquery -> aggregate + add_to_memory + filter referencing it via value_ref
+    # scalar subquery -> aggregate + filter referencing it directly via value_ref (no memory step)
     psub = Compiler().compile("SELECT name FROM employees WHERE salary > (SELECT AVG(salary) FROM employees)")
     tools = [s.tool for s in psub]
-    mem = next(s for s in psub if s.tool == "add_to_memory")
+    agg = next(s for s in psub if s.tool == "aggregate")
     filt = next(s for s in psub if s.tool == "condition_filter")
-    t.check("scalar subquery -> aggregate+add_to_memory+value_ref",
-            tools[:3] == ["aggregate", "add_to_memory", "condition_filter"]
-            and mem.args["source"] == "s1" and mem.args["type"] == "derived_value"
-            and filt.args["conditions"].get("value_ref") == mem.id, str(tools))
+    t.check("scalar subquery -> aggregate + value_ref(step)",
+            tools[:2] == ["aggregate", "condition_filter"]
+            and filt.args["conditions"].get("value_ref") == agg.id, str(tools))
 
     # IN (subquery) -> compile the subquery to a table, test membership via in_table
     pin = Compiler().compile("SELECT a FROM t WHERE a IN (SELECT b FROM s)")

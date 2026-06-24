@@ -36,10 +36,9 @@ def load_by_id(path: str) -> dict:
 
 
 def old_memory_keys(steps: list) -> list[str]:
-    """v1 add_to_memory keys (e.g. 'v3') a reused think might name; replaced with a neutral phrase
-    (no-op for a V2a source, which has no model-authored key)."""
-    return [s["tool_call"]["arguments"].get("key") for s in steps
-            if s["tool_call"]["tool"] == "add_to_memory" and s["tool_call"]["arguments"].get("key")]
+    """v1 add_to_memory keys a reused think might name; replaced with a neutral phrase. No-op for a
+    V2b source, which has no add_to_memory step at all."""
+    return []
 
 
 def main() -> int:

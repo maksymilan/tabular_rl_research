@@ -191,12 +191,6 @@ class Harness:
             f"SELECT {_AGG[op]}({d}{column}) FROM {self._src(table)}"
         ).fetchone()[0]
 
-    def add_to_memory(self, key: str, value=None, content: str = "") -> dict:
-        """Record a model-authored scalar conclusion under `key` (its provenance is the step that
-        produced `value`). A no-op on the data pipeline — it returns the committed entry so the
-        trajectory shows the value being parked in memory for a later predicate to reference."""
-        return {"memory": {"key": key, "value": value, "content": content}}
-
     def extreme_value_select(self, table, order_by, top_k=None, return_columns=None) -> dict:
         """Table-producing ORDER BY [... LIMIT k]: keep the extreme rows under an ordering.
         Merged from the old `order_limit` — one tool now covers a plain ORDER BY/LIMIT, a top-k

@@ -24,7 +24,6 @@ sys.path.insert(0, HERE)
 from compiler import CompileError          # noqa: E402
 from emitter import emit, validate         # noqa: E402
 from executor import Harness               # noqa: E402
-from memory_semantics import MemoryGroundingError  # noqa: E402
 
 SPIDER = os.path.join(ROOT, "data/spider_data")
 
@@ -75,9 +74,6 @@ def main() -> int:
                             db_id=ex["db_id"], trajectory_id=f"spider_{split}_{i}")
             except CompileError:
                 stats["compile_error"] += 1
-                continue
-            except MemoryGroundingError as e:
-                stats[f"memory_reject_{e.code}"] += 1
                 continue
             except Exception:
                 stats["exec_error"] += 1

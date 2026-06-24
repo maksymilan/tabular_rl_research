@@ -7,11 +7,11 @@ trajectory (ReAct steps + a terminal `answer_from_context`). `validate(traj)` ch
 legality (step 4 of the build): tool names, step shape, terminal answer, citation integrity, and
 that the trajectory was execution-verified.
 
-V2a — provenance + grounded memory: every step carries harness-authored `references` (the trajectory
-step_ids / source-table names it consumed) and a `produces` descriptor. `add_to_memory` is grounded
-by `memory_semantics` (the model emits only `{type, source_step_id}`; the harness owns
-value/key/derivation). `backward_slice(traj)` walks `references` from the answer to recover exactly the
-steps it depends on. `validate()` = legality + reference-integrity gate. The model never emits
+V2b — unified provenance, no memory step: every step carries harness-authored `references` (typed
+data/value edges with a structured `target`, built by `provenance.build_references`) and a `produces`
+descriptor. A predicate's `value_ref` cites the producing step directly (there is no `add_to_memory`).
+`backward_slice(traj)` walks the data+value references from the answer to recover exactly the steps it
+depends on. `validate()` = legality + reference-integrity gate. The model never emits
 `references`/`produces` — they are harness-derived sidecars.
 
 V2-ctx — bounded context (so large DBs fit): the opening overview is a lazy CATALOG (table names +
@@ -23,15 +23,15 @@ the evidence before answering.
 from __future__ import annotations
 
 from compiler import Compiler
-from memory_semantics import ground_derived_value
 from plan import TABLE_REF_ARGS, resolve_cond
+from provenance import backward_slice, build_references
 
-SCHEMA_VERSION = "v2-ctx"  # + lazy catalog, metadata-only outputs, injected resident perception
+SCHEMA_VERSION = "v3"  # V2b memory removal + unified references; lazy catalog, metadata-only outputs
 
 # every tool the model may call (table-producing + reading/scalar + perception + memory/terminal)
 TOOLS = set(TABLE_REF_ARGS) | {
     "aggregate", "extreme_value_select", "read_subtable", "describe_table",
-    "inspect_column", "add_to_memory", "refine_memory", "answer_from_context",
+    "inspect_column", "answer_from_context",
 }
 
 THINK = {
@@ -43,8 +43,6 @@ THINK = {
     "project": "Project the output columns the question asks for.",
     "set_op": "Combine the two row sets with the set operation.",
     "aggregate": "Compute the scalar aggregate that answers the question.",
-    "add_to_memory": "Register the scalar computed by the cited source step as a value a later step "
-                     "can reference (the harness grounds the actual number and its derivation).",
     "describe_table": "Read the columns and keys of the tables this question needs before operating.",
     "inspect_column": "Check the actual values in this column so the filter literal is grounded.",
     "read_subtable": "Read the evidence rows so the answer is grounded in real data.",
@@ -72,63 +70,21 @@ def _norm(rows):
     return sorted(repr(tuple(r)) for r in rows)
 
 
-def _cond_refs(cond):
-    """Yield ('value_ref', key) / ('in_table', plan_step_id) found anywhere in a condition tree."""
+def _rewrite_value_ref(cond, planid_to_stepid: dict):
+    """Display-side: rewrite a predicate's `value_ref` from the internal plan-step id to the
+    model-facing trajectory step_id (execution still threads by the plan id)."""
     if isinstance(cond, list):
-        for c in cond:
-            yield from _cond_refs(c)
-        return
-    if not isinstance(cond, dict):
-        return
-    for k in ("and", "or"):
-        if k in cond:
-            for c in cond[k]:
-                yield from _cond_refs(c)
-            return
-    if "not" in cond:
-        yield from _cond_refs(cond["not"])
-        return
-    if "value_ref" in cond:
-        yield ("value_ref", cond["value_ref"])
-    if "in_table" in cond:
-        yield ("in_table", cond["in_table"])
-
-
-def _references(step, planid_to_stepid: dict) -> list[dict]:
-    """Explicit consumption edges (in trajectory step_ids / source-table names) of one plan step."""
-    refs: list[dict] = []
-    for key in TABLE_REF_ARGS.get(step.tool, []):
-        raw = step.args.get(key)
-        if raw in planid_to_stepid:
-            refs.append({"step": planid_to_stepid[raw], "as": key})
-        elif raw is not None:
-            refs.append({"source": raw, "as": key})           # a base (source) table
-    if step.tool == "condition_filter":
-        for kind, val in _cond_refs(step.args.get("conditions")):
-            if val in planid_to_stepid:                        # value_ref -> the add_to_memory step;
-                refs.append({"step": planid_to_stepid[val], "via": kind})  # in_table -> the subset step
-    if step.tool == "add_to_memory":
-        src = step.args.get("source")
-        if src in planid_to_stepid:
-            refs.append({"step": planid_to_stepid[src], "via": "source"})
-    return refs
-
-
-def _rewrite_value_ref(cond, memid_map: dict):
-    """Display-side: rewrite a predicate's `value_ref` from the internal add_to_memory plan id to the
-    model-facing stable `memory_id` (execution still threads by the plan id)."""
-    if isinstance(cond, list):
-        return [_rewrite_value_ref(c, memid_map) for c in cond]
+        return [_rewrite_value_ref(c, planid_to_stepid) for c in cond]
     if not isinstance(cond, dict):
         return cond
     for k in ("and", "or"):
         if k in cond:
-            return {k: [_rewrite_value_ref(x, memid_map) for x in cond[k]]}
+            return {k: [_rewrite_value_ref(x, planid_to_stepid) for x in cond[k]]}
     if "not" in cond:
-        return {"not": _rewrite_value_ref(cond["not"], memid_map)}
+        return {"not": _rewrite_value_ref(cond["not"], planid_to_stepid)}
     out = dict(cond)
-    if out.get("value_ref") in memid_map:
-        out["value_ref"] = memid_map[out["value_ref"]]
+    if out.get("value_ref") in planid_to_stepid:
+        out["value_ref"] = planid_to_stepid[out["value_ref"]]
     return out
 
 
@@ -171,9 +127,8 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
          trajectory_id: str = "traj") -> dict:
     plan = Compiler(h.schema()).compile(gold_sql)
     id_to_table: dict[str, str] = {}        # plan step id -> real harness view name (for EXECUTION)
-    planid_to_stepid: dict[str, str] = {}   # plan step id -> trajectory step id (for REFERENCES)
-    memid_map: dict[str, str] = {}          # add_to_memory plan id -> memory_id (value_ref rewrite)
-    memory_ids: list[str] = []              # all grounded memory_ids (for answer.supporting_memory_ids)
+    planid_to_stepid: dict[str, str] = {}   # plan step id -> trajectory step id (value_ref rewrite)
+    handle_to_stepid: dict[str, str] = {}   # real view name -> trajectory step id (for REFERENCES)
     history: dict[str, dict] = {}           # trajectory step_id -> {tool, arguments, output, references}
     values: dict = {}
     steps: list[dict] = []
@@ -190,40 +145,38 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
                       "references": references, "produces": produces, "tool_output": tool_output})
         return sid
 
+    def resolve_step(ref):
+        """Map a model-facing reference (a produced view name, or a value_ref's step_id) to its
+        trajectory step_id; None for a base source table. Same arg shape the rollout resolver uses."""
+        if ref in handle_to_stepid:
+            return handle_to_stepid[ref]
+        if ref in history:                  # already a trajectory step_id (a value_ref)
+            return ref
+        return None
+
     # --- inject: describe ONLY the source tables this question needs (acquire relevant schemas) ---
     src_tables = _source_tables(plan)
     if src_tables:
         try:
             emit_step("describe_table", {"tables": src_tables},
-                      [{"source": t, "as": "table"} for t in src_tables],
+                      [{"type": "data", "source": t, "role": "table", "target": {"table": t}}
+                       for t in src_tables],
                       {"kind": "schema"}, h.describe_table(src_tables), THINK["describe_table"])
         except Exception:
             pass
 
     # --- main plan loop: metadata-only table outputs; inspect_column injected before literal filters ---
     for step in plan:
-        references = _references(step, planid_to_stepid)
         args = dict(step.args)
         for key in TABLE_REF_ARGS.get(step.tool, []):
             if args.get(key) in id_to_table:
-                args[key] = id_to_table[args[key]]
-
-        if step.tool == "add_to_memory":
-            # V2a trust boundary: the model only cites source_step_id; the harness grounds the value.
-            source_step_id = planid_to_stepid[step.args["source"]]
-            grounded = ground_derived_value(history, source_step_id)
-            memid_map[step.id] = grounded["memory_id"]
-            memory_ids.append(grounded["memory_id"])
-            values[step.id] = grounded["value"]
-            emit_step("add_to_memory", {"type": "derived_value", "source_step_id": source_step_id},
-                      references, {"kind": "memory", "memory_id": grounded["memory_id"], "key": grounded["key"]},
-                      {"memory": grounded}, THINK["add_to_memory"], plan_id=step.id)
-            continue
+                args[key] = id_to_table[args[key]]   # display/exec args: table refs are real view names
 
         if step.tool == "condition_filter":
             tbl = args["table"]
-            tbl_ref = ([{"step": planid_to_stepid[step.args["table"]]}]
-                       if step.args["table"] in planid_to_stepid else [{"source": step.args["table"]}])
+            sid = resolve_step(tbl)
+            tbl_ref = ([{"type": "data", "step": sid, "role": "table", "target": {"handle": tbl}}] if sid
+                       else [{"type": "data", "source": tbl, "role": "table", "target": {"table": tbl}}])
             for col in dict.fromkeys(_string_literal_columns(step.args.get("conditions"))):
                 try:                                      # best-effort grounding; never drop the trajectory
                     ic = h.inspect_column(tbl, col)
@@ -231,12 +184,13 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
                     continue
                 emit_step("inspect_column", {"table": tbl, "column": col}, tbl_ref,
                           {"kind": "column_domain"}, ic, THINK["inspect_column"])
-            disp_conds = _rewrite_value_ref(resolve_cond(args.get("conditions"), id_to_table), memid_map)
+            disp_conds = _rewrite_value_ref(resolve_cond(args.get("conditions"), id_to_table), planid_to_stepid)
             display = {**args, "conditions": disp_conds}
             exec_args = {**args, "conditions": resolve_cond(args.get("conditions"), id_to_table, values)}
         else:
             display = exec_args = args
 
+        references = build_references(step.tool, display, resolve_step)
         out = getattr(h, step.tool)(**exec_args)
         if isinstance(out, dict) and "table_name" in out:
             id_to_table[step.id] = out["table_name"]
@@ -248,6 +202,7 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
             last_result_stepid = emit_step(step.tool, display, references,
                                            {"kind": "table", "handle": out["table_name"]},
                                            tool_output, THINK.get(step.tool, ""), plan_id=step.id)
+            handle_to_stepid[out["table_name"]] = last_result_stepid
         else:
             if step.tool == "aggregate":
                 values[step.id] = out
@@ -268,16 +223,18 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
         try:
             ev = h.read_subtable(answer_table, limit=READ_EVIDENCE_LIMIT)
             emit_step("read_subtable", {"table": answer_table, "limit": READ_EVIDENCE_LIMIT},
-                      [{"step": last_result_stepid}], {"kind": "rows"},
+                      [{"type": "data", "step": last_result_stepid, "role": "table",
+                        "target": {"handle": answer_table}}], {"kind": "rows"},
                       {"table": answer_table, "rows": [list(r) for r in ev], "row_count": len(result)},
                       THINK["read_subtable"])
         except Exception:
             pass
 
-    answer_refs = [{"step": last_result_stepid}] if last_result_stepid else []
+    answer_refs = ([{"type": "data", "step": last_result_stepid, "role": "table",
+                     "target": {"handle": answer_table}}] if last_result_stepid else [])
     emit_step("answer_from_context",
               {"answer": result[:50], "evidence": {"table": answer_table},
-               "supporting_memory_ids": memory_ids, "reason": "Derived by the verified tool chain."},
+               "reason": "Derived by the verified tool chain."},
               answer_refs, {"kind": "answer"}, {"final_answer": result[:50]},
               "Answer the question from the final evidence rows.")
 
@@ -291,25 +248,6 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
         "steps": steps,
         "final_answer": result[:50],
     }
-
-
-def backward_slice(traj: dict) -> set[str]:
-    """Walk `references` backward from the terminal answer to recover the set of step_ids the answer
-    depends on (the provenance slice). Steps NOT in the slice are provably off the answer's path."""
-    by_id = {s["step_id"]: s for s in traj.get("steps", [])}
-    if not traj.get("steps"):
-        return set()
-    frontier = [r["step"] for r in traj["steps"][-1].get("references", []) if "step" in r]
-    seen: set[str] = set()
-    while frontier:
-        x = frontier.pop()
-        if x in seen or x not in by_id:
-            continue
-        seen.add(x)
-        for r in by_id[x].get("references", []):
-            if "step" in r:
-                frontier.append(r["step"])
-    return seen
 
 
 def validate(traj: dict) -> list[str]:
@@ -329,7 +267,6 @@ def validate(traj: dict) -> list[str]:
     sources_lc = {x.lower() for x in sources}   # SQL identifiers are case-insensitive
     created = set()
     seen_step_ids: set[str] = set()
-    memkeys: set[str] = set()
     for s in steps:
         sid = s.get("step_id", "?")
         for k in ("step_id", "tool_call", "tool_output", "references", "produces"):
@@ -347,8 +284,6 @@ def validate(traj: dict) -> list[str]:
                 errs.append(f"{sid}: references unknown/forward step {r['step']!r}")
             if "source" in r and r["source"].lower() not in sources_lc:
                 errs.append(f"{sid}: references unknown source table {r['source']!r}")
-        if tc.get("tool") == "add_to_memory":
-            memkeys.add(s.get("produces", {}).get("memory_id"))   # harness-assigned identity
         tbl = s.get("tool_output", {}).get("table")
         if tbl:
             created.add(tbl)
@@ -362,9 +297,6 @@ def validate(traj: dict) -> list[str]:
         ev = (ans.get("evidence") or {}).get("table")
         if ev is not None and ev not in created | sources:
             errs.append(f"answer cites unknown table {ev!r}")
-        for mk in ans.get("supporting_memory_ids", []) or []:
-            if mk not in memkeys:
-                errs.append(f"answer cites unknown memory key {mk!r}")
         # the answer must be backward-reachable to at least one step that produced evidence
         if len(steps) > 1 and not backward_slice(traj):
             errs.append("answer has no resolvable provenance (empty backward slice)")

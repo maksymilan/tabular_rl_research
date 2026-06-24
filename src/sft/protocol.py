@@ -18,9 +18,9 @@ import hashlib
 import json
 import re
 
-# v0 action space = exactly the tools present in the compiled Spider data. Perception /
-# memory / fuzzy tools (inspect_column, semantic_match, add_to_memory, ...) enter with the
-# v1 data; exposing unlearned tools at eval time only invites illegal calls.
+# v0 action space = exactly the tools present in the compiled Spider data. Perception / fuzzy tools
+# (inspect_column, semantic_match, ...) enter with the v1 data; exposing unlearned tools at eval
+# time only invites illegal calls.
 TOOL_SPECS: dict[str, str] = {
     "condition_filter":
         'condition_filter(table, conditions) -> new table with the rows that satisfy `conditions`.\n'
@@ -28,7 +28,7 @@ TOOL_SPECS: dict[str, str] = {
         '=,!=,>,>=,<,<= | {"op":"in","values":[..]} | {"op":"between","low":x,"high":y} | '
         '{"op":"like","value":pat} | {"op":"contains","value":s} | {"op":"is_null"} | '
         'column-vs-column via {"column":a,"op":o,"column_value":b}; '
-        'a grounded value from memory via {"column":a,"op":o,"value_ref":memory_id}; '
+        'a scalar computed by an earlier step via {"column":a,"op":o,"value_ref":step_id}; '
         'set membership against a computed table via {"column":a,"op":"in","in_table":table}; '
         'combine with {"and":[..]}, {"or":[..]}, {"not": ..}.',
     "project":
@@ -49,12 +49,6 @@ TOOL_SPECS: dict[str, str] = {
     "aggregate":
         'aggregate(table, column, op) -> a single scalar (op: sum|count|count_distinct|mean|min|max; '
         'column "*" allowed for count).',
-    "add_to_memory":
-        'add_to_memory(type, source_step_id) -> register a scalar already computed by an earlier step '
-        'so a later condition_filter can reference it. type="derived_value"; source_step_id is the '
-        'step_id (from an observation) of a step whose output is a single scalar. You do NOT supply '
-        'the value — the harness extracts it and returns {"memory_id", "key", "value", ...}. Use the '
-        'returned memory_id as {"value_ref": memory_id}. Optional "alias": a short human label.',
     "extreme_value_select":
         'extreme_value_select(table, order_by, top_k=None, return_columns=None) -> new table with '
         'the rows ordered by `order_by` (list of "col" or "col DESC") keeping the top `top_k` '
@@ -75,19 +69,18 @@ TOOL_SPECS: dict[str, str] = {
         'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
         'the evidence rows before answering.',
     "answer_from_context":
-        'answer_from_context(answer, evidence, supporting_memory_ids, reason) -> TERMINAL. answer: the '
+        'answer_from_context(answer, evidence, reason) -> TERMINAL. answer: the '
         'result rows as a list of rows (each row a list of cells; at most 50 rows). evidence: {"table": '
-        'name of the table holding the answer rows, or null for a scalar}. supporting_memory_ids: list '
-        'of memory_ids the answer relies on (or []). reason: one short sentence.',
+        'name of the table holding the answer rows, or null for a scalar}. reason: one short sentence.',
 }
 
 TOOLS = set(TOOL_SPECS)
 
-PROTOCOL_VERSION = "v2a"   # bump when specs, rendering, or the memory model change
+PROTOCOL_VERSION = "v2b"   # bump when specs, rendering, or the memory model change
 
 # Strict per-tool argument schema (required, optional). Unlisted keys are rejected so the SFT data
-# and the live rollout can never silently drift — and so the V2a memory trust boundary holds:
-# add_to_memory carries ONLY type + source_step_id, never a model-authored value/key/provenance.
+# and the live rollout can never silently drift. V2b: a predicate's `value_ref` cites the producing
+# step_id directly; there is no add_to_memory tool and no model-authored value.
 _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "condition_filter": ({"table", "conditions"}, {"return_columns", "preview_k"}),
     "project": ({"table", "expressions"}, set()),
@@ -100,8 +93,7 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "describe_table": ({"tables"}, set()),
     "inspect_column": ({"table", "column"}, {"top_k"}),
     "read_subtable": ({"table"}, {"limit", "columns"}),
-    "add_to_memory": ({"type", "source_step_id"}, {"alias"}),
-    "answer_from_context": ({"answer", "evidence"}, {"supporting_memory_ids", "reason"}),
+    "answer_from_context": ({"answer", "evidence"}, {"reason"}),
 }
 
 
@@ -118,8 +110,6 @@ def validate_arguments(tool: str, args: dict) -> None:
     extra = keys - required - optional
     if extra:
         raise ProtocolError(f"{tool}: unexpected arguments {sorted(extra)}")
-    if tool == "add_to_memory" and args.get("type") != "derived_value":
-        raise ProtocolError("add_to_memory: only type='derived_value' is supported in V2a")
 
 
 def protocol_hash() -> str:
@@ -135,15 +125,15 @@ SYSTEM_PROMPT = (
     "foreign-key relations only (no columns) — so it stays small on large databases. Read the "
     "columns of the tables you need with describe_table before operating. Each tool result is an "
     "observation {\"step_id\", \"status\", \"output\"}: step_id names that step so you can cite it "
-    "later (e.g. as add_to_memory's source_step_id); a table-creating tool's output is only a HANDLE "
+    "later (e.g. as a predicate's value_ref); a table-creating tool's output is only a HANDLE "
     "(table name, columns, row_count) — use read_subtable to SEE its rows.\n\n"
     "TOOLS\n" + "\n".join(TOOL_SPECS.values()) + "\n\n"
     "RULES\n"
     "1. Each turn, output exactly: <think>brief reasoning</think> then "
     '<tool_call>{"tool": "<name>", "arguments": {...}}</tool_call>. Nothing else.\n'
     "2. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
-    "3. To reuse a computed scalar as a threshold, add_to_memory with its source_step_id, then "
-    'reference the returned memory_id via {"value_ref": memory_id}.\n'
+    "3. To use a computed scalar as a threshold, set the predicate's "
+    '{"value_ref": step_id} to the step that produced that scalar.\n'
     "4. read_subtable the evidence table, then finish with answer_from_context citing that table.\n"
 )
 
