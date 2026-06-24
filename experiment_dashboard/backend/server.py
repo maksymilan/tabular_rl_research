@@ -780,8 +780,21 @@ class Handler(BaseHTTPRequestHandler):
                 fname = query.get("file", [""])[0]
                 tdir = REPO_ROOT / "data" / "trajectories"
                 if not fname:
-                    files = sorted(f for f in (os.listdir(tdir) if tdir.exists() else [])
-                                   if "enriched" in f and f.endswith(".jsonl"))
+                    files = []
+                    for name in os.listdir(tdir) if tdir.exists() else []:
+                        if "enriched" not in name or not name.endswith(".jsonl"):
+                            continue
+                        path = tdir / name
+                        stat = path.stat()
+                        files.append({
+                            "name": name,
+                            "mtime": stat.st_mtime,
+                            "mtime_iso": time.strftime(
+                                "%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)
+                            ),
+                            "size_bytes": stat.st_size,
+                        })
+                    files.sort(key=lambda item: (item["mtime"], item["name"]), reverse=True)
                     return self.send_json({"files": files})
                 page = max(1, int(query.get("page", ["1"])[0]))
                 page_size = min(50, max(1, int(query.get("page_size", ["8"])[0])))

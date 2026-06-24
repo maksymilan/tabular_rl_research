@@ -1,6 +1,18 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useEffect, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Eye, Search, Table2, Target, Wrench, X } from "lucide-react";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Eye,
+  FileJson,
+  Search,
+  Table2,
+  Target,
+  Wrench,
+  X,
+} from "lucide-react";
 
 // Perception tools (read-only probes). Highlighted distinctly in the trajectory because the
 // research question is whether the model probes the data at a DECISION point or only as a
@@ -527,6 +539,35 @@ function enrichmentField(record, field, fallback = undefined) {
   return record?.[field] ?? record?.enrichment?.[field] ?? fallback;
 }
 
+function normalizeConstructionFile(item) {
+  return typeof item === "string" ? { name: item } : item;
+}
+
+function finiteNumber(value) {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatBytes(bytes) {
+  const value = finiteNumber(bytes);
+  if (value == null) return "未知大小";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatFileTime(item) {
+  if (item.mtime_iso) return item.mtime_iso;
+  const value = finiteNumber(item.mtime);
+  if (value == null) return "未知时间";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value * 1000));
+}
+
 function GeneratorTrace({ record }) {
   const enrichment = record?.enrichment || {};
   const generator = enrichment.generator || {};
@@ -561,23 +602,64 @@ function GeneratorTrace({ record }) {
   );
 }
 
-// Enriched record {steps:[{step_id,think,tool_call,tool_output,perception?,error_attempt?}]} -> the
-// shape TrajectoryView renders, carrying per-step perception/error flags for highlighting.
-export function enrichedToTrajectory(record) {
+function stepsToTrajectory(record, steps, extra = {}) {
   return {
     question: record.question,
     db_id: record.db_id || record.source?.db_id,
     gold_sql: record.source?.gold_sql,
     db_overview: record.initial_state?.dataset_overview,
     isTraining: true,
-    correct: true,
-    turns: (record.steps || []).map((s) => ({
-      parsed: { think: s.think, tool: s.tool_call.tool, arguments: s.tool_call.arguments },
+    correct: extra.correct ?? true,
+    turns: (steps || []).map((s) => ({
+      parsed: {
+        think: s.think,
+        tool: s.tool_call?.tool,
+        arguments: s.tool_call?.arguments,
+      },
       tool_output: s.tool_output,
       perception: !!s.perception,
       error_attempt: !!s.error_attempt,
     })),
   };
+}
+
+function RejectedCandidates({ record }) {
+  const candidates = record?.enrichment?.rejected_candidates || [];
+  if (!candidates.length) return null;
+  return (
+    <details className="rejected-candidates">
+      <summary>被拒候选轨迹 · {candidates.length}</summary>
+      {candidates.map((item, index) => (
+        <div className="rejected-candidate" key={`${item.attempt}-${item.stage}-${index}`}>
+          <div className="generator-attempt-head">
+            <strong>Attempt {item.attempt ?? index + 1}</strong>
+            {item.stage ? <span className="traj-tag err">{item.stage}</span> : null}
+            {item.issues ? <span className="text-warn">{item.issues}</span> : null}
+          </div>
+          <div className="rejected-checks">
+            {["l1_ok", "l2_ok", "q_ok", "ok"].map((key) => (
+              item[key] == null ? null : (
+                <span key={key} className={item[key] ? "text-ok" : "text-warn"}>
+                  {key}:{String(item[key])}
+                </span>
+              )
+            ))}
+          </div>
+          {item.candidate_steps?.length ? (
+            <TrajectoryView record={stepsToTrajectory(record, item.candidate_steps, { correct: false })} />
+          ) : (
+            <p className="traj-empty">该失败发生在形成可 replay 轨迹之前；请查看上方外部模型原始输出。</p>
+          )}
+        </div>
+      ))}
+    </details>
+  );
+}
+
+// Enriched record {steps:[{step_id,think,tool_call,tool_output,perception?,error_attempt?}]} -> the
+// shape TrajectoryView renders, carrying per-step perception/error flags for highlighting.
+export function enrichedToTrajectory(record) {
+  return stepsToTrajectory(record, record.steps || [], { correct: true });
 }
 
 export function ConstructionPanel() {
@@ -592,9 +674,9 @@ export function ConstructionPanel() {
     fetch("/api/construction")
       .then((r) => r.json())
       .then((d) => {
-        const fs = d.files || [];
+        const fs = (d.files || []).map(normalizeConstructionFile).filter((item) => item.name);
         setFiles(fs);
-        setFile((cur) => cur || (fs.length ? fs[fs.length - 1] : ""));
+        setFile((cur) => cur || (fs.length ? fs[0].name : ""));
       })
       .catch((e) => setError(e.message));
   }, []);
@@ -625,9 +707,32 @@ export function ConstructionPanel() {
           <h1>数据构造审核</h1>
           <p>反思/感知富化轨迹:开场目录 → describe_table 取列 → inspect_column 确认字面量 → 纠错(错误→观察→改正) → 执行</p>
         </div>
-        <select value={file} onChange={(e) => { setFile(e.target.value); setPage(1); }}>
-          {files.map((f) => <option key={f} value={f}>{f}</option>)}
-        </select>
+        <div className="construction-picker">
+          <span className="construction-picker-title">
+            <FileJson size={14} />
+            生成数据
+          </span>
+          <div className="construction-file-list" role="listbox" aria-label="构造数据文件">
+            {files.map((item) => (
+              <button
+                key={item.name}
+                type="button"
+                className={`construction-file${file === item.name ? " active" : ""}`}
+                title={item.name}
+                onClick={() => {
+                  setFile(item.name);
+                  setPage(1);
+                }}
+              >
+                <span className="construction-file-name">{item.name}</span>
+                <span className="construction-file-meta">
+                  <Clock size={12} />
+                  {formatFileTime(item)} · {formatBytes(item.size_bytes)}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
       </header>
       <section className="panel browser-panel">
         {error ? <p className="traj-empty">读取失败:{error}</p> : null}
@@ -670,6 +775,7 @@ export function ConstructionPanel() {
                 {active ? (
                   <>
                     <GeneratorTrace record={active} />
+                    <RejectedCandidates record={active} />
                     <TrajectoryView record={enrichedToTrajectory(active)} />
                   </>
                 ) : null}
