@@ -1,0 +1,48 @@
+# LLaMA-Factory SFT config — Qwen3.5-9B QLoRA smoke test on v8 pilot-ready data.
+# Run on server after choosing an idle GPU:
+#   CUDA_VISIBLE_DEVICES=<idx> llamafactory-cli train src/sft/configs/qwen3.5_9b_qlora_v8_pilot_smoke.yaml
+
+### model
+model_name_or_path: /home/dengyan/models/Qwen3.5-9B
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: spider_tools_v8_pilot_ready
+dataset_dir: /home/dengyan/tabular_rl_project/data/sft
+template: qwen
+cutoff_len: 8192
+overwrite_cache: true
+preprocessing_num_workers: 1
+max_samples: 2
+
+### output
+output_dir: /data/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v8-pilot-ready-smoke
+logging_steps: 1
+save_strategy: "no"
+plot_loss: true
+overwrite_output_dir: true
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-4
+max_steps: 2
+optim: paged_adamw_8bit
+bf16: true
+gradient_checkpointing: true
+
+### eval
+val_size: 0
+eval_strategy: "no"

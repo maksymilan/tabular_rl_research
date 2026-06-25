@@ -82,6 +82,25 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   current trajectories teach perception as a fixed ritual rather than evidence that can change the
   next action. In all 7,767 V2-ctx train+dev trajectories, every one of the 6,361
   `read_subtable` calls is penultimate and immediately followed by `answer_from_context`.
+- **Qwen3.5-9B pilot SFT (2026-06-25)**: base model is now local on NewGNN at
+  `/home/dengyan/models/Qwen3.5-9B`; Claude's baseline scripts live in `/home/dengyan/run_qwen35_*.sh`.
+  Baselines already run on Spider dev: direct SQL no-thinking **751/1034 = 72.6%**, direct SQL
+  thinking **756/1034 = 73.1%**, tool 2-shot no-thinking **422/1034 = 40.8%**, tool 2-shot thinking
+  **401/1034 = 38.8%**. Qwen3.5 has a 248k vocab, so cross-entropy logits OOM on long records even
+  when activation memory fits: the 178-record v8 pilot at 8192 cutoff OOMed after 3/46 steps. The
+  working pilot uses Qwen3.5-tokenized <=4096 records (`175/178` kept; dropped indices 140,176,177)
+  with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, output under
+  `/data/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v8-pilot-ready-4k-qlora`. It
+  completed 44 steps / 2 epochs in **39:21**, final train loss **0.5535**, peak GPU memory about
+  **23.5/24.6 GiB** on one RTX 3090. A matched 4-epoch rerun on the same 175 records completed
+  88 steps in **1:17:28**, final train loss **0.4179** and last logged loss **0.2633**, output under
+  `/data/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v8-pilot-ready-4k-epoch4-qlora`.
+  Full Spider dev tool zero-shot evals (no thinking, vLLM `--enforce-eager`, max len 4096) are done:
+  2 epochs **377/1034 = 36.5%** and 4 epochs **440/1034 = 42.6%**. The 4-epoch run fixes some
+  simple/mid-complexity tool chains (e.g. the youngest-singer songs case), but complex schemas with
+  joins/set difference still produce many `steps=0` API/protocol failures; use the saved failure
+  artifacts for the next correction-data loop. Local helper/configs:
+  `src/sft/make_qwen35_4k_subset.py` and `src/sft/configs/qwen3.5_9b_qlora_v8_pilot_ready_4k.yaml`.
 - **Next data iteration (design only)**: construct observation-guided correction trajectories from
   verified gold Plans. Start with pre-action rejection of unsupported operations, then add a small
   mixture of post-action and executor-error recovery. Do not force observation before every action;
@@ -246,8 +265,11 @@ Uses the project venv `.venv` (sqlglot 30.9). Spider DBs in `data/spider_data/` 
 ## GPU server (`ssh NewGNN`)
 
 - host zju, user dengyan, key auth. 8× RTX 3090 24G, **driver 550 = CUDA 12.4 max**, NO direct net.
-- **Writable only `/home/dengyan` and `/data/dengyan`; `/data` is ~full → keep everything in
-  `/home/dengyan`.** Project at `~/tabular_rl_project`. Models in `~/.cache/huggingface/hub/`.
+- Writable only `/home/dengyan` and `/data/dengyan`. As of 2026-06-25, `/home`/root is **100% full**
+  while `/data/dengyan` has usable space; put new training caches/logs/checkpoints under
+  `/data/dengyan/tabular_rl_outputs/` and set `HF_DATASETS_CACHE=/data/dengyan/hf_datasets_cache`
+  plus `TMPDIR=/data/dengyan/tmp`. Project remains at `~/tabular_rl_project`; Qwen3.5-9B is at
+  `/home/dengyan/models/Qwen3.5-9B`.
 - Internet via reverse tunnel from the Mac: `nohup bash src/sft/tunnel.sh > /tmp/tunnel.log 2>&1
   & disown` (auto-reconnect loop; -R 28471→Mac clash 7897 gives the server egress; -L 18000→server
   vLLM 8000 lets the Mac reach the model). Server side: `export http(s)_proxy=http://127.0.0.1:28471`.

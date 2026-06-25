@@ -102,8 +102,9 @@ def build(split: str, max_est_tokens: int, source: Path, out_path: Path) -> dict
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
 
-    source_count = kept = dropped = 0
+    source_count = kept = dropped = dropped_quality = 0
     dropped_ids: list[str] = []
+    dropped_quality_ids: list[str] = []
     toks: list[int] = []
     chars: list[int] = []
     len_hist = collections.Counter()
@@ -123,6 +124,16 @@ def build(split: str, max_est_tokens: int, source: Path, out_path: Path) -> dict
                 if trajectory_id in seen_ids:
                     raise ValueError(f"{source}:{line_no}: duplicate trajectory_id {trajectory_id!r}")
                 seen_ids.add(trajectory_id)
+
+                # export gate: ANY trajectory carrying an enrichment block must be EXPLICITLY
+                # quality_status == "ready" — this also drops legacy enriched data that predates the
+                # field (missing quality_status), closing the None loophole. Only non-enriched
+                # (emitter-direct) trajectories, which have no enrichment block at all, pass through.
+                enr = traj.get("enrichment")
+                if isinstance(enr, dict) and enr.get("quality_status") != "ready":
+                    dropped_quality += 1
+                    dropped_quality_ids.append(trajectory_id)
+                    continue
 
                 rec = convert(traj)
                 t = est_tokens(rec)
@@ -159,6 +170,8 @@ def build(split: str, max_est_tokens: int, source: Path, out_path: Path) -> dict
         "kept": kept,
         "dropped_overlong": dropped,
         "dropped_trajectory_ids": dropped_ids,
+        "dropped_low_quality": dropped_quality,
+        "dropped_low_quality_ids": dropped_quality_ids,
         "max_est_tokens": max_est_tokens,
         "token_estimate_method": f"characters / {CHARS_PER_TOKEN}",
         "est_tokens": {"p50": pct(.5), "p90": pct(.9), "p95": pct(.95),

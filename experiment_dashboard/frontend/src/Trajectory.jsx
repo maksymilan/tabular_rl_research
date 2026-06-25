@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Check,
   ChevronLeft,
@@ -380,7 +380,14 @@ function LengthHistogram({ hist, active, onSelect }) {
 // Training-data board: manifest aggregates + a per-example trajectory browser (train / dev).
 export function TrainingBoard({ experiment }) {
   const manifest = experiment.dataset_summary?.train || {};
-  const [source, setSource] = useState("train");
+  const sourceOptions = useMemo(() => {
+    const availableSourceIds = new Set((experiment.data_sources || []).map((item) => item.id));
+    return [
+      ["train", "训练集"],
+      ["dev", "验证集"],
+    ].filter(([value]) => availableSourceIds.has(value));
+  }, [experiment.data_sources]);
+  const [source, setSource] = useState(sourceOptions[0]?.[0] || "train");
   const [page, setPage] = useState(1);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -389,6 +396,12 @@ export function TrainingBoard({ experiment }) {
   const [lengthFilter, setLengthFilter] = useState(null); // exact trajectory length, or null
 
   useEffect(() => {
+    if (!sourceOptions.some(([value]) => value === source)) {
+      setSource(sourceOptions[0]?.[0] || "");
+      setPage(1);
+      return;
+    }
+    if (!source) return;
     setData(null);
     setError("");
     const lengthQuery = lengthFilter == null ? "" : `&min_steps=${lengthFilter}&max_steps=${lengthFilter}`;
@@ -400,7 +413,7 @@ export function TrainingBoard({ experiment }) {
         setSelected(0);
       })
       .catch((reason) => setError(reason.message));
-  }, [experiment.id, source, page, lengthFilter]);
+  }, [experiment.id, source, page, lengthFilter, sourceOptions]);
 
   const selectLength = (len) => {
     setLengthFilter((current) => (current === len ? null : len));
@@ -410,12 +423,15 @@ export function TrainingBoard({ experiment }) {
   const active = data?.records?.[selected];
   const traj = active ? sftToTrajectory(active.record) : null;
   const tokens = manifest.est_tokens || {};
+  const keptRecords = manifest.kept ?? manifest.kept_records ?? manifest.source_trajectories ?? 0;
+  const droppedOverlong = manifest.dropped_overlong ?? manifest.dropped_over_max_tokens ?? 0;
+  const tokenMax = tokens.max ?? manifest.max_tokens ?? "—";
 
   return (
     <div className="training-board">
       <div className="train-stats">
         <div className="train-stat">
-          <strong>{(manifest.kept ?? 0).toLocaleString()}</strong>
+          <strong>{keptRecords.toLocaleString()}</strong>
           <span>训练轨迹</span>
         </div>
         <div className="train-stat">
@@ -423,11 +439,11 @@ export function TrainingBoard({ experiment }) {
           <span>tokens p50</span>
         </div>
         <div className="train-stat">
-          <strong>{tokens.max ?? "—"}</strong>
+          <strong>{tokenMax}</strong>
           <span>tokens max</span>
         </div>
         <div className="train-stat">
-          <strong>{manifest.dropped_overlong ?? 0}</strong>
+          <strong>{droppedOverlong}</strong>
           <span>超长丢弃</span>
         </div>
         <LengthHistogram
@@ -439,10 +455,7 @@ export function TrainingBoard({ experiment }) {
 
       <div className="train-controls">
         <div className="segmented" aria-label="数据划分">
-          {[
-            ["train", "训练集"],
-            ["dev", "验证集"],
-          ].map(([value, label]) => (
+          {sourceOptions.map(([value, label]) => (
             <button
               key={value}
               className={source === value ? "active" : ""}

@@ -27,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import collections
 import copy
 import json
 import os
@@ -57,6 +58,29 @@ BANNED_NARRATION = (
     "would guess", "without first checking",
 )
 FIRST_PERSON = re.compile(r"\b(I|my|me|I'll|I'm|I will|I need|I see|I should)\b", re.I)
+CONFIRM_WORDS = re.compile(r"\b(confirm(?:ed|s)?|verif(?:y|ied|ies)|exists?|present)\b", re.I)
+STALE_OBSERVATION_WORDING = re.compile(
+    r"\b(i\s+)?(should|need to|must|have to|will)\s+(first\s+)?(inspect|read|check|verify)\b|"
+    r"\blet me\s+(inspect|read|check|verify)\b|"
+    r"\bbefore\s+\w+ing\b[^.]{0,140}\b(i\s+)?(should|need to|must|have to)\s+"
+    r"(first\s+)?(inspect|read|check|verify)\b",
+    re.I,
+)
+FINAL_ANSWER_LEAK = re.compile(
+    r"\b(verified|expected|gold|correct)\s+answer\b|"
+    r"\banswer\s+(matches|is)\s+the\s+(expected|gold|correct)\b",
+    re.I,
+)
+TOOL_ACTION_CUES = {
+    "condition_filter": (r"\bfilter\b", r"\bwhere\b", r"\bcondition_filter\b", r"\bkeep only\b"),
+    "project": (r"\bproject\b", r"\bselect\b", r"\bextract\b"),
+    "join_tables": (r"\bjoin\b", r"\bconnect\b", r"\blink\b"),
+    "group_aggregate": (r"\bgroup\b", r"\bdeduplicate\b", r"\bgroup_aggregate\b"),
+    "aggregate": (r"\baggregate\b", r"\bcompute\b", r"\bcount\b", r"\bsum\b", r"\baverage\b", r"\bminimum\b", r"\bmaximum\b"),
+    "extreme_value_select": (r"\bsort\b", r"\border\b", r"\btop\b", r"\bhighest\b", r"\blowest\b", r"\bsmallest\b", r"\blargest\b"),
+    "set_op": (r"\bintersect\b", r"\bintersection\b", r"\bunion\b", r"\bexcept\b", r"\bset\b"),
+    "answer_from_context": (r"\banswer\b", r"\bevidence\b", r"\bfinal\b"),
+}
 CAUSAL_MARKER = re.compile(
     r"\b(because|so|therefore|to|in order to|asks?|requested|requires?|supports?|"
     r"before|after|ground|confirm|verify|match|identify|produces?|output|final|"
@@ -380,7 +404,14 @@ SYS = (
     "phrases like 'broadcast time' or 'time column' are NOT acceptable substitutes.\n"
     "- A good `describe_table` reason is logical without leaking schema: explain which question "
     "concept points to which candidate table(s), what information is missing, and which future "
-    "operation the schema will support.\n\n"
+    "operation the schema will support.\n"
+    "- Temporal consistency matters: if a prior observation already happened, the next action must "
+    "use past-tense grounded wording such as 'I have inspected X, so I can filter now'. Do NOT write "
+    "'I should inspect/read first' inside a non-observation action; insert the observation before the "
+    "action instead.\n"
+    "- The final answer think should cite the evidence table or scalar result. Do NOT say 'the "
+    "verified answer is', 'the expected answer is', or otherwise speak like an annotator revealing "
+    "gold labels.\n\n"
     "Counterexamples for state-aware reasoning:\n"
     "- BAD before describe_table: 'I need Customer_Orders before filtering on `order_status_code`.' "
     "This leaks a column name that is not visible yet.\n"
@@ -394,7 +425,14 @@ SYS = (
     "Morning literal.'\n"
     "- GOOD after describe_table: 'Now that the schema shows `Time_of_day`, I inspect that column "
     "to verify the literal Morning before filtering.' Exact column names are required AFTER the "
-    "observation exposes them.\n\n"
+    "observation exposes them.\n"
+    "- BAD action after an inspect step: 'I should inspect the status values before filtering.' This "
+    "is stale because the inspect step already happened.\n"
+    "- GOOD action after an inspect step: 'I have inspected the status values and confirmed the "
+    "literal, so I can now filter on the exact status column.'\n"
+    "- BAD final answer: 'The verified answer is X.'\n"
+    "- GOOD final answer: 'The final evidence table contains the requested rows, so I answer from "
+    "that table.'\n\n"
     "Perception tools:\n"
     "- describe_table {\"tables\":[...]} : acquire columns/types/keys. REQUIRED before the first time "
     "the trajectory operates on a table, since the catalog carries no columns.\n"
@@ -483,27 +521,39 @@ OBS_SYS = (
     "The agent currently sees ONLY the lazy catalog: table names, row counts, and foreign-key "
     "relations. It does NOT know any column names or cell values yet. Your job is to decide which "
     "source tables to inspect with describe_table first.\n\n"
-    "Important: do not mention exact column names, because they are not visible yet. Explain the "
-    "logic using question concepts, table names, and catalog relations only. A good reason says: "
-    "which question concept suggests this table, what information is missing, and what kind of "
-    "future operation the schema will support.\n\n"
+    "CRITICAL — no exact schema identifiers: NEVER write an exact column name here, not even as a "
+    "guess or example. Do NOT write 'a column like temporary_acting', 'e.g. COMMISSION_PCT', or 'the "
+    "order_status_code field'. Those are hidden schema names the agent cannot know until "
+    "describe_table returns them — naming them (in `think` OR in any `rationale` field) is a hard "
+    "error, even hedged with 'like', 'such as', or 'e.g.'. Refer to columns ONLY by natural question "
+    "concepts: 'the acting-status column', 'a commission field', 'the order date'. Table names and "
+    "foreign-key columns shown in the catalog relations are fine; everything else must stay a natural "
+    "concept. A good reason says: which question concept suggests this table, what information is "
+    "missing, and what kind of future operation the schema will support.\n\n"
     "Output ONLY JSON: {\"insertions\": [ ... ]}. Each insertion must be a describe_table step with "
     "`after:-1`, arguments {\"tables\":[...]}, first-person `think`, and `rationale` with exactly "
-    "these non-empty fields: question_cue, observed_evidence, decision, supports_next_step.\n\n"
+    "these non-empty fields: question_cue, observed_evidence, decision, supports_next_step. Every "
+    "rationale field must also obey the no-exact-identifier rule above.\n\n"
     "Exploratory observations are allowed: if the question asks for an output entity such as "
     "'all info of students', it is reasonable to describe the entity table even if a later minimal "
     "gold plan might not consume it directly. Still, also include the tables needed to resolve the "
     "question conditions, because later actions may only use schemas that have actually been "
     "observed.\n\n"
-    "Bad: 'I describe Customer_Orders before filtering on order_status_code.'\n"
-    "Good: 'I describe Customer_Orders because the question is about cancelled orders, but I do not "
-    "yet know which exact column represents order status; the schema will let me choose the precise "
-    "filter field later.'"
+    "Bad: 'I inspect management to see if it has a column like temporary_acting.'\n"
+    "Bad: 'I describe employees to find the commission column, e.g. COMMISSION_PCT.'\n"
+    "Good: 'I describe management because the question asks about acting statuses, but I do not yet "
+    "know the exact status column; observing the schema will reveal it.'\n"
+    "Good: 'I describe employees because the question is about employees with a commission; the exact "
+    "commission and department columns stay unknown until I observe the schema.'"
 )
 
 
 def build_observation_prompt(traj: dict, feedback: str = "") -> list[dict]:
-    ov = traj["initial_state"]["dataset_overview"]
+    # the agent's true opening state is the LAZY catalog (table names + row counts + FK relations,
+    # NO columns). The input trajectory's stored overview still carries full columns, so deriving the
+    # lazy catalog here is what actually hides schema from stage 1 — feeding the stored overview was
+    # the real source of "schema leak" in describe-step thinks.
+    ov = catalog_snapshot(Harness(db_path(traj["source"]["db_id"])))
     user = (
         f"QUESTION: {traj['question']}\n\n"
         f"MODEL'S INITIAL CATALOG (the only information available now; no columns):\n"
@@ -533,7 +583,7 @@ def build_staged_action_prompt(traj: dict, domains: dict, describe_insertions: l
     user = (
         f"QUESTION: {traj['question']}\n\n"
         f"MODEL'S INITIAL CATALOG:\n"
-        f"{json.dumps(traj['initial_state']['dataset_overview'], ensure_ascii=False)}\n\n"
+        f"{json.dumps(catalog_snapshot(Harness(db_path(traj['source']['db_id']))), ensure_ascii=False)}\n\n"
         f"OBSERVED SCHEMA FROM PRIOR describe_table STEPS:\n"
         f"{json.dumps(observed_schema_outputs(traj, describe_insertions), ensure_ascii=False)}\n\n"
         f"STRING-FILTER COLUMN DOMAINS (available only after the relevant schema column is observed "
@@ -1081,6 +1131,11 @@ def _is_natural_question_concept(identifier: str, question: str) -> bool:
     words = _identifier_words(identifier)
     if not words:
         return False
+    # a single-word column (no underscore compound) is a natural concept the agent can reasonably
+    # name before observing the schema (age, country, party, beds); real pre-describe leaks are
+    # multi-word exact identifiers (order_status_code, temporary_acting) that keep their underscores.
+    if "_" not in identifier and not re.search(r"[a-z][A-Z]", identifier):
+        return True
     if len(words) == 1 and next(iter(words)) in GENERIC_SCHEMA_TERMS:
         return True
     qwords = _identifier_words(question)
@@ -1164,37 +1219,210 @@ def _table_refs_for_action(tool: str, args: dict) -> list[str]:
     return [args[k] for k in keys if isinstance(args.get(k), str)]
 
 
-def quality_check(enriched_steps: list[dict], question: str = "",
-                  overview: dict | None = None) -> tuple[list[str], list[str]]:
-    """Split validation into (hard_issues, soft_issues).
+def _string_literal_pairs(cond):
+    """Yield (base_column, literal) for each string-literal =/contains/like filter predicate."""
+    if isinstance(cond, list):
+        for c in cond:
+            yield from _string_literal_pairs(c)
+    elif isinstance(cond, dict):
+        for k in ("and", "or"):
+            for c in cond.get(k, []):
+                yield from _string_literal_pairs(c)
+        if "not" in cond:
+            yield from _string_literal_pairs(cond["not"])
+        if cond.get("op") in STR_OPS and isinstance(cond.get("value"), str):
+            yield (_base_col(cond.get("column", "")), cond["value"])
 
-    HARD = structural / executional problems that genuinely break the enrichment for SFT and MUST
-    reject (these reflect the catalog-only agent's real preconditions):
-      - operating on a source table before describe_table exposed its columns;
-      - filtering a text column before inspect_column grounded its value domain;
-      - a correction attempt that guesses a column the schema already ruled out.
-    SOFT = stylistic preferences recorded for review but NOT a reject gate. Over-strict text rules
-    (first-person phrasing, exact-column mentions, rationale completeness, table/column
-    justification) were rejecting large amounts of usable data, so they no longer gate. The
-    describe-step schema-leak rule is dropped entirely: a describe step naming the column it is about
-    to fetch is intent, not a leak.
+
+def _unsupported_confirmation_issues(step, enriched_steps, upto, label):
+    """REPAIRABLE: a think that claims an observation CONFIRMED a literal, when that literal is not in
+    the observed frequent_values (especially under truncation), overstates what the observation
+    actually proved. The fix is to downgrade the wording, not to invent evidence."""
+    tc = step.get("tool_call") or {}
+    if tc.get("tool") != "condition_filter":
+        return []
+    text = f"{step.get('think', '')} {_rationale_text(step.get('rationale'))}"
+    if not CONFIRM_WORDS.search(text):
+        return []
+    observed: dict[str, tuple[set, bool]] = {}
+    for s in enriched_steps[:upto]:
+        if (s.get("tool_call") or {}).get("tool") != "inspect_column":
+            continue
+        a = s["tool_call"]["arguments"]
+        o = s.get("tool_output") or {}
+        observed[_base_col(a.get("column", "")).lower()] = (
+            {str(v).lower() for v in (o.get("frequent_values") or [])}, bool(o.get("truncated")))
+    issues: list[str] = []
+    for col, lit in _string_literal_pairs(tc.get("arguments", {}).get("conditions")):
+        vt = observed.get(col.lower())
+        if vt and lit.lower() not in vt[0]:
+            issues.append(
+                f"{label} claims an observation confirmed literal {lit!r} on {col}, but "
+                f"inspect_column did not show it (truncated={vt[1]})"
+            )
+    return issues
+
+
+def _stale_observation_wording_issues(step: dict, label: str) -> list[str]:
+    """REPAIRABLE: non-observation actions should not say they still need to inspect/read first.
+
+    Once an action is rendered, all required observations should already be in the prior transcript.
+    Phrases like "I should inspect first" inside a condition_filter/project/answer step teach the
+    wrong temporal policy even when the tool path itself is executable.
+    """
+    tool = (step.get("tool_call") or {}).get("tool")
+    if tool in PERCEPTION:
+        return []
+    text = f"{step.get('think', '')} {_rationale_text(step.get('rationale'))}"
+    if STALE_OBSERVATION_WORDING.search(text):
+        return [
+            f"{label} uses stale observation wording inside {tool}: the observation should already "
+            "have happened before this action"
+        ]
+    return []
+
+
+def _final_answer_leak_issues(step: dict, label: str) -> list[str]:
+    """REPAIRABLE: final thoughts should cite evidence, not talk like an annotator revealing gold."""
+    tool = (step.get("tool_call") or {}).get("tool")
+    if tool != "answer_from_context":
+        return []
+    text = f"{step.get('think', '')} {_rationale_text(step.get('rationale'))}"
+    if FINAL_ANSWER_LEAK.search(text):
+        return [
+            f"{label} final think uses annotator/gold-answer wording; cite the evidence table/result "
+            "instead of saying the verified/expected answer"
+        ]
+    return []
+
+
+def _matches_any(text: str, patterns: tuple[str, ...]) -> bool:
+    return any(re.search(p, text, re.I) for p in patterns)
+
+
+def _tool_action_mismatch_issues(step: dict, label: str) -> list[str]:
+    """REPAIRABLE: the action verb in think should match the actual tool call.
+
+    This catches long-chain shifted rewrites like a `project` step whose think says "I filter ...",
+    or a `set_op` step whose think describes a condition_filter. It is intentionally conservative:
+    if the current tool's own cue is present, we do not flag incidental mentions of prior/future work.
+    """
+    tool = (step.get("tool_call") or {}).get("tool")
+    if tool in PERCEPTION or tool not in TOOL_ACTION_CUES:
+        return []
+    # The think string is the text the model learns to emit before the tool call; do not let a
+    # correct cue hidden in the structured rationale mask a shifted/wrong action sentence.
+    text = str(step.get("think", ""))
+    if tool == "condition_filter" and re.search(r"\bjoin(?:ing)?\s+\w+|join\s+\w+\s+with\b", text, re.I):
+        return [
+            f"{label} think appears to describe `join_tables` while the actual tool is `{tool}`"
+        ]
+    if _matches_any(text, TOOL_ACTION_CUES[tool]):
+        return []
+    for other, cues in TOOL_ACTION_CUES.items():
+        if other != tool and _matches_any(text, cues):
+            return [
+                f"{label} think appears to describe `{other}` while the actual tool is `{tool}`"
+            ]
+    return []
+
+
+def _missing_action_column_issues(step: dict, label: str) -> list[str]:
+    """REPAIRABLE for non-observation actions: exact columns used by the action should be visible in
+    the think text itself, not only buried in structured rationale."""
+    tool = (step.get("tool_call") or {}).get("tool")
+    if tool in PERCEPTION:
+        return []
+    args = (step.get("tool_call") or {}).get("arguments") or {}
+    low = str(step.get("think", "")).lower()
+    missing = [
+        term for term in sorted(expected_column_terms(tool, args))
+        if term.lower() not in low and not _is_generated_alias(term)
+    ]
+    if missing:
+        return [f"{label} think does not name exact column(s) {missing}"]
+    return []
+
+
+def _missing_action_reference_issues(step: dict, label: str) -> list[str]:
+    """REPAIRABLE: important table handles/source tables in the actual call should be visible in the
+    think text. This catches shifted join explanations that mention the previous join target while
+    the current call joins a different table."""
+    tool = (step.get("tool_call") or {}).get("tool")
+    if tool in PERCEPTION:
+        return []
+    args = (step.get("tool_call") or {}).get("arguments") or {}
+    needed: list[str] = []
+    if tool in {"condition_filter", "project", "aggregate", "group_aggregate", "extreme_value_select"}:
+        if isinstance(args.get("table"), str):
+            needed.append(args["table"])
+    elif tool == "join_tables":
+        # Require both inputs. The left side is often a derived handle such as join_009, and naming it
+        # prevents shifted explanations that accidentally describe the previous join_008 step.
+        if isinstance(args.get("left"), str):
+            needed.append(args["left"])
+        if isinstance(args.get("right"), str):
+            needed.append(args["right"])
+    elif tool == "set_op":
+        for key in ("left", "right"):
+            if isinstance(args.get(key), str):
+                needed.append(args[key])
+    elif tool == "answer_from_context":
+        evidence = (args.get("evidence") or {}).get("table")
+        if isinstance(evidence, str):
+            needed.append(evidence)
+    low = str(step.get("think", "")).lower()
+    missing = [ref for ref in needed if ref.lower() not in low]
+    if missing:
+        return [f"{label} think does not name table/reference(s) {missing} used by the action"]
+    return []
+
+
+def quality_check(enriched_steps: list[dict], question: str = "",
+                  overview: dict | None = None) -> tuple[list[str], list[str], list[str]]:
+    """Return (hard, repairable, style).
+
+    HARD = structural / executional red lines that make the trajectory unusable for SFT (reject /
+    fallback): operating on a source table before describe_table; filtering a text column before
+    inspect_column grounded its domain; a correction guessing a ruled-out column; empty or
+    third-person reasoning.
+    REPAIRABLE = state-visibility / honesty violations fixable by rewriting the think WITHOUT
+    touching the (correct) tool path, and that MUST be fixed before SFT export: naming an exact
+    hidden schema identifier before describe_table observed it (schema leak); claiming an observation
+    confirmed a literal the observation did not actually show (unsupported confirmation); stale
+    "I should inspect/read first" wording inside a non-observation action; annotator-style final
+    answer leakage; tool-action mismatch.
+    STYLE = soft readability preferences, recorded but never blocking: non-first-person phrasing;
+    missing exact column after schema; weak semantic bridge; incomplete rationale.
     """
     hard: list[str] = []
-    soft: list[str] = []
+    repairable: list[str] = []
+    style: list[str] = []
     for i, step in enumerate(enriched_steps):
         think = step.get("think", "")
         tool_call = step.get("tool_call") or {}
         tool = tool_call.get("tool")
         args = tool_call.get("arguments") or {}
+        label = f"step {i + 1}"
 
         # ---- hard: genuine quality red lines (empty reasoning / third-person narration) ----
-        narration = _narration_issue(think, f"step {i + 1} think")
+        narration = _narration_issue(think, f"{label} think")
         if narration:
             hard.append(narration)
-        # ---- soft: stylistic / readability (recorded, never a reject) ----
+
+        # ---- repairable: state-visibility / honesty (fixable by rewriting the think) ----
+        repairable.extend(_schema_leak_issues(step, question, label, overview))
+        repairable.extend(_unsupported_confirmation_issues(step, enriched_steps, i, label))
+        repairable.extend(_stale_observation_wording_issues(step, label))
+        repairable.extend(_final_answer_leak_issues(step, label))
+        repairable.extend(_tool_action_mismatch_issues(step, label))
+        repairable.extend(_missing_action_column_issues(step, label))
+        repairable.extend(_missing_action_reference_issues(step, label))
+
+        # ---- style: readability preferences (recorded, never a reject) ----
         if think.strip() and not FIRST_PERSON.search(think):
-            soft.append(f"step {i + 1} think is not written as first-person task reasoning")
-        soft.extend(_rationale_quality_issues(step.get("rationale"), f"step {i + 1}"))
+            style.append(f"{label} think is not written as first-person task reasoning")
+        style.extend(_rationale_quality_issues(step.get("rationale"), label))
         terms = expected_semantic_terms(tool, args)
         column_terms = expected_column_terms(tool, args)
         rationale_text = _rationale_text(step.get("rationale"))
@@ -1204,17 +1432,17 @@ def quality_check(enriched_steps: list[dict], question: str = "",
             term for term in sorted(column_terms)
             if term.lower() not in low and not _is_generated_alias(term)
         ]
-        if missing_columns:
-            soft.append(f"step {i + 1} think does not name exact column(s) {missing_columns}")
-        elif terms and not any(term.lower() in combined_low for term in terms):
-            soft.append(f"step {i + 1} think does not justify its concrete table/column choice")
+        if missing_columns and tool in PERCEPTION:
+            style.append(f"{label} think does not name exact column(s) {missing_columns}")
+        elif not missing_columns and terms and not any(term.lower() in combined_low for term in terms):
+            style.append(f"{label} think does not justify its concrete table/column choice")
 
         # ---- hard: structural preconditions of a catalog-only agent ----
         described = _described_columns(enriched_steps, i)
         for table in _table_refs_for_action(tool, args):
             if not _is_derived_table(table) and table.lower() not in described:
                 hard.append(
-                    f"step {i + 1} operates on source table {table!r} before describe_table exposed "
+                    f"{label} operates on source table {table!r} before describe_table exposed "
                     f"its columns"
                 )
         if tool == "condition_filter":
@@ -1225,7 +1453,7 @@ def quality_check(enriched_steps: list[dict], question: str = "",
                 if isinstance(source_table, str) and not _is_derived_table(source_table):
                     if (source_table.lower(), col.lower()) not in domains:
                         hard.append(
-                            f"step {i + 1} filters text column {source_table}.{col} before "
+                            f"{label} filters text column {source_table}.{col} before "
                             f"inspect_column grounded its value domain"
                         )
         if not step.get("error_attempt"):
@@ -1237,7 +1465,7 @@ def quality_check(enriched_steps: list[dict], question: str = "",
             known = columns_seen.get(table.lower())
             if known is not None and column.lower() not in known:
                 hard.append(
-                    f"step {i + 1} guesses missing column {table}.{column} after describe_table "
+                    f"{label} guesses missing column {table}.{column} after describe_table "
                     f"already showed the schema"
                 )
         cond = args.get("conditions")
@@ -1246,9 +1474,207 @@ def quality_check(enriched_steps: list[dict], question: str = "",
                                                           "arguments": {"conditions": cond}}}]):
                 if col.lower() not in columns_seen[table.lower()]:
                     hard.append(
-                        f"step {i + 1} filters on missing column {table}.{col} after schema was known"
+                        f"{label} filters on missing column {table}.{col} after schema was known"
                     )
-    return hard, soft
+    return hard, repairable, style
+
+
+def _compact_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _action_repair_text(tool: str, args: dict, question: str) -> str:
+    """Deterministic repair for temporal/annotator wording.
+
+    This intentionally repairs only the narration; it never changes arguments or observations.
+    """
+    if tool == "condition_filter":
+        return (
+            f"I have the needed schema and prior observation context, so I now apply "
+            f"`condition_filter` on `{args.get('table')}` with conditions "
+            f"`{_compact_json(args.get('conditions'))}` to keep the rows required by the question."
+        )
+    if tool == "project":
+        return (
+            f"The current intermediate table already contains the requested fields. I now project "
+            f"`{_compact_json(args.get('expressions', []))}` from `{args.get('table')}` so the "
+            "output matches the columns asked for in the question."
+        )
+    if tool == "aggregate":
+        return (
+            f"I now compute `{args.get('op')}` over `{args.get('column')}` from `{args.get('table')}` "
+            "because the question requires this scalar result from the already prepared table."
+        )
+    if tool == "group_aggregate":
+        return (
+            f"I now group `{args.get('table')}` by `{_compact_json(args.get('group_by', []))}` and "
+            f"compute `{_compact_json(args.get('aggregations', []))}` because the question requires "
+            "deduplicated or grouped evidence."
+        )
+    if tool == "extreme_value_select":
+        return (
+            f"I now sort/select rows from `{args.get('table')}` using "
+            f"`{_compact_json(args.get('order_by', []))}` because the question asks for an ordered "
+            "or extreme result."
+        )
+    if tool == "join_tables":
+        return (
+            f"I now join `{args.get('left')}` with `{args.get('right')}` on "
+            f"`{_compact_json(args.get('on', []))}` so the columns needed by the question are in one "
+            "intermediate table."
+        )
+    if tool == "set_op":
+        return (
+            f"I now apply `{args.get('op')}` between `{args.get('left')}` and `{args.get('right')}` "
+            "because the question requires combining two derived result sets."
+        )
+    if tool == "answer_from_context":
+        evidence = (args.get("evidence") or {}).get("table")
+        if evidence:
+            return (
+                f"The evidence table `{evidence}` contains the rows requested by the question, so I "
+                "answer from that table."
+            )
+        return (
+            "The previous tool result contains the scalar requested by the question, so I answer "
+            "from that result."
+        )
+    return (
+        f"I now call `{tool}` with arguments `{_compact_json(args)}` because the prior observations "
+        "and intermediate results provide the information this step needs."
+    )
+
+
+def _action_repair_rationale(tool: str, args: dict, question: str) -> dict:
+    if tool == "answer_from_context":
+        evidence = (args.get("evidence") or {}).get("table")
+        return {
+            "question_cue": question,
+            "observed_evidence": (
+                f"the evidence table `{evidence}`" if evidence else
+                "the previous scalar/result-producing tool output"
+            ),
+            "decision": "answer_from_context uses the already computed evidence without adding new claims",
+            "supports_next_step": "final answer",
+        }
+    return {
+        "question_cue": question,
+        "observed_evidence": "prior schema/value observations and intermediate tool outputs are already available",
+        "decision": f"use `{tool}` with arguments `{_compact_json(args)}`",
+        "supports_next_step": "the next tool call or final answer",
+    }
+
+
+def _perception_repair_text(tool: str, args: dict, question: str) -> str:
+    if tool == "describe_table":
+        tables = args.get("tables") or []
+        return (
+            f"I describe `{_compact_json(tables)}` because the question requires information from "
+            "these table concepts, and I need the schema observation before naming exact columns or "
+            "choosing relational actions."
+        )
+    if tool == "inspect_column":
+        return (
+            f"I inspect `{args.get('table')}.{args.get('column')}` because this column is needed by "
+            "a later predicate or decision, and I need its observed values before relying on it."
+        )
+    if tool == "read_subtable":
+        return (
+            f"I read `{args.get('table')}` because the next step depends on the rows in this "
+            "intermediate result, and I need to ground that action in the actual output."
+        )
+    return (
+        f"I call `{tool}` with arguments `{_compact_json(args)}` to acquire information needed by "
+        "the following action."
+    )
+
+
+def _perception_repair_rationale(tool: str, args: dict, question: str) -> dict:
+    if tool == "describe_table":
+        tables = args.get("tables") or []
+        return {
+            "question_cue": question,
+            "observed_evidence": "the initial catalog has table names and relations but no full column schema",
+            "decision": (
+                f"describe_table on `{_compact_json(tables)}` is needed before exact columns can be "
+                "named or used"
+            ),
+            "supports_next_step": "later relational actions over the observed source table schema",
+        }
+    if tool == "inspect_column":
+        return {
+            "question_cue": question,
+            "observed_evidence": f"values from `{args.get('table')}.{args.get('column')}`",
+            "decision": "inspect_column grounds the column's observed value domain before a later action uses it",
+            "supports_next_step": "the later filter, comparison, or answer step that depends on this column",
+        }
+    if tool == "read_subtable":
+        return {
+            "question_cue": question,
+            "observed_evidence": f"rows from intermediate table `{args.get('table')}`",
+            "decision": "read_subtable grounds the next action in the actual intermediate result",
+            "supports_next_step": "the next dependent relational action or final answer",
+        }
+    return {
+        "question_cue": question,
+        "observed_evidence": "the requested observation output",
+        "decision": f"use `{tool}` with arguments `{_compact_json(args)}`",
+        "supports_next_step": "the following tool call",
+    }
+
+
+def repair_reasoning(traj: dict) -> tuple[dict, int]:
+    """Repair only think/rationale text for deterministic repairable issues.
+
+    Tool calls, tool outputs, final answers, step ids, and provenance are intentionally untouched.
+    """
+    out = copy.deepcopy(traj)
+    repaired = 0
+    question = out.get("question", "")
+    overview = out.get("initial_state", {}).get("dataset_overview")
+    steps = out.get("steps", [])
+    for index, step in enumerate(steps):
+        tool = (step.get("tool_call") or {}).get("tool")
+        args = (step.get("tool_call") or {}).get("arguments") or {}
+        before = (step.get("think"), step.get("rationale"))
+        text = f"{step.get('think', '')} {_rationale_text(step.get('rationale'))}"
+
+        schema_leaks = _schema_leak_issues(step, question, "step", overview)
+        unsupported = _unsupported_confirmation_issues(step, steps, index, "step")
+        stale = bool(STALE_OBSERVATION_WORDING.search(text))
+        final_leak = bool(FINAL_ANSWER_LEAK.search(text))
+        mismatch = _tool_action_mismatch_issues(step, "step")
+        missing_columns = _missing_action_column_issues(step, "step")
+        missing_refs = _missing_action_reference_issues(step, "step")
+
+        if tool in PERCEPTION and schema_leaks:
+            step["think"] = _perception_repair_text(tool, args, question)
+            step["rationale"] = _perception_repair_rationale(tool, args, question)
+        elif tool == "answer_from_context" and (stale or final_leak or mismatch):
+            step["think"] = _action_repair_text(tool, args, question)
+            step["rationale"] = _action_repair_rationale(tool, args, question)
+        elif tool not in PERCEPTION and (stale or unsupported or mismatch or missing_columns or missing_refs):
+            step["think"] = _action_repair_text(tool, args, question)
+            step["rationale"] = _action_repair_rationale(tool, args, question)
+
+        if (step.get("think"), step.get("rationale")) != before:
+            repaired += 1
+
+    hard, repairable, style = quality_check(
+        out.get("steps", []), out.get("question", ""), out.get("initial_state", {}).get("dataset_overview")
+    )
+    enr = out.setdefault("enrichment", {})
+    enr["quality_status"] = "reject" if hard else ("repairable" if repairable else "ready")
+    enr["repairable_issues"] = repairable
+    enr["soft_issues"] = style
+    repair_meta = enr.setdefault("repair_history", [])
+    repair_meta.append({
+        "method": "deterministic_think_repair",
+        "changed_steps": repaired,
+        "remaining_hard_issues": hard,
+        "remaining_repairable_issues": repairable,
+    })
+    return out, repaired
 
 
 # ---------------------------------------------------------------- per-trajectory loop ------------
@@ -1338,13 +1764,14 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
             continue
         l2_ok, l2_issues = check_load_bearing(traj, perc)
         l1p_ok, l1p_err, enr_p = replay_validate(traj, spliced_sequence(traj, perc, rewrites))
-        q_hard, q_soft = quality_check(
-            enr_p, traj.get("question", ""), traj.get("initial_state", {}).get("dataset_overview")
+        q_hard, q_rep, q_style = quality_check(
+            enr_p, traj.get("question", ""), catalog_snapshot(h)
         )
         if not (l1p_ok and l2_ok and not q_hard):
             feedback = "; ".join(([l1p_err] if not l1p_ok else []) + l2_issues + q_hard) or "no valid perception"
             history.append({"attempt": attempt, "perc": len(perc), "errs": len(errs),
-                            "perception_ok": False, "issues": feedback, "soft_issues": q_soft,
+                            "perception_ok": False, "issues": feedback,
+                            "repairable_issues": q_rep, "soft_issues": q_style,
                             "model_output": text, "usage": usage})
             _remember_rejection(
                 rejections, attempt=attempt, stage="perception_validation", issues=feedback,
@@ -1352,17 +1779,19 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
                 l2_ok=l2_ok, q_ok=not q_hard, n_perception=len(perc), n_error=len(errs),
             )
             continue
-        best = {"steps": enr_p, "mode": "perception_only", "n_perception": len(perc), "n_error": 0}
+        best = {"steps": enr_p, "mode": "perception_only", "n_perception": len(perc), "n_error": 0,
+                "repairable": q_rep, "style": q_style}
         if not errs:
             history.append({"attempt": attempt, "perc": len(perc), "errs": 0, "ok": True,
                             "model_output": text, "usage": usage})
             break
         l1f_ok, l1f_err, enr_f = replay_validate(traj, spliced_sequence(traj, perc + errs, rewrites))
-        qf_hard, qf_soft = quality_check(
-            enr_f, traj.get("question", ""), traj.get("initial_state", {}).get("dataset_overview")
+        qf_hard, qf_rep, qf_style = quality_check(
+            enr_f, traj.get("question", ""), catalog_snapshot(h)
         )
         if l1f_ok and not qf_hard:
-            best = {"steps": enr_f, "mode": "full", "n_perception": len(perc), "n_error": len(errs)}
+            best = {"steps": enr_f, "mode": "full", "n_perception": len(perc), "n_error": len(errs),
+                    "repairable": qf_rep, "style": qf_style}
             history.append({"attempt": attempt, "perc": len(perc), "errs": len(errs), "ok": True,
                             "model_output": text, "usage": usage})
             break
@@ -1384,6 +1813,9 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
         out["initial_state"]["dataset_overview"] = catalog_snapshot(h)
         out["steps"] = best["steps"]
         out["enrichment"] = {"status": "enriched", "mode": best["mode"],
+                             "quality_status": "repairable" if best.get("repairable") else "ready",
+                             "repairable_issues": best.get("repairable", []),
+                             "soft_issues": best.get("style", []),
                              "generator": {"model": model,
                                            "mode_requested": "full" if allow_errors else "perception_only"},
                              "n_perception": best["n_perception"], "n_error": best["n_error"],
@@ -1397,6 +1829,7 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
     out["initial_state"]["dataset_overview"] = catalog_snapshot(h)
     out["steps"] = base_steps
     out["enrichment"] = {"status": "fallback_skeleton", "mode": "skeleton",
+                         "quality_status": "reject",
                          "generator": {"model": model,
                                        "mode_requested": "full" if allow_errors else "perception_only"},
                          "n_perception": 0, "n_error": 0,
@@ -1501,8 +1934,8 @@ def enrich_one_staged(traj: dict, base: str, key: str, model: str, max_attempts:
         perc = describes + local_perc
         l2_ok, l2_issues = check_load_bearing(traj, perc)
         l1_ok, l1_err, steps = replay_validate(traj, spliced_sequence(traj, perc, rewrites))
-        q_hard, q_soft = quality_check(
-            steps, traj.get("question", ""), traj.get("initial_state", {}).get("dataset_overview")
+        q_hard, q_rep, q_style = quality_check(
+            steps, traj.get("question", ""), catalog_snapshot(h)
         )
         if l1_ok and l2_ok and not q_hard:
             out = copy.deepcopy(traj)
@@ -1511,12 +1944,15 @@ def enrich_one_staged(traj: dict, base: str, key: str, model: str, max_attempts:
             out["initial_state"]["dataset_overview"] = catalog_snapshot(h)
             out["steps"] = steps
             out["enrichment"] = {"status": "enriched", "mode": "staged_perception",
+                                 "quality_status": "repairable" if q_rep else "ready",
+                                 "repairable_issues": q_rep, "soft_issues": q_style,
                                  "generator": {"model": model,
                                                "mode_requested": "staged_perception"},
                                  "n_perception": len(perc), "n_error": 0,
                                  "rejected_candidates": rejections,
                                  "annotation_history": history + [{
-                                     "attempt": attempt, "ok": True, "soft_issues": q_soft,
+                                     "attempt": attempt, "ok": True,
+                                     "repairable_issues": q_rep, "soft_issues": q_style,
                                      "observation_model_output": obs_text,
                                      "observation_usage": obs_usage,
                                      "model_output": act_text, "usage": act_usage,
@@ -1528,7 +1964,8 @@ def enrich_one_staged(traj: dict, base: str, key: str, model: str, max_attempts:
         feedback = "; ".join(([l1_err] if not l1_ok else []) +
                              ([] if l2_ok else l2_issues) +
                              q_hard) or "staged enrichment failed validation"
-        history.append({"attempt": attempt, "ok": False, "issues": feedback, "soft_issues": q_soft,
+        history.append({"attempt": attempt, "ok": False, "issues": feedback,
+                        "repairable_issues": q_rep, "soft_issues": q_style,
                         "observation_model_output": obs_text, "observation_usage": obs_usage,
                         "model_output": act_text, "usage": act_usage,
                         "stage1_describes": len(describes), "stage2_perception": len(local_perc)})
@@ -1546,6 +1983,7 @@ def enrich_one_staged(traj: dict, base: str, key: str, model: str, max_attempts:
     out["initial_state"]["dataset_overview"] = catalog_snapshot(h)
     out["steps"] = base_steps
     out["enrichment"] = {"status": "fallback_skeleton", "mode": "skeleton",
+                         "quality_status": "reject",
                          "generator": {"model": model, "mode_requested": "staged_perception"},
                          "n_perception": 0, "n_error": 0,
                          "rejected_candidates": rejections,
@@ -1577,6 +2015,7 @@ def enrich_one_rewrite_only(traj: dict, base: str, key: str, model: str,
         out["initial_state"]["dataset_overview"] = catalog_snapshot(h)
         out["steps"] = base_steps
         out["enrichment"] = {"status": "fallback_skeleton", "mode": "skeleton",
+                             "quality_status": "reject",
                              "generator": {"model": model,
                                            "mode_requested": "semantic_rewrite"},
                              "n_perception": 0, "n_error": 0,
@@ -1586,8 +2025,8 @@ def enrich_one_rewrite_only(traj: dict, base: str, key: str, model: str,
 
     insertions = deterministic_perception_insertions(traj)
     ok, err, steps = replay_validate(traj, spliced_sequence(traj, insertions, rewrites))
-    qhard, qsoft = quality_check(
-        steps, traj.get("question", ""), traj.get("initial_state", {}).get("dataset_overview")
+    qhard, qrep, qstyle = quality_check(
+        steps, traj.get("question", ""), catalog_snapshot(h)
     )
     out = copy.deepcopy(traj)
     out["schema_version"] = "v3-enriched"
@@ -1596,6 +2035,8 @@ def enrich_one_rewrite_only(traj: dict, base: str, key: str, model: str,
     if ok and not qhard:
         out["steps"] = steps
         out["enrichment"] = {"status": "enriched", "mode": "semantic_rewrite",
+                             "quality_status": "repairable" if qrep else "ready",
+                             "repairable_issues": qrep, "soft_issues": qstyle,
                              "generator": {"model": model,
                                            "mode_requested": "semantic_rewrite"},
                              "n_perception": len(insertions), "n_error": 0,
@@ -1613,6 +2054,7 @@ def enrich_one_rewrite_only(traj: dict, base: str, key: str, model: str,
         _, _, base_steps = replay_validate(traj, spliced_sequence(traj, []))
         out["steps"] = base_steps
         out["enrichment"] = {"status": "fallback_skeleton", "mode": "skeleton",
+                             "quality_status": "reject",
                              "generator": {"model": model,
                                            "mode_requested": "semantic_rewrite"},
                              "n_perception": 0, "n_error": 0,
@@ -1621,6 +2063,91 @@ def enrich_one_rewrite_only(traj: dict, base: str, key: str, model: str,
                                                       "issues": issues,
                                                       "model_output": text, "usage": usage}]}
     return out
+
+
+def _issue_bucket(issue: str) -> str:
+    if "leaks exact schema identifier" in issue:
+        return "schema_leak"
+    if "confirmed literal" in issue or "did not show it" in issue:
+        return "unsupported_confirmation"
+    if "stale observation wording" in issue:
+        return "stale_observation_wording"
+    if "final think uses annotator" in issue:
+        return "final_answer_leak"
+    if "actual tool is" in issue:
+        return "tool_action_mismatch"
+    if "does not name exact column" in issue:
+        return "missing_action_column"
+    if "does not name table/reference" in issue:
+        return "missing_action_reference"
+    if "before describe_table" in issue:
+        return "unobserved_schema_use"
+    if "before inspect_column" in issue:
+        return "unobserved_literal_filter"
+    if "third-person" in issue:
+        return "third_person"
+    if "empty" in issue:
+        return "empty_think"
+    return issue.split(":", 1)[0][:80]
+
+
+def quality_manifest(results: list[dict], *, out_path: str, args: argparse.Namespace) -> dict:
+    status_counts = collections.Counter()
+    stored_status_counts = collections.Counter()
+    mode_counts = collections.Counter()
+    generator_counts = collections.Counter()
+    issue_counts = collections.Counter()
+    records = []
+    for r in results:
+        enr = r.get("enrichment") or {}
+        generator = enr.get("generator") or {}
+        hard, issues, soft = quality_check(
+            r.get("steps", []), r.get("question", ""), r.get("initial_state", {}).get("dataset_overview")
+        )
+        q = "reject" if hard else ("repairable" if issues else "ready")
+        stored_status_counts[enr.get("quality_status", "missing")] += 1
+        status_counts[q] += 1
+        mode_counts[enr.get("mode", "unknown")] += 1
+        generator_counts[generator.get("model", "unknown")] += 1
+        for issue in issues:
+            issue_counts[_issue_bucket(issue)] += 1
+        tools = [s.get("tool_call", {}).get("tool") for s in r.get("steps", [])]
+        records.append({
+            "trajectory_id": r.get("trajectory_id"),
+            "question": r.get("question"),
+            "db_id": (r.get("source") or {}).get("db_id"),
+            "status": enr.get("status"),
+            "stored_quality_status": enr.get("quality_status"),
+            "quality_status": q,
+            "mode": enr.get("mode"),
+            "generator_model": generator.get("model"),
+            "n_steps": len(r.get("steps", [])),
+            "n_perception": enr.get("n_perception", 0),
+            "n_error": enr.get("n_error", 0),
+            "tools": tools,
+            "hard_issues": hard,
+            "repairable_issues": issues,
+            "soft_issues": soft,
+            "recommended_action": (
+                "use_for_sft" if q == "ready" else
+                "repair_then_recheck" if q == "repairable" else
+                "drop_or_manual_review"
+            ),
+        })
+    return {
+        "output": out_path,
+        "model": args.model,
+        "mode": args.mode,
+        "which": args.which,
+        "subset_file": args.subset_file,
+        "n": len(results),
+        "quality_status_counts": dict(status_counts),
+        "stored_quality_status_counts": dict(stored_status_counts),
+        "mode_counts": dict(mode_counts),
+        "generator_model_counts": dict(generator_counts),
+        "repairable_issue_counts": dict(issue_counts),
+        "records": records,
+    }
 
 
 def main() -> int:
@@ -1644,7 +2171,65 @@ def main() -> int:
                     help="external LLM retries per annotation attempt")
     ap.add_argument("--max-attempts", type=int, default=3,
                     help="annotation attempts per trajectory after validation feedback")
+    ap.add_argument("--quality-manifest", default=None,
+                    help="path for per-trajectory quality manifest; default is OUT.quality_manifest.json")
+    ap.add_argument("--audit-file", default=None,
+                    help="recompute quality manifest for an existing enriched jsonl without calling the API")
+    ap.add_argument("--repair-file", default=None,
+                    help="repair think/rationale text in an existing enriched jsonl without calling the API")
+    ap.add_argument("--repair-out", default=None,
+                    help="output jsonl for --repair-file; default is REPAIR_FILE.repaired.jsonl")
+    ap.add_argument("--no-auto-repair", action="store_true",
+                    help="disable deterministic text-only repair during new generation")
     args = ap.parse_args()
+
+    if args.audit_file:
+        with open(args.audit_file, encoding="utf-8") as f:
+            results = [json.loads(line) for line in f if line.strip()]
+        q_manifest_path = args.quality_manifest or (args.audit_file + ".quality_manifest.json")
+        manifest = quality_manifest(results, out_path=args.audit_file, args=args)
+        with open(q_manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2, default=str)
+            f.write("\n")
+        print(
+            f"audited {len(results)} trajectories"
+            f"\nquality {manifest['quality_status_counts']}"
+            f"\nissues {manifest['repairable_issue_counts']}"
+            f"\n-> {q_manifest_path}"
+        )
+        return 0
+
+    if args.repair_file:
+        with open(args.repair_file, encoding="utf-8") as f:
+            source = [json.loads(line) for line in f if line.strip()]
+        results = []
+        changed = 0
+        for traj in source:
+            repaired, n_changed = repair_reasoning(traj)
+            results.append(repaired)
+            changed += n_changed
+        repair_out = args.repair_out or (args.repair_file + ".repaired.jsonl")
+        with open(repair_out, "w", encoding="utf-8") as f:
+            for traj in results:
+                f.write(json.dumps(traj, ensure_ascii=False, default=str) + "\n")
+        q_manifest_path = args.quality_manifest or (repair_out + ".quality_manifest.json")
+        manifest = quality_manifest(results, out_path=repair_out, args=args)
+        manifest["repair"] = {
+            "input": args.repair_file,
+            "changed_steps": changed,
+            "method": "deterministic_think_repair",
+        }
+        with open(q_manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2, default=str)
+            f.write("\n")
+        print(
+            f"repaired {len(results)} trajectories; changed_steps={changed}"
+            f"\nquality {manifest['quality_status_counts']}"
+            f"\nissues {manifest['repairable_issue_counts']}"
+            f"\n-> {repair_out}"
+            f"\n-> {q_manifest_path}"
+        )
+        return 0
 
     key, base = load_api()
     wanted = set(json.load(open(args.ids))[args.which])
@@ -1679,15 +2264,30 @@ def main() -> int:
             except Exception as e:  # noqa: BLE001 — one bad trajectory must never abort the whole batch
                 print(f"  {t['trajectory_id']:<20} ERROR: {type(e).__name__}: {e}")
                 continue
+            n_repaired = 0
+            if not args.no_auto_repair:
+                r, n_repaired = repair_reasoning(r)
             results.append(r)
             f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
             f.flush()
             meta = r["enrichment"]
             print(f"  {r['trajectory_id']:<20} len={len(r['steps']):<3} +perc={meta['n_perception']:<2} "
-                  f"+err={meta['n_error']:<2} {meta['mode']:<16} db={r['source']['db_id']}")
+                  f"+err={meta['n_error']:<2} {meta['mode']:<16} "
+                  f"quality={meta.get('quality_status', 'unknown'):<10} repair={n_repaired:<2} "
+                  f"db={r['source']['db_id']}")
     enr = sum(1 for r in results if r["enrichment"]["status"] == "enriched")
     full = sum(1 for r in results if r["enrichment"].get("mode") == "full")
-    print(f"\nenriched {enr}/{len(results)} (with errors {full})  fallback {len(results)-enr}\n-> {args.out}")
+    q_manifest_path = args.quality_manifest or (args.out + ".quality_manifest.json")
+    manifest = quality_manifest(results, out_path=args.out, args=args)
+    with open(q_manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2, default=str)
+        f.write("\n")
+    print(
+        f"\nenriched {enr}/{len(results)} (with errors {full})  fallback {len(results)-enr}"
+        f"\nquality {manifest['quality_status_counts']}"
+        f"\n-> {args.out}"
+        f"\n-> {q_manifest_path}"
+    )
     return 0
 
 

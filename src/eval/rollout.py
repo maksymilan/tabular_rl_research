@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 from copy import deepcopy
 
@@ -45,6 +46,30 @@ from protocol import (SYSTEM_PROMPT, ProtocolError, TOOLS,      # noqa: E402
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 MAX_CONSECUTIVE_ERRORS = 3   # error feedback turns allowed before aborting the trajectory
 DEFAULT_FEWSHOT_IDS = ["spider_train_0", "spider_train_1"]
+DEFAULT_MAX_TOKENS = 768
+MIN_CONTEXT_RETRY_TOKENS = 256
+
+
+class ChatAPIError(RuntimeError):
+    """OpenAI-compatible chat endpoint failure with enough detail for eval accounting."""
+
+    def __init__(self, message: str, *, status: int | None = None, body: str = ""):
+        super().__init__(message)
+        self.status = status
+        self.body = body
+
+
+class ContextOverflowError(ChatAPIError):
+    """The request exceeds the serving context window, even after reducing output tokens."""
+
+
+def is_context_overflow(text: str) -> bool:
+    lowered = text.lower()
+    return (
+        "maximum context length" in lowered
+        or "context length" in lowered and "max_tokens" in lowered
+        or "too many tokens" in lowered
+    )
 
 
 def db_path(db_id: str) -> str:
@@ -126,7 +151,7 @@ def score(h: Harness, gold_sql: str, answer_args: dict, created: set) -> tuple[b
 
 
 # ---------------- live mode ----------------
-def chat(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048) -> str:
+def _chat_once(base_url: str, model: str, messages: list[dict], max_tokens: int) -> str:
     payload = {"model": model, "messages": messages, "temperature": 0, "max_tokens": max_tokens}
     # Qwen3.5 is a thinking model. EVAL_ENABLE_THINKING=0 disables chain-of-thought via the chat
     # template so the baseline is directly comparable to the non-thinking Qwen2.5 runs and stays
@@ -137,8 +162,58 @@ def chat(base_url: str, model: str, messages: list[dict], max_tokens: int = 2048
     body = json.dumps(payload).encode()
     req = urllib.request.Request(f"{base_url.rstrip('/')}/chat/completions", data=body,
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=300) as r:
-        return json.loads(r.read())["choices"][0]["message"]["content"]
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            return json.loads(r.read())["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise ChatAPIError(f"HTTP {e.code}: {body}", status=e.code, body=body) from e
+
+
+def chat(
+    base_url: str,
+    model: str,
+    messages: list[dict],
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    retries: int = 2,
+    min_context_retry_tokens: int = MIN_CONTEXT_RETRY_TOKENS,
+) -> str:
+    """Call the model with retry semantics that do not conflate infra failures with model quality.
+
+    Context-window errors are deterministic for a given prompt/output budget, so retrying the same
+    request is useless. Instead, progressively shrink the requested output budget; if even the
+    minimum budget overflows, surface `ContextOverflowError` so the evaluator can count it
+    separately from protocol/execution failures.
+    """
+    current_max_tokens = max_tokens
+    transient_attempts = 0
+    last_error: Exception | None = None
+    while True:
+        try:
+            return _chat_once(base_url, model, messages, current_max_tokens)
+        except ChatAPIError as e:
+            last_error = e
+            if is_context_overflow(str(e)) or is_context_overflow(e.body):
+                if current_max_tokens > min_context_retry_tokens:
+                    current_max_tokens = max(
+                        min_context_retry_tokens,
+                        current_max_tokens // 2,
+                    )
+                    continue
+                raise ContextOverflowError(str(e), status=e.status, body=e.body) from e
+            if e.status is not None and e.status >= 500 and transient_attempts < retries:
+                transient_attempts += 1
+                time.sleep(min(2 ** transient_attempts, 8))
+                continue
+            raise
+        except (TimeoutError, urllib.error.URLError) as e:
+            last_error = e
+            if transient_attempts < retries:
+                transient_attempts += 1
+                time.sleep(min(2 ** transient_attempts, 8))
+                continue
+            raise ChatAPIError(f"{type(e).__name__}: {e}") from e
+    raise ChatAPIError(f"chat failed: {last_error}")
 
 
 def fewshot_text(trajectory_ids: list[str]) -> str:
@@ -173,7 +248,14 @@ def fewshot_text(trajectory_ids: list[str]) -> str:
 
 
 def run_live(
-    ex: dict, example_index: int, base_url: str, model: str, system: str, max_steps: int
+    ex: dict,
+    example_index: int,
+    base_url: str,
+    model: str,
+    system: str,
+    max_steps: int,
+    max_tokens: int,
+    api_retries: int,
 ) -> dict:
     h = Harness(db_path(ex["db_id"]))
     messages = [{"role": "system", "content": system},
@@ -203,12 +285,27 @@ def run_live(
     while steps < max_steps:
         turn = {"turn_index": len(turns), "model_input": deepcopy(messages)}
         try:
-            text = chat(base_url, model, messages)
+            text = chat(base_url, model, messages, max_tokens=max_tokens, retries=api_retries)
+        except ContextOverflowError as e:
+            rec["failure_type"] = "context_overflow"
+            rec["fail"] = f"api: {type(e).__name__}: {e}"
+            rec["steps"] = steps
+            rec["errors"] = errors
+            turn["api_error"] = rec["fail"]
+            turn["api_error_type"] = "context_overflow"
+            turns.append(turn)
+            rec["final_messages"] = messages
+            rec["elapsed_seconds"] = round(time.time() - started, 3)
+            return rec
         except Exception as e:
             rec["failure_type"] = "api_error"
             rec["fail"] = f"api: {type(e).__name__}: {e}"
+            rec["steps"] = steps
+            rec["errors"] = errors
             turn["api_error"] = rec["fail"]
+            turn["api_error_type"] = "api_error"
             turns.append(turn)
+            rec["final_messages"] = messages
             rec["elapsed_seconds"] = round(time.time() - started, 3)
             return rec
         turn["model_output"] = text
@@ -309,6 +406,10 @@ def main() -> int:
     ap.add_argument("--few-shot", type=int, default=0)
     ap.add_argument("--few-shot-ids", nargs="*", default=DEFAULT_FEWSHOT_IDS)
     ap.add_argument("--max-steps", type=int, default=20)
+    ap.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
+                    help="per-turn generation budget; smaller values leave more room for tool context")
+    ap.add_argument("--api-retries", type=int, default=2,
+                    help="retry count for transient API errors; context overflow uses adaptive token shrink")
     ap.add_argument("--workers", type=int, default=1,
                     help="concurrent questions (vLLM batches requests; each worker owns its Harness/sqlite)")
     ap.add_argument("--result-dir", default="")
@@ -333,7 +434,9 @@ def main() -> int:
             "max_steps": args.max_steps,
             "max_consecutive_errors": MAX_CONSECUTIVE_ERRORS,
             "temperature": 0,
-            "max_tokens": 2048,
+            "max_tokens": args.max_tokens,
+            "api_retries": args.api_retries,
+            "min_context_retry_tokens": MIN_CONTEXT_RETRY_TOKENS,
             "system_prompt": system,
         }, args.resume)
         indexed_dev = [(i, ex) for i, ex in indexed_dev if i not in writer.completed]
@@ -341,7 +444,17 @@ def main() -> int:
     if args.workers > 1:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            futs = [pool.submit(run_live, ex, i, args.base_url, args.model, system, args.max_steps)
+            futs = [pool.submit(
+                run_live,
+                ex,
+                i,
+                args.base_url,
+                args.model,
+                system,
+                args.max_steps,
+                args.max_tokens,
+                args.api_retries,
+            )
                     for i, ex in indexed_dev]
             for fut in as_completed(futs):
                 r = fut.result()
@@ -352,7 +465,16 @@ def main() -> int:
                 print(f"[{len(results)}/{len(indexed_dev)}] {flag} steps={r['steps']} errs={r['errors']} {r['question'][:60]}")
     else:
         for position, (i, ex) in enumerate(indexed_dev, 1):
-            r = run_live(ex, i, args.base_url, args.model, system, args.max_steps)
+            r = run_live(
+                ex,
+                i,
+                args.base_url,
+                args.model,
+                system,
+                args.max_steps,
+                args.max_tokens,
+                args.api_retries,
+            )
             results.append(r)
             if writer:
                 writer.append(r)

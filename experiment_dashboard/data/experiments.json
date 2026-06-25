@@ -152,5 +152,69 @@
       "directory": "data/results/qwen2.5_7b_sft_v2ctx/tool_zero_shot_dev1034"
     },
     "notes": "Full Spider dev evaluation is complete. Compare the context-compression accuracy drop against the large-database context savings."
+  },
+  {
+    "id": "qwen35-9b-v8-pilot-4k",
+    "name": "Qwen3.5-9B · SFT v8 pilot 4k",
+    "short_name": "9B v8 4k",
+    "status": "completed",
+    "model": "Qwen/Qwen3.5-9B",
+    "method": "QLoRA SFT",
+    "dataset_version": "Spider tools v8 pilot-ready · Qwen3.5 <=4k",
+    "description": "Small perception-enriched pilot SFT after filtering long examples for Qwen3.5-9B 24G training.",
+    "started_at": "2026-06-25T13:27:25+08:00",
+    "completed_at": "2026-06-25T14:06:53+08:00",
+    "tags": ["qwen3.5", "pilot", "perception", "4k-filtered"],
+    "dataset": {
+      "train": "data/sft/spider_v8_pilot_ready_qwen35_4k_train.jsonl",
+      "train_manifest": "data/sft/spider_v8_pilot_ready_qwen35_4k_train.manifest.json"
+    },
+    "training": {
+      "trainer_state": "experiment_dashboard/data/trainer_states/qwen35_v8_pilot_4k.json",
+      "remote_trainer_state": "/data/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v8-pilot-ready-4k-qlora/trainer_state.json",
+      "checkpoint": "/data/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v8-pilot-ready-4k-qlora",
+      "epochs": 2,
+      "cutoff_len": 4096,
+      "effective_batch_size": 8,
+      "learning_rate": 0.0001,
+      "lora_rank": 16,
+      "lora_alpha": 32
+    },
+    "evaluation": {
+      "directory": "data/results/qwen3.5_9b_sft_v8_pilot_4k_epoch2/tool_zero_shot_dev1034"
+    },
+    "notes": "Qwen3.5-9B has a large vocabulary; the unfiltered 8192 run OOMed on cross-entropy logits. This run kept 175/178 records and completed with final train loss 0.5535."
+  },
+  {
+    "id": "qwen35-9b-v8-pilot-4k-epoch4",
+    "name": "Qwen3.5-9B · SFT v8 pilot 4k · 4 epoch",
+    "short_name": "9B v8 4k e4",
+    "status": "completed",
+    "model": "Qwen/Qwen3.5-9B",
+    "method": "QLoRA SFT",
+    "dataset_version": "Spider tools v8 pilot-ready · Qwen3.5 <=4k",
+    "description": "Four-epoch continuation-style rerun on the same Qwen3.5 4k-filtered perception-enriched pilot data.",
+    "started_at": "2026-06-25T17:05:40+08:00",
+    "completed_at": "2026-06-25T18:23:31+08:00",
+    "tags": ["qwen3.5", "pilot", "perception", "4k-filtered", "epoch4"],
+    "dataset": {
+      "train": "data/sft/spider_v8_pilot_ready_qwen35_4k_train.jsonl",
+      "train_manifest": "data/sft/spider_v8_pilot_ready_qwen35_4k_train.manifest.json"
+    },
+    "training": {
+      "trainer_state": "experiment_dashboard/data/trainer_states/qwen35_v8_pilot_4k_epoch4.json",
+      "remote_trainer_state": "/data/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v8-pilot-ready-4k-epoch4-qlora/trainer_state.json",
+      "checkpoint": "/data/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v8-pilot-ready-4k-epoch4-qlora",
+      "epochs": 4,
+      "cutoff_len": 4096,
+      "effective_batch_size": 8,
+      "learning_rate": 0.0001,
+      "lora_rank": 16,
+      "lora_alpha": 32
+    },
+    "evaluation": {
+      "directory": "data/results/qwen3.5_9b_sft_v8_pilot_4k_epoch4/tool_zero_shot_dev1034"
+    },
+    "notes": "Same 175-record 4k-filtered pilot data as the 2-epoch run. Completed 88 optimizer steps with final train_loss 0.4179 and last logged step loss 0.2633."
   }
 ]
