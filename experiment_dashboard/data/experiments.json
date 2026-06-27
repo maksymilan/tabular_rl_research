@@ -10,7 +10,11 @@
     "dataset_version": "Spider dev",
     "description": "Base model generates one SQLite query directly, without gold SQL or execution feedback.",
     "completed_at": "2026-06-12T23:03:47+08:00",
-    "tags": ["baseline", "direct-sql", "zero-shot"],
+    "tags": [
+      "baseline",
+      "direct-sql",
+      "zero-shot"
+    ],
     "evaluation": {
       "directory": "data/results/qwen2.5_7b_baselines/sql_zero_shot_dev1034"
     },
@@ -33,7 +37,11 @@
     "dataset_version": "Spider dev",
     "description": "Base model receives two tool-use demonstrations and answers through the original tool protocol.",
     "completed_at": "2026-06-12T23:23:30+08:00",
-    "tags": ["baseline", "tool-use", "few-shot"],
+    "tags": [
+      "baseline",
+      "tool-use",
+      "few-shot"
+    ],
     "evaluation": {
       "directory": "data/results/qwen2.5_7b_baselines/tool_2shot_dev1034"
     },
@@ -46,6 +54,62 @@
     "notes": "Strict parser baseline. Most failures are incomplete tool-call formatting, so this run measures both protocol acquisition and reasoning."
   },
   {
+    "id": "qwen35-9b-base-sql",
+    "name": "Qwen3.5-9B · Direct SQL Baseline",
+    "short_name": "9B Base SQL",
+    "kind": "baseline",
+    "status": "completed",
+    "model": "Qwen/Qwen3.5-9B",
+    "method": "Zero-shot direct SQL",
+    "dataset_version": "Spider dev",
+    "description": "Base Qwen3.5-9B generates one SQLite query directly, without tool use or execution feedback.",
+    "started_at": "2026-06-26T10:20:00+08:00",
+    "completed_at": "2026-06-26T10:49:23+08:00",
+    "tags": [
+      "qwen3.5",
+      "baseline",
+      "direct-sql",
+      "zero-shot"
+    ],
+    "evaluation": {
+      "directory": "data/results/qwen3.5_9b_baselines/sql_zero_shot_dev1034"
+    },
+    "related_evaluations": [
+      {
+        "label": "Pass@32 sampling baseline",
+        "directory": "data/results/qwen3.5_9b_baselines/sql_pass32_dev1034"
+      },
+      {
+        "label": "Earlier no-thinking run",
+        "directory": "data/results/qwen3.5_9b_baselines/sql_zero_shot_nothink_dev1034"
+      }
+    ],
+    "notes": "Same-family direct-SQL reference for Qwen3.5 tool-SFT runs. Full Spider dev result: 753/1034 = 72.82%."
+  },
+  {
+    "id": "qwen35-9b-base-tool-2shot",
+    "name": "Qwen3.5-9B · Tool 2-shot Baseline",
+    "short_name": "9B Base Tool",
+    "kind": "baseline",
+    "status": "completed",
+    "model": "Qwen/Qwen3.5-9B",
+    "method": "Two-shot tool rollout",
+    "dataset_version": "Spider dev",
+    "description": "Base Qwen3.5-9B receives two tool-use demonstrations and answers through the tool protocol (no thinking, max_len 4096). First eval on dell (table_rl) after the NewGNN→dell migration.",
+    "started_at": "2026-06-27T09:14:39+08:00",
+    "completed_at": "2026-06-27T12:28:48+08:00",
+    "tags": [
+      "qwen3.5",
+      "baseline",
+      "tool-use",
+      "few-shot"
+    ],
+    "evaluation": {
+      "directory": "data/results/qwen3.5_9b_baselines/tool_2shot_dev1034"
+    },
+    "notes": "Full Spider dev: 379/1034 = 36.7% exec-acc, 818/1034 = 79.1% legal. 156 context_overflow at max_len 4096 (two few-shot demos consume the window) is the likely cause of the gap vs the documented NewGNN 422/1034 = 40.8%. Run on dell GPU1. Tool pass@32 pending dual-GPU availability."
+  },
+  {
     "id": "qwen25-7b-v1",
     "name": "Qwen2.5-7B · SFT v1",
     "short_name": "7B v1",
@@ -56,7 +120,10 @@
     "description": "Original tool-use SFT run with inline intermediate-table previews.",
     "started_at": "2026-06-13T00:01:00+08:00",
     "completed_at": "2026-06-13T13:03:38+08:00",
-    "tags": ["baseline-sft", "inline-preview"],
+    "tags": [
+      "baseline-sft",
+      "inline-preview"
+    ],
     "dataset": {
       "train": "data/sft/spider_v1_train.jsonl",
       "dev": "data/sft/spider_v1_dev.jsonl",
@@ -96,7 +163,10 @@
     "description": "Harness-grounded scalar memory and explicit step-level provenance.",
     "started_at": "2026-06-14T11:59:10+08:00",
     "completed_at": "2026-06-15T00:14:03+08:00",
-    "tags": ["grounded-memory", "provenance"],
+    "tags": [
+      "grounded-memory",
+      "provenance"
+    ],
     "dataset": {
       "train": "data/sft/spider_v2_train.jsonl",
       "dev": "data/sft/spider_v2_dev.jsonl",
@@ -130,7 +200,11 @@
     "description": "Lazy schemas, metadata-only table handles, and explicit perception tools.",
     "started_at": "2026-06-14T16:30:32+08:00",
     "completed_at": "2026-06-15T05:00:00+08:00",
-    "tags": ["context-compression", "large-db", "perception"],
+    "tags": [
+      "context-compression",
+      "large-db",
+      "perception"
+    ],
     "dataset": {
       "train": "data/sft/spider_v2ctx_train.jsonl",
       "dev": "data/sft/spider_v2ctx_dev.jsonl",
@@ -164,7 +238,12 @@
     "description": "Small perception-enriched pilot SFT after filtering long examples for Qwen3.5-9B 24G training.",
     "started_at": "2026-06-25T13:27:25+08:00",
     "completed_at": "2026-06-25T14:06:53+08:00",
-    "tags": ["qwen3.5", "pilot", "perception", "4k-filtered"],
+    "tags": [
+      "qwen3.5",
+      "pilot",
+      "perception",
+      "4k-filtered"
+    ],
     "dataset": {
       "train": "data/sft/spider_v8_pilot_ready_qwen35_4k_train.jsonl",
       "train_manifest": "data/sft/spider_v8_pilot_ready_qwen35_4k_train.manifest.json"
@@ -196,7 +275,13 @@
     "description": "Four-epoch continuation-style rerun on the same Qwen3.5 4k-filtered perception-enriched pilot data.",
     "started_at": "2026-06-25T17:05:40+08:00",
     "completed_at": "2026-06-25T18:23:31+08:00",
-    "tags": ["qwen3.5", "pilot", "perception", "4k-filtered", "epoch4"],
+    "tags": [
+      "qwen3.5",
+      "pilot",
+      "perception",
+      "4k-filtered",
+      "epoch4"
+    ],
     "dataset": {
       "train": "data/sft/spider_v8_pilot_ready_qwen35_4k_train.jsonl",
       "train_manifest": "data/sft/spider_v8_pilot_ready_qwen35_4k_train.manifest.json"
@@ -213,8 +298,52 @@
       "lora_alpha": 32
     },
     "evaluation": {
-      "directory": "data/results/qwen3.5_9b_sft_v8_pilot_4k_epoch4/tool_zero_shot_dev1034"
+      "directory": "data/results/qwen3.5_9b_sft_v8_pilot_4k_epoch4/tool_zero_shot_dev1034_max768_retry"
     },
+    "related_evaluations": [
+      {
+        "label": "Initial max-token run",
+        "directory": "data/results/qwen3.5_9b_sft_v8_pilot_4k_epoch4/tool_zero_shot_dev1034"
+      }
+    ],
     "notes": "Same 175-record 4k-filtered pilot data as the 2-epoch run. Completed 88 optimizer steps with final train_loss 0.4179 and last logged step loss 0.2633."
+  },
+  {
+    "id": "qwen35-9b-v9-ready-4k-epoch4",
+    "name": "Qwen3.5-9B · SFT v9 ready 4k · 4 epoch",
+    "short_name": "9B v9 4k e4",
+    "status": "completed",
+    "model": "Qwen/Qwen3.5-9B",
+    "method": "QLoRA SFT",
+    "dataset_version": "Spider tools v9 ready · Qwen3.5 <=4k",
+    "description": "Four-epoch QLoRA run on the 1k perception-enriched v9 ready set after Qwen3.5 tokenizer filtering.",
+    "started_at": "2026-06-26T21:50:04+08:00",
+    "completed_at": "2026-06-27T05:27:52+08:00",
+    "tags": [
+      "qwen3.5",
+      "v9",
+      "perception",
+      "4k-filtered",
+      "epoch4"
+    ],
+    "dataset": {
+      "train": "data/sft/spider_v9_ready_qwen35_4k_train.jsonl",
+      "train_manifest": "data/sft/spider_v9_ready_qwen35_4k_train.manifest.json"
+    },
+    "training": {
+      "trainer_state": "experiment_dashboard/data/trainer_states/qwen35_v9_ready_4k_epoch4.json",
+      "remote_trainer_state": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v9-ready-4k-epoch4-qlora/trainer_state.json",
+      "checkpoint": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v9-ready-4k-epoch4-qlora",
+      "epochs": 4,
+      "cutoff_len": 4096,
+      "effective_batch_size": 8,
+      "learning_rate": 0.0001,
+      "lora_rank": 16,
+      "lora_alpha": 32
+    },
+    "evaluation": {
+      "directory": "data/results/qwen3.5_9b_sft_v9_ready_4k_epoch4/tool_zero_shot_dev1034_max768_retry"
+    },
+    "notes": "Generated from 1000 v9 enriched trajectories: 988 ready, 12 rejected. Qwen3.5 tokenizer filtering kept 974/988 records at cutoff_len=4096. Completed on table_rl in 7:35:37 with final train_loss 0.2991."
   }
 ]

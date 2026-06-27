@@ -38,6 +38,40 @@ def load_skeletons(path: str) -> list[dict]:
     return out
 
 
+def load_excluded_ids(paths: list[str]) -> set[str]:
+    excluded = set()
+    for path in paths:
+        if not path:
+            continue
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+            stripped = text.lstrip()
+            if not stripped:
+                continue
+            if stripped[0] in "[{":
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, list):
+                    excluded.update(str(item) for item in payload)
+                    continue
+                if isinstance(payload, dict):
+                    if "trajectory_id" in payload:
+                        excluded.add(payload["trajectory_id"])
+                    for value in payload.values():
+                        if isinstance(value, list):
+                            excluded.update(str(item) for item in value)
+                    continue
+            for line in text.splitlines():
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                if "trajectory_id" in item:
+                    excluded.add(item["trajectory_id"])
+    return excluded
+
+
 def length_targets(by_len: dict[int, list], n: int) -> dict[int, int]:
     """Proportional per-length quota that sums to ~n, with >=1 for every present length so the
     distribution's tail (rare long trajectories) is preserved, then trimmed/topped to hit n."""
@@ -87,10 +121,15 @@ def main() -> int:
     ap.add_argument("--per-db-cap", type=int, default=2)
     ap.add_argument("--smoke", type=int, default=10)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--out-prefix", default=None,
+                    help="output prefix under data/trajectories; default subset_<N>")
+    ap.add_argument("--exclude-ids", action="append", default=[],
+                    help="JSON/JSONL file containing trajectory ids to exclude; may be repeated")
     args = ap.parse_args()
     random.seed(args.seed)
 
-    skeletons = load_skeletons(SRC)
+    excluded = load_excluded_ids(args.exclude_ids)
+    skeletons = [t for t in load_skeletons(SRC) if t["trajectory_id"] not in excluded]
     by_len: dict[int, list] = collections.defaultdict(list)
     for t in skeletons:
         by_len[len(t["steps"])].append(t)
@@ -117,8 +156,9 @@ def main() -> int:
     smoke = [sub_by_len[L][0] for L in smoke_lengths][: args.smoke]
 
     # Write artifacts.
-    out_jsonl = os.path.join(ROOT, "data", "trajectories", f"subset_{args.n}.jsonl")
-    out_ids = os.path.join(ROOT, "data", "trajectories", f"subset_{args.n}.ids.json")
+    out_prefix = args.out_prefix or f"subset_{args.n}"
+    out_jsonl = os.path.join(ROOT, "data", "trajectories", f"{out_prefix}.jsonl")
+    out_ids = os.path.join(ROOT, "data", "trajectories", f"{out_prefix}.ids.json")
     with open(out_jsonl, "w", encoding="utf-8") as f:
         for t in subset:
             f.write(json.dumps(t, ensure_ascii=False, default=str) + "\n")
@@ -131,6 +171,8 @@ def main() -> int:
     full_total, sub_total = len(skeletons), len(subset)
     print(f"selected {sub_total} / {full_total}  (DB coverage {len(used_db)} dbs, "
           f"max {max(used_db.values())}/db)")
+    if excluded:
+        print(f"excluded {len(excluded)} trajectory ids")
     print(f"{'len':>4} {'full':>6} {'full%':>7} {'sub':>5} {'sub%':>7}")
     for L in sorted(by_len):
         fn, sn = len(by_len[L]), len(sub_by_len.get(L, []))

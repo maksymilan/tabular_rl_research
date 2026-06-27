@@ -82,6 +82,13 @@ const pct = (value) => (Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` 
 const fixed = (value, digits = 3) =>
   Number.isFinite(value) ? Number(value).toFixed(digits) : "—";
 const compact = new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 });
+const modelFamily = (model = "") => {
+  const match = String(model).match(/Qwen(\d+(?:\.\d+)?)-([^-/\s]+)/i);
+  return match ? `Qwen${match[1]}-${match[2]}` : model || "Unknown model";
+};
+const modelAbbrev = (model = "") => modelFamily(model).replace(/^Qwen/, "Q");
+const isDirectSqlBaseline = (item) =>
+  item.kind === "baseline" && (item.tags || []).includes("direct-sql");
 const duration = (seconds) => {
   if (!Number.isFinite(seconds)) return "—";
   const hours = Math.floor(seconds / 3600);
@@ -130,18 +137,51 @@ function Empty({ title, detail }) {
 }
 
 function Overview({ experiments, onOpen }) {
-  const directSql = experiments.find((item) => item.id === "qwen25-7b-base-sql");
-  const chartData = experiments.map((item) => ({
-    name: item.short_name,
+  const families = useMemo(() => {
+    const groups = new Map();
+    for (const item of experiments) {
+      const family = modelFamily(item.model);
+      if (!groups.has(family)) groups.set(family, []);
+      groups.get(family).push(item);
+    }
+    return [...groups.entries()]
+      .map(([family, items]) => ({
+        family,
+        items,
+        directSql: items.find(isDirectSqlBaseline),
+      }))
+      .sort((a, b) => a.family.localeCompare(b.family, "zh-CN", { numeric: true }));
+  }, [experiments]);
+  const preferredFamily = useMemo(
+    () => families.find((group) => group.family.startsWith("Qwen3.5"))?.family || families[0]?.family || "",
+    [families],
+  );
+  const [selectedFamily, setSelectedFamily] = useState("");
+  useEffect(() => {
+    if (!families.length) return;
+    if (!selectedFamily || !families.some((group) => group.family === selectedFamily)) {
+      setSelectedFamily(preferredFamily);
+    }
+  }, [families, preferredFamily, selectedFamily]);
+  const activeFamily = selectedFamily || preferredFamily;
+  const visibleFamilies = families.filter((group) => group.family === activeFamily);
+  const visibleExperiments = visibleFamilies.flatMap((group) => group.items);
+  const directSqlByFamily = useMemo(
+    () => new Map(visibleFamilies.map((group) => [group.family, group.directSql]).filter(([, item]) => item)),
+    [visibleFamilies],
+  );
+  const chartData = visibleExperiments.map((item) => ({
+    name: `${modelAbbrev(item.model)} ${item.short_name}`,
     accuracy: Number(((item.evaluation_summary?.accuracy || 0) * 100).toFixed(2)),
     legal: Number.isFinite(item.evaluation_summary?.legal_rate)
       ? Number((item.evaluation_summary.legal_rate * 100).toFixed(2))
       : null,
     evalLoss: item.training_metrics?.summary?.last_eval_loss,
     kind: item.kind || "sft",
+    family: modelFamily(item.model),
   }));
-  const trainedRuns = experiments.filter((item) => item.training_metrics?.available).length;
-  const best = [...experiments].sort(
+  const trainedRuns = visibleExperiments.filter((item) => item.training_metrics?.available).length;
+  const best = [...visibleExperiments].sort(
     (a, b) => (b.evaluation_summary?.accuracy || 0) - (a.evaluation_summary?.accuracy || 0),
   )[0];
 
@@ -151,7 +191,7 @@ function Overview({ experiments, onOpen }) {
         <div>
           <p className="eyebrow">Research workspace</p>
           <h1>训练实验总览</h1>
-          <p>Qwen2.5-7B 表格工具使用实验</p>
+          <p>当前展示 {activeFamily || "模型"} 的 baseline、SFT 与工具评测</p>
         </div>
         <div className="header-date">
           <Clock3 size={16} />
@@ -159,11 +199,30 @@ function Overview({ experiments, onOpen }) {
         </div>
       </header>
 
+      <section className="model-switch-panel">
+        <div>
+          <span>模型家族</span>
+          <strong>{activeFamily || "未选择"}</strong>
+        </div>
+        <div className="segmented-control">
+          {families.map((group) => (
+            <button
+              key={group.family}
+              className={group.family === activeFamily ? "active" : ""}
+              onClick={() => setSelectedFamily(group.family)}
+            >
+              {group.family}
+              <span>{group.items.length}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
       <section className="metric-strip">
         <Metric
           label="实验与基线"
-          value={experiments.length}
-          detail={`${experiments.filter((item) => item.kind === "baseline").length} 个基线`}
+          value={visibleExperiments.length}
+          detail={`${visibleExperiments.filter((item) => item.kind === "baseline").length} 个基线`}
           icon={FlaskConical}
         />
         <Metric label="SFT 训练" value={trainedRuns} icon={Check} />
@@ -176,7 +235,7 @@ function Overview({ experiments, onOpen }) {
         <Metric
           label="累计评测案例"
           value={compact.format(
-            experiments.reduce((sum, item) => sum + (item.evaluation_summary?.total || 0), 0),
+            visibleExperiments.reduce((sum, item) => sum + (item.evaluation_summary?.total || 0), 0),
           )}
           icon={Database}
         />
@@ -199,14 +258,17 @@ function Overview({ experiments, onOpen }) {
                 <YAxis domain={[0, 100]} axisLine={false} tickLine={false} width={34} />
                 <Tooltip contentStyle={{ borderRadius: 6, borderColor: "#cfd5cf" }} />
                 <Legend />
-                {directSql ? (
-                  <ReferenceLine
-                    y={directSql.evaluation_summary.accuracy * 100}
-                    stroke="#b45309"
-                    strokeDasharray="5 4"
-                    label={{ value: "Direct SQL", fill: "#8a4b09", fontSize: 10 }}
-                  />
-                ) : null}
+                {visibleFamilies
+                  .filter((group) => group.directSql?.evaluation_summary?.available)
+                  .map((group, index) => (
+                    <ReferenceLine
+                      key={group.family}
+                      y={group.directSql.evaluation_summary.accuracy * 100}
+                      stroke={index ? "#7c3aed" : "#b45309"}
+                      strokeDasharray={index ? "3 3" : "5 4"}
+                      label={{ value: `${group.family} SQL`, fill: index ? "#6d28d9" : "#8a4b09", fontSize: 10 }}
+                    />
+                  ))}
                 <Bar dataKey="accuracy" name="执行准确率" fill="#087f5b" radius={[3, 3, 0, 0]}>
                   {chartData.map((item) => (
                     <Cell key={item.name} fill={item.kind === "baseline" ? "#b45309" : "#087f5b"} />
@@ -226,24 +288,63 @@ function Overview({ experiments, onOpen }) {
             </div>
           </div>
           <div className="run-list">
-            {experiments.map((item) => (
-              <button className="run-row" key={item.id} onClick={() => onOpen(item.id)}>
-                <div className={`run-marker ${item.kind === "baseline" ? "baseline" : ""}`} />
-                <div className="run-main">
-                  <div className="run-title">
-                    <strong>{item.name}</strong>
-                    {item.kind === "baseline" ? <span className="type-badge">Baseline</span> : <StatusDot status={item.status} />}
-                  </div>
-                  <span>{item.dataset_version}</span>
+            {visibleFamilies.map((group) => (
+              <div className="run-family" key={group.family}>
+                <div className="run-family-heading">
+                  <strong>{group.family}</strong>
+                  <span>
+                    {group.directSql ? "含同系列 Direct SQL baseline" : "缺少同系列 Direct SQL baseline"}
+                  </span>
                 </div>
-                <div className="run-score">
-                  <strong>{pct(item.evaluation_summary?.accuracy)}</strong>
-                  <span>{item.evaluation_summary?.correct || 0}/{item.evaluation_summary?.total || 0}</span>
-                </div>
-                <ChevronRight size={18} />
-              </button>
+                {group.items.map((item) => (
+                  <button className="run-row" key={item.id} onClick={() => onOpen(item.id)}>
+                    <div className={`run-marker ${item.kind === "baseline" ? "baseline" : ""}`} />
+                    <div className="run-main">
+                      <div className="run-title">
+                        <strong>{item.name}</strong>
+                        {item.kind === "baseline" ? <span className="type-badge">Baseline</span> : <StatusDot status={item.status} />}
+                      </div>
+                      <span>{item.dataset_version}</span>
+                    </div>
+                    <div className="run-score">
+                      <strong>{pct(item.evaluation_summary?.accuracy)}</strong>
+                      <span>{item.evaluation_summary?.correct || 0}/{item.evaluation_summary?.total || 0}</span>
+                    </div>
+                    <ChevronRight size={18} />
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
+        </div>
+      </section>
+
+      <section className="panel baseline-map">
+        <div className="panel-heading">
+          <div>
+            <h2>Baseline 对齐</h2>
+            <p>每个模型家族只和自己的 Direct SQL baseline 对比，避免跨模型误读</p>
+          </div>
+        </div>
+        <div className="baseline-grid">
+          {visibleFamilies.map((group) => (
+            <div className="baseline-card" key={group.family}>
+              <div>
+                <strong>{group.family}</strong>
+                <span>{group.items.length} 个实验</span>
+              </div>
+              {group.directSql ? (
+                <div className="baseline-score">
+                  <span>Direct SQL</span>
+                  <strong>{pct(group.directSql.evaluation_summary?.accuracy)}</strong>
+                </div>
+              ) : (
+                <div className="baseline-missing">
+                  当前没有同系列 Direct SQL baseline
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </section>
 
@@ -259,42 +360,47 @@ function Overview({ experiments, onOpen }) {
             <thead>
               <tr>
                 <th>实验</th>
+                <th>模型家族</th>
                 <th>类型</th>
                 <th>训练样本</th>
                 <th>Train loss</th>
                 <th>Eval loss</th>
                 <th>执行准确率</th>
-                <th>相对 Direct SQL</th>
+                <th>相对同系列 Direct SQL</th>
                 <th>平均步骤</th>
                 <th>评测完整性</th>
               </tr>
             </thead>
             <tbody>
-              {experiments.map((item) => (
-                <tr key={item.id} onClick={() => onOpen(item.id)}>
-                  <td><strong>{item.short_name}</strong></td>
-                  <td><span className={`type-badge ${item.kind === "baseline" ? "baseline" : ""}`}>{item.kind === "baseline" ? "Baseline" : "SFT"}</span></td>
-                  <td>{item.training_metrics?.available ? compact.format(item.dataset_summary?.train?.kept || 0) : "—"}</td>
-                  <td>{fixed(item.training_metrics?.summary?.train_loss)}</td>
-                  <td>{fixed(item.training_metrics?.summary?.last_eval_loss)}</td>
-                  <td>{pct(item.evaluation_summary?.accuracy)}</td>
-                  <td>
-                    {directSql && item.id !== directSql.id
-                      ? `${((item.evaluation_summary?.accuracy - directSql.evaluation_summary.accuracy) * 100).toFixed(2)} pp`
-                      : "reference"}
-                  </td>
-                  <td>{fixed(item.evaluation_summary?.average_steps, 2)}</td>
-                  <td>
-                    {item.evaluation_summary?.complete_dev ? (
-                      <span className="inline-ok"><Check size={14} /> 1034/1034</span>
-                    ) : (
-                      <span className="inline-warn">
-                        <CircleAlert size={14} /> {item.evaluation_summary?.total || 0}/1034
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {visibleExperiments.map((item) => {
+                const reference = directSqlByFamily.get(modelFamily(item.model));
+                return (
+                  <tr key={item.id} onClick={() => onOpen(item.id)}>
+                    <td><strong>{item.short_name}</strong></td>
+                    <td>{modelFamily(item.model)}</td>
+                    <td><span className={`type-badge ${item.kind === "baseline" ? "baseline" : ""}`}>{item.kind === "baseline" ? "Baseline" : "SFT"}</span></td>
+                    <td>{item.training_metrics?.available ? compact.format(item.dataset_summary?.train?.kept || 0) : "—"}</td>
+                    <td>{fixed(item.training_metrics?.summary?.train_loss)}</td>
+                    <td>{fixed(item.training_metrics?.summary?.last_eval_loss)}</td>
+                    <td>{pct(item.evaluation_summary?.accuracy)}</td>
+                    <td>
+                      {reference && item.id !== reference.id
+                        ? `${((item.evaluation_summary?.accuracy - reference.evaluation_summary.accuracy) * 100).toFixed(2)} pp`
+                        : reference ? "reference" : "缺少同系列 baseline"}
+                    </td>
+                    <td>{fixed(item.evaluation_summary?.average_steps, 2)}</td>
+                    <td>
+                      {item.evaluation_summary?.complete_dev ? (
+                        <span className="inline-ok"><Check size={14} /> 1034/1034</span>
+                      ) : (
+                        <span className="inline-warn">
+                          <CircleAlert size={14} /> {item.evaluation_summary?.total || 0}/1034
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -589,7 +695,7 @@ function ExperimentDetail({ experiment, onBack, onUpdated }) {
         ) : (
           <>
             <Metric label="实验类型" value="Baseline" detail={experiment.method} icon={FlaskConical} />
-            <Metric label="模型" value="7B" detail={experiment.model} icon={Bot} />
+            <Metric label="模型" value={modelFamily(experiment.model)} detail={experiment.model} icon={Bot} />
             <Metric
               label="平均耗时"
               value={`${fixed(evaluation?.average_elapsed_seconds, 2)}s`}

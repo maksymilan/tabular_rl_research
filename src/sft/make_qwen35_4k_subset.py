@@ -45,21 +45,22 @@ def main() -> int:
             else:
                 dropped.append({"index": index, "tokens": token_count})
 
-    dataset_info = {
-        args.dataset_name: {
-            "file_name": output.name,
-            "formatting": "sharegpt",
-            "columns": {"messages": "conversations", "system": "system"},
-            "tags": {
-                "role_tag": "from",
-                "content_tag": "value",
-                "user_tag": "human",
-                "assistant_tag": "gpt",
-                "observation_tag": "observation",
-            },
-        }
-    }
+    dataset_info = {}
     info_path = Path(args.dataset_info)
+    if info_path.exists():
+        dataset_info = json.loads(info_path.read_text(encoding="utf-8"))
+    dataset_info[args.dataset_name] = {
+        "file_name": output.name,
+        "formatting": "sharegpt",
+        "columns": {"messages": "conversations", "system": "system"},
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "observation_tag": "observation",
+        },
+    }
     info_path.parent.mkdir(parents=True, exist_ok=True)
     info_path.write_text(json.dumps(dataset_info, ensure_ascii=False, indent=2) + "\n")
 

@@ -2134,12 +2134,21 @@ def quality_manifest(results: list[dict], *, out_path: str, args: argparse.Names
                 "drop_or_manual_review"
             ),
         })
+    def manifest_scalar(counter: collections.Counter, fallback: str | None = None) -> str | None:
+        keys = [key for key, count in counter.items() if count and key not in (None, "unknown")]
+        if len(keys) == 1:
+            return str(keys[0])
+        if len(keys) > 1:
+            return "mixed"
+        return fallback
+
     return {
         "output": out_path,
-        "model": args.model,
-        "mode": args.mode,
-        "which": args.which,
-        "subset_file": args.subset_file,
+        "model": manifest_scalar(generator_counts, args.model),
+        "mode": manifest_scalar(mode_counts, args.mode),
+        "which": "audit" if getattr(args, "audit_file", None) else args.which,
+        "source_file": getattr(args, "audit_file", None) or args.subset_file,
+        "subset_file": None if getattr(args, "audit_file", None) else args.subset_file,
         "n": len(results),
         "quality_status_counts": dict(status_counts),
         "stored_quality_status_counts": dict(stored_status_counts),

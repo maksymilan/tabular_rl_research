@@ -24,8 +24,8 @@ DASHBOARD_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = DASHBOARD_ROOT.parent
 REGISTRY_PATH = DASHBOARD_ROOT / "data" / "experiments.json"
 DIST_ROOT = DASHBOARD_ROOT / "frontend" / "dist"
-VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:18000/v1").rstrip("/")
-SSH_HOST = os.environ.get("EXPERIMENT_SSH_HOST", "NewGNN")
+VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:18001/v1").rstrip("/")
+SSH_HOST = os.environ.get("EXPERIMENT_SSH_HOST", "table_rl")
 REMOTE_PROJECT_ROOT = os.environ.get(
     "EXPERIMENT_REMOTE_ROOT", "/home/dengyan/tabular_rl_project"
 )
@@ -36,6 +36,8 @@ REMOTE_VLLM_PORT = int(os.environ.get("EXPERIMENT_VLLM_PORT", "8000"))
 REMOTE_VLLM_PID = f"{REMOTE_PROJECT_ROOT}/logs/dashboard_vllm.pid"
 REMOTE_VLLM_META = f"{REMOTE_PROJECT_ROOT}/logs/dashboard_vllm.json"
 REMOTE_VLLM_LOG = f"{REMOTE_PROJECT_ROOT}/logs/dashboard_vllm.log"
+GPU_IDLE_MAX_MEMORY_MIB = int(os.environ.get("EXPERIMENT_GPU_IDLE_MAX_MEMORY_MIB", "512"))
+GPU_IDLE_MAX_UTILIZATION = int(os.environ.get("EXPERIMENT_GPU_IDLE_MAX_UTILIZATION", "5"))
 MAX_BODY = 2 * 1024 * 1024
 _eval_cache: dict[str, tuple[float, dict]] = {}
 
@@ -347,6 +349,53 @@ def refresh_trainer_state(experiment: dict) -> dict:
     return training_metrics(experiment)
 
 
+def evaluation_directories(experiment: dict) -> list[str]:
+    directories = []
+    primary = experiment.get("evaluation", {}).get("directory")
+    if primary:
+        directories.append(primary)
+    for related in experiment.get("related_evaluations", []):
+        directory = related.get("directory")
+        if directory:
+            directories.append(directory)
+    return directories
+
+
+def sync_remote_directory(relative_value: str) -> dict:
+    local = resolve_repo_path(relative_value)
+    relative = local.relative_to(REPO_ROOT)
+    if not str(relative).startswith("data/results/"):
+        raise ValueError(f"refusing to sync non-result path: {relative}")
+    local.parent.mkdir(parents=True, exist_ok=True)
+    remote = f"{REMOTE_PROJECT_ROOT}/{relative.as_posix()}"
+    process = subprocess.run(
+        ["scp", "-r", f"{SSH_HOST}:{remote}", str(local.parent)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    return {
+        "path": str(relative),
+        "available": local.exists(),
+        "stdout": process.stdout.strip(),
+        "stderr": process.stderr.strip(),
+    }
+
+
+def refresh_experiment_artifacts(experiment: dict) -> dict:
+    result = {"training": None, "evaluations": []}
+    remote_trainer = experiment.get("training", {}).get("remote_trainer_state")
+    if remote_trainer:
+        result["training"] = refresh_trainer_state(experiment)
+    for directory in evaluation_directories(experiment):
+        result["evaluations"].append(sync_remote_directory(directory))
+    if not remote_trainer and not result["evaluations"]:
+        raise ValueError("experiment has no remote trainer state or evaluation directories")
+    result["experiment"] = enrich_experiment(experiment)
+    return result
+
+
 def update_experiment(experiment_id: str, patch: dict) -> dict:
     allowed = {"notes", "status", "tags", "description", "completed_at"}
     unknown = set(patch) - allowed
@@ -484,10 +533,18 @@ def remote_gpu_status() -> list[dict]:
     gpus = json.loads(process.stdout)
     for gpu in gpus:
         gpu["available"] = (
-            gpu["memory_used_mib"] <= 512
-            and gpu["utilization_percent"] <= 10
+            gpu["memory_used_mib"] <= GPU_IDLE_MAX_MEMORY_MIB
+            and gpu["utilization_percent"] <= GPU_IDLE_MAX_UTILIZATION
             and not gpu["processes"]
         )
+        reasons = []
+        if gpu["memory_used_mib"] > GPU_IDLE_MAX_MEMORY_MIB:
+            reasons.append(f"memory>{GPU_IDLE_MAX_MEMORY_MIB}MiB")
+        if gpu["utilization_percent"] > GPU_IDLE_MAX_UTILIZATION:
+            reasons.append(f"utilization>{GPU_IDLE_MAX_UTILIZATION}%")
+        if gpu["processes"]:
+            reasons.append("compute_processes_present")
+        gpu["availability_reasons"] = reasons
     return gpus
 
 
@@ -553,6 +610,34 @@ port="$8"
 pid_file="$9"
 meta_file="${10}"
 log_file="${11}"
+max_memory_mib="${12}"
+max_utilization="${13}"
+lock_dir="/tmp/tabular_rl_gpu_${gpu}.lock"
+
+cleanup_lock() {
+  if [[ -d "$lock_dir" ]] && [[ "$(cat "$lock_dir/owner" 2>/dev/null || true)" == "$$" ]]; then
+    rm -f "$lock_dir/owner" 2>/dev/null || true
+    rmdir "$lock_dir" 2>/dev/null || true
+  fi
+}
+trap cleanup_lock EXIT
+
+check_gpu_idle() {
+  local label="$1"
+  local used util uuid compute_count process_detail
+  used="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | sed -n "$((gpu + 1))p" | xargs)"
+  util="$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | sed -n "$((gpu + 1))p" | xargs)"
+  uuid="$(nvidia-smi --query-gpu=uuid --format=csv,noheader | sed -n "$((gpu + 1))p" | xargs)"
+  process_detail="$(nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory --format=csv,noheader,nounits 2>/dev/null | awk -F, -v uuid="$uuid" '$1 ~ uuid {print}' || true)"
+  compute_count="$(printf '%s\n' "$process_detail" | sed '/^[[:space:]]*$/d' | wc -l | xargs)"
+  if (( used > max_memory_mib || util > max_utilization || compute_count > 0 )); then
+    echo "GPU $gpu is busy during ${label}: ${used} MiB, ${util}% utilization, compute_processes=${compute_count}" >&2
+    if [[ -n "$process_detail" ]]; then
+      echo "$process_detail" >&2
+    fi
+    return 1
+  fi
+}
 
 mkdir -p "$(dirname "$pid_file")"
 if [[ -f "$pid_file" ]]; then
@@ -570,14 +655,16 @@ if ss -ltn 2>/dev/null | grep -q ":${port} "; then
   echo "port $port is already in use" >&2
   exit 22
 fi
-used="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | sed -n "$((gpu + 1))p")"
-util="$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | sed -n "$((gpu + 1))p")"
-uuid="$(nvidia-smi --query-gpu=uuid --format=csv,noheader | sed -n "$((gpu + 1))p" | xargs)"
-compute_count="$(nvidia-smi --query-compute-apps=gpu_uuid --format=csv,noheader 2>/dev/null | grep -Fxc "$uuid" || true)"
-if (( used > 512 || util > 10 || compute_count > 0 )); then
-  echo "GPU $gpu is busy: ${used} MiB, ${util}% utilization" >&2
+
+if ! mkdir "$lock_dir" 2>/dev/null; then
+  echo "GPU $gpu is already reserved by another dashboard launch: $lock_dir" >&2
   exit 23
 fi
+printf '%s\n' "$$" > "$lock_dir/owner"
+
+check_gpu_idle "first check" || exit 23
+sleep 8
+check_gpu_idle "second check" || exit 23
 
 : > "$log_file"
 nohup env \
@@ -655,6 +742,8 @@ def start_managed_vllm(experiment_id: str, gpu_index: int) -> dict:
         REMOTE_VLLM_PID,
         REMOTE_VLLM_META,
         REMOTE_VLLM_LOG,
+        str(GPU_IDLE_MAX_MEMORY_MIB),
+        str(GPU_IDLE_MAX_UTILIZATION),
     ]
     process = ssh_run(["bash", "-s", "--", *args], input_text=START_VLLM_SCRIPT, timeout=30)
     result = json.loads(process.stdout.strip().splitlines()[-1])
@@ -893,7 +982,7 @@ class Handler(BaseHTTPRequestHandler):
                 and parts[:2] == ["api", "experiments"]
                 and parts[3] == "refresh"
             ):
-                return self.send_json(refresh_trainer_state(find_experiment(parts[2])))
+                return self.send_json(refresh_experiment_artifacts(find_experiment(parts[2])))
             self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except subprocess.CalledProcessError as error:
             self.send_json(

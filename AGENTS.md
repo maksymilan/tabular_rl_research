@@ -240,11 +240,15 @@ gate.
 - JSON records use a structure-aware viewer (conversation, tool trajectory, direct-SQL comparison,
   or generic collapsible tree) with raw JSON as an alternate view.
 - The dependency-free Python API scans repository JSONL/manifests, refreshes trainer state through
-  `ssh NewGNN`, serves the built React app, and proxies OpenAI-compatible requests to
-  `VLLM_BASE_URL` (default `http://127.0.0.1:18000/v1`).
+  `ssh table_rl`, serves the built React app, and proxies OpenAI-compatible requests to
+  `VLLM_BASE_URL` (default `http://127.0.0.1:18001/v1`; tunnel port 18001→dell vLLM 8000).
+- After every remote evaluation finishes, sync the result directory back into local
+  `data/results/...` and make sure the dashboard registry points to it. The dashboard refresh button
+  now syncs registered evaluation directories from table_rl as well as trainer state; use it or an
+  explicit `scp -r` before expecting the frontend to show the latest run.
 - The Playground system prompt is loaded directly from `src/sft/protocol.py`; do not duplicate or
   hand-maintain a second prompt in React. Its service controller may start only registry-backed
-  LoRA adapters on an actually idle NewGNN GPU. It tracks its own PID/metadata under remote
+  LoRA adapters on an actually idle table_rl GPU. It tracks its own PID/metadata under remote
   `logs/dashboard_vllm.*` and must never stop an unowned process.
 - Run the API with `.venv/bin/python experiment_dashboard/backend/server.py`; run the frontend with
   `cd experiment_dashboard/frontend && npm run dev`, or `npm run build` and use the API server alone.
@@ -262,25 +266,37 @@ gate.
 ```
 Uses the project venv `.venv` (sqlglot 30.9). Spider DBs in `data/spider_data/` (gitignored).
 
-## GPU server (`ssh NewGNN`)
+## GPU server (`ssh table_rl`)
 
-- host zju, user dengyan, key auth. 8× RTX 3090 24G, **driver 550 = CUDA 12.4 max**, NO direct net.
-- Writable only `/home/dengyan` and `/data/dengyan`. As of 2026-06-25, `/home`/root is **100% full**
-  while `/data/dengyan` has usable space; put new training caches/logs/checkpoints under
-  `/data/dengyan/tabular_rl_outputs/` and set `HF_DATASETS_CACHE=/data/dengyan/hf_datasets_cache`
-  plus `TMPDIR=/data/dengyan/tmp`. Project remains at `~/tabular_rl_project`; Qwen3.5-9B is at
-  `/home/dengyan/models/Qwen3.5-9B`.
-- Internet via reverse tunnel from the Mac: `nohup bash src/sft/tunnel.sh > /tmp/tunnel.log 2>&1
-  & disown` (auto-reconnect loop; -R 28471→Mac clash 7897 gives the server egress; -L 18000→server
-  vLLM 8000 lets the Mac reach the model). Server side: `export http(s)_proxy=http://127.0.0.1:28471`.
+- **dell PowerEdge T640**, host 10.214.243.15 port 222, user dengyan, key auth.
+  **2× RTX 3090 24G, driver 560.35.03 (=CUDA 12.6 max)**, 48 cores, 503G RAM.
+  Disk `/dev/sda2` 4.9T (3.2T free), everything under `/home/dengyan`.
+  Project at `~/tabular_rl_project`; Qwen3.5-9B at `~/models/Qwen3.5-9B`;
+  checkpoints at `~/tabular_rl_outputs/checkpoints/`.
+- Internet via reverse tunnel from the Mac: `nohup bash src/sft/tunnel_table_rl.sh > /tmp/tunnel_table_rl.log 2>&1
+  & disown` (auto-reconnect loop; -R 28472→Mac clash 7897 gives server egress; -L 18001→dell vLLM 8000
+  lets the Mac reach the model). Server side: `export http(s)_proxy=http://127.0.0.1:28472`.
+- conda envs: `sft` (torch2.6.0+cu124, llamafactory0.9.5) and `vllm-qwen35` (torch2.10.0+cu126, vllm0.19.1).
+- **NewGNN** (8× RTX 3090, driver 550, port 16014) kept for reference; tunnel ports 28471/18000; project
+  same path. `/home` was 100% full as of 2026-06-25 — use `/data/dengyan/tabular_rl_outputs/` on NewGNN.
 
 ## PITFALLS — hard-won, do not re-step
 
 **Ops / server:**
-- **Version pins (critical):** driver 550 = cu124; latest torch (2.11+) ships cu13 wheels needing
-  driver ≥580 and won't run. Pin the WHOLE family: `vllm==0.8.5.post1` (brings torch 2.6.0 cu124),
-  and `torch==2.6.0 torchaudio==2.6.0 torchvision==0.21.0` (unpinned siblings pull cu13 →
-  `libcudart.so.13 not found`), `transformers==4.51.3` (5.x breaks vllm 0.8.5: ProcessorMixin).
+- **Version pins (table_rl / dell, driver 560 = cu126):** sft env uses torch2.6.0+cu124 (from
+  NewGNN freeze, cu124 wheels still install fine on cu126 driver); vllm env uses torch2.10.0+cu126 +
+  vllm0.19.1 + transformers5.12.0. Install with `pip install -r req.txt --extra-index-url
+  https://download.pytorch.org/whl/cu124` (sft) or `cu126` (vllm). On dell, upgrade pip first
+  (`conda run -n ENV pip install --upgrade pip`) — old conda pip ≤26 truncates the available-version
+  list and fails to find 1.x packages like accelerate==1.11.0 or aiohappyeyeballs==2.6.2.
+- **NewGNN version pins (legacy, driver 550 = cu124):** `vllm==0.8.5.post1` + `torch==2.6.0
+  torchaudio==2.6.0 torchvision==0.21.0` + `transformers==4.51.3`. Still relevant if using NewGNN.
+- **dell missing `libcuda.so` (triton/bitsandbytes JIT link fails):** dell's driver ships only
+  `/usr/lib/x86_64-linux-gnu/libcuda.so.1` (no unversioned 64-bit `libcuda.so` symlink), so QLoRA
+  training dies at "Quantizing model to 4 bit" — triton JIT-compiles `cuda_utils` and `gcc -lcuda`
+  fails with `collect2: ld returned 1`. Fix (no sudo): `ln -sf /usr/lib/x86_64-linux-gnu/libcuda.so.1
+  ~/cuda_link/libcuda.so` then `export LIBRARY_PATH=$HOME/cuda_link:$LIBRARY_PATH` in every training
+  launcher. (vLLM inference doesn't hit this; NewGNN already has the symlink so it never showed there.)
 - vLLM/training must run with **`HF_HUB_OFFLINE=1`** (processes have no proxy env; model is cached).
 - HF downloads: official huggingface.co via the clash tunnel + **`HF_HUB_DISABLE_XET=1`** (the Xet
   client ignores proxy env); do NOT use hf-mirror (hub ≥1.x rejects its HEAD). Command is
@@ -294,6 +310,10 @@ Uses the project venv `.venv` (sqlglot 30.9). Spider DBs in `data/spider_data/` 
   truly-idle card (cards get grabbed between checks; in-process GPU 0 = the physical card you pinned).
   OOM from long samples / fragmentation → tune `cutoff_len` + `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`;
   7B on 24G needs QLoRA (4-bit).
+- **Idle GPU detection must be strict:** do not select a card by memory alone. Treat a GPU as idle
+  only when memory is low (dashboard default ≤512 MiB), utilization is near zero (default ≤5%), and
+  `nvidia-smi --query-compute-apps` shows no compute process for that GPU UUID. Re-check after a
+  short sleep immediately before launching vLLM/training to reduce races with other users.
 - **vLLM cleanup is mandatory:** after every inference/evaluation test, stop the vLLM server and
   verify with `nvidia-smi` that its GPU memory is released. Do not leave an idle vLLM process
   reserving GPUs. Before killing anything, confirm the PID belongs to user `dengyan` and its command

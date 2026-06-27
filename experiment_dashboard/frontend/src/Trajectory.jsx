@@ -13,6 +13,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { ConversationView } from "./JsonViewer";
 
 // Perception tools (read-only probes). Highlighted distinctly in the trajectory because the
 // research question is whether the model probes the data at a DECISION point or only as a
@@ -80,6 +81,54 @@ function outputSummary(output) {
   }
   if (output.distinct_count != null) return `distinct ${output.distinct_count}`;
   return "";
+}
+
+function normalizeMessage(message) {
+  if (!message) return null;
+  return {
+    role: message.role || message.from || "user",
+    content: message.content ?? message.value ?? "",
+  };
+}
+
+function contextDiff(current, next) {
+  if (!Array.isArray(current) || !Array.isArray(next) || next.length <= current.length) {
+    return [];
+  }
+  return next.slice(current.length).map(normalizeMessage).filter(Boolean);
+}
+
+function observationMessage(turn, index) {
+  if (turn.context_added?.length) return null;
+  if (turn.tool_output == null && !turn.execution_error && !turn.api_error) return null;
+  const payload = turn.execution_error || turn.api_error
+    ? {
+        step_id: `step_${index + 1}`,
+        status: "error",
+        error: {
+          type: turn.execution_error_type || turn.api_error_type || "error",
+          message: turn.execution_error || turn.api_error,
+        },
+      }
+    : { step_id: `step_${index + 1}`, status: "success", output: turn.tool_output };
+  return { role: "user", content: JSON.stringify(payload) };
+}
+
+function ContextPanel({ title, messages, empty = "无新增上下文" }) {
+  if (!messages?.length) {
+    return (
+      <details className="traj-context">
+        <summary>{title} · 0 条</summary>
+        <p className="traj-empty-inline">{empty}</p>
+      </details>
+    );
+  }
+  return (
+    <details className="traj-context">
+      <summary>{title} · {messages.length} 条</summary>
+      <ConversationView messages={messages} />
+    </details>
+  );
 }
 
 function Sample({ title, rows, tone }) {
@@ -172,6 +221,15 @@ export function TrajectoryView({ record }) {
       ) : null}
       <ol className="traj-steps">
         {turns.map((turn, i) => {
+          const nextTurn = turns[i + 1];
+          const modelInput = Array.isArray(turn.model_input) ? turn.model_input.map(normalizeMessage).filter(Boolean) : [];
+          const addedFromNext = contextDiff(turn.model_input, nextTurn?.model_input);
+          const fallbackObservation = observationMessage(turn, i);
+          const contextAdded = turn.context_added?.length
+            ? turn.context_added.map(normalizeMessage).filter(Boolean)
+            : addedFromNext.length
+              ? addedFromNext
+              : fallbackObservation ? [fallbackObservation] : [];
           const tool = turn.parsed && turn.parsed.tool;
           const Icon = TOOL_ICON[tool] || Wrench;
           const isError = !!turn.error_attempt;
@@ -196,6 +254,10 @@ export function TrajectoryView({ record }) {
               {turn.parsed && turn.parsed.arguments ? (
                 <code className="traj-args">{JSON.stringify(turn.parsed.arguments)}</code>
               ) : null}
+              {modelInput.length ? (
+                <ContextPanel title="本步前模型看到的上下文" messages={modelInput} empty="该记录没有保存 model_input" />
+              ) : null}
+              <ContextPanel title="本步后加入上下文" messages={contextAdded} />
               {turn.tool_output != null ? (
                 <details className="traj-output">
                   <summary>{outputSummary(turn.tool_output) || "tool_output"}</summary>
@@ -332,12 +394,19 @@ export function sftToTrajectory(record) {
     }
   }
   const turns = [];
+  const context = [
+    ...(record.system ? [{ role: "system", content: record.system }] : []),
+    ...(human ? [{ role: "user", content: human.value }] : []),
+  ];
   for (let i = 0; i < conv.length; i += 1) {
     if (conv[i].from !== "gpt") continue;
     const parsed = parseAssistantTurn(conv[i].value);
+    const assistant = { role: "assistant", content: conv[i].value };
     let tool_output = null;
+    let observation = null;
     const next = conv[i + 1];
     if (next && next.from === "observation") {
+      observation = { role: "observation", content: next.value };
       try {
         const envelope = JSON.parse(next.value);
         tool_output = envelope.output ?? envelope;
@@ -345,7 +414,14 @@ export function sftToTrajectory(record) {
         tool_output = next.value;
       }
     }
-    turns.push({ parsed, tool_output });
+    turns.push({
+      model_input: context.map((message) => ({ ...message })),
+      context_added: [assistant, observation].filter(Boolean),
+      parsed,
+      tool_output,
+    });
+    context.push(assistant);
+    if (observation) context.push(observation);
   }
   return { question, db_overview: overview, correct: true, isTraining: true, turns };
 }
@@ -616,14 +692,39 @@ function GeneratorTrace({ record }) {
 }
 
 function stepsToTrajectory(record, steps, extra = {}) {
-  return {
-    question: record.question,
-    db_id: record.db_id || record.source?.db_id,
-    gold_sql: record.source?.gold_sql,
-    db_overview: record.initial_state?.dataset_overview,
-    isTraining: true,
-    correct: extra.correct ?? true,
-    turns: (steps || []).map((s) => ({
+  const turns = [];
+  const context = [];
+  if (record.system) context.push({ role: "system", content: record.system });
+  if (record.question || record.initial_state?.dataset_overview) {
+    context.push({
+      role: "user",
+      content: [
+        record.initial_state?.dataset_overview
+          ? `DATASET OVERVIEW\n${JSON.stringify(record.initial_state.dataset_overview)}`
+          : "",
+        record.question ? `QUESTION\n${record.question}` : "",
+      ].filter(Boolean).join("\n\n"),
+    });
+  }
+  for (const s of steps || []) {
+    const assistant = {
+      role: "assistant",
+      content: [
+        s.think ? `<think>${s.think}</think>` : "",
+        s.tool_call ? `<tool_call>${JSON.stringify(s.tool_call)}</tool_call>` : "",
+      ].filter(Boolean).join("\n"),
+    };
+    const observation = s.tool_output == null ? null : {
+      role: "observation",
+      content: JSON.stringify({
+        step_id: s.step_id,
+        status: "success",
+        output: s.tool_output,
+      }),
+    };
+    turns.push({
+      model_input: context.map((message) => ({ ...message })),
+      context_added: [assistant, observation].filter(Boolean),
       parsed: {
         think: s.think,
         tool: s.tool_call?.tool,
@@ -632,7 +733,18 @@ function stepsToTrajectory(record, steps, extra = {}) {
       tool_output: s.tool_output,
       perception: !!s.perception,
       error_attempt: !!s.error_attempt,
-    })),
+    });
+    context.push(assistant);
+    if (observation) context.push(observation);
+  }
+  return {
+    question: record.question,
+    db_id: record.db_id || record.source?.db_id,
+    gold_sql: record.source?.gold_sql,
+    db_overview: record.initial_state?.dataset_overview,
+    isTraining: true,
+    correct: extra.correct ?? true,
+    turns,
   };
 }
 

@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 from artifacts import ArtifactWriter                          # noqa: E402
 from executor import Harness                                  # noqa: E402
 from protocol import rows_equal                               # noqa: E402
-from rollout import chat, db_path, overview                   # noqa: E402
+from rollout import ContextOverflowError, chat, db_path, overview  # noqa: E402
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 SYSTEM_PROMPT = (
@@ -75,6 +75,11 @@ def run_one(ex: dict, example_index: int, base_url: str, model: str, max_tokens:
     }
     try:
         output = chat(base_url, model, messages, max_tokens=max_tokens)
+    except ContextOverflowError as exc:
+        record["failure_type"] = "context_overflow"
+        record["error"] = f"{type(exc).__name__}: {exc}"
+        record["elapsed_seconds"] = round(time.time() - started, 3)
+        return record
     except Exception as exc:  # noqa: BLE001
         record["failure_type"] = "api_error"
         record["error"] = f"{type(exc).__name__}: {exc}"

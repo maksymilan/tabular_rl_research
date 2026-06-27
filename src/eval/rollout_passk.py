@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+"""Closed-loop tool-use pass@k evaluation.
+
+Each example is rolled out independently `n_samples` times with sampling enabled. A question is
+pass@k-correct if any of the first k trajectories reaches a legal answer whose denotation matches
+the gold SQL result.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(ROOT, "src", "harness"))
+sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
+
+from artifacts import ArtifactWriter  # noqa: E402
+from executor import Harness  # noqa: E402
+from passk import attach_passk_fields, parse_pass_k, write_passk_summary  # noqa: E402
+from protocol import (  # noqa: E402
+    ProtocolError,
+    assistant_message,
+    first_user_message,
+    parse_assistant,
+    tool_output_message,
+)
+from rollout import (  # noqa: E402
+    ChatAPIError,
+    ContextOverflowError,
+    DEFAULT_MAX_TOKENS,
+    MAX_CONSECUTIVE_ERRORS,
+    db_path,
+    execute_tool,
+    is_context_overflow,
+    new_ctx,
+    overview,
+    score,
+)
+
+SPIDER = os.path.join(ROOT, "data", "spider_data")
+
+
+def chat_sample(
+    base_url: str,
+    model: str,
+    messages: list[dict],
+    *,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    retries: int,
+) -> str:
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_tokens": max_tokens,
+    }
+    think = os.environ.get("EVAL_ENABLE_THINKING")
+    if think is not None:
+        payload["chat_template_kwargs"] = {"enable_thinking": think == "1"}
+
+    transient_attempts = 0
+    while True:
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            f"{base_url.rstrip('/')}/chat/completions",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=600) as response:
+                data = json.loads(response.read())
+            return data["choices"][0]["message"]["content"]
+        except urllib.error.HTTPError as exc:
+            body_text = exc.read().decode("utf-8", errors="replace")
+            if is_context_overflow(body_text):
+                raise ContextOverflowError(
+                    f"HTTP {exc.code}: {body_text}", status=exc.code, body=body_text
+                ) from exc
+            if exc.code >= 500 and transient_attempts < retries:
+                transient_attempts += 1
+                time.sleep(min(2 ** transient_attempts, 8))
+                continue
+            raise ChatAPIError(f"HTTP {exc.code}: {body_text}", status=exc.code, body=body_text) from exc
+        except (TimeoutError, urllib.error.URLError) as exc:
+            if transient_attempts < retries:
+                transient_attempts += 1
+                time.sleep(min(2 ** transient_attempts, 8))
+                continue
+            raise ChatAPIError(f"{type(exc).__name__}: {exc}") from exc
+
+
+def run_sample(
+    ex: dict,
+    sample_index: int,
+    base_url: str,
+    model: str,
+    system: str,
+    *,
+    max_steps: int,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    api_retries: int,
+) -> dict:
+    h = Harness(db_path(ex["db_id"]))
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": first_user_message(overview(h), ex["question"])},
+    ]
+    created: set[str] = set()
+    ctx = new_ctx()
+    steps = errors = consecutive = 0
+    turns = []
+    started = time.time()
+    rec = {
+        "sample_index": sample_index,
+        "correct": False,
+        "legal": False,
+        "steps": 0,
+        "errors": 0,
+        "failure_type": None,
+        "turns": turns,
+    }
+    while steps < max_steps:
+        turn = {"turn_index": len(turns)}
+        try:
+            text = chat_sample(
+                base_url,
+                model,
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                retries=api_retries,
+            )
+        except ContextOverflowError as exc:
+            rec["failure_type"] = "context_overflow"
+            rec["error"] = f"{type(exc).__name__}: {exc}"
+            break
+        except Exception as exc:  # noqa: BLE001
+            rec["failure_type"] = "api_error"
+            rec["error"] = f"{type(exc).__name__}: {exc}"
+            break
+
+        turn["model_output"] = text
+        messages.append({"role": "assistant", "content": text})
+        try:
+            think, tool, args = parse_assistant(text)
+            turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
+            if tool == "answer_from_context":
+                rec["legal"] = True
+                rec["steps"] = steps + 1
+                rec["errors"] = errors
+                rec["correct"], rec["pred_sample"], rec["gold_sample"] = score(
+                    h, ex["query"], args, created
+                )
+                if not rec["correct"]:
+                    rec["failure_type"] = "wrong_answer"
+                turns.append(turn)
+                rec["elapsed_seconds"] = round(time.time() - started, 3)
+                return rec
+
+            step_id = f"step_{steps + 1}"
+            out, table_name = execute_tool(h, tool, args, ctx, step_id)
+            turn["tool_output"] = out
+        except (ProtocolError, Exception) as exc:  # noqa: BLE001
+            errors += 1
+            consecutive += 1
+            error = f"{type(exc).__name__}: {exc}"
+            error_type = "protocol_error" if isinstance(exc, ProtocolError) else "execution_error"
+            turn["execution_error"] = error
+            turn["execution_error_type"] = error_type
+            turns.append(turn)
+            if consecutive >= MAX_CONSECUTIVE_ERRORS:
+                rec["failure_type"] = error_type
+                rec["error"] = f"aborted after {consecutive} consecutive errors: {error}"
+                rec["errors"] = errors
+                rec["steps"] = steps
+                rec["elapsed_seconds"] = round(time.time() - started, 3)
+                return rec
+            messages.append({
+                "role": "user",
+                "content": json.dumps({
+                    "step_id": f"step_{steps + 1}",
+                    "status": "error",
+                    "error": {"type": error_type, "message": error},
+                }),
+            })
+            continue
+
+        turns.append(turn)
+        consecutive = 0
+        steps += 1
+        if table_name:
+            created.add(table_name)
+        messages.append({"role": "user", "content": tool_output_message(step_id, out)})
+
+    if rec["failure_type"] is None:
+        rec["failure_type"] = "max_steps"
+    rec["steps"] = steps
+    rec["errors"] = errors
+    rec["elapsed_seconds"] = round(time.time() - started, 3)
+    return rec
+
+
+def run_one(
+    ex: dict,
+    example_index: int,
+    base_url: str,
+    model: str,
+    system: str,
+    *,
+    n_samples: int,
+    sample_workers: int,
+    pass_k: tuple[int, ...],
+    max_steps: int,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    api_retries: int,
+) -> dict:
+    initial_harness = Harness(db_path(ex["db_id"]))
+    initial_input = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": first_user_message(overview(initial_harness), ex["question"])},
+    ]
+    started = time.time()
+    record = {
+        "example_index": example_index,
+        "db_id": ex["db_id"],
+        "question": ex["question"],
+        "gold_sql": ex["query"],
+        "initial_model_input": initial_input,
+        "n_samples": n_samples,
+        "sample_workers": sample_workers,
+        "pass_k": list(pass_k),
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_steps": max_steps,
+        "max_tokens": max_tokens,
+        "samples": [],
+        "correct": False,
+        "failure_type": None,
+    }
+    samples: list[dict | None] = [None] * n_samples
+    with ThreadPoolExecutor(max_workers=sample_workers) as pool:
+        futures = {
+            pool.submit(
+                run_sample,
+                ex,
+                sample_index,
+                base_url,
+                model,
+                system,
+                max_steps=max_steps,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                api_retries=api_retries,
+            ): sample_index
+            for sample_index in range(n_samples)
+        }
+        for future in as_completed(futures):
+            sample_index = futures[future]
+            samples[sample_index] = future.result()
+    attach_passk_fields(record, [sample for sample in samples if sample is not None], pass_k)
+    record["elapsed_seconds"] = round(time.time() - started, 3)
+    return record
+
+
+def fewshot_text(trajectory_ids: list[str]) -> str:
+    if not trajectory_ids:
+        return ""
+    wanted = set(trajectory_ids)
+    found = {}
+    with open(os.path.join(ROOT, "data", "trajectories", "spider_train_v2.jsonl")) as source:
+        for line in source:
+            trajectory = json.loads(line)
+            if trajectory["trajectory_id"] in wanted:
+                found[trajectory["trajectory_id"]] = trajectory
+    missing = [trajectory_id for trajectory_id in trajectory_ids if trajectory_id not in found]
+    if missing:
+        raise ValueError(f"few-shot trajectories not found: {missing}")
+    blocks = []
+    for trajectory_id in trajectory_ids:
+        trajectory = found[trajectory_id]
+        overview_payload = trajectory["initial_state"]["dataset_overview"]
+        lines = [f"USER: {first_user_message(overview_payload, trajectory['question'])}"]
+        for index, step in enumerate(trajectory["steps"]):
+            tool_call = step["tool_call"]
+            lines.append(
+                "ASSISTANT: "
+                + assistant_message(step.get("think", ""), tool_call["tool"], tool_call["arguments"])
+            )
+            if index < len(trajectory["steps"]) - 1:
+                lines.append(f"USER: {tool_output_message(step['step_id'], step['tool_output'])}")
+        blocks.append("\n".join(lines))
+    return "\n\nEXAMPLE SESSIONS\n" + "\n\n---\n\n".join(blocks)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--n", type=int, default=1034)
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--result-dir", required=True)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--max-steps", type=int, default=20)
+    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument("--n-samples", type=int, default=32)
+    parser.add_argument("--sample-workers", type=int, default=1,
+                        help="parallel rollouts per question; pass@k is computed in sample_index order")
+    parser.add_argument("--pass-k", default="2,4,8,16,32")
+    parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--api-retries", type=int, default=3)
+    parser.add_argument("--few-shot", type=int, default=0)
+    args = parser.parse_args()
+
+    try:
+        pass_k = parse_pass_k(args.pass_k, n_samples=args.n_samples)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.sample_workers <= 0:
+        parser.error("--sample-workers must be positive")
+
+    system = __import__("protocol").SYSTEM_PROMPT
+    if args.few_shot:
+        from rollout import DEFAULT_FEWSHOT_IDS
+
+        system += fewshot_text(DEFAULT_FEWSHOT_IDS[:args.few_shot])
+
+    writer = ArtifactWriter(args.result_dir, {
+        "runner": "tool_rollout_passk",
+        "model": args.model,
+        "base_url": args.base_url,
+        "dev_size": args.n,
+        "n_samples": args.n_samples,
+        "sample_workers": args.sample_workers,
+        "pass_k": list(pass_k),
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "max_tokens": args.max_tokens,
+        "max_steps": args.max_steps,
+        "api_retries": args.api_retries,
+        "few_shot": args.few_shot,
+        "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
+    }, args.resume)
+
+    indexed_dev = list(enumerate(json.load(open(os.path.join(SPIDER, "dev.json")))[:args.n]))
+    pending = [(index, example) for index, example in indexed_dev if index not in writer.completed]
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = [
+            pool.submit(
+                run_one,
+                example,
+                index,
+                args.base_url,
+                args.model,
+                system,
+                n_samples=args.n_samples,
+                sample_workers=args.sample_workers,
+                pass_k=pass_k,
+                max_steps=args.max_steps,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                api_retries=args.api_retries,
+            )
+            for index, example in pending
+        ]
+        for position, future in enumerate(as_completed(futures), 1):
+            record = future.result()
+            writer.append(record)
+            flag = "OK" if record["correct"] else record["failure_type"]
+            print(
+                f"[{position}/{len(pending)}] {flag} q{record['example_index']} "
+                f"correct_samples={record.get('sample_correct_count', 0)} "
+                f"legal_samples={record.get('sample_legal_count', 0)} "
+                f"{record['question'][:60]}",
+                flush=True,
+            )
+            write_passk_summary(writer, pass_k, include_legal=True)
+
+    summary = write_passk_summary(writer, pass_k, include_legal=True)
+    print(json.dumps(summary["pass_at"], ensure_ascii=False, indent=2))
+    print(f"-> {writer.path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
