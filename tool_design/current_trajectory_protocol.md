@@ -1,0 +1,111 @@
+# Current Trajectory Protocol (v2b / v3)
+
+Status: index-level contract for the currently implemented trajectory format. This file does not
+replace code; it points to the source of truth and records what must not drift.
+
+## Sources of Truth
+
+- Model-visible protocol: `src/sft/protocol.py`
+  - `PROTOCOL_VERSION`
+  - `SYSTEM_PROMPT`
+  - `TOOL_SPECS`
+  - per-tool argument schema
+  - message rendering/parsing
+- Harness provenance sidecars: `src/harness/provenance.py`
+- Scalar `value_ref` grounding: `src/harness/scalar_grounding.py`
+- Frozen provenance redesign and implementation status: `draft/provenance_redesign.md`
+- SFT export rendering: `src/sft/build_sft_data.py`
+- Live rollout rendering: `src/eval/rollout.py` and `src/eval/rollout_passk.py`
+
+If these disagree, fix the code and this index together. Do not infer the active protocol from old
+`tool_design/tool_usage.md` examples.
+
+## Model-Visible Format
+
+The model sees a normal ReAct dialogue:
+
+```text
+system: protocol/system prompt
+user: DATASET OVERVIEW + QUESTION
+assistant: <think>...</think>
+           <tool_call>{"tool": "...", "arguments": {...}}</tool_call>
+user: {"step_id":"step_1","status":"success","output":{...}}
+...
+assistant: final answer_from_context tool call
+```
+
+The model emits only:
+
+- `<think>` text;
+- one `<tool_call>` JSON object.
+
+The model does not emit provenance, references, produces, quality status, repair metadata, or reward
+fields.
+
+## Current Tool Set
+
+The current v2b tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
+
+- `condition_filter`
+- `project`
+- `join_tables`
+- `group_aggregate`
+- `aggregate`
+- `extreme_value_select`
+- `set_op`
+- `describe_table`
+- `inspect_column`
+- `read_subtable`
+- `answer_from_context`
+
+No `add_to_memory` tool exists in v2b. No reflection or invalidate tool exists.
+
+## Memory Status
+
+Memory is not part of the current model-visible protocol:
+
+- no `add_to_memory`;
+- no `memory_id`;
+- no `mem_` references;
+- no `supporting_memory_ids`.
+
+Computed scalars are reused through `condition_filter.conditions[*].value_ref`, and `value_ref`
+points directly to the step id that produced the scalar. The harness performs scalar extraction and
+validation.
+
+## Harness-Owned Fields
+
+Trajectory JSON may contain harness-owned fields that are not model actions:
+
+- `step_id`
+- `tool_status`
+- `tool_output`
+- `references`
+- `produces`
+- `schema_version`
+- `label_status`
+- `enrichment`
+
+These fields are used for validation, replay, SFT export, provenance slicing, and analysis.
+They should not be copied into model tool arguments.
+
+## Recovery Data Rule
+
+Second-stage recovery data must keep this same protocol.
+
+Recovery behavior is represented by ordinary first-person `<think>` text and existing tools:
+
+```text
+The previous result is empty, so it does not support answering yet. I should inspect the relevant
+column values and try a grounded filter instead.
+```
+
+Do not add:
+
+- an `invalidate` field;
+- a `reflection` tool;
+- model-visible sidecar state;
+- a new memory object.
+
+Any recovery analysis outside the dialogue must be derived from the execution log, tool outputs, and
+the final answer dependency slice.

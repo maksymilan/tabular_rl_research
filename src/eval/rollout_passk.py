@@ -48,6 +48,33 @@ from rollout import (  # noqa: E402
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 
 
+def load_indexed_examples(path: str | None, n: int | None) -> tuple[list[tuple[int, dict]], str]:
+    """Load eval examples.
+
+    Default is Spider dev for held-out evaluation. For training-set recovery data generation, pass
+    an explicit --examples-json produced from train_spider.json. Each item may carry example_index
+    and trajectory_id; example_index is used for resume/artifact names.
+    """
+    if path:
+        with open(path, encoding="utf-8") as source:
+            payload = json.load(source)
+        examples = payload.get("examples", payload) if isinstance(payload, dict) else payload
+        if not isinstance(examples, list):
+            raise ValueError("--examples-json must be a JSON list or {'examples': [...]}")
+        if n is not None:
+            examples = examples[:n]
+        out = []
+        for local_index, ex in enumerate(examples):
+            if not isinstance(ex, dict):
+                raise ValueError(f"--examples-json item {local_index} is not an object")
+            example_index = int(ex.get("example_index", local_index))
+            out.append((example_index, ex))
+        return out, path
+    dev = json.load(open(os.path.join(SPIDER, "dev.json"), encoding="utf-8"))
+    examples = dev[: n if n is not None else len(dev)]
+    return list(enumerate(examples)), "data/spider_data/dev.json"
+
+
 def chat_sample(
     base_url: str,
     model: str,
@@ -238,6 +265,8 @@ def run_one(
     started = time.time()
     record = {
         "example_index": example_index,
+        "trajectory_id": ex.get("trajectory_id"),
+        "dataset_split": ex.get("dataset_split"),
         "db_id": ex["db_id"],
         "question": ex["question"],
         "gold_sql": ex["query"],
@@ -313,7 +342,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
     parser.add_argument("--model", required=True)
-    parser.add_argument("--n", type=int, default=1034)
+    parser.add_argument("--n", type=int, default=None,
+                        help="number of examples; default = all examples in the selected input")
+    parser.add_argument("--examples-json", default=None,
+                        help=("explicit JSON examples to run instead of Spider dev; use this for "
+                              "training-subset recovery rollouts"))
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--result-dir", required=True)
     parser.add_argument("--resume", action="store_true")
@@ -346,7 +379,8 @@ def main() -> int:
         "runner": "tool_rollout_passk",
         "model": args.model,
         "base_url": args.base_url,
-        "dev_size": args.n,
+        "dataset": args.examples_json or "data/spider_data/dev.json",
+        "requested_size": args.n,
         "n_samples": args.n_samples,
         "sample_workers": args.sample_workers,
         "pass_k": list(pass_k),
@@ -359,8 +393,11 @@ def main() -> int:
         "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
     }, args.resume)
 
-    indexed_dev = list(enumerate(json.load(open(os.path.join(SPIDER, "dev.json")))[:args.n]))
-    pending = [(index, example) for index, example in indexed_dev if index not in writer.completed]
+    indexed_examples, source_name = load_indexed_examples(args.examples_json, args.n)
+    pending = [(index, example) for index, example in indexed_examples if index not in writer.completed]
+    if args.examples_json and "dev" in args.examples_json.lower():
+        raise ValueError("--examples-json appears to be a dev/eval file; do not use it for recovery SFT")
+    print(f"loaded {len(indexed_examples)} examples from {source_name}; pending {len(pending)}")
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = [

@@ -298,6 +298,41 @@ tbody tr:last-child td { border-bottom: 0; }
 .failure-label span { color: var(--muted); }
 .progress { height: 7px; background: #edf0ed; border-radius: 4px; overflow: hidden; }
 .progress span { display: block; height: 100%; background: var(--red); }
+.passk-panel { margin-top: 20px; }
+.passk-chart { height: 260px; padding: 16px 12px 4px 4px; }
+.passk-run-list {
+  display: grid;
+  gap: 8px;
+  padding: 0 16px 16px;
+}
+.passk-run {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  min-height: 70px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-soft);
+}
+.passk-run strong { display: block; color: var(--ink); font-size: 13px; }
+.passk-run span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.passk-run dl {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 10px;
+  margin: 0;
+}
+.passk-run dl > div { min-width: 68px; text-align: right; }
+.passk-run dt { color: var(--muted); font-size: 10px; }
+.passk-run dd { margin: 2px 0 0; color: var(--ink); font-size: 13px; font-weight: 750; }
 .attribution-panel { margin-top: 20px; }
 .attribution { padding: 20px; }
 .attr-headline { display: flex; justify-content: space-between; align-items: baseline; gap: 20px; }

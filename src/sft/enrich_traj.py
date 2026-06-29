@@ -13,7 +13,7 @@ Pipeline (per verified v2 skeleton trajectory):
   5. check that correction steps are logically plausible and written as the model's own reasoning
      (first person, no "the model might..." narration, no guessing a nonexistent column after the
      table schema has already ruled it out);
-  6. on any L1/L2/style failure, feed the SPECIFIC reason back and regenerate (<=3 attempts); if it never
+  6. on any L1/L2/style failure, feed the SPECIFIC reason back and regenerate (<=10 attempts); if it never
      validates, fall back to the clean skeleton so a failed enrichment never blocks.
 
 The LLM authors only PLACEMENT + reasons (think); the harness owns observations, step ids and
@@ -2178,7 +2178,7 @@ def main() -> int:
                     help="seconds per external LLM request before retry/fallback")
     ap.add_argument("--api-retries", type=int, default=4,
                     help="external LLM retries per annotation attempt")
-    ap.add_argument("--max-attempts", type=int, default=3,
+    ap.add_argument("--max-attempts", type=int, default=10,
                     help="annotation attempts per trajectory after validation feedback")
     ap.add_argument("--quality-manifest", default=None,
                     help="path for per-trajectory quality manifest; default is OUT.quality_manifest.json")

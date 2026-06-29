@@ -101,13 +101,24 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   joins/set difference still produce many `steps=0` API/protocol failures; use the saved failure
   artifacts for the next correction-data loop. Local helper/configs:
   `src/sft/make_qwen35_4k_subset.py` and `src/sft/configs/qwen3.5_9b_qlora_v8_pilot_ready_4k.yaml`.
-- **Next data iteration (design only)**: construct observation-guided correction trajectories from
-  verified gold Plans. Start with pre-action rejection of unsupported operations, then add a small
-  mixture of post-action and executor-error recovery. Do not force observation before every action;
-  require it when a schema, literal, join, cardinality, or intermediate-result precondition is
-  unresolved. Decision/reflection state is model-authored control information, while observations,
-  step IDs, execution status, and provenance remain harness-owned. Canonical plan and acceptance
-  gates: `draft/reflection_trajectory_data_plan.md`.
+- **RL pilot environment prepared (2026-06-27)**: first-stage RL work should start from `src/rl/`.
+  `env.py` wraps the same closed-loop model↔harness protocol used by eval; the trainer only supplies
+  assistant text, while the environment owns parsing, tool execution, observation messages, and
+  terminal scoring. `reward.py` is an auditable pilot reward (correctness dominates; legal answers,
+  valid tool calls, evidence reads get small bonuses; repeated calls, tool/protocol/API failures and
+  max-steps get penalties). Before any PPO/GRPO run, use `build_reward_report.py` on rollout/pass@k
+  artifacts and manually audit a sample; use `select_pilot_tasks.py` to choose mixed-success or
+  legal-but-wrong tasks. Do not train RL directly on API/protocol failure-heavy buckets.
+- **Next data iteration (SFT v10 two-lane plan, 2026-06-28)**: do not add a reflection tool,
+  `invalidate` state, memory, or any model-visible sidecar. Use two data lanes: (A) clean canonical
+  data from gold-SQL verified trajectories with observation/think enrichment; (B) recovery data only
+  from current SFT rollout failures on **training-set examples** (never Spider dev / held-out eval),
+  where the external LLM rewrites a failed attempt into a validated recovery trajectory under
+  harness feedback. Recovery repair defaults to **10 attempts**.
+  Keep the mixture mostly clean canonical (about 1600-1700) plus a smaller recovery slice
+  (about 300-400). Fixed plan and commands: `draft/sft_v10_two_lane_data_plan.md`. Candidate
+  selector: `src/sft/select_recovery_candidates.py`; train rollout input builder:
+  `src/sft/build_rollout_examples.py`. Current protocol index: `tool_design/current_trajectory_protocol.md`.
 - **Claude implementation handoff**: read `draft/trajectory_data_generation_v2.md` before changing
   trajectory generation or starting another SFT/RL run. It records the audited blockers, canonical
   `add_to_memory(key, source_step_id)` ownership model, deterministic semantic derivations, online

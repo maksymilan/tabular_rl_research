@@ -44,6 +44,7 @@ import {
   attributeRecord,
   BUCKET_META,
   ConstructionPanel,
+  PassKRecordView,
   TrainingBoard,
   TrajectoryView,
 } from "./Trajectory";
@@ -538,7 +539,7 @@ function RecordBrowser({ experiment }) {
           <div className="record-layout">
             <div className="record-index">
               {data.records.map((item, index) => {
-                const isEval = Array.isArray(item.record.turns);
+                const isEval = Array.isArray(item.record.turns) || Array.isArray(item.record.samples);
                 const bucket =
                   isEval && item.record.correct === false
                     ? BUCKET_META[attributeRecord(item.record).bucket] || BUCKET_META.unknown
@@ -576,7 +577,9 @@ function RecordBrowser({ experiment }) {
                 <span>{data.total} records</span>
               </div>
               {active && view === "visual" ? (
-                Array.isArray(active.record.turns) ? (
+                Array.isArray(active.record.samples) ? (
+                  <PassKRecordView record={active.record} />
+                ) : Array.isArray(active.record.turns) ? (
                   <TrajectoryView record={active.record} />
                 ) : (
                   <StructuredRecord record={active.record} />
@@ -618,6 +621,33 @@ function ExperimentDetail({ experiment, onBack, onUpdated }) {
   const [saving, setSaving] = useState(false);
   const metrics = experiment.training_metrics;
   const evaluation = experiment.evaluation_summary;
+  const evaluationRuns = experiment.evaluation_runs || [];
+  const passChartData = evaluationRuns
+    .filter((run) => run.summary?.available)
+    .map((run) => {
+      const entries = Object.entries(run.summary.pass_at || {}).sort(
+        ([a], [b]) => Number(a) - Number(b),
+      );
+      const [passKey, passValue] = entries[entries.length - 1] || [
+        "acc",
+        {
+          correct: run.summary.correct,
+          total: run.summary.total,
+          rate: run.summary.accuracy,
+        },
+      ];
+      return {
+        name: run.label,
+        passKey: passKey === "acc" ? "acc" : `pass@${passKey}`,
+        score: Number(((passValue?.rate || 0) * 100).toFixed(2)),
+        legal: Number.isFinite(run.summary.legal_rate)
+          ? Number((run.summary.legal_rate * 100).toFixed(2))
+          : null,
+        correct: passValue?.correct ?? run.summary.correct,
+        total: passValue?.total ?? run.summary.total,
+        directory: run.directory,
+      };
+    });
   const trainManifest = experiment.dataset_summary?.train || {};
   const tabs = [
     ...(hasTraining ? [["training", "训练过程"]] : []),
@@ -838,6 +868,50 @@ function ExperimentDetail({ experiment, onBack, onUpdated }) {
             </div>
             </div>
           </section>
+          {passChartData.length ? (
+            <section className="panel passk-panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>Pass@ 对比</h2>
+                  <p>主评测和采样评测的正确率、合法回答率</p>
+                </div>
+              </div>
+              <div className="passk-chart">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={passChartData} margin={{ top: 18, right: 18, left: 4, bottom: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="passKey" tickLine={false} axisLine={false} />
+                    <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} width={42} />
+                    <Tooltip
+                      formatter={(value, name) => [
+                        `${Number(value).toFixed(2)}%`,
+                        name === "score" ? "Pass / Acc" : "Legal",
+                      ]}
+                      labelFormatter={(_, payload) => payload?.[0]?.payload?.name || ""}
+                    />
+                    <Legend />
+                    <Bar dataKey="score" name="Pass / Acc" fill="#087f5b" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="legal" name="Legal" fill="#4c78a8" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="passk-run-list">
+                {passChartData.map((run) => (
+                  <div key={run.name} className="passk-run">
+                    <div>
+                      <strong>{run.name}</strong>
+                      <span>{run.directory}</span>
+                    </div>
+                    <dl>
+                      <div><dt>{run.passKey}</dt><dd>{run.score.toFixed(2)}%</dd></div>
+                      <div><dt>正确</dt><dd>{run.correct}/{run.total}</dd></div>
+                      <div><dt>合法</dt><dd>{Number.isFinite(run.legal) ? `${run.legal.toFixed(2)}%` : "—"}</dd></div>
+                    </dl>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
           {experiment.id !== "qwen25-7b-base-sql" ? (
             <section className="panel attribution-panel">
               <div className="panel-heading">

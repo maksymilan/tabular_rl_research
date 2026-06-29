@@ -144,6 +144,14 @@ def json_page(path: Path) -> dict:
     }
 
 
+def is_construction_review_file(name: str) -> bool:
+    if not name.endswith(".jsonl"):
+        return False
+    if name.startswith("recovery_candidates"):
+        return False
+    return "enriched" in name or name.startswith("recovery_v10_")
+
+
 def data_sources(experiment: dict) -> list[dict]:
     candidates = []
 
@@ -226,6 +234,13 @@ def evaluation_summary(directory: Path) -> dict:
     total_steps = total_elapsed = 0.0
     steps_observed = elapsed_observed = 0
     failures = Counter()
+    pass_at = None
+    summary_path = directory / "summary.json"
+    if summary_path.exists():
+        try:
+            pass_at = read_json(summary_path).get("pass_at")
+        except (OSError, json.JSONDecodeError):
+            pass_at = None
     with all_path.open(encoding="utf-8") as source:
         for line in source:
             if not line.strip():
@@ -236,9 +251,22 @@ def evaluation_summary(directory: Path) -> dict:
             if isinstance(record.get("legal"), bool):
                 legal_observed += 1
                 legal += int(record["legal"])
+            elif record.get("sample_legal_count") is not None:
+                n_samples = int(record.get("n_samples") or len(record.get("samples") or []) or 1)
+                legal_observed += n_samples
+                legal += int(record.get("sample_legal_count") or 0)
             if record.get("steps") is not None:
                 steps_observed += 1
                 total_steps += float(record["steps"])
+            elif isinstance(record.get("samples"), list):
+                sample_steps = [
+                    float(sample["steps"])
+                    for sample in record["samples"]
+                    if isinstance(sample, dict) and sample.get("steps") is not None
+                ]
+                if sample_steps:
+                    steps_observed += len(sample_steps)
+                    total_steps += sum(sample_steps)
             if record.get("elapsed_seconds") is not None:
                 elapsed_observed += 1
                 total_elapsed += float(record["elapsed_seconds"])
@@ -257,6 +285,8 @@ def evaluation_summary(directory: Path) -> dict:
         "failure_types": dict(failures),
         "complete_dev": total == 1034,
     }
+    if pass_at:
+        summary["pass_at"] = pass_at
     _eval_cache[cache_key] = (mtime, summary)
     return summary
 
@@ -319,6 +349,31 @@ def dataset_summary(experiment: dict) -> dict:
     return result
 
 
+def evaluation_runs(experiment: dict) -> list[dict]:
+    runs = []
+    primary_dir = experiment.get("evaluation", {}).get("directory")
+    if primary_dir:
+        runs.append({
+            "id": "eval",
+            "label": experiment.get("evaluation", {}).get("label") or "完整评测",
+            "directory": primary_dir,
+            "primary": True,
+            "summary": evaluation_summary(resolve_repo_path(primary_dir)),
+        })
+    for index, related in enumerate(experiment.get("related_evaluations", []), start=1):
+        directory = related.get("directory")
+        if not directory:
+            continue
+        runs.append({
+            "id": f"related_{index}",
+            "label": related.get("label") or f"附加评测 {index}",
+            "directory": directory,
+            "primary": False,
+            "summary": evaluation_summary(resolve_repo_path(directory)),
+        })
+    return runs
+
+
 def enrich_experiment(experiment: dict) -> dict:
     result = dict(experiment)
     result["training_metrics"] = training_metrics(experiment)
@@ -327,6 +382,7 @@ def enrich_experiment(experiment: dict) -> dict:
     result["evaluation_summary"] = (
         evaluation_summary(resolve_repo_path(eval_dir)) if eval_dir else {"available": False}
     )
+    result["evaluation_runs"] = evaluation_runs(experiment)
     result["data_sources"] = data_sources(experiment)
     return result
 
@@ -863,15 +919,16 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/experiments":
                 return self.send_json([enrich_experiment(item) for item in load_registry()])
             if parsed.path == "/api/construction":
-                # Enriched reflection/perception trajectories under data/trajectories/. No file param
-                # lists the available *enriched*.jsonl files; with a file param it pages records.
+                # Enriched reflection/perception/recovery trajectories under data/trajectories/.
+                # Raw recovery_candidates are intentionally excluded because they are rollout audit
+                # inputs, not final trajectory records with model-visible steps.
                 query = parse_qs(parsed.query)
                 fname = query.get("file", [""])[0]
                 tdir = REPO_ROOT / "data" / "trajectories"
                 if not fname:
                     files = []
                     for name in os.listdir(tdir) if tdir.exists() else []:
-                        if "enriched" not in name or not name.endswith(".jsonl"):
+                        if not is_construction_review_file(name):
                             continue
                         path = tdir / name
                         stat = path.stat()

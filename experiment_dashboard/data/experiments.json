@@ -342,8 +342,14 @@
       "lora_alpha": 32
     },
     "evaluation": {
-      "directory": "data/results/qwen3.5_9b_sft_v9_ready_4k_epoch4/tool_zero_shot_dev1034_max768_retry"
+      "directory": "data/results/qwen3.5_9b_sft_v9_ready_4k_epoch4/tool_pass1_dev1034_greedy"
     },
-    "notes": "Generated from 1000 v9 enriched trajectories: 988 ready, 12 rejected. Qwen3.5 tokenizer filtering kept 974/988 records at cutoff_len=4096. Completed on table_rl in 7:35:37 with final train_loss 0.2991."
+    "notes": "Generated from 1000 v9 enriched trajectories: 988 ready, 12 rejected. Qwen3.5 tokenizer filtering kept 974/988 records at cutoff_len=4096. Completed on table_rl in 7:35:37 with final train_loss 0.2991. Full dev tool sampling evals: pass@1 greedy 640/1034 = 61.90% (legal samples 92.75%); pass@2 sampling 724/1034 = 70.02% (average legal samples 1.845/2).",
+    "related_evaluations": [
+      {
+        "label": "Tool pass@2 sampling",
+        "directory": "data/results/qwen3.5_9b_sft_v9_ready_4k_epoch4/tool_pass2_dev1034"
+      }
+    ]
   }
 ]

@@ -37,6 +37,7 @@ export const BUCKET_META = {
   protocol_error: { label: "协议/格式错误", color: "var(--muted)" },
   api_error: { label: "API 错误", color: "var(--muted)" },
   max_steps: { label: "超出最大步数", color: "var(--muted)" },
+  all_samples_failed: { label: "Pass@k 全失败", color: "var(--red)" },
   unknown: { label: "未知", color: "var(--muted)" },
 };
 
@@ -112,6 +113,14 @@ function observationMessage(turn, index) {
       }
     : { step_id: `step_${index + 1}`, status: "success", output: turn.tool_output };
   return { role: "user", content: JSON.stringify(payload) };
+}
+
+function thinkFromTurn(turn) {
+  const parsedThink = turn?.parsed?.think;
+  if (parsedThink) return parsedThink;
+  const output = turn?.model_output || "";
+  const beforeTool = output.split("<tool_call>")[0] || "";
+  return beforeTool.replace(/<\/?think>/g, "").trim();
 }
 
 function ContextPanel({ title, messages, empty = "无新增上下文" }) {
@@ -236,6 +245,7 @@ export function TrajectoryView({ record }) {
           const isPerception = !isError && (turn.perception != null ? turn.perception : PERCEPTION.has(tool));
           const isRitualRead = tool === "read_subtable" && i >= turns.length - 2;
           const cls = isError ? " error-attempt" : isPerception ? " perception" : "";
+          const displayThink = thinkFromTurn(turn);
           return (
             <li key={i} className={`traj-step${cls}`}>
               <div className="traj-step-head">
@@ -250,7 +260,7 @@ export function TrajectoryView({ record }) {
                 ) : null}
                 <span className="traj-step-no">#{i}</span>
               </div>
-              {turn.parsed && turn.parsed.think ? <p className="traj-think">{turn.parsed.think}</p> : null}
+              {displayThink ? <p className="traj-think">{displayThink}</p> : null}
               {turn.parsed && turn.parsed.arguments ? (
                 <code className="traj-args">{JSON.stringify(turn.parsed.arguments)}</code>
               ) : null}
@@ -268,6 +278,100 @@ export function TrajectoryView({ record }) {
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+function sampleToTrajectory(record, sample) {
+  const context = (record.initial_model_input || []).map(normalizeMessage).filter(Boolean);
+  const turns = [];
+  for (const turn of sample.turns || []) {
+    const modelInput = context.map((message) => ({ ...message }));
+    const assistant = turn.model_output
+      ? { role: "assistant", content: turn.model_output }
+      : null;
+    const observation = observationMessage(turn, turns.length);
+    turns.push({
+      ...turn,
+      model_input: modelInput,
+      context_added: [assistant, observation].filter(Boolean),
+    });
+    if (assistant) context.push(assistant);
+    if (observation) context.push(observation);
+  }
+  return {
+    ...sample,
+    question: record.question,
+    db_id: record.db_id,
+    gold_sql: record.gold_sql,
+    db_overview: record.initial_model_input?.[1]?.content
+      ? (() => {
+          const match = record.initial_model_input[1].content.match(/DATASET OVERVIEW\s*\n([\s\S]*?)\n\s*QUESTION/);
+          if (!match) return null;
+          try {
+            return JSON.parse(match[1]);
+          } catch {
+            return null;
+          }
+        })()
+      : null,
+    turns,
+  };
+}
+
+export function PassKRecordView({ record }) {
+  const samples = record.samples || [];
+  const defaultIndex = Math.max(0, samples.findIndex((sample) => !sample.correct));
+  const [selected, setSelected] = useState(defaultIndex);
+
+  useEffect(() => {
+    setSelected(defaultIndex);
+  }, [record, defaultIndex]);
+
+  const sample = samples[selected] || samples[0];
+  const traj = sample ? sampleToTrajectory(record, sample) : null;
+  const passItems = Object.entries(record.pass_at || {});
+
+  return (
+    <div className="passk-view">
+      <div className="source-toolbar passk-toolbar">
+        <div className="source-summary">
+          <strong>{record.sample_correct_count || 0}</strong>
+          <span>/ {record.n_samples || samples.length} correct samples</span>
+        </div>
+        {passItems.length ? (
+          <div className="segmented" aria-label="pass@k">
+            {passItems.map(([k, ok]) => (
+              <button key={k} className={ok ? "active" : ""} type="button">
+                pass@{k} {ok ? "✓" : "×"}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <div className="record-layout passk-layout">
+        <div className="record-index">
+          {samples.map((item, index) => {
+            const bucket = BUCKET_META[item.failure_type || (item.correct ? "correct" : "unknown")] || BUCKET_META.unknown;
+            return (
+              <button
+                key={item.sample_index ?? index}
+                className={selected === index ? "active" : ""}
+                onClick={() => setSelected(index)}
+              >
+                <span>sample #{(item.sample_index ?? index) + 1}</span>
+                <strong>{item.correct ? "正确轨迹" : item.failure_type || "失败轨迹"}</strong>
+                <em className="case-bucket" style={{ color: bucket.color }}>
+                  {bucket.label} · {item.steps ?? 0} 步
+                </em>
+              </button>
+            );
+          })}
+        </div>
+        <div className="record-json light">
+          {traj ? <TrajectoryView record={traj} /> : <p className="traj-empty">没有 sample turns</p>}
+        </div>
+      </div>
     </div>
   );
 }
@@ -621,6 +725,7 @@ const MODE_META = {
   full: { label: "感知+纠错", color: "var(--green)" },
   perception_only: { label: "仅感知", color: "var(--blue)" },
   semantic_rewrite: { label: "语义重写", color: "var(--blue)" },
+  failure_recovery: { label: "失败纠正", color: "var(--amber)" },
   skeleton: { label: "未富化·骨架", color: "var(--muted)" },
 };
 
@@ -660,14 +765,36 @@ function formatFileTime(item) {
 function GeneratorTrace({ record }) {
   const enrichment = record?.enrichment || {};
   const generator = enrichment.generator || {};
+  const semantic = enrichment.semantic_rewrite || null;
   const history = enrichment.annotation_history || [];
-  if (!generator.model && !history.length) return null;
+  if (!generator.model && !history.length && !semantic) return null;
   return (
     <details className="generator-trace">
       <summary>
         生成模型 · {generator.model || "unknown"}
         {generator.mode_requested ? ` · ${generator.mode_requested}` : ""}
+        {semantic?.status ? ` · ${semantic.status}` : ""}
       </summary>
+      {semantic ? (
+        <div className="generator-attempt">
+          <div className="generator-attempt-head">
+            <strong>Semantic rewrite</strong>
+            <span className={semantic.status === "rewritten" ? "text-ok" : "text-warn"}>
+              {semantic.status}
+            </span>
+            {semantic.model ? <span>{semantic.model}</span> : null}
+          </div>
+          {semantic.usage ? (
+            <code className="traj-args">usage {JSON.stringify(semantic.usage)}</code>
+          ) : null}
+          {semantic.rejected_candidates?.length ? (
+            <details className="traj-output">
+              <summary>语义重写被拒候选 · {semantic.rejected_candidates.length}</summary>
+              <pre>{JSON.stringify(semantic.rejected_candidates, null, 2)}</pre>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
       {history.map((item, index) => (
         <div className="generator-attempt" key={index}>
           <div className="generator-attempt-head">
@@ -878,7 +1005,10 @@ export function ConstructionPanel() {
                       <span>#{item.index + 1}</span>
                       <strong>{r.question || r.trajectory_id}</strong>
                       <em className="case-bucket" style={{ color: m.color }}>
-                        {m.label} · 感{enrichmentField(r, "n_perception", 0)}/纠{enrichmentField(r, "n_error", 0)}
+                        {m.label}
+                        {m === MODE_META.failure_recovery
+                          ? ` · 失败前缀 ${enrichmentField(r, "n_failed_prefix_steps", 0)}`
+                          : ` · 感${enrichmentField(r, "n_perception", 0)}/纠${enrichmentField(r, "n_error", 0)}`}
                       </em>
                     </button>
                   );
@@ -890,7 +1020,9 @@ export function ConstructionPanel() {
                     {active ? (
                       <>
                         <span className="bucket-badge" style={{ "--badge": mode.color }}>{mode.label}</span>
-                        {" "}感知 {enrichmentField(active, "n_perception", 0)} · 纠错 {enrichmentField(active, "n_error", 0)}
+                        {modeName === "failure_recovery"
+                          ? ` 失败前缀 ${enrichmentField(active, "n_failed_prefix_steps", 0)}`
+                          : ` 感知 ${enrichmentField(active, "n_perception", 0)} · 纠错 ${enrichmentField(active, "n_error", 0)}`}
                         {active.enrichment?.generator?.model ? ` · ${active.enrichment.generator.model}` : ""}
                       </>
                     ) : "—"}
