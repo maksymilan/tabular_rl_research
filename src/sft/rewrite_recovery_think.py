@@ -137,10 +137,15 @@ def step_brief(step: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_messages(traj: dict[str, Any], feedback: str = "") -> list[dict[str, str]]:
+    source_candidate = (traj.get("enrichment") or {}).get("source_candidate", {})
     payload = {
         "trajectory_id": traj.get("trajectory_id"),
         "question": traj.get("question"),
         "opening_catalog": compact(traj.get("initial_state", {}).get("dataset_overview"), 2000),
+        "structure_only_hint": compact({
+            "selection_method": source_candidate.get("selection_method"),
+            "structural_hint": source_candidate.get("structural_hint"),
+        }, 1800),
         "steps": [step_brief(step) for step in traj.get("steps", [])],
     }
     user = (

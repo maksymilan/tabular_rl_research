@@ -469,6 +469,8 @@ def build_one(candidate: dict[str, Any], clean: dict[str, Any], *,
         "generator": {"model": "deterministic_recovery_builder"},
         "source_candidate": {
             "bucket": candidate.get("bucket"),
+            "selection_method": candidate.get("selection_method"),
+            "structural_hint": candidate.get("structural_hint"),
             "example_index": candidate.get("example_index"),
             "sample_index": candidate.get("failed_sample", {}).get("sample_index"),
             "sample_failure_type": candidate.get("failed_sample", {}).get("failure_type"),
