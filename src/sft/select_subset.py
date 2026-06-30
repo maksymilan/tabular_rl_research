@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Select a small, high-quality SUBSET of verified train trajectories for the reflection/perception
-data pipeline — instead of enriching all ~6.8k, we enrich <200 that PRESERVE the trajectory-length
-distribution and maximise database coverage (≈ one per DB).
+"""Select a high-quality CURRENT-PROTOCOL skeleton subset for the perception/recovery data pipeline.
+
+The output is still a skeleton trajectory file, not final SFT-ready clean data. For clean SFT, run
+`enrich_traj.py` on the selected ids and train only on the resulting `quality_status == "ready"`
+v3-enriched file.
 
 Why: the full set is overkill for the new (more expensive, LLM-in-the-loop) enrichment. A length-
 stratified, DB-diverse subset keeps the difficulty spread of the original while cutting API cost and
-training time by ~40x.
+training time.
 
 Outputs (under data/trajectories/):
-  subset_<N>.jsonl        the selected skeleton trajectories (v2 relational backbone, no perception)
+  subset_<N>.jsonl        selected current-protocol skeleton trajectories (v3, no memory)
   subset_<N>.ids.json     {"subset": [...ids], "smoke": [...10 ids]} for downstream stages
 The 10 smoke ids span the length range EVENLY (not all short), for the human-reviewed smoke test.
 
@@ -25,16 +27,40 @@ import random
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-SRC = os.path.join(ROOT, "data", "trajectories", "spider_train_v2.jsonl")
+DEFAULT_SOURCE = os.path.join(ROOT, "data", "trajectories", "spider_train_v3.jsonl")
+MEMORY_TOOLS = {"add_to_memory", "refine_memory"}
 
 
-def load_skeletons(path: str) -> list[dict]:
+def has_memory_residue(traj: dict) -> bool:
+    text = json.dumps(traj, ensure_ascii=False)
+    if any(marker in text for marker in ("memory_id", "supporting_memory_ids", "mem_")):
+        return True
+    for step in traj.get("steps", []):
+        if (step.get("tool_call") or {}).get("tool") in MEMORY_TOOLS:
+            return True
+    return False
+
+
+def load_skeletons(path: str, *, allow_legacy_source: bool = False) -> list[dict]:
     out = []
     with open(path, encoding="utf-8") as f:
-        for line in f:
+        for line_no, line in enumerate(f, 1):
             line = line.strip()
             if line:
-                out.append(json.loads(line))
+                traj = json.loads(line)
+                schema_version = str(traj.get("schema_version", ""))
+                if not allow_legacy_source and not schema_version.startswith("v3"):
+                    raise ValueError(
+                        f"{path}:{line_no}: expected current v3 schema, got {schema_version!r}. "
+                        "Regenerate with `src/harness/gen_trajectories.py train --tag=_v3` or pass "
+                        "--allow-legacy-source only for migration/debugging."
+                    )
+                if not allow_legacy_source and has_memory_residue(traj):
+                    raise ValueError(
+                        f"{path}:{line_no}: memory residue found in skeleton source; do not use this "
+                        "file for current no-memory SFT data."
+                    )
+                out.append(traj)
     return out
 
 
@@ -123,13 +149,20 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out-prefix", default=None,
                     help="output prefix under data/trajectories; default subset_<N>")
+    ap.add_argument("--source", default=DEFAULT_SOURCE,
+                    help="current-protocol skeleton JSONL source; default spider_train_v3.jsonl")
+    ap.add_argument("--allow-legacy-source", action="store_true",
+                    help="allow non-v3/memory-bearing sources for one-off migration/debugging only")
     ap.add_argument("--exclude-ids", action="append", default=[],
                     help="JSON/JSONL file containing trajectory ids to exclude; may be repeated")
     args = ap.parse_args()
     random.seed(args.seed)
 
     excluded = load_excluded_ids(args.exclude_ids)
-    skeletons = [t for t in load_skeletons(SRC) if t["trajectory_id"] not in excluded]
+    skeletons = [
+        t for t in load_skeletons(args.source, allow_legacy_source=args.allow_legacy_source)
+        if t["trajectory_id"] not in excluded
+    ]
     by_len: dict[int, list] = collections.defaultdict(list)
     for t in skeletons:
         by_len[len(t["steps"])].append(t)
@@ -169,6 +202,7 @@ def main() -> int:
 
     # Report: full vs subset length distribution (proportional preservation) + DB coverage.
     full_total, sub_total = len(skeletons), len(subset)
+    print(f"source {os.path.relpath(args.source, ROOT)}")
     print(f"selected {sub_total} / {full_total}  (DB coverage {len(used_db)} dbs, "
           f"max {max(used_db.values())}/db)")
     if excluded:

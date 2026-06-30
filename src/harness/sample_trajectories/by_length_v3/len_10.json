@@ -1,0 +1,658 @@
+{
+  "trajectory_id": "spider_train_141",
+  "schema_version": "v3",
+  "source": {
+    "dataset": "spider",
+    "db_id": "bike_1",
+    "gold_sql": "SELECT id FROM station WHERE city  =  \"San Francisco\" INTERSECT SELECT station_id FROM status GROUP BY station_id HAVING avg(bikes_available)  >  10"
+  },
+  "question": "What are the ids of stations that are located in San Francisco and have average bike availability above 10.",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "station",
+          "num_rows": 70
+        },
+        {
+          "table_name": "status",
+          "num_rows": 8487
+        },
+        {
+          "table_name": "trip",
+          "num_rows": 9959
+        },
+        {
+          "table_name": "weather",
+          "num_rows": 3665
+        }
+      ],
+      "relations": [
+        {
+          "from": "status.station_id",
+          "to": "station.id"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "station",
+            "status"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "station",
+          "role": "table",
+          "target": {
+            "table": "station"
+          }
+        },
+        {
+          "type": "data",
+          "source": "status",
+          "role": "table",
+          "target": {
+            "table": "status"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "station",
+            "row_count": 70,
+            "columns": [
+              {
+                "name": "id",
+                "type": "integer",
+                "pk": true
+              },
+              {
+                "name": "name",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "lat",
+                "type": "numeric",
+                "pk": false
+              },
+              {
+                "name": "long",
+                "type": "numeric",
+                "pk": false
+              },
+              {
+                "name": "dock_count",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "city",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "installation_date",
+                "type": "text",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          },
+          {
+            "table_name": "status",
+            "row_count": 8487,
+            "columns": [
+              {
+                "name": "station_id",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "bikes_available",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "docks_available",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "time",
+                "type": "text",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "station_id",
+                "references": "station.id"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Check the actual values in this column so the filter literal is grounded.",
+      "tool_call": {
+        "tool": "inspect_column",
+        "arguments": {
+          "table": "station",
+          "column": "city"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "station",
+          "role": "table",
+          "target": {
+            "table": "station"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "column_domain"
+      },
+      "tool_output": {
+        "column": "city",
+        "distinct_count": 5,
+        "has_null": false,
+        "frequent_values": [
+          "San Francisco",
+          "San Jose",
+          "Redwood City",
+          "Mountain View",
+          "Palo Alto"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "station",
+          "conditions": {
+            "column": "city",
+            "op": "=",
+            "value": "San Francisco"
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "station",
+          "role": "table",
+          "target": {
+            "table": "station"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_001"
+      },
+      "tool_output": {
+        "table": "filter_001",
+        "kind": "filter",
+        "columns": [
+          "id",
+          "name",
+          "lat",
+          "long",
+          "dock_count",
+          "city",
+          "installation_date"
+        ],
+        "row_count": 35
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_001",
+          "expressions": [
+            "id"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_3",
+          "role": "table",
+          "target": {
+            "handle": "filter_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_002"
+      },
+      "tool_output": {
+        "table": "project_002",
+        "kind": "project",
+        "columns": [
+          "id"
+        ],
+        "row_count": 35
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "status",
+          "group_by": [
+            "station_id"
+          ],
+          "aggregations": [
+            {
+              "op": "mean",
+              "column": "bikes_available",
+              "as": "mean_1"
+            }
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "status",
+          "role": "table",
+          "target": {
+            "table": "status"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "group_003"
+      },
+      "tool_output": {
+        "table": "group_003",
+        "kind": "group",
+        "columns": [
+          "station_id",
+          "mean_1"
+        ],
+        "row_count": 69
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "group_003",
+          "conditions": {
+            "column": "mean_1",
+            "op": ">",
+            "value": 10
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_5",
+          "role": "table",
+          "target": {
+            "handle": "group_003"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_004"
+      },
+      "tool_output": {
+        "table": "filter_004",
+        "kind": "filter",
+        "columns": [
+          "station_id",
+          "mean_1"
+        ],
+        "row_count": 19
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_004",
+          "expressions": [
+            "station_id"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_6",
+          "role": "table",
+          "target": {
+            "handle": "filter_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_005"
+      },
+      "tool_output": {
+        "table": "project_005",
+        "kind": "project",
+        "columns": [
+          "station_id"
+        ],
+        "row_count": 19
+      }
+    },
+    {
+      "step_id": "step_8",
+      "think": "Combine the two row sets with the set operation.",
+      "tool_call": {
+        "tool": "set_op",
+        "arguments": {
+          "left": "project_002",
+          "right": "project_005",
+          "op": "intersect"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "project_002"
+          }
+        },
+        {
+          "type": "data",
+          "step": "step_7",
+          "role": "table",
+          "target": {
+            "handle": "project_005"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "setop_006"
+      },
+      "tool_output": {
+        "table": "setop_006",
+        "kind": "setop",
+        "columns": [
+          "id"
+        ],
+        "row_count": 14
+      }
+    },
+    {
+      "step_id": "step_9",
+      "think": "Read the evidence rows so the answer is grounded in real data.",
+      "tool_call": {
+        "tool": "read_subtable",
+        "arguments": {
+          "table": "setop_006",
+          "limit": 20
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_8",
+          "role": "table",
+          "target": {
+            "handle": "setop_006"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "rows"
+      },
+      "tool_output": {
+        "table": "setop_006",
+        "rows": [
+          [
+            45
+          ],
+          [
+            48
+          ],
+          [
+            51
+          ],
+          [
+            56
+          ],
+          [
+            57
+          ],
+          [
+            62
+          ],
+          [
+            64
+          ],
+          [
+            65
+          ],
+          [
+            68
+          ],
+          [
+            71
+          ],
+          [
+            72
+          ],
+          [
+            73
+          ],
+          [
+            75
+          ],
+          [
+            77
+          ]
+        ],
+        "row_count": 14
+      }
+    },
+    {
+      "step_id": "step_10",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              45
+            ],
+            [
+              48
+            ],
+            [
+              51
+            ],
+            [
+              56
+            ],
+            [
+              57
+            ],
+            [
+              62
+            ],
+            [
+              64
+            ],
+            [
+              65
+            ],
+            [
+              68
+            ],
+            [
+              71
+            ],
+            [
+              72
+            ],
+            [
+              73
+            ],
+            [
+              75
+            ],
+            [
+              77
+            ]
+          ],
+          "evidence": {
+            "table": "setop_006"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_8",
+          "role": "table",
+          "target": {
+            "handle": "setop_006"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            45
+          ],
+          [
+            48
+          ],
+          [
+            51
+          ],
+          [
+            56
+          ],
+          [
+            57
+          ],
+          [
+            62
+          ],
+          [
+            64
+          ],
+          [
+            65
+          ],
+          [
+            68
+          ],
+          [
+            71
+          ],
+          [
+            72
+          ],
+          [
+            73
+          ],
+          [
+            75
+          ],
+          [
+            77
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      45
+    ],
+    [
+      48
+    ],
+    [
+      51
+    ],
+    [
+      56
+    ],
+    [
+      57
+    ],
+    [
+      62
+    ],
+    [
+      64
+    ],
+    [
+      65
+    ],
+    [
+      68
+    ],
+    [
+      71
+    ],
+    [
+      72
+    ],
+    [
+      73
+    ],
+    [
+      75
+    ],
+    [
+      77
+    ]
+  ]
+}

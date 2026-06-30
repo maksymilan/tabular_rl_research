@@ -1,0 +1,674 @@
+{
+  "trajectory_id": "spider_train_525",
+  "schema_version": "v3",
+  "source": {
+    "dataset": "spider",
+    "db_id": "allergy_1",
+    "gold_sql": "SELECT avg(age) FROM Student WHERE StuID IN ( SELECT T1.StuID FROM Has_allergy AS T1 JOIN Allergy_Type AS T2 ON T1.Allergy  =  T2.Allergy WHERE T2.allergytype  =  \"food\" INTERSECT SELECT T1.StuID FROM Has_allergy AS T1 JOIN Allergy_Type AS T2 ON T1.Allergy  =  T2.Allergy WHERE T2.allergytype  =  \"animal\")"
+  },
+  "question": "Find the average age of the students who have allergies with food and animal types.",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "Allergy_Type",
+          "num_rows": 14
+        },
+        {
+          "table_name": "Has_Allergy",
+          "num_rows": 59
+        },
+        {
+          "table_name": "Student",
+          "num_rows": 34
+        }
+      ],
+      "relations": [
+        {
+          "from": "Has_Allergy.Allergy",
+          "to": "Allergy_Type.Allergy"
+        },
+        {
+          "from": "Has_Allergy.StuID",
+          "to": "Student.StuID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "has_allergy",
+            "allergy_type",
+            "Student"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "has_allergy",
+          "role": "table",
+          "target": {
+            "table": "has_allergy"
+          }
+        },
+        {
+          "type": "data",
+          "source": "allergy_type",
+          "role": "table",
+          "target": {
+            "table": "allergy_type"
+          }
+        },
+        {
+          "type": "data",
+          "source": "Student",
+          "role": "table",
+          "target": {
+            "table": "Student"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "has_allergy",
+            "row_count": 59,
+            "columns": [
+              {
+                "name": "StuID",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "Allergy",
+                "type": "varchar(20)",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "Allergy",
+                "references": "Allergy_Type.Allergy"
+              },
+              {
+                "column": "StuID",
+                "references": "Student.StuID"
+              }
+            ]
+          },
+          {
+            "table_name": "allergy_type",
+            "row_count": 14,
+            "columns": [
+              {
+                "name": "Allergy",
+                "type": "varchar(20)",
+                "pk": true
+              },
+              {
+                "name": "AllergyType",
+                "type": "varchar(20)",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          },
+          {
+            "table_name": "Student",
+            "row_count": 34,
+            "columns": [
+              {
+                "name": "StuID",
+                "type": "integer",
+                "pk": true
+              },
+              {
+                "name": "LName",
+                "type": "varchar(12)",
+                "pk": false
+              },
+              {
+                "name": "Fname",
+                "type": "varchar(12)",
+                "pk": false
+              },
+              {
+                "name": "Age",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "Sex",
+                "type": "varchar(1)",
+                "pk": false
+              },
+              {
+                "name": "Major",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "Advisor",
+                "type": "integer",
+                "pk": false
+              },
+              {
+                "name": "city_code",
+                "type": "varchar(3)",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "has_allergy",
+          "right": "allergy_type",
+          "on": [
+            {
+              "left": "Allergy",
+              "right": "Allergy"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "has_allergy",
+          "role": "table",
+          "target": {
+            "table": "has_allergy"
+          }
+        },
+        {
+          "type": "data",
+          "source": "allergy_type",
+          "role": "table",
+          "target": {
+            "table": "allergy_type"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__StuID",
+          "T1__Allergy",
+          "T2__Allergy",
+          "T2__AllergyType"
+        ],
+        "row_count": 59
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Check the actual values in this column so the filter literal is grounded.",
+      "tool_call": {
+        "tool": "inspect_column",
+        "arguments": {
+          "table": "join_001",
+          "column": "T2__allergytype"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "join_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "column_domain"
+      },
+      "tool_output": {
+        "column": "T2__allergytype",
+        "distinct_count": 3,
+        "has_null": false,
+        "frequent_values": [
+          "food",
+          "environmental",
+          "animal"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_001",
+          "conditions": {
+            "column": "T2__allergytype",
+            "op": "=",
+            "value": "food"
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "join_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_002"
+      },
+      "tool_output": {
+        "table": "filter_002",
+        "kind": "filter",
+        "columns": [
+          "T1__StuID",
+          "T1__Allergy",
+          "T2__Allergy",
+          "T2__AllergyType"
+        ],
+        "row_count": 28
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_002",
+          "expressions": [
+            "T1__StuID"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "filter_002"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_003"
+      },
+      "tool_output": {
+        "table": "project_003",
+        "kind": "project",
+        "columns": [
+          "T1__StuID"
+        ],
+        "row_count": 28
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "has_allergy",
+          "right": "allergy_type",
+          "on": [
+            {
+              "left": "Allergy",
+              "right": "Allergy"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "has_allergy",
+          "role": "table",
+          "target": {
+            "table": "has_allergy"
+          }
+        },
+        {
+          "type": "data",
+          "source": "allergy_type",
+          "role": "table",
+          "target": {
+            "table": "allergy_type"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_004"
+      },
+      "tool_output": {
+        "table": "join_004",
+        "kind": "join",
+        "columns": [
+          "T1__StuID",
+          "T1__Allergy",
+          "T2__Allergy",
+          "T2__AllergyType"
+        ],
+        "row_count": 59
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Check the actual values in this column so the filter literal is grounded.",
+      "tool_call": {
+        "tool": "inspect_column",
+        "arguments": {
+          "table": "join_004",
+          "column": "T2__allergytype"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_6",
+          "role": "table",
+          "target": {
+            "handle": "join_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "column_domain"
+      },
+      "tool_output": {
+        "column": "T2__allergytype",
+        "distinct_count": 3,
+        "has_null": false,
+        "frequent_values": [
+          "food",
+          "environmental",
+          "animal"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "step_id": "step_8",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_004",
+          "conditions": {
+            "column": "T2__allergytype",
+            "op": "=",
+            "value": "animal"
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_6",
+          "role": "table",
+          "target": {
+            "handle": "join_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_005"
+      },
+      "tool_output": {
+        "table": "filter_005",
+        "kind": "filter",
+        "columns": [
+          "T1__StuID",
+          "T1__Allergy",
+          "T2__Allergy",
+          "T2__AllergyType"
+        ],
+        "row_count": 8
+      }
+    },
+    {
+      "step_id": "step_9",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_005",
+          "expressions": [
+            "T1__StuID"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_8",
+          "role": "table",
+          "target": {
+            "handle": "filter_005"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_006"
+      },
+      "tool_output": {
+        "table": "project_006",
+        "kind": "project",
+        "columns": [
+          "T1__StuID"
+        ],
+        "row_count": 8
+      }
+    },
+    {
+      "step_id": "step_10",
+      "think": "Combine the two row sets with the set operation.",
+      "tool_call": {
+        "tool": "set_op",
+        "arguments": {
+          "left": "project_003",
+          "right": "project_006",
+          "op": "intersect"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_5",
+          "role": "table",
+          "target": {
+            "handle": "project_003"
+          }
+        },
+        {
+          "type": "data",
+          "step": "step_9",
+          "role": "table",
+          "target": {
+            "handle": "project_006"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "setop_007"
+      },
+      "tool_output": {
+        "table": "setop_007",
+        "kind": "setop",
+        "columns": [
+          "T1__StuID"
+        ],
+        "row_count": 3
+      }
+    },
+    {
+      "step_id": "step_11",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "Student",
+          "conditions": {
+            "column": "StuID",
+            "op": "in",
+            "in_table": "setop_007"
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "Student",
+          "role": "table",
+          "target": {
+            "table": "Student"
+          }
+        },
+        {
+          "type": "data",
+          "step": "step_10",
+          "role": "in_table",
+          "target": {
+            "handle": "setop_007"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_008"
+      },
+      "tool_output": {
+        "table": "filter_008",
+        "kind": "filter",
+        "columns": [
+          "StuID",
+          "LName",
+          "Fname",
+          "Age",
+          "Sex",
+          "Major",
+          "Advisor",
+          "city_code"
+        ],
+        "row_count": 3
+      }
+    },
+    {
+      "step_id": "step_12",
+      "think": "Compute the scalar aggregate that answers the question.",
+      "tool_call": {
+        "tool": "aggregate",
+        "arguments": {
+          "table": "filter_008",
+          "column": "age",
+          "op": "mean"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_11",
+          "role": "table",
+          "target": {
+            "handle": "filter_008"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "scalar"
+      },
+      "tool_output": {
+        "result_sample": [
+          [
+            18.333333333333332
+          ]
+        ],
+        "row_count": 1
+      }
+    },
+    {
+      "step_id": "step_13",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              18.333333333333332
+            ]
+          ],
+          "evidence": {
+            "table": null
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_12",
+          "role": "table",
+          "target": {
+            "handle": null
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            18.333333333333332
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      18.333333333333332
+    ]
+  ]
+}

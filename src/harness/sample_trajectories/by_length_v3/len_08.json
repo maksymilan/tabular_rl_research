@@ -1,0 +1,441 @@
+{
+  "trajectory_id": "spider_train_12",
+  "schema_version": "v3",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT DISTINCT T1.age FROM management AS T2 JOIN head AS T1 ON T1.head_id  =  T2.head_id WHERE T2.temporary_acting  =  'Yes'"
+  },
+  "question": "What are the distinct ages of the heads who are acting?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5
+        }
+      ],
+      "relations": [
+        {
+          "from": "management.head_ID",
+          "to": "head.head_ID"
+        },
+        {
+          "from": "management.department_ID",
+          "to": "department.Department_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "management",
+            "head"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "management",
+          "role": "table",
+          "target": {
+            "table": "management"
+          }
+        },
+        {
+          "type": "data",
+          "source": "head",
+          "role": "table",
+          "target": {
+            "table": "head"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "management",
+            "row_count": 5,
+            "columns": [
+              {
+                "name": "department_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "head_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "temporary_acting",
+                "type": "text",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "head_ID",
+                "references": "head.head_ID"
+              },
+              {
+                "column": "department_ID",
+                "references": "department.Department_ID"
+              }
+            ]
+          },
+          {
+            "table_name": "head",
+            "row_count": 10,
+            "columns": [
+              {
+                "name": "head_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "name",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "born_state",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "age",
+                "type": "real",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "management",
+          "right": "head",
+          "on": [
+            {
+              "left": "head_id",
+              "right": "head_id"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T2",
+          "right_prefix": "T1"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "management",
+          "role": "table",
+          "target": {
+            "table": "management"
+          }
+        },
+        {
+          "type": "data",
+          "source": "head",
+          "role": "table",
+          "target": {
+            "table": "head"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T2__department_ID",
+          "T2__head_ID",
+          "T2__temporary_acting",
+          "T1__head_ID",
+          "T1__name",
+          "T1__born_state",
+          "T1__age"
+        ],
+        "row_count": 5
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Check the actual values in this column so the filter literal is grounded.",
+      "tool_call": {
+        "tool": "inspect_column",
+        "arguments": {
+          "table": "join_001",
+          "column": "T2__temporary_acting"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "join_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "column_domain"
+      },
+      "tool_output": {
+        "column": "T2__temporary_acting",
+        "distinct_count": 2,
+        "has_null": false,
+        "frequent_values": [
+          "Yes",
+          "No"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_001",
+          "conditions": {
+            "column": "T2__temporary_acting",
+            "op": "=",
+            "value": "Yes"
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "join_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_002"
+      },
+      "tool_output": {
+        "table": "filter_002",
+        "kind": "filter",
+        "columns": [
+          "T2__department_ID",
+          "T2__head_ID",
+          "T2__temporary_acting",
+          "T1__head_ID",
+          "T1__name",
+          "T1__born_state",
+          "T1__age"
+        ],
+        "row_count": 3
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_002",
+          "expressions": [
+            "T1__age"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "filter_002"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_003"
+      },
+      "tool_output": {
+        "table": "project_003",
+        "kind": "project",
+        "columns": [
+          "T1__age"
+        ],
+        "row_count": 3
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "project_003",
+          "group_by": [
+            "T1__age"
+          ],
+          "aggregations": []
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_5",
+          "role": "table",
+          "target": {
+            "handle": "project_003"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "group_004"
+      },
+      "tool_output": {
+        "table": "group_004",
+        "kind": "group",
+        "columns": [
+          "T1__age"
+        ],
+        "row_count": 3
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Read the evidence rows so the answer is grounded in real data.",
+      "tool_call": {
+        "tool": "read_subtable",
+        "arguments": {
+          "table": "group_004",
+          "limit": 20
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_6",
+          "role": "table",
+          "target": {
+            "handle": "group_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "rows"
+      },
+      "tool_output": {
+        "table": "group_004",
+        "rows": [
+          [
+            52.0
+          ],
+          [
+            53.0
+          ],
+          [
+            69.0
+          ]
+        ],
+        "row_count": 3
+      }
+    },
+    {
+      "step_id": "step_8",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              52.0
+            ],
+            [
+              53.0
+            ],
+            [
+              69.0
+            ]
+          ],
+          "evidence": {
+            "table": "group_004"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_6",
+          "role": "table",
+          "target": {
+            "handle": "group_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            52.0
+          ],
+          [
+            53.0
+          ],
+          [
+            69.0
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      52.0
+    ],
+    [
+      53.0
+    ],
+    [
+      69.0
+    ]
+  ]
+}

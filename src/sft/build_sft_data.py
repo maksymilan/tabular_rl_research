@@ -40,6 +40,7 @@ DEFAULT_OUTPUT_DIR = "data/sft"
 DEFAULT_OUTPUT_PREFIX = "spider_v0"
 DEFAULT_DATASET_NAME = "spider_tools_v0"
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+MEMORY_TOOLS = {"add_to_memory", "refine_memory"}
 
 
 def convert(traj: dict) -> dict:
@@ -81,10 +82,31 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def validate_trajectory(traj: dict, source: Path, line_no: int) -> None:
+def has_memory_residue(traj: dict) -> bool:
+    text = json.dumps(traj, ensure_ascii=False)
+    if any(marker in text for marker in ("memory_id", "supporting_memory_ids", "mem_")):
+        return True
+    for step in traj.get("steps", []):
+        if (step.get("tool_call") or {}).get("tool") in MEMORY_TOOLS:
+            return True
+    return False
+
+
+def validate_trajectory(
+    traj: dict,
+    source: Path,
+    line_no: int,
+    *,
+    allow_legacy_memory: bool = False,
+) -> None:
     where = f"{source}:{line_no}"
     if traj.get("label_status") != "verified":
         raise ValueError(f"{where}: trajectory is not execution-verified")
+    if not allow_legacy_memory and has_memory_residue(traj):
+        raise ValueError(
+            f"{where}: memory residue found. Current SFT exports must use the v3 no-memory "
+            "trajectory protocol; pass --allow-legacy-memory only for reproducing old runs."
+        )
     steps = traj.get("steps")
     if not isinstance(steps, list) or not steps:
         raise ValueError(f"{where}: trajectory has no steps")
@@ -98,7 +120,14 @@ def validate_trajectory(traj: dict, source: Path, line_no: int) -> None:
             raise ValueError(f"{where}: step {i} has an invalid tool_call")
 
 
-def build(split: str, max_est_tokens: int, source: Path, out_path: Path) -> dict:
+def build(
+    split: str,
+    max_est_tokens: int,
+    source: Path,
+    out_path: Path,
+    *,
+    allow_legacy_memory: bool = False,
+) -> dict:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
 
@@ -117,7 +146,9 @@ def build(split: str, max_est_tokens: int, source: Path, out_path: Path) -> dict
                     continue
                 source_count += 1
                 traj = json.loads(line)
-                validate_trajectory(traj, source, line_no)
+                validate_trajectory(
+                    traj, source, line_no, allow_legacy_memory=allow_legacy_memory
+                )
                 trajectory_id = traj.get("trajectory_id")
                 if not trajectory_id:
                     raise ValueError(f"{source}:{line_no}: missing trajectory_id")
@@ -229,6 +260,11 @@ def main() -> int:
     ap.add_argument("--output-prefix", default=DEFAULT_OUTPUT_PREFIX)
     ap.add_argument("--dataset-name", default=DEFAULT_DATASET_NAME)
     ap.add_argument("--max-est-tokens", type=int, default=12000)
+    ap.add_argument(
+        "--allow-legacy-memory",
+        action="store_true",
+        help="allow old memory-bearing trajectory protocol only for reproducing legacy runs",
+    )
     args = ap.parse_args()
 
     validate_name(args.output_prefix, "--output-prefix")
@@ -245,7 +281,13 @@ def main() -> int:
         if not source.is_file():
             ap.error(f"input trajectory file not found: {source}")
         out_path = out_dir / f"{args.output_prefix}_{split}.jsonl"
-        manifest = build(split, args.max_est_tokens, source, out_path)
+        manifest = build(
+            split,
+            args.max_est_tokens,
+            source,
+            out_path,
+            allow_legacy_memory=args.allow_legacy_memory,
+        )
         print(f"{split}: source {manifest['source_trajectories']}  kept {manifest['kept']}  "
               f"dropped_overlong {manifest['dropped_overlong']}  "
               f"est_tokens p50/p95/max = {manifest['est_tokens']['p50']}/"

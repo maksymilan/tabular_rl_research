@@ -1,0 +1,177 @@
+{
+  "trajectory_id": "spider_train_10",
+  "schema_version": "v3",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT count(DISTINCT temporary_acting) FROM management"
+  },
+  "question": "How many acting statuses are there?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5
+        }
+      ],
+      "relations": [
+        {
+          "from": "management.head_ID",
+          "to": "head.head_ID"
+        },
+        {
+          "from": "management.department_ID",
+          "to": "department.Department_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "management"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "management",
+          "role": "table",
+          "target": {
+            "table": "management"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "management",
+            "row_count": 5,
+            "columns": [
+              {
+                "name": "department_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "head_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "temporary_acting",
+                "type": "text",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "head_ID",
+                "references": "head.head_ID"
+              },
+              {
+                "column": "department_ID",
+                "references": "department.Department_ID"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Compute the scalar aggregate that answers the question.",
+      "tool_call": {
+        "tool": "aggregate",
+        "arguments": {
+          "table": "management",
+          "column": "temporary_acting",
+          "op": "count_distinct"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "management",
+          "role": "table",
+          "target": {
+            "table": "management"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "scalar"
+      },
+      "tool_output": {
+        "result_sample": [
+          [
+            2
+          ]
+        ],
+        "row_count": 1
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              2
+            ]
+          ],
+          "evidence": {
+            "table": null
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": null
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            2
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      2
+    ]
+  ]
+}

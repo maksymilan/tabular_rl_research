@@ -1,0 +1,597 @@
+{
+  "trajectory_id": "spider_train_288",
+  "schema_version": "v3",
+  "source": {
+    "dataset": "spider",
+    "db_id": "twitter_1",
+    "gold_sql": "SELECT T2.f1 FROM user_profiles AS T1 JOIN follows AS T2 ON T1.uid  =  T2.f2 WHERE T1.name  =  \"Mary\" INTERSECT SELECT T2.f1 FROM user_profiles AS T1 JOIN follows AS T2 ON T1.uid  =  T2.f2 WHERE T1.name  =  \"Susan\""
+  },
+  "question": "Find the id of users who are followed by Mary and Susan.",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "follows",
+          "num_rows": 9
+        },
+        {
+          "table_name": "tweets",
+          "num_rows": 8
+        },
+        {
+          "table_name": "user_profiles",
+          "num_rows": 7
+        }
+      ],
+      "relations": [
+        {
+          "from": "follows.f2",
+          "to": "user_profiles.uid"
+        },
+        {
+          "from": "follows.f1",
+          "to": "user_profiles.uid"
+        },
+        {
+          "from": "tweets.uid",
+          "to": "user_profiles.uid"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "user_profiles",
+            "follows"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "user_profiles",
+          "role": "table",
+          "target": {
+            "table": "user_profiles"
+          }
+        },
+        {
+          "type": "data",
+          "source": "follows",
+          "role": "table",
+          "target": {
+            "table": "follows"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "user_profiles",
+            "row_count": 7,
+            "columns": [
+              {
+                "name": "uid",
+                "type": "int(11)",
+                "pk": true
+              },
+              {
+                "name": "name",
+                "type": "varchar(255)",
+                "pk": false
+              },
+              {
+                "name": "email",
+                "type": "varchar(255)",
+                "pk": false
+              },
+              {
+                "name": "partitionid",
+                "type": "int(11)",
+                "pk": false
+              },
+              {
+                "name": "followers",
+                "type": "int(11)",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          },
+          {
+            "table_name": "follows",
+            "row_count": 9,
+            "columns": [
+              {
+                "name": "f1",
+                "type": "int(11)",
+                "pk": true
+              },
+              {
+                "name": "f2",
+                "type": "int(11)",
+                "pk": true
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "f2",
+                "references": "user_profiles.uid"
+              },
+              {
+                "column": "f1",
+                "references": "user_profiles.uid"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "user_profiles",
+          "right": "follows",
+          "on": [
+            {
+              "left": "uid",
+              "right": "f2"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "user_profiles",
+          "role": "table",
+          "target": {
+            "table": "user_profiles"
+          }
+        },
+        {
+          "type": "data",
+          "source": "follows",
+          "role": "table",
+          "target": {
+            "table": "follows"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__uid",
+          "T1__name",
+          "T1__email",
+          "T1__partitionid",
+          "T1__followers",
+          "T2__f1",
+          "T2__f2"
+        ],
+        "row_count": 9
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Check the actual values in this column so the filter literal is grounded.",
+      "tool_call": {
+        "tool": "inspect_column",
+        "arguments": {
+          "table": "join_001",
+          "column": "T1__name"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "join_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "column_domain"
+      },
+      "tool_output": {
+        "column": "T1__name",
+        "distinct_count": 6,
+        "has_null": false,
+        "frequent_values": [
+          "Iron Man",
+          "Celine Dion",
+          "Black Widow\n",
+          "Tyler Swift",
+          "Susan",
+          "Mary"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_001",
+          "conditions": {
+            "column": "T1__name",
+            "op": "=",
+            "value": "Mary"
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "join_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_002"
+      },
+      "tool_output": {
+        "table": "filter_002",
+        "kind": "filter",
+        "columns": [
+          "T1__uid",
+          "T1__name",
+          "T1__email",
+          "T1__partitionid",
+          "T1__followers",
+          "T2__f1",
+          "T2__f2"
+        ],
+        "row_count": 1
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_002",
+          "expressions": [
+            "T2__f1"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "filter_002"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_003"
+      },
+      "tool_output": {
+        "table": "project_003",
+        "kind": "project",
+        "columns": [
+          "T2__f1"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "user_profiles",
+          "right": "follows",
+          "on": [
+            {
+              "left": "uid",
+              "right": "f2"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "user_profiles",
+          "role": "table",
+          "target": {
+            "table": "user_profiles"
+          }
+        },
+        {
+          "type": "data",
+          "source": "follows",
+          "role": "table",
+          "target": {
+            "table": "follows"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_004"
+      },
+      "tool_output": {
+        "table": "join_004",
+        "kind": "join",
+        "columns": [
+          "T1__uid",
+          "T1__name",
+          "T1__email",
+          "T1__partitionid",
+          "T1__followers",
+          "T2__f1",
+          "T2__f2"
+        ],
+        "row_count": 9
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Check the actual values in this column so the filter literal is grounded.",
+      "tool_call": {
+        "tool": "inspect_column",
+        "arguments": {
+          "table": "join_004",
+          "column": "T1__name"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_6",
+          "role": "table",
+          "target": {
+            "handle": "join_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "column_domain"
+      },
+      "tool_output": {
+        "column": "T1__name",
+        "distinct_count": 6,
+        "has_null": false,
+        "frequent_values": [
+          "Iron Man",
+          "Celine Dion",
+          "Black Widow\n",
+          "Tyler Swift",
+          "Susan",
+          "Mary"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "step_id": "step_8",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_004",
+          "conditions": {
+            "column": "T1__name",
+            "op": "=",
+            "value": "Susan"
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_6",
+          "role": "table",
+          "target": {
+            "handle": "join_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_005"
+      },
+      "tool_output": {
+        "table": "filter_005",
+        "kind": "filter",
+        "columns": [
+          "T1__uid",
+          "T1__name",
+          "T1__email",
+          "T1__partitionid",
+          "T1__followers",
+          "T2__f1",
+          "T2__f2"
+        ],
+        "row_count": 1
+      }
+    },
+    {
+      "step_id": "step_9",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_005",
+          "expressions": [
+            "T2__f1"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_8",
+          "role": "table",
+          "target": {
+            "handle": "filter_005"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_006"
+      },
+      "tool_output": {
+        "table": "project_006",
+        "kind": "project",
+        "columns": [
+          "T2__f1"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            3
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_10",
+      "think": "Combine the two row sets with the set operation.",
+      "tool_call": {
+        "tool": "set_op",
+        "arguments": {
+          "left": "project_003",
+          "right": "project_006",
+          "op": "intersect"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_5",
+          "role": "table",
+          "target": {
+            "handle": "project_003"
+          }
+        },
+        {
+          "type": "data",
+          "step": "step_9",
+          "role": "table",
+          "target": {
+            "handle": "project_006"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "setop_007"
+      },
+      "tool_output": {
+        "table": "setop_007",
+        "kind": "setop",
+        "columns": [
+          "T2__f1"
+        ],
+        "row_count": 0
+      }
+    },
+    {
+      "step_id": "step_11",
+      "think": "Read the evidence rows so the answer is grounded in real data.",
+      "tool_call": {
+        "tool": "read_subtable",
+        "arguments": {
+          "table": "setop_007",
+          "limit": 20
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_10",
+          "role": "table",
+          "target": {
+            "handle": "setop_007"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "rows"
+      },
+      "tool_output": {
+        "table": "setop_007",
+        "rows": [],
+        "row_count": 0
+      }
+    },
+    {
+      "step_id": "step_12",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [],
+          "evidence": {
+            "table": "setop_007"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_10",
+          "role": "table",
+          "target": {
+            "handle": "setop_007"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": []
+      }
+    }
+  ],
+  "final_answer": []
+}

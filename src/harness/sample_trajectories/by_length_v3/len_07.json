@@ -1,0 +1,433 @@
+{
+  "trajectory_id": "spider_train_9",
+  "schema_version": "v3",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT T1.name ,  T1.num_employees FROM department AS T1 JOIN management AS T2 ON T1.department_id  =  T2.department_id WHERE T2.temporary_acting  =  'Yes'"
+  },
+  "question": "Show the name and number of employees for the departments managed by heads whose temporary acting value is 'Yes'?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5
+        }
+      ],
+      "relations": [
+        {
+          "from": "management.head_ID",
+          "to": "head.head_ID"
+        },
+        {
+          "from": "management.department_ID",
+          "to": "department.Department_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "department",
+            "management"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "department",
+          "role": "table",
+          "target": {
+            "table": "department"
+          }
+        },
+        {
+          "type": "data",
+          "source": "management",
+          "role": "table",
+          "target": {
+            "table": "management"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "department",
+            "row_count": 15,
+            "columns": [
+              {
+                "name": "Department_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "Name",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "Creation",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "Ranking",
+                "type": "int",
+                "pk": false
+              },
+              {
+                "name": "Budget_in_Billions",
+                "type": "real",
+                "pk": false
+              },
+              {
+                "name": "Num_Employees",
+                "type": "real",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          },
+          {
+            "table_name": "management",
+            "row_count": 5,
+            "columns": [
+              {
+                "name": "department_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "head_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "temporary_acting",
+                "type": "text",
+                "pk": false
+              }
+            ],
+            "foreign_keys": [
+              {
+                "column": "head_ID",
+                "references": "head.head_ID"
+              },
+              {
+                "column": "department_ID",
+                "references": "department.Department_ID"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "left": "department",
+          "right": "management",
+          "on": [
+            {
+              "left": "department_id",
+              "right": "department_id"
+            }
+          ],
+          "join_type": "inner",
+          "left_prefix": "T1",
+          "right_prefix": "T2"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "department",
+          "role": "table",
+          "target": {
+            "table": "department"
+          }
+        },
+        {
+          "type": "data",
+          "source": "management",
+          "role": "table",
+          "target": {
+            "table": "management"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__Department_ID",
+          "T1__Name",
+          "T1__Creation",
+          "T1__Ranking",
+          "T1__Budget_in_Billions",
+          "T1__Num_Employees",
+          "T2__department_ID",
+          "T2__head_ID",
+          "T2__temporary_acting"
+        ],
+        "row_count": 5
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Check the actual values in this column so the filter literal is grounded.",
+      "tool_call": {
+        "tool": "inspect_column",
+        "arguments": {
+          "table": "join_001",
+          "column": "T2__temporary_acting"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "join_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "column_domain"
+      },
+      "tool_output": {
+        "column": "T2__temporary_acting",
+        "distinct_count": 2,
+        "has_null": false,
+        "frequent_values": [
+          "Yes",
+          "No"
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_001",
+          "conditions": {
+            "column": "T2__temporary_acting",
+            "op": "=",
+            "value": "Yes"
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "join_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_002"
+      },
+      "tool_output": {
+        "table": "filter_002",
+        "kind": "filter",
+        "columns": [
+          "T1__Department_ID",
+          "T1__Name",
+          "T1__Creation",
+          "T1__Ranking",
+          "T1__Budget_in_Billions",
+          "T1__Num_Employees",
+          "T2__department_ID",
+          "T2__head_ID",
+          "T2__temporary_acting"
+        ],
+        "row_count": 3
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_002",
+          "expressions": [
+            "T1__name",
+            "T1__num_employees"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "filter_002"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_003"
+      },
+      "tool_output": {
+        "table": "project_003",
+        "kind": "project",
+        "columns": [
+          "T1__name",
+          "T1__num_employees"
+        ],
+        "row_count": 3
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Read the evidence rows so the answer is grounded in real data.",
+      "tool_call": {
+        "tool": "read_subtable",
+        "arguments": {
+          "table": "project_003",
+          "limit": 20
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_5",
+          "role": "table",
+          "target": {
+            "handle": "project_003"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "rows"
+      },
+      "tool_output": {
+        "table": "project_003",
+        "rows": [
+          [
+            "Treasury",
+            115897.0
+          ],
+          [
+            "Homeland Security",
+            208000.0
+          ],
+          [
+            "Treasury",
+            115897.0
+          ]
+        ],
+        "row_count": 3
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "Treasury",
+              115897.0
+            ],
+            [
+              "Homeland Security",
+              208000.0
+            ],
+            [
+              "Treasury",
+              115897.0
+            ]
+          ],
+          "evidence": {
+            "table": "project_003"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_5",
+          "role": "table",
+          "target": {
+            "handle": "project_003"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "Treasury",
+            115897.0
+          ],
+          [
+            "Homeland Security",
+            208000.0
+          ],
+          [
+            "Treasury",
+            115897.0
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "Treasury",
+      115897.0
+    ],
+    [
+      "Homeland Security",
+      208000.0
+    ],
+    [
+      "Treasury",
+      115897.0
+    ]
+  ]
+}

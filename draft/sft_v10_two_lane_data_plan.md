@@ -50,7 +50,10 @@ Recommended command shape:
 
 Generated initial candidate files:
 
-- `data/trajectories/subset_v10_clean_1600.jsonl`
+- `data/trajectories/subset_v10_clean_1600.jsonl` was an old v2a skeleton artifact and must not be
+  used directly for current SFT. Regenerate the skeleton from `spider_train_v3.jsonl`, or use the
+  current replacement below.
+- `data/trajectories/subset_v10_clean_1600_v3_skeleton.jsonl`
 - `data/trajectories/subset_v10_clean_1600.ids.json`
 - `data/eval_inputs/subset_v10_clean_1600_train_examples.json`
 
@@ -64,6 +67,10 @@ The rollout input file is built from Spider train, not dev:
   --ids data/trajectories/subset_v10_clean_1600.ids.json \
   --output data/eval_inputs/subset_v10_clean_1600_train_examples.json
 ```
+
+Important: `select_subset.py` only selects current-protocol skeletons. The SFT-clean file is the
+output of `enrich_traj.py` after quality filtering, e.g.
+`data/trajectories/subset_v10_clean_1600_v3_ready.jsonl`. Do not train on the skeleton JSONL.
 
 ### Lane B: recovery data
 

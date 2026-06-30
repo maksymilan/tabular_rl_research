@@ -1,0 +1,294 @@
+{
+  "trajectory_id": "spider_train_7",
+  "schema_version": "v3",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT born_state FROM head GROUP BY born_state HAVING count(*)  >=  3"
+  },
+  "question": "What are the names of the states where at least 3 heads were born?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5
+        }
+      ],
+      "relations": [
+        {
+          "from": "management.head_ID",
+          "to": "head.head_ID"
+        },
+        {
+          "from": "management.department_ID",
+          "to": "department.Department_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Read the columns and keys of the tables this question needs before operating.",
+      "tool_call": {
+        "tool": "describe_table",
+        "arguments": {
+          "tables": [
+            "head"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "head",
+          "role": "table",
+          "target": {
+            "table": "head"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "schema"
+      },
+      "tool_output": {
+        "tables": [
+          {
+            "table_name": "head",
+            "row_count": 10,
+            "columns": [
+              {
+                "name": "head_ID",
+                "type": "int",
+                "pk": true
+              },
+              {
+                "name": "name",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "born_state",
+                "type": "text",
+                "pk": false
+              },
+              {
+                "name": "age",
+                "type": "real",
+                "pk": false
+              }
+            ],
+            "foreign_keys": []
+          }
+        ]
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "head",
+          "group_by": [
+            "born_state"
+          ],
+          "aggregations": [
+            {
+              "op": "count",
+              "column": "*",
+              "as": "count_1"
+            }
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "head",
+          "role": "table",
+          "target": {
+            "table": "head"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "group_001"
+      },
+      "tool_output": {
+        "table": "group_001",
+        "kind": "group",
+        "columns": [
+          "born_state",
+          "count_1"
+        ],
+        "row_count": 5
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "group_001",
+          "conditions": {
+            "column": "count_1",
+            "op": ">=",
+            "value": 3
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "group_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_002"
+      },
+      "tool_output": {
+        "table": "filter_002",
+        "kind": "filter",
+        "columns": [
+          "born_state",
+          "count_1"
+        ],
+        "row_count": 1
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_002",
+          "expressions": [
+            "born_state"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_3",
+          "role": "table",
+          "target": {
+            "handle": "filter_002"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_003"
+      },
+      "tool_output": {
+        "table": "project_003",
+        "kind": "project",
+        "columns": [
+          "born_state"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            "California"
+          ]
+        ]
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Read the evidence rows so the answer is grounded in real data.",
+      "tool_call": {
+        "tool": "read_subtable",
+        "arguments": {
+          "table": "project_003",
+          "limit": 20
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "project_003"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "rows"
+      },
+      "tool_output": {
+        "table": "project_003",
+        "rows": [
+          [
+            "California"
+          ]
+        ],
+        "row_count": 1
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "California"
+            ]
+          ],
+          "evidence": {
+            "table": "project_003"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "project_003"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "California"
+          ]
+        ]
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "California"
+    ]
+  ]
+}
