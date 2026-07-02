@@ -23,6 +23,7 @@ the evidence before answering.
 from __future__ import annotations
 
 from compiler import Compiler
+from environment_state import EnvironmentState
 from plan import TABLE_REF_ARGS, resolve_cond
 from provenance import backward_slice, build_references
 
@@ -31,7 +32,7 @@ SCHEMA_VERSION = "v3"  # V2b memory removal + unified references; lazy catalog, 
 # every tool the model may call (table-producing + reading/scalar + perception + memory/terminal)
 TOOLS = set(TABLE_REF_ARGS) | {
     "aggregate", "extreme_value_select", "read_subtable", "describe_table",
-    "inspect_column", "answer_from_context",
+    "inspect_column", "plan", "answer_from_context",
 }
 
 THINK = {
@@ -46,6 +47,7 @@ THINK = {
     "describe_table": "Read the columns and keys of the tables this question needs before operating.",
     "inspect_column": "Check the actual values in this column so the filter literal is grounded.",
     "read_subtable": "Read the evidence rows so the answer is grounded in real data.",
+    "plan": "Create or update the task plan so the next tool calls follow explicit subgoals.",
 }
 
 # how many evidence rows to read before answering (bounded — replaces per-step row inlining)
@@ -134,15 +136,21 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
     steps: list[dict] = []
     final = None
     last_result_stepid: str | None = None   # the step whose output IS the running result (table/scalar)
+    env_state = EnvironmentState(_catalog(h))
 
     def emit_step(tool, display, references, produces, tool_output, think, *, plan_id=None) -> str:
         sid = f"step_{len(steps) + 1}"
         if plan_id is not None:
             planid_to_stepid[plan_id] = sid
         history[sid] = {"tool": tool, "arguments": display, "output": tool_output, "references": references}
+        if tool == "plan":
+            env_state.apply_plan_ops(display.get("ops"), sid)
+        elif tool != "answer_from_context":
+            env_state.apply_tool_result(tool, display, tool_output, sid)
         steps.append({"step_id": sid, "think": think,
                       "tool_call": {"tool": tool, "arguments": display},
-                      "references": references, "produces": produces, "tool_output": tool_output})
+                      "references": references, "produces": produces, "tool_output": tool_output,
+                      "environment_state": env_state.snapshot()})
         return sid
 
     def resolve_step(ref):

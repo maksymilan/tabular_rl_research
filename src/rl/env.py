@@ -73,16 +73,17 @@ class ToolUseEnv:
 
     def reset(self) -> list[dict]:
         self.harness = Harness(db_path(self.example["db_id"]))
+        ov = overview(self.harness)
         self.messages = [
             {"role": "system", "content": self.system_prompt},
             {
                 "role": "user",
-                "content": first_user_message(overview(self.harness), self.example["question"]),
+                "content": first_user_message(ov, self.example["question"]),
             },
         ]
         self.initial_messages = deepcopy(self.messages)
         self.created: set[str] = set()
-        self.ctx = new_ctx()
+        self.ctx = new_ctx(ov)
         self.steps = 0
         self.errors = 0
         self.consecutive_errors = 0
@@ -153,7 +154,11 @@ class ToolUseEnv:
             self.steps += 1
             if table_name:
                 self.created.add(table_name)
-            observation = tool_output_message(step_id, output)
+            observation = tool_output_message(
+                step_id,
+                output,
+                state=self.ctx["environment"].snapshot(),
+            )
             self.messages.append({"role": "user", "content": observation})
             if self.steps >= self.max_steps:
                 self.done = True

@@ -34,12 +34,13 @@ sys.path.insert(0, os.path.join(ROOT, "src", "harness"))
 sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 
 from executor import Harness                                    # noqa: E402
+from environment_state import EnvironmentState                  # noqa: E402
 from plan import resolve_cond, _value_ref_ids                  # noqa: E402
 from scalar_grounding import extract_scalar                    # noqa: E402
 from provenance import build_references                        # noqa: E402
 from emitter import _catalog                                   # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
-from protocol import (SYSTEM_PROMPT, ProtocolError, TOOLS,      # noqa: E402
+from protocol import (ProtocolError, TOOLS, get_system_prompt,  # noqa: E402
                       assistant_message, first_user_message, parse_assistant,
                       rows_equal, tool_output_message)
 
@@ -82,9 +83,9 @@ def overview(h: Harness) -> dict:
     return _catalog(h)
 
 
-def new_ctx() -> dict:
+def new_ctx(catalog: dict | None = None) -> dict:
     """Online harness state threaded across one trajectory's actions (history + provenance)."""
-    return {"history": {}, "handle_to_step": {}}
+    return {"history": {}, "handle_to_step": {}, "environment": EnvironmentState(catalog)}
 
 
 def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
@@ -104,10 +105,16 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
         return None
     references = build_references(tool, args, resolve_step)
 
+    if tool == "plan":
+        output = ctx["environment"].apply_plan_ops(args.get("ops"), step_id)
+        ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
+        return output, None
+
     if tool in ("describe_table", "inspect_column", "read_subtable"):   # read-only perception; no table
         out = getattr(h, tool)(**args)
         output = out if isinstance(out, dict) else {"rows": [list(r) for r in out], "row_count": len(out)}
         ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
+        ctx["environment"].apply_tool_result(tool, args, output, step_id)
         return output, None
 
     exec_args = dict(args)
@@ -129,6 +136,7 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
         output = {"result_sample": [list(r) for r in rows[:5]], "row_count": len(rows)}
         created = None
     ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
+    ctx["environment"].apply_tool_result(tool, args, output, step_id)
     return output, created
 
 
@@ -242,7 +250,9 @@ def fewshot_text(trajectory_ids: list[str]) -> str:
                 f"{assistant_message(s.get('think', ''), tc['tool'], tc['arguments'])}"
             )
             if i < len(t["steps"]) - 1:
-                lines.append(f"USER: {tool_output_message(s['step_id'], s['tool_output'])}")
+                lines.append(
+                    f"USER: {tool_output_message(s['step_id'], s['tool_output'], state=s.get('environment_state'))}"
+                )
         blocks.append("\n".join(lines))
     return "\n\nEXAMPLE SESSIONS\n" + "\n\n---\n\n".join(blocks)
 
@@ -258,11 +268,12 @@ def run_live(
     api_retries: int,
 ) -> dict:
     h = Harness(db_path(ex["db_id"]))
+    ov = overview(h)
     messages = [{"role": "system", "content": system},
-                {"role": "user", "content": first_user_message(overview(h), ex["question"])}]
+                {"role": "user", "content": first_user_message(ov, ex["question"])}]
     initial_messages = deepcopy(messages)
     created: set[str] = set()
-    ctx = new_ctx()
+    ctx = new_ctx(ov)
     steps = errors = consecutive = 0
     text = ""
     turns = []
@@ -353,7 +364,10 @@ def run_live(
         steps += 1
         if tname:
             created.add(tname)
-        messages.append({"role": "user", "content": tool_output_message(step_id, out)})
+        messages.append({
+            "role": "user",
+            "content": tool_output_message(step_id, out, state=ctx["environment"].snapshot()),
+        })
 
     rec["failure_type"] = "max_steps"
     rec["fail"] = "max_steps"
@@ -376,7 +390,7 @@ def run_replay(n: int, path: str = "") -> int:
             total += 1
             h = Harness(db_path(t["source"]["db_id"]))
             created: set[str] = set()
-            ctx = new_ctx()
+            ctx = new_ctx(t.get("initial_state", {}).get("dataset_overview"))
             try:
                 for s in t["steps"][:-1]:
                     tc = s["tool_call"]
@@ -422,7 +436,8 @@ def main() -> int:
     indexed_dev = list(enumerate(json.load(open(os.path.join(SPIDER, "dev.json")))[: args.n]))
     indexed_dev = [(i, ex) for i, ex in indexed_dev if os.path.exists(db_path(ex["db_id"]))]
     fewshot_ids = args.few_shot_ids[:args.few_shot] if args.few_shot else []
-    system = SYSTEM_PROMPT + fewshot_text(fewshot_ids)
+    prompt_variant = os.environ.get("EVAL_SYSTEM_PROMPT_VARIANT") or "default"
+    system = get_system_prompt() + fewshot_text(fewshot_ids)
     writer = None
     if args.result_dir:
         writer = ArtifactWriter(args.result_dir, {
@@ -437,6 +452,7 @@ def main() -> int:
             "max_tokens": args.max_tokens,
             "api_retries": args.api_retries,
             "min_context_retry_tokens": MIN_CONTEXT_RETRY_TOKENS,
+            "system_prompt_variant": prompt_variant,
             "system_prompt": system,
         }, args.resume)
         indexed_dev = [(i, ex) for i, ex in indexed_dev if i not in writer.completed]

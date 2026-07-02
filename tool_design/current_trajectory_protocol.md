@@ -1,4 +1,4 @@
-# Current Trajectory Protocol (v2b / v3)
+# Current Trajectory Protocol (v2c-plan / v3+state)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -29,10 +29,14 @@ system: protocol/system prompt
 user: DATASET OVERVIEW + QUESTION
 assistant: <think>...</think>
            <tool_call>{"tool": "...", "arguments": {...}}</tool_call>
-user: {"step_id":"step_1","status":"success","output":{...}}
+user: {"step_id":"step_1","status":"success","output":{...},"state":{...}}
 ...
 assistant: final answer_from_context tool call
 ```
+
+The `state` block is harness-managed resident context. It groups the current task plan and known
+table context by source table or derived handle. It is optional for legacy trajectories, but new
+v2c-plan trajectories should render it after non-terminal tool calls.
 
 The model emits only:
 
@@ -47,6 +51,7 @@ fields.
 The current v2b tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
+- `plan`
 - `project`
 - `join_tables`
 - `group_aggregate`
@@ -58,7 +63,20 @@ The current v2b tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 - `read_subtable`
 - `answer_from_context`
 
-No `add_to_memory` tool exists in v2b. No reflection or invalidate tool exists.
+No `add_to_memory` tool exists in v2c-plan. No reflection or invalidate tool exists.
+
+## Plan Status
+
+`plan(ops)` is model-visible task-control state managed by the harness. The model can create,
+add, update, or delete subgoals. The plan is not factual evidence:
+
+- it cannot be used through `value_ref`;
+- it cannot support the final answer;
+- it is excluded from data/value provenance slices;
+- it may receive separate planning/process rewards.
+
+External-model plan enrichment should generate natural plan wording and updates, while deterministic
+checks enforce that plan items do not leak facts unsupported by later observations.
 
 ## Memory Status
 

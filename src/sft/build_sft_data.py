@@ -60,7 +60,12 @@ def convert(traj: dict) -> dict:
                 status = output.get("status", status)
                 output = output.get("output", {"error": output.get("error")})
             conv.append({"from": "observation",
-                         "value": tool_output_message(s["step_id"], output, status=status)})
+                         "value": tool_output_message(
+                             s["step_id"],
+                             output,
+                             status=status,
+                             state=s.get("environment_state"),
+                         )})
     return {"system": SYSTEM_PROMPT, "conversations": conv}
 
 

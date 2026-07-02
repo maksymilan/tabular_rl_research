@@ -29,6 +29,7 @@ from protocol import (  # noqa: E402
     ProtocolError,
     assistant_message,
     first_user_message,
+    get_system_prompt,
     parse_assistant,
     tool_output_message,
 )
@@ -37,6 +38,7 @@ from rollout import (  # noqa: E402
     ContextOverflowError,
     DEFAULT_MAX_TOKENS,
     MAX_CONSECUTIVE_ERRORS,
+    MIN_CONTEXT_RETRY_TOKENS,
     db_path,
     execute_tool,
     is_context_overflow,
@@ -84,20 +86,22 @@ def chat_sample(
     temperature: float,
     top_p: float,
     retries: int,
+    min_context_retry_tokens: int = MIN_CONTEXT_RETRY_TOKENS,
 ) -> str:
     payload = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
         "top_p": top_p,
-        "max_tokens": max_tokens,
     }
     think = os.environ.get("EVAL_ENABLE_THINKING")
     if think is not None:
         payload["chat_template_kwargs"] = {"enable_thinking": think == "1"}
 
+    current_max_tokens = max_tokens
     transient_attempts = 0
     while True:
+        payload["max_tokens"] = current_max_tokens
         body = json.dumps(payload).encode()
         req = urllib.request.Request(
             f"{base_url.rstrip('/')}/chat/completions",
@@ -111,6 +115,12 @@ def chat_sample(
         except urllib.error.HTTPError as exc:
             body_text = exc.read().decode("utf-8", errors="replace")
             if is_context_overflow(body_text):
+                if current_max_tokens > min_context_retry_tokens:
+                    current_max_tokens = max(
+                        min_context_retry_tokens,
+                        current_max_tokens // 2,
+                    )
+                    continue
                 raise ContextOverflowError(
                     f"HTTP {exc.code}: {body_text}", status=exc.code, body=body_text
                 ) from exc
@@ -141,12 +151,13 @@ def run_sample(
     api_retries: int,
 ) -> dict:
     h = Harness(db_path(ex["db_id"]))
+    ov = overview(h)
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": first_user_message(overview(h), ex["question"])},
+        {"role": "user", "content": first_user_message(ov, ex["question"])},
     ]
     created: set[str] = set()
-    ctx = new_ctx()
+    ctx = new_ctx(ov)
     steps = errors = consecutive = 0
     turns = []
     started = time.time()
@@ -231,7 +242,10 @@ def run_sample(
         steps += 1
         if table_name:
             created.add(table_name)
-        messages.append({"role": "user", "content": tool_output_message(step_id, out)})
+        messages.append({
+            "role": "user",
+            "content": tool_output_message(step_id, out, state=ctx["environment"].snapshot()),
+        })
 
     if rec["failure_type"] is None:
         rec["failure_type"] = "max_steps"
@@ -258,9 +272,10 @@ def run_one(
     api_retries: int,
 ) -> dict:
     initial_harness = Harness(db_path(ex["db_id"]))
+    initial_overview = overview(initial_harness)
     initial_input = [
         {"role": "system", "content": system},
-        {"role": "user", "content": first_user_message(overview(initial_harness), ex["question"])},
+        {"role": "user", "content": first_user_message(initial_overview, ex["question"])},
     ]
     started = time.time()
     record = {
@@ -333,7 +348,9 @@ def fewshot_text(trajectory_ids: list[str]) -> str:
                 + assistant_message(step.get("think", ""), tool_call["tool"], tool_call["arguments"])
             )
             if index < len(trajectory["steps"]) - 1:
-                lines.append(f"USER: {tool_output_message(step['step_id'], step['tool_output'])}")
+                lines.append(
+                    f"USER: {tool_output_message(step['step_id'], step['tool_output'], state=step.get('environment_state'))}"
+                )
         blocks.append("\n".join(lines))
     return "\n\nEXAMPLE SESSIONS\n" + "\n\n---\n\n".join(blocks)
 
@@ -369,7 +386,8 @@ def main() -> int:
     if args.sample_workers <= 0:
         parser.error("--sample-workers must be positive")
 
-    system = __import__("protocol").SYSTEM_PROMPT
+    prompt_variant = os.environ.get("EVAL_SYSTEM_PROMPT_VARIANT") or "default"
+    system = get_system_prompt()
     if args.few_shot:
         from rollout import DEFAULT_FEWSHOT_IDS
 
@@ -391,6 +409,8 @@ def main() -> int:
         "api_retries": args.api_retries,
         "few_shot": args.few_shot,
         "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
+        "system_prompt_variant": prompt_variant,
+        "system_prompt": system,
     }, args.resume)
 
     indexed_examples, source_name = load_indexed_examples(args.examples_json, args.n)

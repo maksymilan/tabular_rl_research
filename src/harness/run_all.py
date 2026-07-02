@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.join(HERE, "tests"))
 from compiler import Compiler, CompileError  # noqa: E402
 
 import test_executor          # noqa: E402
+import test_environment_state # noqa: E402
 import test_plan              # noqa: E402
 import test_compiler          # noqa: E402
 import test_verify            # noqa: E402
@@ -32,7 +33,7 @@ SPIDER = os.path.join(ROOT, "data/spider/spider/train-00000-of-00001.parquet")
 def run_unit_tests():
     """Run each module's run() -> list of (module, passed, failed, fails)."""
     results = []
-    for mod in (test_executor, test_plan, test_compiler, test_verify, test_emitter):
+    for mod in (test_executor, test_environment_state, test_plan, test_compiler, test_verify, test_emitter):
         passed, failed, fails = mod.run()
         results.append((mod.run.__module__, passed, failed, fails))
     return results

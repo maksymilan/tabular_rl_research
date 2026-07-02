@@ -76,6 +76,14 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   §5. Deferred (in SSOT §2): C (perception grounding edges + reward), F (subtable consolidation —
   empirically triggered by the first perception-SFT failure modes), D-3/D-4 (regenerate perception
   data + SFT).
+- **V2c-plan/context scaffolding started (2026-07-02)**: `plan(ops)` is now a model-visible,
+  harness-managed task-control tool for creating/updating/deleting subgoals. Plan state is not
+  factual evidence: it cannot support `value_ref` or final answers and is excluded from data/value
+  provenance slices. New shared `src/harness/environment_state.py` maintains resident context with
+  plan items plus per-table/handle schema, inspected column domains, reads, and produced handles.
+  Online rollout/RL env and offline SFT rendering can include this `state` snapshot in observation
+  envelopes. External-model enrichment should generate natural plan wording/updates, while harness
+  checks remain the trust boundary.
 - **7B / V2a and V2-ctx evaluations done (2026-06-15)**: V2a scores **66.83%** and V2-ctx scores
   **62.77%** on the full 1,034-example Spider dev set, versus v1 **68.38%** and direct SQL
   **69.25%**. V2-ctx preserves the large-database context invariant but exposes a planning weakness:

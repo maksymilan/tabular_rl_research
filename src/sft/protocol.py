@@ -16,12 +16,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 
 # v0 action space = exactly the tools present in the compiled Spider data. Perception / fuzzy tools
 # (inspect_column, semantic_match, ...) enter with the v1 data; exposing unlearned tools at eval
 # time only invites illegal calls.
 TOOL_SPECS: dict[str, str] = {
+    "plan":
+        'plan(ops) -> update the task plan managed by the harness. Call this first to split the '
+        'question into subgoals, and later to add/update/delete subgoals as observations change. '
+        'ops: [{"op": create|add|update|delete, "id": "...", "goal": "...", '
+        '"status": pending|in_progress|done|blocked, "depends_on": [...], '
+        '"evidence_step_id": "step_k", "notes": "..."}]. The plan is control state only: it '
+        'cannot be used as factual evidence, value_ref, or final-answer support.',
     "condition_filter":
         'condition_filter(table, conditions) -> new table with the rows that satisfy `conditions`.\n'
         '  conditions: a predicate {"column": c, "op": o, "value": v} with op in '
@@ -61,9 +69,10 @@ TOOL_SPECS: dict[str, str] = {
         'tables (tables is a list; pass several at once). The opening overview lists only table names '
         'and relations, so read the schema of the tables you need before operating on them.',
     "inspect_column":
-        'inspect_column(table, column) -> the distinct count, most frequent values and NULL flag of a '
-        'column. Use it to ground a filter literal (does "France" exist? what is the exact spelling?) '
-        'before condition_filter.',
+        'inspect_column(table, column, value?) -> the distinct count, most frequent values and NULL '
+        'flag of a column. Use it to ground a filter literal (does "France" exist? what is the exact '
+        'spelling?) before condition_filter. Pass the literal you intend to filter on as `value` to '
+        'get a definitive value_present check that is never lost to truncation.',
     "read_subtable":
         'read_subtable(table, limit=20) -> the actual rows of a table (bounded). Tool results otherwise '
         'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
@@ -76,12 +85,13 @@ TOOL_SPECS: dict[str, str] = {
 
 TOOLS = set(TOOL_SPECS)
 
-PROTOCOL_VERSION = "v2b"   # bump when specs, rendering, or the memory model change
+PROTOCOL_VERSION = "v2c-plan"   # bump when specs, rendering, or the memory model change
 
 # Strict per-tool argument schema (required, optional). Unlisted keys are rejected so the SFT data
 # and the live rollout can never silently drift. V2b: a predicate's `value_ref` cites the producing
 # step_id directly; there is no add_to_memory tool and no model-authored value.
 _ARG_SCHEMA: dict[str, tuple[set, set]] = {
+    "plan": ({"ops"}, set()),
     "condition_filter": ({"table", "conditions"}, {"return_columns", "preview_k"}),
     "project": ({"table", "expressions"}, set()),
     "join_tables": ({"left", "right"}, {"on", "join_type", "left_prefix", "right_prefix", "return_columns"}),
@@ -91,7 +101,7 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "set_op": ({"left", "right", "op"}, set()),
     "derive_column": ({"table", "new_column", "expression"}, set()),
     "describe_table": ({"tables"}, set()),
-    "inspect_column": ({"table", "column"}, {"top_k"}),
+    "inspect_column": ({"table", "column"}, {"top_k", "value"}),
     "read_subtable": ({"table"}, {"limit", "columns"}),
     "answer_from_context": ({"answer", "evidence"}, {"reason"}),
 }
@@ -126,16 +136,56 @@ SYSTEM_PROMPT = (
     "columns of the tables you need with describe_table before operating. Each tool result is an "
     "observation {\"step_id\", \"status\", \"output\"}: step_id names that step so you can cite it "
     "later (e.g. as a predicate's value_ref); a table-creating tool's output is only a HANDLE "
-    "(table name, columns, row_count) — use read_subtable to SEE its rows.\n\n"
+    "(table name, columns, row_count) — use read_subtable to SEE its rows. Observations may also "
+    "include a harness-managed resident state block that groups the current plan and known table "
+    "context by table/handle.\n\n"
     "TOOLS\n" + "\n".join(TOOL_SPECS.values()) + "\n\n"
     "RULES\n"
     "1. Each turn, output exactly: <think>brief reasoning</think> then "
     '<tool_call>{"tool": "<name>", "arguments": {...}}</tool_call>. Nothing else.\n'
-    "2. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
-    "3. To use a computed scalar as a threshold, set the predicate's "
+    "2. Start with plan to break the task into subgoals; update it when observations change.\n"
+    "3. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
+    "4. To use a computed scalar as a threshold, set the predicate's "
     '{"value_ref": step_id} to the step that produced that scalar.\n'
-    "4. read_subtable the evidence table, then finish with answer_from_context citing that table.\n"
+    "5. read_subtable the evidence table, then finish with answer_from_context citing that table.\n"
 )
+
+SYSTEM_PROMPT_COMPACT = (
+    "You are a table-tool agent. Answer by calling one tool per turn.\n\n"
+    "STRICT FORMAT\n"
+    "Each turn output exactly:\n"
+    "<think>brief reason for this action</think>\n"
+    '<tool_call>{"tool":"...","arguments":{...}}</tool_call>\n'
+    "No text outside these tags.\n\n"
+    "CONTEXT\n"
+    "The opening overview is only a catalog: table names, row counts, and relations. It has no "
+    "columns. Use describe_table only for relevant unresolved tables. Tool-created tables return "
+    "handles (table, columns, row_count), not rows. Use existing handles instead of restarting from "
+    "source tables. Use plan first to create subgoals, then update it as work completes or changes.\n\n"
+    "POLICY\n"
+    "Inspect a text column before filtering by a literal unless that column was already inspected. "
+    "Avoid repeating the same observation. Use read_subtable only when row values are needed; for "
+    "scalar aggregate answers, answer directly with evidence=null. Before a row-valued final answer, "
+    "read the evidence table and cite it.\n\n"
+    "TOOLS\n"
+    "plan(ops), describe_table(tables), inspect_column(table,column,top_k?,value?), condition_filter(table,conditions), "
+    "project(table,expressions), join_tables(left,right,on?,join_type?,left_prefix?,right_prefix?), "
+    "group_aggregate(table,group_by,aggregations,passthrough?), aggregate(table,column,op), "
+    "extreme_value_select(table,order_by,top_k?,return_columns?), set_op(left,right,op), "
+    "read_subtable(table,limit?,columns?), answer_from_context(answer,evidence,reason?).\n"
+)
+
+
+def get_system_prompt() -> str:
+    """Return the default train/eval prompt, or a compact eval-only variant.
+
+    The default remains SYSTEM_PROMPT so SFT data and existing protocol hashes stay stable.
+    Set EVAL_SYSTEM_PROMPT_VARIANT=compact for prompt-ablation evaluations.
+    """
+    variant = os.environ.get("EVAL_SYSTEM_PROMPT_VARIANT", "").strip().lower()
+    if variant in {"compact", "short"}:
+        return SYSTEM_PROMPT_COMPACT
+    return SYSTEM_PROMPT
 
 
 class ProtocolError(Exception):
@@ -155,10 +205,14 @@ def assistant_message(think: str, tool: str, arguments: dict) -> str:
             f"<tool_call>{_compact({'tool': tool, 'arguments': arguments})}</tool_call>")
 
 
-def tool_output_message(step_id: str, output: dict, status: str = "success") -> str:
+def tool_output_message(step_id: str, output: dict, status: str = "success",
+                        state: dict | None = None) -> str:
     """Observation envelope: a stable `step_id` (so the model can cite it as `source_step_id`),
     a status, and the tool output. Identical offline (SFT) and online (rollout)."""
-    return _compact({"step_id": step_id, "status": status, "output": output})
+    msg = {"step_id": step_id, "status": status, "output": output}
+    if state is not None:
+        msg["state"] = state
+    return _compact(msg)
 
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
