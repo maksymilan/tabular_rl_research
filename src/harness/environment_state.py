@@ -34,6 +34,33 @@ def _status(value: Any) -> str:
     return s
 
 
+def _result(value: Any) -> Any:
+    """Normalize a model-authored subtask result/conclusion.
+
+    The harness stores this as task-control state only. It is not a factual evidence channel and
+    cannot be consumed as `value_ref` or final-answer support.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        return {"type": "text", "summary": text}
+    if isinstance(value, bool):
+        return {"type": "boolean", "value": value}
+    if isinstance(value, (int, float)):
+        return {"type": "scalar", "value": value}
+    if isinstance(value, list):
+        return {"type": "list", "value": deepcopy(value)}
+    if isinstance(value, dict):
+        out = deepcopy(value)
+        if "type" not in out:
+            out["type"] = "structured"
+        return out
+    raise EnvironmentStateError(f"invalid plan result type {type(value).__name__}")
+
+
 class EnvironmentState:
     """Resident task state rendered alongside transient observations."""
 
@@ -107,6 +134,10 @@ class EnvironmentState:
                 for key in ("depends_on", "notes", "evidence_step_id"):
                     if key in op:
                         item[key] = deepcopy(op[key])
+                if "result" in op:
+                    item["result"] = _result(op["result"])
+                elif "conclusion" in op:
+                    item["result"] = _result(op["conclusion"])
                 self.plan[item_id] = item
                 if item_id not in self.plan_order:
                     self.plan_order.append(item_id)
@@ -123,12 +154,21 @@ class EnvironmentState:
                 changes.append({"op": "delete", "id": item_id})
                 continue
 
-            allowed = {"goal", "status", "depends_on", "notes", "evidence_step_id"}
+            allowed = {"goal", "status", "depends_on", "notes", "evidence_step_id", "result", "conclusion"}
             updated = False
             for key in allowed:
                 if key not in op:
                     continue
-                self.plan[item_id][key] = _status(op[key]) if key == "status" else deepcopy(op[key])
+                if key == "status":
+                    self.plan[item_id][key] = _status(op[key])
+                elif key in {"result", "conclusion"}:
+                    normalized = _result(op[key])
+                    if normalized is None:
+                        self.plan[item_id].pop("result", None)
+                    else:
+                        self.plan[item_id]["result"] = normalized
+                else:
+                    self.plan[item_id][key] = deepcopy(op[key])
                 updated = True
             if not updated:
                 raise EnvironmentStateError(f"update for {item_id!r} changes no fields")

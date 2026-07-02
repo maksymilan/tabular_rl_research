@@ -77,7 +77,14 @@ No `add_to_memory` tool exists in v2c-plan. No reflection or invalidate tool exi
 ## Plan Status
 
 `plan(ops)` is model-visible task-control state managed by the harness. The model can create,
-add, update, or delete subgoals. The plan is not factual evidence:
+add, update, or delete subgoals. Each plan item separates completion from conclusion:
+
+- `status`: `pending|in_progress|done|blocked` says whether the subtask is complete;
+- `result`: optional model-authored subtask answer/conclusion, such as
+  `{type:"boolean", value:true}`, `{type:"scalar", value:3}`, or
+  `{type:"text", summary:"..."}`.
+
+The plan is not factual evidence:
 
 - it cannot be used through `value_ref`;
 - it cannot support the final answer;

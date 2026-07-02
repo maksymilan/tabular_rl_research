@@ -18,6 +18,20 @@ def run():
     ], "step_1")
     t.check("plan creates one item", len(out["plan"]) == 1, str(out))
     t.check("plan updates status", out["plan"][0]["status"] == "in_progress", str(out))
+    out = state.apply_plan_ops([
+        {"op": "update", "id": "p1", "status": "done",
+         "result": {"type": "boolean", "value": True, "summary": "engineering rows were found"},
+         "evidence_step_id": "step_0"},
+    ], "step_1b")
+    t.check("plan stores result object",
+            out["plan"][0]["result"]["value"] is True and out["plan"][0]["status"] == "done",
+            str(out))
+    state.apply_plan_ops([
+        {"op": "update", "id": "p1", "conclusion": "Use the filtered employee rows next."},
+    ], "step_1c")
+    t.check("plan conclusion normalizes to result text",
+            state.snapshot()["plan"][0]["result"]["summary"] == "Use the filtered employee rows next.",
+            str(state.snapshot()))
 
     desc = h.describe_table(["employees"])
     state.apply_tool_result("describe_table", {"tables": ["employees"]}, desc, "step_2")

@@ -28,8 +28,11 @@ TOOL_SPECS: dict[str, str] = {
         'question into subgoals, and later to add/update/delete subgoals as observations change. '
         'ops: [{"op": create|add|update|delete, "id": "...", "goal": "...", '
         '"status": pending|in_progress|done|blocked, "depends_on": [...], '
-        '"evidence_step_id": "step_k", "notes": "..."}]. The plan is control state only: it '
-        'cannot be used as factual evidence, value_ref, or final-answer support.',
+        '"evidence_step_id": "step_k", "result": {"type": boolean|scalar|list|text|structured, '
+        '"value": ..., "summary": "..."}, "notes": "..."}]. `status` says whether the subtask is '
+        'finished; `result` records the subtask answer/conclusion (e.g. true/false, a scalar, or a '
+        'short conclusion). The plan is control state only: it cannot be used as factual evidence, '
+        'value_ref, or final-answer support.',
     "condition_filter":
         'condition_filter(table, conditions) -> new table with the rows that satisfy `conditions`.\n'
         '  conditions: a predicate {"column": c, "op": o, "value": v} with op in '

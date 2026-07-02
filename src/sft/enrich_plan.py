@@ -45,7 +45,10 @@ SYSTEM = (
     "a small number of plan updates that reflect progress after important backbone steps.\n\n"
     "The plan is control state only. It must not claim unsupported facts, leak final answers, or "
     "invent table values. It can say what needs to be checked or computed, and later mark a "
-    "subgoal done when a corresponding tool step has executed.\n\n"
+    "subgoal done when a corresponding tool step has executed. A done or blocked subgoal should "
+    "also record `result`: the subtask's current answer or conclusion, such as a boolean, scalar, "
+    "list, or short text summary. `status` says whether the subtask is complete; `result` says what "
+    "the subtask found.\n\n"
     "Output ONLY JSON:\n"
     "{\n"
     "  \"initial_think\": \"first-person reason for creating the plan\",\n"
@@ -55,12 +58,16 @@ SYSTEM = (
     "  \"updates\": [\n"
     "    {\"after_step\": 1, \"think\":\"first-person reason for updating the plan\", "
     "\"ops\":[{\"op\":\"update\", \"id\":\"p1\", \"status\":\"done\", "
-    "\"evidence_step_id\":\"step_1\", \"notes\":\"...\"}]}\n"
+    "\"evidence_step_id\":\"step_1\", \"result\":{\"type\":\"text\", \"summary\":\"...\"}, "
+    "\"notes\":\"...\"}]}\n"
     "  ]\n"
     "}\n\n"
     "`after_step` is the 1-based index of the raw backbone step after which to insert the update. "
     "Do not insert updates after the final answer_from_context step; the final answer must remain "
-    "terminal. Use at most 4 initial goals and at most 6 update blocks. Use ids p1, p2, ... ."
+    "terminal. Use at most 4 initial goals and at most 6 update blocks. Use ids p1, p2, ... . "
+    "For `result`, prefer {\"type\":\"boolean\",\"value\":true|false,\"summary\":\"...\"} for "
+    "yes/no checks, {\"type\":\"scalar\",\"value\":...} for counts/aggregates, and "
+    "{\"type\":\"text\",\"summary\":\"...\"} for qualitative progress conclusions."
 )
 
 
@@ -151,14 +158,17 @@ def template_plan(traj: dict) -> dict:
         updates.append({
             "after_step": max(1, len(tools) // 2),
             "think": "The intermediate computation is underway, so I update the plan to track progress.",
-            "ops": [{"op": "update", "id": "p1", "status": "done", "evidence_step_id": "step_1"}],
+            "ops": [{"op": "update", "id": "p1", "status": "done", "evidence_step_id": "step_1",
+                     "result": {"type": "text", "summary": "The relevant intermediate result has been started."}}],
         })
         updates.append({
             "after_step": max(1, len(tools) - 1),
             "think": "The final answer step has been reached, so I close the remaining plan items.",
             "ops": [
-                {"op": "update", "id": "p2", "status": "done"},
-                {"op": "update", "id": "p3", "status": "done"},
+                {"op": "update", "id": "p2", "status": "done",
+                 "result": {"type": "text", "summary": "The required relational operations are complete."}},
+                {"op": "update", "id": "p3", "status": "done",
+                 "result": {"type": "text", "summary": "The final answer is ready to submit."}},
             ],
         })
     return {
@@ -188,7 +198,7 @@ def normalize_plan_payload(payload: dict, n_steps: int) -> dict:
             raise ValueError(f"plan item {item_id} has no goal")
         op = {"op": "create", "id": item_id, "goal": goal,
               "status": item.get("status") or "pending"}
-        for key in ("depends_on", "notes"):
+        for key in ("depends_on", "notes", "result", "conclusion"):
             if key in item:
                 op[key] = item[key]
         create_ops.append(op)
@@ -216,7 +226,8 @@ def normalize_plan_payload(payload: dict, n_steps: int) -> dict:
             if not isinstance(item_id, str) or not item_id.strip():
                 continue
             clean = {"op": action, "id": item_id.strip()}
-            for key in ("goal", "status", "depends_on", "notes", "reason", "evidence_step_id"):
+            for key in ("goal", "status", "depends_on", "notes", "reason", "evidence_step_id",
+                        "result", "conclusion"):
                 if key in op:
                     clean[key] = op[key]
             clean_ops.append(clean)

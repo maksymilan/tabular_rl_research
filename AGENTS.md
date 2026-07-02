@@ -79,7 +79,9 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
 - **V2c-plan/context scaffolding started (2026-07-02)**: `plan(ops)` is now a model-visible,
   harness-managed task-control tool for creating/updating/deleting subgoals. Plan state is not
   factual evidence: it cannot support `value_ref` or final answers and is excluded from data/value
-  provenance slices. New shared `src/harness/environment_state.py` maintains resident context with
+  provenance slices. Plan items separate `status` (completion) from `result` (model-authored
+  subtask answer/conclusion such as boolean/scalar/text); `result` is still control state, not
+  grounded memory. New shared `src/harness/environment_state.py` maintains resident context with
   plan items plus per-table/handle schema, inspected column domains, reads, and produced handles.
   Online rollout/RL env and offline SFT rendering can include this `state` snapshot in observation
   envelopes. The raw SQL→trajectory emitter now produces the verified relational backbone only; it
