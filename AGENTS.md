@@ -82,7 +82,9 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   provenance slices. New shared `src/harness/environment_state.py` maintains resident context with
   plan items plus per-table/handle schema, inspected column domains, reads, and produced handles.
   Online rollout/RL env and offline SFT rendering can include this `state` snapshot in observation
-  envelopes. External-model enrichment should generate natural plan wording/updates, while harness
+  envelopes. The raw SQL→trajectory emitter now produces the verified relational backbone only; it
+  does **not** mechanically inject `describe_table` / `inspect_column` / `read_subtable`. External-
+  model enrichment owns natural plan wording/updates and perception-step insertion, while harness
   checks remain the trust boundary.
 - **7B / V2a and V2-ctx evaluations done (2026-06-15)**: V2a scores **66.83%** and V2-ctx scores
   **62.77%** on the full 1,034-example Spider dev set, versus v1 **68.38%** and direct SQL

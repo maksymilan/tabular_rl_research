@@ -14,11 +14,12 @@ descriptor. A predicate's `value_ref` cites the producing step directly (there i
 depends on. `validate()` = legality + reference-integrity gate. The model never emits
 `references`/`produces` — they are harness-derived sidecars.
 
-V2-ctx — bounded context (so large DBs fit): the opening overview is a lazy CATALOG (table names +
+V2c-plan — bounded context (so large DBs fit): the opening overview is a lazy CATALOG (table names +
 row_counts + FK relations, NO columns); table-producing steps emit metadata-only handles (no inlined
-rows; a 1x1 scalar result keeps its one cell); the emitter injects read-only resident perception —
-`describe_table` the touched tables, `inspect_column` before a string-literal filter, `read_subtable`
-the evidence before answering.
+rows; a 1x1 scalar result keeps its one cell). The raw emitter produces the verified relational
+backbone only. Perception steps (`describe_table`, `inspect_column`, `read_subtable`) are inserted by
+the external-model enrichment pass so they can follow the actual reasoning context instead of a
+mechanical template.
 """
 from __future__ import annotations
 
@@ -44,14 +45,8 @@ THINK = {
     "project": "Project the output columns the question asks for.",
     "set_op": "Combine the two row sets with the set operation.",
     "aggregate": "Compute the scalar aggregate that answers the question.",
-    "describe_table": "Read the columns and keys of the tables this question needs before operating.",
-    "inspect_column": "Check the actual values in this column so the filter literal is grounded.",
-    "read_subtable": "Read the evidence rows so the answer is grounded in real data.",
     "plan": "Create or update the task plan so the next tool calls follow explicit subgoals.",
 }
-
-# how many evidence rows to read before answering (bounded — replaces per-step row inlining)
-READ_EVIDENCE_LIMIT = 20
 
 
 def _catalog(h) -> dict:
@@ -89,40 +84,6 @@ def _rewrite_value_ref(cond, planid_to_stepid: dict):
         out["value_ref"] = planid_to_stepid[out["value_ref"]]
     return out
 
-
-def _source_tables(plan) -> list[str]:
-    """Distinct base (source) tables the plan touches, in first-seen order — for the injected
-    `describe_table` step (acquire only the RELEVANT schemas, not the whole DB)."""
-    step_ids = {s.id for s in plan}
-    seen, out = set(), []
-    for s in plan:
-        for key in TABLE_REF_ARGS.get(s.tool, []):
-            v = s.args.get(key)
-            if isinstance(v, str) and v not in step_ids and v not in seen:
-                seen.add(v)
-                out.append(v)
-    return out
-
-
-def _string_literal_columns(cond):
-    """Columns compared to a STRING literal (=/contains/like) — where grounding via inspect_column
-    matters (conservative injection: numeric filters are not injected)."""
-    if isinstance(cond, list):
-        for c in cond:
-            yield from _string_literal_columns(c)
-        return
-    if not isinstance(cond, dict):
-        return
-    for k in ("and", "or"):
-        if k in cond:
-            for c in cond[k]:
-                yield from _string_literal_columns(c)
-            return
-    if "not" in cond:
-        yield from _string_literal_columns(cond["not"])
-        return
-    if cond.get("op") in ("=", "contains", "like") and isinstance(cond.get("value"), str):
-        yield cond["column"]
 
 
 def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
@@ -162,18 +123,7 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
             return ref
         return None
 
-    # --- inject: describe ONLY the source tables this question needs (acquire relevant schemas) ---
-    src_tables = _source_tables(plan)
-    if src_tables:
-        try:
-            emit_step("describe_table", {"tables": src_tables},
-                      [{"type": "data", "source": t, "role": "table", "target": {"table": t}}
-                       for t in src_tables],
-                      {"kind": "schema"}, h.describe_table(src_tables), THINK["describe_table"])
-        except Exception:
-            pass
-
-    # --- main plan loop: metadata-only table outputs; inspect_column injected before literal filters ---
+    # --- main plan loop: metadata-only table outputs; perception is handled by enrichment ---
     for step in plan:
         args = dict(step.args)
         for key in TABLE_REF_ARGS.get(step.tool, []):
@@ -181,17 +131,6 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
                 args[key] = id_to_table[args[key]]   # display/exec args: table refs are real view names
 
         if step.tool == "condition_filter":
-            tbl = args["table"]
-            sid = resolve_step(tbl)
-            tbl_ref = ([{"type": "data", "step": sid, "role": "table", "target": {"handle": tbl}}] if sid
-                       else [{"type": "data", "source": tbl, "role": "table", "target": {"table": tbl}}])
-            for col in dict.fromkeys(_string_literal_columns(step.args.get("conditions"))):
-                try:                                      # best-effort grounding; never drop the trajectory
-                    ic = h.inspect_column(tbl, col)
-                except Exception:
-                    continue
-                emit_step("inspect_column", {"table": tbl, "column": col}, tbl_ref,
-                          {"kind": "column_domain"}, ic, THINK["inspect_column"])
             disp_conds = _rewrite_value_ref(resolve_cond(args.get("conditions"), id_to_table), planid_to_stepid)
             display = {**args, "conditions": disp_conds}
             exec_args = {**args, "conditions": resolve_cond(args.get("conditions"), id_to_table, values)}
@@ -225,18 +164,6 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
     result = h.rows(payload) if kind == "table" else (payload if isinstance(payload, list) else [(payload,)])
     verified = _norm(result) == _norm(h.gold(gold_sql))
     answer_table = payload if kind == "table" else None
-
-    # --- inject: read the evidence rows once before answering (the ONE place rows enter context) ---
-    if answer_table is not None and last_result_stepid is not None:
-        try:
-            ev = h.read_subtable(answer_table, limit=READ_EVIDENCE_LIMIT)
-            emit_step("read_subtable", {"table": answer_table, "limit": READ_EVIDENCE_LIMIT},
-                      [{"type": "data", "step": last_result_stepid, "role": "table",
-                        "target": {"handle": answer_table}}], {"kind": "rows"},
-                      {"table": answer_table, "rows": [list(r) for r in ev], "row_count": len(result)},
-                      THINK["read_subtable"])
-        except Exception:
-            pass
 
     answer_refs = ([{"type": "data", "step": last_result_stepid, "role": "table",
                      "target": {"handle": answer_table}}] if last_result_stepid else [])

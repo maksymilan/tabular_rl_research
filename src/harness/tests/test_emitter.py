@@ -24,6 +24,12 @@ def run():
         t.check(f"verified: {q[:32]}", traj["label_status"] == "verified", str(traj.get("label_status")))
         t.check(f"legal:    {q[:32]}", validate(traj) == [], str(validate(traj)))
         t.check(f"terminal: {q[:32]}", traj["steps"][-1]["tool_call"]["tool"] == "answer_from_context")
+        tools = [s["tool_call"]["tool"] for s in traj["steps"]]
+        t.check(
+            f"raw backbone has no perception: {q[:20]}",
+            not ({"describe_table", "inspect_column", "read_subtable"} & set(tools)),
+            str(tools),
+        )
 
     # negative cases: the validator must reject tampered trajectories
     h = employees_db()

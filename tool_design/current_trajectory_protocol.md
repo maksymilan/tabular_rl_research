@@ -38,6 +38,11 @@ The `state` block is harness-managed resident context. It groups the current tas
 table context by source table or derived handle. It is optional for legacy trajectories, but new
 v2c-plan trajectories should render it after non-terminal tool calls.
 
+Raw SQL-compiled trajectories contain the verified relational backbone only. They do not
+mechanically inject `describe_table`, `inspect_column`, or `read_subtable`; those perception steps
+are model-visible tools and should be inserted by the external-model enrichment pass when the
+current reasoning context needs them.
+
 The model emits only:
 
 - `<think>` text;
