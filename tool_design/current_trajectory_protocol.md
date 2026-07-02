@@ -43,6 +43,10 @@ mechanically inject `describe_table`, `inspect_column`, or `read_subtable`; thos
 are model-visible tools and should be inserted by the external-model enrichment pass when the
 current reasoning context needs them.
 
+Plan steps are added by `src/sft/enrich_plan.py`: an external model proposes the initial `plan`
+operation and later updates, then the sequence is replayed through the harness. The script's
+`--dry-run-template` mode is for smoke tests only.
+
 The model emits only:
 
 - `<think>` text;

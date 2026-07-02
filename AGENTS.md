@@ -85,7 +85,10 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   envelopes. The raw SQL→trajectory emitter now produces the verified relational backbone only; it
   does **not** mechanically inject `describe_table` / `inspect_column` / `read_subtable`. External-
   model enrichment owns natural plan wording/updates and perception-step insertion, while harness
-  checks remain the trust boundary.
+  checks remain the trust boundary. `src/sft/enrich_plan.py` is the standalone plan-enrichment pass:
+  it calls the external model for initial `plan` + updates, splices plan steps into a verified
+  trajectory, then replays through the harness so `EnvironmentState` and terminal correctness are
+  checked. Its `--dry-run-template` mode is only for local smoke tests, not final training data.
 - **7B / V2a and V2-ctx evaluations done (2026-06-15)**: V2a scores **66.83%** and V2-ctx scores
   **62.77%** on the full 1,034-example Spider dev set, versus v1 **68.38%** and direct SQL
   **69.25%**. V2-ctx preserves the large-database context invariant but exposes a planning weakness:
