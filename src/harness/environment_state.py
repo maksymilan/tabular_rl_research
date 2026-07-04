@@ -203,9 +203,6 @@ class EnvironmentState:
                     "has_null": output.get("has_null"),
                     "frequent_values": deepcopy(output.get("frequent_values", [])),
                     "truncated": output.get("truncated"),
-                    **({"queried_value": output.get("queried_value"),
-                        "value_present": output.get("value_present")}
-                       if "queried_value" in output else {}),
                 }
             return
 

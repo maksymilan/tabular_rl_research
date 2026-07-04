@@ -61,11 +61,13 @@ def build_references(tool: str, args: dict, resolve_step) -> list[dict]:
         v = args.get(key)
         if v is None:
             continue
-        sid = resolve_step(v)
-        if sid:
-            refs.append({"type": "data", "step": sid, "role": "table", "target": {"handle": v}})
-        else:
-            refs.append({"type": "data", "source": v, "role": "table", "target": {"table": v}})
+        # An N-way join carries its inputs as a list under `tables`; a data edge per input.
+        for item in (v if isinstance(v, list) else [v]):
+            sid = resolve_step(item)
+            if sid:
+                refs.append({"type": "data", "step": sid, "role": "table", "target": {"handle": item}})
+            else:
+                refs.append({"type": "data", "source": item, "role": "table", "target": {"table": item}})
     if tool == "condition_filter":
         for kind, ref, col in _cond_value_refs(args.get("conditions")):
             sid = resolve_step(ref)

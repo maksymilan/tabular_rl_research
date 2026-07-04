@@ -34,6 +34,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -42,6 +43,7 @@ sys.path.insert(0, os.path.join(ROOT, "src", "eval"))
 sys.path.insert(0, HERE)
 
 from executor import Harness                                              # noqa: E402
+from environment_state import EnvironmentState                            # noqa: E402
 from plan import resolve_cond                                             # noqa: E402
 from scalar_grounding import extract_scalar                               # noqa: E402
 from protocol import ProtocolError, TOOLS, rows_equal                     # noqa: E402
@@ -54,7 +56,7 @@ STR_OPS = ("=", "==", "contains", "like", "in")
 RATIONALE_FIELDS = ("question_cue", "observed_evidence", "decision", "supports_next_step")
 MAX_REJECTED_CANDIDATES = 5
 BANNED_NARRATION = (
-    "the model", "a model", "the agent", "the assistant", "might guess",
+    "the model", "the agent", "the assistant", "might guess",
     "would guess", "without first checking",
 )
 FIRST_PERSON = re.compile(r"\b(I|my|me|I'll|I'm|I will|I need|I see|I should)\b", re.I)
@@ -71,9 +73,34 @@ FINAL_ANSWER_LEAK = re.compile(
     r"\banswer\s+(matches|is)\s+the\s+(expected|gold|correct)\b",
     re.I,
 )
+TEMPLATE_THINK_PATTERNS = (
+    r"^I have the needed schema and prior observation context, so I now apply\b",
+    r"^The current intermediate table already contains the requested fields\. I now project\b",
+    r"^I now compute\b",
+    r"^I now group\b",
+    r"^I now sort/select\b",
+    r"^I now join\b",
+    r"^I now apply\b",
+    r"^I now call\b",
+    r"\bbecause the prior observations and intermediate results provide the information this step needs\b",
+    r"\bto keep the rows required by the question\b",
+    r"\bso the output matches the columns asked for in the question\b",
+    r"\bbecause the question requires this scalar result from the already prepared table\b",
+    r"\bbecause the question requires deduplicated or grouped evidence\b",
+    r"\bbecause the question asks for an ordered or extreme result\b",
+    r"\bso the columns needed by the question are in one intermediate table\b",
+    r"\bbecause the question requires combining two derived result sets\b",
+    r"\bI read `[^`]+` locally to verify the rows before answering\b",
+)
 TOOL_ACTION_CUES = {
     "condition_filter": (r"\bfilter\b", r"\bwhere\b", r"\bcondition_filter\b", r"\bkeep only\b"),
-    "project": (r"\bproject\b", r"\bselect\b", r"\bextract\b"),
+    "project": (
+        r"\bproject\b",
+        r"\bselect\b",
+        r"\bextract\b",
+        r"\bkeep just\b",
+        r"\bkeep only (?:the|these|those)?\s*(?:fields|columns)\b",
+    ),
     "join_tables": (r"\bjoin\b", r"\bconnect\b", r"\blink\b"),
     "group_aggregate": (r"\bgroup\b", r"\bdeduplicate\b", r"\bgroup_aggregate\b"),
     "aggregate": (r"\baggregate\b", r"\bcompute\b", r"\bcount\b", r"\bsum\b", r"\baverage\b", r"\bminimum\b", r"\bmaximum\b"),
@@ -104,8 +131,14 @@ def db_path(db_id: str) -> str:
     return os.path.join(SPIDER, "database", db_id, f"{db_id}.sqlite")
 
 
+def review_path_for(path: str) -> str:
+    if path.endswith(".jsonl") and not path.endswith("_review.jsonl"):
+        return path[:-6] + "_review.jsonl"
+    return path
+
+
 def new_ctx() -> dict:
-    return {"history": {}, "handle_to_step": {}}
+    return {"history": {}, "handle_to_step": {}, "environment": EnvironmentState()}
 
 
 def _cond_refs(cond) -> list[tuple[str, str]]:
@@ -132,10 +165,16 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
     if tool not in EXECUTABLE_TOOLS or tool == "answer_from_context":
         raise ProtocolError(f"tool {tool!r} not executable here")
 
+    if tool == "plan":
+        output = ctx.setdefault("environment", EnvironmentState()).apply_plan_ops(args.get("ops"), step_id)
+        ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output}
+        return output, None
+
     if tool in PERCEPTION:
         out = getattr(h, tool)(**args)
         output = out if isinstance(out, dict) else {"rows": [list(r) for r in out], "row_count": len(out)}
         ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output}
+        ctx.setdefault("environment", EnvironmentState()).apply_tool_result(tool, args, output, step_id)
         return output, None
 
     exec_args = dict(args)
@@ -156,6 +195,7 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
         output = {"result_sample": [list(r) for r in rows[:5]], "row_count": len(rows)}
         created = None
     ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output}
+    ctx.setdefault("environment", EnvironmentState()).apply_tool_result(tool, args, output, step_id)
     return output, created
 
 
@@ -181,6 +221,26 @@ def score(h: Harness, gold_sql: str, answer_args: dict, created: set) -> tuple[b
 def _base_col(col) -> str:
     """Strip a join prefix: 'T5__dept_name' -> 'dept_name' (post-join filters carry prefixes)."""
     return col.split("__", 1)[-1] if isinstance(col, str) and "__" in col else col
+
+
+def _join_on_edges(args: dict) -> list[dict]:
+    """Flatten a join_tables `on` into one list of {left,right} edges, across the N-way form
+    (on = a list of per-fold edge-lists) and the legacy 2-table form (on = a flat edge-list)."""
+    edges: list[dict] = []
+    for entry in args.get("on", []) or []:
+        if isinstance(entry, list):
+            edges.extend(e for e in entry if isinstance(e, dict))
+        elif isinstance(entry, dict):
+            edges.append(entry)
+    return edges
+
+
+def _join_table_refs(args: dict) -> list[str]:
+    """Input table refs of a join_tables call, across the N-way form (`tables`) and the legacy
+    2-table form (`left`/`right`)."""
+    if isinstance(args.get("tables"), list):
+        return [t for t in args["tables"] if isinstance(t, str)]
+    return [args[k] for k in ("left", "right") if isinstance(args.get(k), str)]
 
 
 def string_filter_cols(steps: list[dict]) -> set[str]:
@@ -217,9 +277,9 @@ def condition_columns(cond) -> set[str]:
         if "not" in c:
             walk(c["not"])
         if isinstance(c.get("column"), str):
-            out.add(_base_col(c["column"]))
+            out.update(expression_columns(c["column"]))
         if isinstance(c.get("column_value"), str):
-            out.add(_base_col(c["column_value"]))
+            out.update(expression_columns(c["column_value"]))
 
     walk(cond)
     return out
@@ -261,7 +321,7 @@ def expected_semantic_terms(tool: str, args: dict) -> set[str]:
         for item in args.get("return_columns") or []:
             terms |= expression_columns(item)
     elif tool == "join_tables":
-        for item in args.get("on", []):
+        for item in _join_on_edges(args):
             terms.add(_base_col(item.get("left", "")))
             terms.add(_base_col(item.get("right", "")))
     elif tool == "describe_table":
@@ -304,7 +364,7 @@ def expected_column_terms(tool: str, args: dict) -> set[str]:
         for item in args.get("return_columns") or []:
             cols |= expression_columns(item)
     elif tool == "join_tables":
-        for item in args.get("on", []):
+        for item in _join_on_edges(args):
             cols.add(_base_col(item.get("left", "")))
             cols.add(_base_col(item.get("right", "")))
     elif tool == "inspect_column" and args.get("column"):
@@ -396,6 +456,9 @@ SYS = (
     "the QUESTION to the exact table/column/tool choice. Do not say only 'I project the output "
     "columns'. Say why these columns are the requested fields and what later step this information "
     "supports.\n"
+    "- Prefer concrete, observation-grounded thoughts over stock templates. Instead of a generic "
+    "'I now apply/compute/group/join...' sentence, name the observed table/column/result and the "
+    "question phrase that makes this operation useful.\n"
     "- Mention exact column names when choosing them, e.g. `Song_Name` because the question asks for "
     "song names, `Song_release_year` because it asks for release years, `Age` because it asks for "
     "the youngest singer.\n"
@@ -430,15 +493,28 @@ SYS = (
     "is stale because the inspect step already happened.\n"
     "- GOOD action after an inspect step: 'I have inspected the status values and confirmed the "
     "literal, so I can now filter on the exact status column.'\n"
+    "- OK but weak action: 'I now compute count over * from filter_001 because the question requires "
+    "this scalar result.'\n"
+    "- BETTER action: '`filter_001` is already restricted to the qualifying rows, and the question "
+    "asks how many such rows there are, so counting `*` on that table gives the requested scalar.'\n"
+    "- OK but weak join: 'I now join students and enrollment on student_id.'\n"
+    "- BETTER join: 'The question needs student attributes together with enrollment records, and "
+    "`student_id` is the observed key connecting those two tables.'\n"
     "- BAD final answer: 'The verified answer is X.'\n"
     "- GOOD final answer: 'The final evidence table contains the requested rows, so I answer from "
     "that table.'\n\n"
     "Perception tools:\n"
     "- describe_table {\"tables\":[...]} : acquire columns/types/keys. REQUIRED before the first time "
-    "the trajectory operates on a table, since the catalog carries no columns.\n"
+    "the trajectory operates on a table, since the catalog carries no columns. Put all source tables "
+    "you want to inspect at the same point into ONE describe_table call; do not emit one "
+    "describe_table step per table.\n"
     "- inspect_column {\"table\":t,\"column\":c} : see a column's real values. REQUIRED before a filter "
     "comparing that column to a STRING literal, so the literal is grounded, not guessed. Use the "
-    "SOURCE table + base column name even if the backbone filters it post-join under a prefix.\n"
+    "SOURCE table + base column name even if the backbone filters it post-join under a prefix. "
+    "GROUNDING HONESTY: only claim what the output returned. If frequent_values LISTS the literal, you "
+    "may say you saw it. If the output is truncated (truncated=true) and does NOT list it, do NOT say "
+    "you confirmed/verified the value exists — say you filter on the value the question asks for and the "
+    "condition_filter row count is what validates it. Never fabricate a confirmation the output did not give.\n"
     "- read_subtable {\"table\":handle} : inspect an intermediate result's rows to confirm a filter/"
     "join produced what the next step assumes (e.g. non-empty) before building on it.\n\n"
     "Rules:\n"
@@ -533,7 +609,9 @@ OBS_SYS = (
     "Output ONLY JSON: {\"insertions\": [ ... ]}. Each insertion must be a describe_table step with "
     "`after:-1`, arguments {\"tables\":[...]}, first-person `think`, and `rationale` with exactly "
     "these non-empty fields: question_cue, observed_evidence, decision, supports_next_step. Every "
-    "rationale field must also obey the no-exact-identifier rule above.\n\n"
+    "rationale field must also obey the no-exact-identifier rule above. If several tables should be "
+    "described initially, include all of them in that single insertion's `tables` list; do NOT output "
+    "multiple separate describe_table insertions for individual tables.\n\n"
     "Exploratory observations are allowed: if the question asks for an output entity such as "
     "'all info of students', it is reasonable to describe the entity table even if a later minimal "
     "gold plan might not consume it directly. Still, also include the tables needed to resolve the "
@@ -571,6 +649,9 @@ def observed_schema_outputs(traj: dict, describe_insertions: list[dict]) -> list
     for ins in describe_insertions:
         if ins.get("tool") != "describe_table":
             continue
+        if isinstance(ins.get("tool_output"), dict):
+            outs.append({"arguments": ins.get("arguments", {}), "output": ins["tool_output"]})
+            continue
         try:
             outs.append({"arguments": ins.get("arguments", {}),
                          "output": h.describe_table(ins.get("arguments", {}).get("tables", []))})
@@ -591,18 +672,171 @@ def build_staged_action_prompt(traj: dict, domains: dict, describe_insertions: l
         f"RELATIONAL BACKBONE (fixed order; rewrite every think and insert only local observations "
         f"around these actions):\n{json.dumps(skeleton_view(traj), ensure_ascii=False)}\n\n"
         "Return JSON with `rewrites` for every backbone step and optional `insertions`. In this staged "
-        "second pass, do NOT output describe_table insertions; only inspect_column/read_subtable are "
-        "allowed as new observations."
+        "second pass, do NOT output describe_table insertions. If the backbone already contains a "
+        "describe_table step, treat that schema observation as already present in the trajectory. "
+        "Only inspect_column/read_subtable are allowed as new observations."
     )
     system = SYS + (
-        "\n\nCURRENT RUN MODE: STAGED ACTION PASS. Initial describe_table observations have already "
-        "been chosen from the catalog. Do NOT add more describe_table steps. You may use exact column "
+        "\n\nCURRENT RUN MODE: STAGED ACTION PASS. The schema observations listed above have already "
+        "been chosen from the catalog or already exist in the backbone trajectory. Do NOT add more "
+        "describe_table steps. You may use exact column "
         "names only for tables whose schema appears in OBSERVED SCHEMA; otherwise the trajectory will "
         "be rejected as relying on unobserved schema."
     )
     if domains.get("_feedback"):
         user += f"\n\nPREVIOUS ATTEMPT FAILED VALIDATION: {domains['_feedback']}\nFix and re-output."
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+STATEFUL_STEP_SYS = (
+    "Role: you are the table-tool agent at the current turn. You are not an outside annotator and "
+    "you must not describe the whole future trajectory. You see only the question, the lazy catalog, "
+    "the previous tool calls/observations, and ONE target tool call that the verified backbone wants "
+    "to execute now.\n\n"
+    "Your job for this turn:\n"
+    "1. Decide whether the current visible state is sufficient to justify the target tool call.\n"
+    "2. If it is sufficient, write the target step's first-person `<think>` explaining why this exact "
+    "tool, table, column, handle, or predicate is now justified by the visible state.\n"
+    "3. If there is a gap, insert the smallest necessary read-only observation BEFORE the target "
+    "step. Use only describe_table, inspect_column, or read_subtable. The observation must bridge a "
+    "specific missing precondition for the target action, not be decorative.\n"
+    "4. After any inserted observation, still write the target step's first-person reason as if the "
+    "agent has now seen that observation.\n\n"
+    "State boundary:\n"
+    "- Before a describe_table observation, do not name hidden exact columns. Use natural concepts "
+    "from the question instead.\n"
+    "- After a schema observation is in PREVIOUS TOOL HISTORY, target action thinks must name the "
+    "exact columns used by the target tool call.\n"
+    "- If the target filters a string literal and the column's value domain has not been inspected, "
+    "insert inspect_column first.\n"
+    "- If the target depends on a derived handle's rows and those rows are not visible, insert "
+    "read_subtable first when that row-level evidence is needed.\n"
+    "- Existing previous observations count. Do not repeat an observation already present in the "
+    "history.\n\n"
+    "OBSERVATION TOOL ARGUMENTS — use these EXACT argument keys. The harness does NOT tolerate other "
+    "key names; a wrong key fails the turn:\n"
+    "- describe_table: {\"tables\": [\"TableA\", \"TableB\"]}  — the key is `tables` and its value is a "
+    "LIST of table-name strings. Do NOT use `table`, `table_name`, or a bare string.\n"
+    "- inspect_column: {\"table\": \"TableA\", \"column\": \"ColumnX\"}  — shows a column's value domain "
+    "(distinct count, most-frequent values, whether it is truncated).\n"
+    "- read_subtable: {\"table\": \"TableA\", \"columns\": [\"ColumnX\"], \"limit\": 10}  — `columns` "
+    "(a list) and `limit` (an int) are optional; `table` is required.\n\n"
+    "GROUNDING HONESTY — the <think> must only claim what the observation actually returned:\n"
+    "- If inspect_column's frequent_values LISTS the literal you filter on, you may say you saw it there.\n"
+    "- If the output is truncated (truncated=true) and does NOT list that literal, DO NOT say you "
+    "confirmed / verified that the value exists — the observation did not show it. Instead reason that "
+    "you filter on the value the question asks for and the condition_filter result (its row count) is "
+    "what validates whether the value matched. Never fabricate a confirmation the output did not give.\n\n"
+    "Output ONLY JSON with this schema:\n"
+    "{\n"
+    "  \"insertions\": [\n"
+    "    {\"tool\": \"describe_table|inspect_column|read_subtable\", \"arguments\": {...}, "
+    "\"think\": \"first-person reason\", \"rationale\": {\"question_cue\":..., "
+    "\"observed_evidence\":..., \"decision\":..., \"supports_next_step\":...}}\n"
+    "  ],\n"
+    "  \"target\": {\"think\": \"first-person reason for executing the given target call now\", "
+    "\"rationale\": {\"question_cue\":..., \"observed_evidence\":..., \"decision\":..., "
+    "\"supports_next_step\":...}}\n"
+    "}\n\n"
+    "Rules:\n"
+    "- Never change the target tool call or its arguments.\n"
+    "- Do not add correction/error steps in this mode.\n"
+    "- Each think must read like current-moment reasoning from observations to decision, not a "
+    "post-hoc explanation of a known full path. A plain 'I now apply/compute/join' sentence is "
+    "acceptable only if it is tied to the concrete observed state; prefer: '`filter_003` already "
+    "contains the qualifying rows, so counting `*` answers the how-many question.'\n"
+    "- Every rationale field must be non-empty."
+)
+
+
+def _history_for_prompt(accepted_steps: list[dict], max_steps: int = 14) -> list[dict]:
+    """Compact visible transcript for the stateful per-step prompt."""
+    items = []
+    for step in accepted_steps[-max_steps:]:
+        call = step.get("tool_call") or {}
+        out = step.get("tool_output")
+        if isinstance(out, dict):
+            visible_out = copy.deepcopy(out)
+            if "rows" in visible_out and isinstance(visible_out["rows"], list):
+                visible_out["rows"] = visible_out["rows"][:5]
+            if "result_sample" in visible_out and isinstance(visible_out["result_sample"], list):
+                visible_out["result_sample"] = visible_out["result_sample"][:5]
+        else:
+            visible_out = out
+        items.append({
+            "step_id": step.get("step_id"),
+            "tool": call.get("tool"),
+            "arguments": call.get("arguments"),
+            "output": visible_out,
+        })
+    return items
+
+
+def build_stateful_step_prompt(
+    traj: dict,
+    accepted_steps: list[dict],
+    target_index: int,
+    target_step: dict,
+    target_args: dict,
+    feedback: str = "",
+) -> list[dict]:
+    h = Harness(db_path(traj["source"]["db_id"]))
+    call = target_step["tool_call"]
+    user = (
+        f"QUESTION:\n{traj['question']}\n\n"
+        f"INITIAL LAZY CATALOG:\n"
+        f"{json.dumps(catalog_snapshot(h), ensure_ascii=False)}\n\n"
+        f"PREVIOUS TOOL HISTORY VISIBLE TO THE AGENT:\n"
+        f"{json.dumps(_history_for_prompt(accepted_steps), ensure_ascii=False)}\n\n"
+        f"CURRENT BACKBONE STEP INDEX: {target_index}\n"
+        f"TARGET TOOL CALL TO JUSTIFY NOW (do not change this call):\n"
+        f"{json.dumps({'tool': call['tool'], 'arguments': target_args}, ensure_ascii=False)}\n\n"
+        "Return the JSON object for this single turn."
+    )
+    if feedback:
+        user += f"\n\nPREVIOUS ATTEMPT FAILED VALIDATION: {feedback}\nFix this single turn only."
+    return [{"role": "system", "content": STATEFUL_STEP_SYS}, {"role": "user", "content": user}]
+
+
+def parse_stateful_step(text: str) -> tuple[list[dict], dict]:
+    obj_match = re.search(r"\{.*\}", text, re.S)
+    if not obj_match:
+        return [], {}
+    try:
+        payload = json.loads(obj_match.group(0))
+    except json.JSONDecodeError:
+        return [], {}
+    if not isinstance(payload, dict):
+        return [], {}
+    insertions = []
+    for item in payload.get("insertions", []) if isinstance(payload.get("insertions"), list) else []:
+        if isinstance(item, dict) and item.get("tool") in PERCEPTION:
+            insertions.append(item)
+    target = payload.get("target") if isinstance(payload.get("target"), dict) else {}
+    return insertions, target
+
+
+def _seen_perception_keys(accepted_steps: list[dict]) -> set[tuple]:
+    seen = set()
+    for step in accepted_steps:
+        call = step.get("tool_call") or {}
+        key = _canonical_perception_key(call.get("tool"), call.get("arguments") or {})
+        if key:
+            seen.add(key)
+    return seen
+
+
+def _dedupe_against_state(insertions: list[dict], accepted_steps: list[dict]) -> list[dict]:
+    seen = _seen_perception_keys(accepted_steps)
+    out = []
+    for ins in insertions:
+        key = _canonical_perception_key(ins.get("tool"), ins.get("arguments") or {})
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        out.append(ins)
+    return out
 
 
 REWRITE_SYS = (
@@ -735,7 +969,10 @@ def deterministic_perception_insertions(traj: dict) -> list[dict]:
                 "after": i,
                 "tool": "read_subtable",
                 "arguments": {"table": produced, "limit": 20},
-                "think": f"I read {produced} locally to verify the rows before answering.",
+                "think": (
+                    f"The answer will cite `{produced}`, so I inspect its rows to ground the final "
+                    "response in visible evidence."
+                ),
                 "rationale": {
                     "question_cue": traj.get("question", ""),
                     "observed_evidence": f"{produced} is the final derived table produced by the previous action",
@@ -783,6 +1020,67 @@ def parse_observation_insertions(text: str) -> list[dict]:
             norm["arguments"] = args
             norm.setdefault("after", -1)
             out.append(norm)
+    return out
+
+
+def _canonical_perception_key(tool: str, args: dict) -> tuple | None:
+    if tool not in PERCEPTION or not isinstance(args, dict):
+        return None
+    if tool == "describe_table":
+        tables = tuple(sorted(str(t) for t in (args.get("tables") or [])))
+        return (tool, tables)
+    if tool == "inspect_column":
+        return (tool, str(args.get("table", "")), _base_col(str(args.get("column", ""))).lower())
+    if tool == "read_subtable":
+        columns = args.get("columns")
+        if isinstance(columns, list):
+            columns = tuple(columns)
+        return (tool, str(args.get("table", "")), args.get("limit"), columns)
+    return (tool, json.dumps(args, sort_keys=True, ensure_ascii=False, default=str))
+
+
+def backbone_describe_observations(traj: dict) -> list[dict]:
+    """Existing v3 skeletons already contain initial describe_table steps.
+
+    The enrichment prompt needs those schemas as observed context, but they must not be re-inserted
+    as extra perception steps. Returning the actual backbone observation keeps the staged action pass
+    state-faithful without creating duplicate reads.
+    """
+    out: list[dict] = []
+    for s in traj.get("steps", []):
+        tc = s.get("tool_call") or {}
+        if tc.get("tool") != "describe_table":
+            continue
+        out.append({
+            "tool": "describe_table",
+            "arguments": tc.get("arguments", {}),
+            "tool_output": s.get("tool_output", {}),
+        })
+    return out
+
+
+def dedupe_perception_insertions(traj: dict, insertions: list[dict]) -> list[dict]:
+    """Drop perception insertions that duplicate observations already present in the skeleton.
+
+    Current v3 skeletons are not pure relational backbones: the emitter has already injected
+    describe_table/inspect_column/read_subtable observations. Without this guard, the external LLM
+    can add a second identical describe_table at the start, teaching a bad repeated-read habit.
+    """
+    seen = set()
+    for s in traj.get("steps", []):
+        tc = s.get("tool_call") or {}
+        key = _canonical_perception_key(tc.get("tool"), tc.get("arguments") or {})
+        if key:
+            seen.add(key)
+
+    out = []
+    for ins in insertions:
+        key = _canonical_perception_key(ins.get("tool"), ins.get("arguments") or {})
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        out.append(ins)
     return out
 
 
@@ -888,6 +1186,38 @@ def spliced_sequence(traj: dict, insertions: list[dict],
     pending_recovery: list[str] = []
     rewrites = rewrites or {}
 
+    def describe_tables(args: dict) -> list[str]:
+        tables = args.get("tables") if isinstance(args, dict) else []
+        if isinstance(tables, str):
+            tables = [tables]
+        return [str(t) for t in tables or [] if str(t)]
+
+    def append_seq_step(step: dict) -> int:
+        """Append one logical step, merging consecutive describe_table calls into one survey turn.
+
+        describe_table already accepts a list of tables. Keeping one table per turn teaches a noisy
+        ritual and bloats trajectories; consecutive schema-survey calls should be represented as one
+        observation over all relevant tables.
+        """
+        if step.get("tool") == "describe_table" and seq and seq[-1].get("tool") == "describe_table":
+            prev = seq[-1]
+            seen = set()
+            merged: list[str] = []
+            for table in describe_tables(prev.get("arguments") or {}) + describe_tables(step.get("arguments") or {}):
+                key = table.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(table)
+            prev["arguments"] = {"tables": merged}
+            prev["reason"] = _perception_repair_text("describe_table", prev["arguments"], traj.get("question", ""))
+            prev["rationale"] = _perception_repair_rationale("describe_table", prev["arguments"], traj.get("question", ""))
+            if step.get("backbone"):
+                prev["backbone"] = True
+            return len(seq)
+        seq.append(step)
+        return len(seq)
+
     def emit_backbone(i: int, s):
         rewrite = rewrites.get(i, {})
         think = rewrite.get("think", s.get("think", "")) if isinstance(rewrite, dict) else str(rewrite)
@@ -897,23 +1227,23 @@ def spliced_sequence(traj: dict, insertions: list[dict],
             pending_recovery.clear()
         tool = s["tool_call"]["tool"]
         args = _strip_answer_memory_args(tool, s["tool_call"]["arguments"])
-        seq.append({"tool": tool, "arguments": args,
-                    "reason": think, "rationale": rationale, "backbone": True})
-        old_to_new[s["step_id"]] = f"step_{len(seq)}"
+        new_index = append_seq_step({"tool": tool, "arguments": args,
+                                     "reason": think, "rationale": rationale, "backbone": True})
+        old_to_new[s["step_id"]] = f"step_{new_index}"
 
     def emit_ann(a):
         if a.get("tool") == "error":
             w = a["wrong"]
-            seq.append({"tool": w.get("tool"), "arguments": w.get("arguments", {}),
-                        "reason": a.get("think", ""), "rationale": a.get("rationale"),
-                        "error_attempt": True})
+            append_seq_step({"tool": w.get("tool"), "arguments": w.get("arguments", {}),
+                             "reason": a.get("think", ""), "rationale": a.get("rationale"),
+                             "error_attempt": True})
             if a.get("recovery_think"):
                 pending_recovery.append(a["recovery_think"])
         else:
-            seq.append({"tool": a["tool"], "arguments": a.get("arguments", {}),
-                        "reason": a.get("think", ""), "rationale": a.get("rationale"),
-                        "observation_role": a.get("observation_role"),
-                        "exploratory_tables": a.get("exploratory_tables", [])})
+            append_seq_step({"tool": a["tool"], "arguments": a.get("arguments", {}),
+                             "reason": a.get("think", ""), "rationale": a.get("rationale"),
+                             "observation_role": a.get("observation_role"),
+                             "exploratory_tables": a.get("exploratory_tables", [])})
 
     for a in by_after.get(-1, []):
         emit_ann(a)
@@ -1059,6 +1389,17 @@ def _narration_issue(text: str, label: str) -> str | None:
     return None
 
 
+def _templated_think_style_issues(text: str, label: str) -> list[str]:
+    if not isinstance(text, str) or not text.strip():
+        return []
+    issues = []
+    for pattern in TEMPLATE_THINK_PATTERNS:
+        if re.search(pattern, text.strip(), re.I):
+            issues.append(f"{label} may be overly templated; prefer a more observation-specific reason")
+            break
+    return issues
+
+
 def _is_generated_alias(identifier: str) -> bool:
     return bool(re.match(r"^(count|sum|mean|min|max|avg)_\d+$", str(identifier).lower()))
 
@@ -1158,6 +1499,11 @@ def _schema_leak_issues(step: dict, question: str, label: str,
     text = f"{step.get('think', '')} {_rationale_text(step.get('rationale'))}".lower()
     question_low = question.lower()
     catalog_visible = _catalog_visible_identifiers(overview)
+    catalog_tables = {
+        str(table.get("table_name", "")).lower()
+        for table in (overview or {}).get("tables", [])
+        if isinstance(table, dict)
+    }
     leaked: list[str] = []
     for table in (step.get("tool_output") or {}).get("tables", []):
         for col in table.get("columns", []):
@@ -1167,6 +1513,8 @@ def _schema_leak_issues(step: dict, question: str, label: str,
             table_name = str(table.get("table_name", ""))
             full = f"{table_name}.{name}".lower()
             if name.lower() in catalog_visible or full in catalog_visible:
+                continue
+            if name.lower() in catalog_tables:
                 continue
             if _is_natural_question_concept(name, question):
                 continue
@@ -1191,6 +1539,67 @@ def _described_columns(enriched_steps: list[dict], upto: int) -> dict[str, set[s
     return described
 
 
+def _grounded_columns(enriched_steps: list[dict], upto: int,
+                      overview: dict | None = None) -> dict[str, set[str]]:
+    """Source-table columns the agent has legitimately seen before step `upto`, from ANY grounding
+    source — not just describe_table. describe_table is one path; the model also grounds via:
+    - the initial catalog's `relations` (foreign keys expose the join-key columns of each table), and
+    - inspect_column (the inspected column's existence + value domain).
+    Keyed by lowercased table name -> set of lowercased base column names. Used to decide whether an
+    action touches a column it has never observed (a real grounding gap) versus one already exposed by
+    the catalog FK graph or an inspect (which the old describe_table-only check mis-flagged)."""
+    grounded: dict[str, set[str]] = {t: set(cols) for t, cols in _described_columns(enriched_steps, upto).items()}
+
+    def add(table: str, col: str) -> None:
+        if table and col:
+            grounded.setdefault(table.lower(), set()).add(_base_col(col).lower())
+
+    for rel in (overview or {}).get("relations", []) or []:
+        for side in ("from", "to"):
+            ref = rel.get(side, "")
+            if isinstance(ref, str) and "." in ref:
+                table, col = ref.split(".", 1)
+                add(table, col)
+    for s in enriched_steps[:upto]:
+        call = s.get("tool_call") or {}
+        if call.get("tool") == "inspect_column":
+            a = call.get("arguments") or {}
+            if isinstance(a.get("table"), str) and isinstance(a.get("column"), str):
+                add(a["table"], a["column"])
+    return grounded
+
+
+def _source_columns_used(tool: str, args: dict, table: str) -> list[str]:
+    """Base columns of source `table` that this action actually reads. For a join, only the `on` keys
+    on the side that is `table` (the accumulated left operand may be a derived handle). For a
+    single-table op, every column term belongs to that one source table."""
+    if tool == "join_tables":
+        cols: list[str] = []
+        tables = args.get("tables")
+        if isinstance(tables, list):                        # N-way form: on[k] joins tables[k+1]
+            for k, edges in enumerate(args.get("on") or []):
+                for e in (edges or []):
+                    if k + 1 < len(tables) and tables[k + 1] == table and e.get("right"):
+                        cols.append(_base_col(e["right"]))   # right key belongs to the newly-joined table
+                    if k == 0 and tables and tables[0] == table and e.get("left"):
+                        cols.append(_base_col(e["left"]))    # first fold's left key belongs to tables[0]
+            return [c for c in cols if c]
+        for pair in args.get("on", []) or []:               # legacy 2-table form
+            if args.get("right") == table and pair.get("right"):
+                cols.append(_base_col(pair["right"]))
+            if args.get("left") == table and pair.get("left"):
+                cols.append(_base_col(pair["left"]))
+        return [c for c in cols if c]
+    if tool == "group_aggregate":
+        cols = [_base_col(c) for c in args.get("group_by", [])]
+        for agg in args.get("aggregations", []):
+            col = agg.get("column")
+            if col and col != "*":
+                cols.append(_base_col(col))
+        return [c for c in cols if c]
+    return [_base_col(c) for c in expected_column_terms(tool, args) if _base_col(c)]
+
+
 def _observed_value_domains(enriched_steps: list[dict], upto: int) -> set[tuple[str, str]]:
     seen: set[tuple[str, str]] = set()
     for s in enriched_steps[:upto]:
@@ -1207,6 +1616,8 @@ def _is_derived_table(name: str) -> bool:
 
 
 def _table_refs_for_action(tool: str, args: dict) -> list[str]:
+    if tool == "join_tables" and isinstance(args.get("tables"), list):   # N-way join
+        return [t for t in args["tables"] if isinstance(t, str)]
     keys = {
         "condition_filter": ["table"],
         "project": ["table"],
@@ -1320,6 +1731,16 @@ def _tool_action_mismatch_issues(step: dict, label: str) -> list[str]:
     if _matches_any(text, TOOL_ACTION_CUES[tool]):
         return []
     for other, cues in TOOL_ACTION_CUES.items():
+        if other == "answer_from_context":
+            terminal_answer = re.search(
+                r"\banswer_from_context\b|\bfinal answer\b|"
+                r"\b(?:can|will|now|directly|confidently|ready to)\s+"
+                r"(?:answer|return|provide|give)\b",
+                text,
+                re.I,
+            )
+            if not terminal_answer:
+                continue
         if other != tool and _matches_any(text, cues):
             return [
                 f"{label} think appears to describe `{other}` while the actual tool is `{tool}`"
@@ -1357,12 +1778,9 @@ def _missing_action_reference_issues(step: dict, label: str) -> list[str]:
         if isinstance(args.get("table"), str):
             needed.append(args["table"])
     elif tool == "join_tables":
-        # Require both inputs. The left side is often a derived handle such as join_009, and naming it
-        # prevents shifted explanations that accidentally describe the previous join_008 step.
-        if isinstance(args.get("left"), str):
-            needed.append(args["left"])
-        if isinstance(args.get("right"), str):
-            needed.append(args["right"])
+        # Require the join's input tables named. Prevents shifted explanations that describe a
+        # different join. Covers both the N-way `tables` list and the legacy left/right form.
+        needed.extend(_join_table_refs(args))
     elif tool == "set_op":
         for key in ("left", "right"):
             if isinstance(args.get(key), str):
@@ -1422,6 +1840,7 @@ def quality_check(enriched_steps: list[dict], question: str = "",
         # ---- style: readability preferences (recorded, never a reject) ----
         if think.strip() and not FIRST_PERSON.search(think):
             style.append(f"{label} think is not written as first-person task reasoning")
+        style.extend(_templated_think_style_issues(think, f"{label} think"))
         style.extend(_rationale_quality_issues(step.get("rationale"), label))
         terms = expected_semantic_terms(tool, args)
         column_terms = expected_column_terms(tool, args)
@@ -1438,12 +1857,23 @@ def quality_check(enriched_steps: list[dict], question: str = "",
             style.append(f"{label} think does not justify its concrete table/column choice")
 
         # ---- hard: structural preconditions of a catalog-only agent ----
-        described = _described_columns(enriched_steps, i)
+        # A source-table column is grounded by ANY of describe_table, the catalog FK graph (join
+        # keys), or inspect_column — and derived-table columns are re-exposed by each producing step's
+        # output. So flag only columns this action reads from a SOURCE table that no such source has
+        # exposed yet — not merely "this table was never describe_table'd" (which mis-flagged legal
+        # catalog-grounded joins and inspect-grounded filters).
+        grounded = _grounded_columns(enriched_steps, i, overview)
         for table in _table_refs_for_action(tool, args):
-            if not _is_derived_table(table) and table.lower() not in described:
+            if _is_derived_table(table):
+                continue
+            ungrounded = sorted(
+                c for c in _source_columns_used(tool, args, table)
+                if c.lower() not in grounded.get(table.lower(), set())
+            )
+            if ungrounded:
                 hard.append(
-                    f"{label} operates on source table {table!r} before describe_table exposed "
-                    f"its columns"
+                    f"{label} reads column(s) {ungrounded} of source table {table!r} before any "
+                    f"observation (describe_table / inspect_column) or the catalog grounded them"
                 )
         if tool == "condition_filter":
             domains = _observed_value_domains(enriched_steps, i)
@@ -1458,7 +1888,10 @@ def quality_check(enriched_steps: list[dict], question: str = "",
                         )
         if not step.get("error_attempt"):
             continue
-        columns_seen = described
+        # This branch is specifically "after a describe_table exposed the schema, did the retry still
+        # guess a column that schema does not have" — so it uses the describe_table-only view, not the
+        # broader grounded set (catalog FK / inspect do not 'show the full schema').
+        columns_seen = _described_columns(enriched_steps, i)
         table = args.get("table")
         column = args.get("column")
         if isinstance(table, str) and isinstance(column, str):
@@ -1490,43 +1923,44 @@ def _action_repair_text(tool: str, args: dict, question: str) -> str:
     """
     if tool == "condition_filter":
         return (
-            f"I have the needed schema and prior observation context, so I now apply "
-            f"`condition_filter` on `{args.get('table')}` with conditions "
-            f"`{_compact_json(args.get('conditions'))}` to keep the rows required by the question."
+            f"The observed state supports filtering `{args.get('table')}` with "
+            f"`{_compact_json(args.get('conditions'))}`; this narrows the candidate rows toward "
+            "the condition expressed in the question."
         )
     if tool == "project":
         return (
-            f"The current intermediate table already contains the requested fields. I now project "
-            f"`{_compact_json(args.get('expressions', []))}` from `{args.get('table')}` so the "
-            "output matches the columns asked for in the question."
+            f"I project `{args.get('table')}` to keep just "
+            f"`{_compact_json(args.get('expressions', []))}`, since those fields are the useful "
+            "columns for the next result."
         )
     if tool == "aggregate":
         return (
-            f"I now compute `{args.get('op')}` over `{args.get('column')}` from `{args.get('table')}` "
-            "because the question requires this scalar result from the already prepared table."
+            f"The question asks for a scalar summary, so `{args.get('op')}` over "
+            f"`{args.get('column')}` from `{args.get('table')}` is the needed computation."
         )
     if tool == "group_aggregate":
         return (
-            f"I now group `{args.get('table')}` by `{_compact_json(args.get('group_by', []))}` and "
-            f"compute `{_compact_json(args.get('aggregations', []))}` because the question requires "
-            "deduplicated or grouped evidence."
+            f"The comparison needs grouped evidence from `{args.get('table')}`: group by "
+            f"`{_compact_json(args.get('group_by', []))}` and compute "
+            f"`{_compact_json(args.get('aggregations', []))}`."
         )
     if tool == "extreme_value_select":
         return (
-            f"I now sort/select rows from `{args.get('table')}` using "
-            f"`{_compact_json(args.get('order_by', []))}` because the question asks for an ordered "
-            "or extreme result."
+            f"The ordering criterion `{_compact_json(args.get('order_by', []))}` on "
+            f"`{args.get('table')}` identifies the extreme or ordered rows requested."
         )
     if tool == "join_tables":
+        refs = _join_table_refs(args)
+        keys = sorted({_base_col(e.get("left", "")) for e in _join_on_edges(args)}
+                      | {_base_col(e.get("right", "")) for e in _join_on_edges(args)} - {""})
         return (
-            f"I now join `{args.get('left')}` with `{args.get('right')}` on "
-            f"`{_compact_json(args.get('on', []))}` so the columns needed by the question are in one "
-            "intermediate table."
+            f"The question needs information spread across {', '.join('`%s`' % r for r in refs)}, "
+            f"so the key(s) {', '.join('`%s`' % k for k in keys)} connect those rows into one table."
         )
     if tool == "set_op":
         return (
-            f"I now apply `{args.get('op')}` between `{args.get('left')}` and `{args.get('right')}` "
-            "because the question requires combining two derived result sets."
+            f"The two derived sets `{args.get('left')}` and `{args.get('right')}` represent the "
+            f"branches of the question, and `{args.get('op')}` combines them in the required way."
         )
     if tool == "answer_from_context":
         evidence = (args.get("evidence") or {}).get("table")
@@ -1540,8 +1974,8 @@ def _action_repair_text(tool: str, args: dict, question: str) -> str:
             "from that result."
         )
     return (
-        f"I now call `{tool}` with arguments `{_compact_json(args)}` because the prior observations "
-        "and intermediate results provide the information this step needs."
+        f"The visible state points to `{tool}` with `{_compact_json(args)}` as the next operation "
+        "needed for the question."
     )
 
 
@@ -1623,6 +2057,32 @@ def _perception_repair_rationale(tool: str, args: dict, question: str) -> dict:
     }
 
 
+def _normalize_agent_voice(text: str) -> str:
+    """Prefer the trained agent's singular first-person voice without rewriting the content."""
+    if not isinstance(text, str):
+        return text
+    repl = [
+        (r"\bWe need to\b", "I need to"),
+        (r"\bwe need to\b", "I need to"),
+        (r"\bwe first need\b", "I first need"),
+        (r"\bwe need\b", "I need"),
+        (r"\bWe should\b", "I should"),
+        (r"\bwe should\b", "I should"),
+        (r"\bWe can\b", "I can"),
+        (r"\bwe can\b", "I can"),
+        (r"\bWe have\b", "I have"),
+        (r"\bwe have\b", "I have"),
+        (r"\bWe now have\b", "I now have"),
+        (r"\bwe now have\b", "I now have"),
+        (r"\bSince we\b", "Since I"),
+        (r"\bsince we\b", "since I"),
+    ]
+    out = text
+    for pat, rep in repl:
+        out = re.sub(pat, rep, out)
+    return out
+
+
 def repair_reasoning(traj: dict) -> tuple[dict, int]:
     """Repair only think/rationale text for deterministic repairable issues.
 
@@ -1637,6 +2097,8 @@ def repair_reasoning(traj: dict) -> tuple[dict, int]:
         tool = (step.get("tool_call") or {}).get("tool")
         args = (step.get("tool_call") or {}).get("arguments") or {}
         before = (step.get("think"), step.get("rationale"))
+        if isinstance(step.get("think"), str):
+            step["think"] = _normalize_agent_voice(step["think"])
         text = f"{step.get('think', '')} {_rationale_text(step.get('rationale'))}"
 
         schema_leaks = _schema_leak_issues(step, question, "step", overview)
@@ -1689,6 +2151,464 @@ def call_retry(base: str, key: str, model: str, messages: list[dict], tries: int
             last = e
             time.sleep(2 * (i + 1))
     raise last
+
+
+QUALITY_AUDIT_SYS = (
+    "You are the final quality reviewer for SFT data of a table-tool reasoning agent. "
+    "Judge whether one trajectory should be kept for training. You are not rewriting the "
+    "trajectory now; if it is not directly usable, return concrete revision requirements.\n\n"
+    "The agent starts from a lazy catalog: table names, row counts, and foreign-key relations. "
+    "It learns through tool calls and tool observations. The tool calls, the relational decomposition, "
+    "and the FINAL ANSWER are ALREADY execution-verified equivalent to the gold query by the harness — "
+    "so do NOT judge whether a join/filter/aggregate/intersect is the 'right' method or whether the "
+    "answer is correct (both are guaranteed). Judge ONLY whether the reasoning and observations teach "
+    "faithful, non-hallucinated behavior: grounding, honest use of observations, no leaked hidden "
+    "state, and non-formulaic reasoning.\n\n"
+    "The data is built in two stages you must both review: (1) perception + reasoning (describe_table / "
+    "inspect_column / read_subtable observations and each step's <think>), and (2) a plan tool that "
+    "records subgoals (goal/status/result). Judge both.\n\n"
+    "A deterministic checker has already flagged CANDIDATE STRUCTURAL ISSUES in the user message. Treat "
+    "them as leads, not verdicts: confirm the real ones (fold them into revision_requests), discard "
+    "false positives, and still catch anything semantic the checker cannot see.\n\n"
+    "KEEP when:\n"
+    "- Each <think> explains the current decision from the visible question/catalog/history, not "
+    "from hidden gold answers.\n"
+    "- Schema identifiers, literal values, intermediate rows, and final values are mentioned only "
+    "after they are visible in previous observations or tool outputs.\n"
+    "- Observation calls are useful but not ritualistic: describe_table can inspect several relevant "
+    "tables at once; inspect_column grounds a string literal or ambiguous value; read_subtable checks "
+    "rows only when row evidence matters.\n"
+    "- The reasoning may be concise, but it should be specific to this question and this state.\n\n"
+    "REPAIR when the tool sequence and observations are usable, but local wording should be fixed "
+    "before SFT, for example stale wording ('I should inspect' after inspection already happened), "
+    "third-person/meta narration, overly generic boilerplate, or a missing explanation for why a "
+    "chosen column/table answers the question. Repair means the same tool calls and outputs can stay.\n\n"
+    "REJECT when the trajectory would teach the model a wrong state boundary or unreliable behavior: "
+    "it relies on hidden schema/value/row/final-answer information, hallucinates what an observation "
+    "showed (e.g. claims a value was 'confirmed' when the cited inspect_column was truncated and did "
+    "not list it), skips a necessary observation before a risky string/value decision, has a tool/think "
+    "mismatch that cannot be fixed by wording alone, ignores important tool feedback, or is dominated "
+    "by templated reasoning that would make the dataset mode-collapse.\n\n"
+    "PLAN QUALITY (stage 2): the plan is control state, not evidence. KEEP plans whose subgoals map to "
+    "real backbone operations and whose `result`/status reflect what actually executed. REPAIR minor "
+    "plan wording. REJECT plan HALLUCINATION (a goal/result asserting a value, row, or outcome no step "
+    "produced; a result restating the final answer as if pre-known) and OVER-PLANNING (a subgoal per "
+    "trivial step, ritualistic updates that restate the prior state with no real progress, or more plan "
+    "calls than actual work). A good plan is a few meaningful subgoals updated when state truly changes.\n\n"
+    "BAD PATTERNS to actively catch (repair if local, reject if pervasive):\n"
+    "- formulaic reasoning: many steps sharing 'I now apply/compute/project X because the question asks...';\n"
+    "- ritual observation: an inspect/read that no later step consumes, or describe/inspect narrated every step;\n"
+    "- fabricated grounding: 'I confirmed/verified X' when the observation did not actually show X;\n"
+    "- ritual planning: a plan update after nearly every step, or subgoals that just echo the tool name.\n\n"
+    "Do not reject merely because the style differs from your favorite phrasing. Prefer preserving "
+    "natural, varied reasoning when it is faithful.\n\n"
+    "Output ONLY JSON with this schema:\n"
+    "{\n"
+    "  \"decision\": \"keep|repair|reject\",\n"
+    "  \"confidence\": 0.0,\n"
+    "  \"summary\": \"one sentence\",\n"
+    "  \"strengths\": [\"...\"],\n"
+    "  \"risks\": [\"...\"],\n"
+    "  \"revision_requests\": [\n"
+    "    {\"step_id\": \"step_3\", \"severity\": \"minor|major|fatal\", "
+    "\"requirement\": \"what must change\", \"reason\": \"why\"}\n"
+    "  ]\n"
+    "}\n"
+    "For keep, revision_requests should usually be empty. For BOTH repair AND reject, you MUST return "
+    "revision_requests — one per real problem, each naming the exact step_id and a concrete, actionable "
+    "requirement a later generator can apply to fix that step's think or plan (repair keeps the same tool "
+    "calls/outputs; reject may need a regenerated observation/plan). Never return an empty "
+    "revision_requests for repair or reject."
+)
+
+
+def _clip_text(value, limit: int = 1200) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"... <truncated {len(text) - limit} chars>"
+
+
+def _compact_audit_output(output):
+    if not isinstance(output, dict):
+        return output
+    out = copy.deepcopy(output)
+    for key in ("rows", "result_sample"):
+        if isinstance(out.get(key), list):
+            out[key] = out[key][:5]
+    if isinstance(out.get("tables"), list):
+        compact_tables = []
+        for table in out["tables"]:
+            if not isinstance(table, dict):
+                compact_tables.append(table)
+                continue
+            t = dict(table)
+            if isinstance(t.get("columns"), list):
+                t["columns"] = t["columns"][:40]
+            compact_tables.append(t)
+        out["tables"] = compact_tables
+    return out
+
+
+def _compact_trajectory_for_quality(traj: dict) -> dict:
+    steps = []
+    for i, step in enumerate(traj.get("steps", []), 1):
+        call = step.get("tool_call") or {}
+        item = {
+            "index": i,
+            "step_id": step.get("step_id"),
+            "think": step.get("think", ""),
+            "rationale": step.get("rationale"),
+            "tool": call.get("tool"),
+            "arguments": call.get("arguments"),
+            "output": _compact_audit_output(step.get("tool_output")),
+        }
+        if step.get("perception"):
+            item["perception"] = True
+        steps.append(item)
+    return {
+        "trajectory_id": traj.get("trajectory_id"),
+        "db_id": (traj.get("source") or {}).get("db_id"),
+        "question": traj.get("question"),
+        "initial_catalog": (traj.get("initial_state") or {}).get("dataset_overview"),
+        "steps": steps,
+        "final_answer": traj.get("final_answer"),
+    }
+
+
+def _step_ref_from_issue(text: str) -> str:
+    m = re.search(r"\bstep[ _](\d+)\b", str(text))
+    return f"step_{m.group(1)}" if m else "trajectory"
+
+
+def _plan_structural_issues(traj: dict) -> list[dict]:
+    """Deterministic structural checks specific to the plan tool: dangling references and an
+    over-planning signal. Semantic judgements (hallucinated results, ritualistic goals) are left to
+    the LLM auditor — these are only the mechanically decidable candidates."""
+    steps = traj.get("steps", [])
+    out: list[dict] = []
+    plan_idx = [i for i, s in enumerate(steps) if (s.get("tool_call") or {}).get("tool") == "plan"]
+    work = len(steps) - len(plan_idx)
+    if work and len(plan_idx) > max(2, work):
+        out.append({"step_id": "plan", "severity": "minor",
+                    "issue": f"possible over-planning: {len(plan_idx)} plan calls vs {work} tool/work steps"})
+    seen: set = set()
+    for s in steps:
+        tc = s.get("tool_call") or {}
+        if tc.get("tool") == "plan":
+            for op in (tc.get("arguments") or {}).get("ops", []) or []:
+                ev = op.get("evidence_step_id")
+                if isinstance(ev, str) and ev and ev not in seen:
+                    out.append({"step_id": s.get("step_id"), "severity": "major",
+                                "issue": f"plan op {op.get('id')!r} cites evidence_step_id {ev!r} "
+                                         f"which is not an earlier executed step"})
+        seen.add(s.get("step_id"))
+    return out
+
+
+def structural_diagnosis(traj: dict) -> list[dict]:
+    """Deterministic structural problem diagnosis handed to the LLM auditor as CANDIDATES to verify.
+    Execution/rules decide the structural part (grounding gaps, truncation-fabrication, stale wording,
+    tool/think mismatch, plan step-ref validity, over-planning signals); the LLM makes the semantic
+    call and writes repair requirements. Programmatic verdicts never decide retention on their own."""
+    hard, repairable, _style = quality_check(
+        traj.get("steps", []), traj.get("question", ""),
+        traj.get("initial_state", {}).get("dataset_overview"),
+    )
+    out: list[dict] = []
+    for severity, issues in (("major", hard), ("minor", repairable)):
+        for text in issues:
+            out.append({"step_id": _step_ref_from_issue(text), "severity": severity, "issue": text})
+    out.extend(_plan_structural_issues(traj))
+    return out
+
+
+def build_quality_audit_prompt(traj: dict) -> list[dict]:
+    payload = _compact_trajectory_for_quality(traj)
+    diagnosis = structural_diagnosis(traj)
+    diag_block = (
+        "CANDIDATE STRUCTURAL ISSUES (found by a deterministic checker — VERIFY each against the "
+        "trajectory; confirm real ones in your revision_requests, ignore false positives, and add any "
+        "the checker missed):\n" + json.dumps(diagnosis, ensure_ascii=False)
+        if diagnosis else
+        "CANDIDATE STRUCTURAL ISSUES: none flagged by the deterministic checker (still judge semantics "
+        "and plan quality yourself)."
+    )
+    user = (
+        "Review this trajectory for SFT data quality.\n\n"
+        f"TRAJECTORY:\n{_clip_text(payload, 24000)}\n\n"
+        f"{diag_block}\n\n"
+        "Return the JSON review now."
+    )
+    return [{"role": "system", "content": QUALITY_AUDIT_SYS}, {"role": "user", "content": user}]
+
+
+def _json_object_from_text(text: str) -> dict:
+    obj_match = re.search(r"\{.*\}", text, re.S)
+    if not obj_match:
+        return {}
+    try:
+        obj = json.loads(obj_match.group(0))
+    except json.JSONDecodeError:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def parse_quality_audit(text: str) -> dict:
+    obj = _json_object_from_text(text)
+    decision = str(obj.get("decision", "")).strip().lower()
+    aliases = {
+        "ready": "keep",
+        "accept": "keep",
+        "accepted": "keep",
+        "use": "keep",
+        "usable": "keep",
+        "needs_repair": "repair",
+        "revise": "repair",
+        "fix": "repair",
+        "drop": "reject",
+        "discard": "reject",
+        "not usable": "reject",
+    }
+    decision = aliases.get(decision, decision)
+    if decision not in {"keep", "repair", "reject"}:
+        decision = "reject"
+        obj.setdefault("summary", "quality audit did not return a valid decision")
+    obj["decision"] = decision
+    reqs = obj.get("revision_requests")
+    if not isinstance(reqs, list):
+        obj["revision_requests"] = []
+    else:
+        obj["revision_requests"] = [r for r in reqs if isinstance(r, dict)]
+    for key in ("strengths", "risks"):
+        if not isinstance(obj.get(key), list):
+            obj[key] = []
+    try:
+        obj["confidence"] = float(obj.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        obj["confidence"] = 0.0
+    obj["summary"] = str(obj.get("summary", "")).strip()
+    return obj
+
+
+def _audit_issue_texts(audit: dict) -> list[str]:
+    out = []
+    for req in audit.get("revision_requests") or []:
+        step = req.get("step_id") or req.get("step") or "trajectory"
+        requirement = str(req.get("requirement", "")).strip()
+        reason = str(req.get("reason", "")).strip()
+        if requirement and reason:
+            out.append(f"{step}: {requirement} ({reason})")
+        elif requirement:
+            out.append(f"{step}: {requirement}")
+    if not out and audit.get("summary"):
+        out.append(audit["summary"])
+    return out
+
+
+def apply_quality_review(
+    traj: dict,
+    *,
+    mode: str,
+    base: str | None = None,
+    key: str | None = None,
+    model: str | None = None,
+    api_timeout: int = 180,
+    api_retries: int = 4,
+) -> dict:
+    """Attach final quality status.
+
+    Programmatic checks are kept as diagnostics, but in LLM mode they no longer decide whether a
+    trajectory is retained. The external audit is the final status source.
+    """
+    out = traj
+    enr = out.setdefault("enrichment", {})
+    prog_hard, prog_rep, prog_style = quality_check(
+        out.get("steps", []), out.get("question", ""),
+        out.get("initial_state", {}).get("dataset_overview"),
+    )
+    programmatic = {
+        "status": "reject" if prog_hard else ("repairable" if prog_rep else "ready"),
+        "hard_issues": prog_hard,
+        "repairable_issues": prog_rep,
+        "soft_issues": prog_style,
+    }
+    enr["programmatic_quality"] = programmatic
+
+    if mode == "none":
+        enr["quality_status_source"] = "none"
+        enr.setdefault("quality_status", "unreviewed")
+        return out
+
+    if mode == "programmatic":
+        enr["quality_status_source"] = "programmatic"
+        enr["quality_status"] = programmatic["status"]
+        enr["hard_issues"] = prog_hard
+        enr["repairable_issues"] = prog_rep
+        enr["soft_issues"] = prog_style
+        return out
+
+    if enr.get("status") != "enriched":
+        audit = {
+            "decision": "reject",
+            "confidence": 1.0,
+            "summary": "trajectory generation fell back to skeleton, so it is not usable for enriched SFT",
+            "strengths": [],
+            "risks": ["fallback_skeleton"],
+            "revision_requests": [{
+                "step_id": "trajectory",
+                "severity": "fatal",
+                "requirement": "regenerate the trajectory with successful enrichment",
+                "reason": "fallback skeleton has not passed external quality review",
+            }],
+            "status": "skipped_fallback",
+        }
+    else:
+        if not (base and key and model):
+            audit = {
+                "decision": "reject",
+                "confidence": 0.0,
+                "summary": "external quality audit was requested but API credentials/model were unavailable",
+                "strengths": [],
+                "risks": ["audit_not_run"],
+                "revision_requests": [{
+                    "step_id": "trajectory",
+                    "severity": "fatal",
+                    "requirement": "run external quality audit before using this record",
+                    "reason": "no audit result is present",
+                }],
+                "status": "api_missing",
+            }
+        else:
+            try:
+                text, usage = call_retry(
+                    base, key, model, build_quality_audit_prompt(out),
+                    tries=api_retries, timeout=api_timeout,
+                )
+                audit = parse_quality_audit(text)
+                audit["status"] = "ok"
+                audit["model_output"] = text
+                audit["usage"] = usage
+            except Exception as e:  # noqa: BLE001
+                audit = {
+                    "decision": "reject",
+                    "confidence": 0.0,
+                    "summary": f"external quality audit failed: {type(e).__name__}: {e}",
+                    "strengths": [],
+                    "risks": ["audit_api_error"],
+                    "revision_requests": [{
+                        "step_id": "trajectory",
+                        "severity": "fatal",
+                        "requirement": "rerun external quality audit",
+                        "reason": f"{type(e).__name__}: {e}",
+                    }],
+                    "status": "api_error",
+                }
+
+    status_map = {"keep": "ready", "repair": "repairable", "reject": "reject"}
+    final_status = status_map.get(audit.get("decision"), "reject")
+    enr["quality_status_source"] = "llm"
+    enr["quality_status"] = final_status
+    enr["quality_audit"] = audit
+    enr["quality_reviewer"] = {"model": model, "mode": "llm_quality_audit"}
+    issues = _audit_issue_texts(audit)
+    enr["hard_issues"] = issues if final_status == "reject" else []
+    enr["repairable_issues"] = issues if final_status == "repairable" else []
+    enr["soft_issues"] = audit.get("risks", []) if final_status == "ready" else []
+    return out
+
+
+REPAIR_SYS = (
+    "You revise ONLY the <think> wording of specific steps in a verified table-tool trajectory so it "
+    "satisfies a reviewer's requirements. HARD RULES: never change any tool call, arguments, tool "
+    "output, plan ops, step order, or the final answer — only the first-person <think> of the named "
+    "steps. Keep it concise and faithful: describe the decision from what the visible observations "
+    "ACTUALLY showed; never claim a value/row/schema was confirmed if the cited observation did not "
+    "show it (if it was truncated, say the value was not shown and proceed accordingly); name the exact "
+    "table handle and columns the step uses.\n\n"
+    "Output ONLY JSON: {\"revisions\": [{\"step_id\": \"step_4\", \"think\": \"revised first-person "
+    "think\"}]}. Include one entry per step named in the requirements; omit steps you do not change."
+)
+
+
+def build_repair_prompt(traj: dict, revision_requests: list[dict]) -> list[dict]:
+    payload = _compact_trajectory_for_quality(traj)
+    reqs = [{"step_id": r.get("step_id"), "requirement": r.get("requirement"), "reason": r.get("reason")}
+            for r in revision_requests if isinstance(r, dict)]
+    user = (
+        f"TRAJECTORY:\n{_clip_text(payload, 24000)}\n\n"
+        f"REVISION REQUIREMENTS:\n{json.dumps(reqs, ensure_ascii=False)}\n\n"
+        "Return the JSON revisions now."
+    )
+    return [{"role": "system", "content": REPAIR_SYS}, {"role": "user", "content": user}]
+
+
+def apply_think_revisions(traj: dict, revisions: list[dict]) -> int:
+    """Apply LLM think rewrites in place — think text ONLY; tool calls/outputs/plan ops are untouched."""
+    by_id = {r.get("step_id"): r.get("think") for r in revisions
+             if isinstance(r, dict) and isinstance(r.get("think"), str) and r["think"].strip()}
+    changed = 0
+    for step in traj.get("steps", []):
+        new = by_id.get(step.get("step_id"))
+        if new and new.strip() != str(step.get("think", "")).strip():
+            step["think"] = new.strip()
+            changed += 1
+    return changed
+
+
+def review_and_repair(
+    traj: dict, *, mode: str, base: str | None, key: str | None, model: str | None,
+    max_repair: int = 3, api_timeout: int = 180, api_retries: int = 4,
+) -> dict:
+    """Audit -> if repair/reject with actionable requests, let the model rewrite the flagged steps'
+    think and re-audit, up to `max_repair` rounds. The LLM audit stays the final gate; repair only
+    edits think wording (never tools/outputs), so a verified trajectory stays verified."""
+    traj = apply_quality_review(traj, mode=mode, base=base, key=key, model=model,
+                                api_timeout=api_timeout, api_retries=api_retries)
+    if mode != "llm" or not (base and key and model):
+        return traj
+    rank = {"ready": 2, "repairable": 1, "reject": 0}
+
+    def _rank(t: dict) -> int:
+        return rank.get((t.get("enrichment") or {}).get("quality_status"), -1)
+
+    # Monotonic: keep the best-status version ever seen (including the pre-repair one). A repair round
+    # that the noisy judge re-scores worse can never drag the record below where it already was.
+    best = copy.deepcopy(traj)
+    history: list[dict] = []
+    for attempt in range(1, max_repair + 1):
+        enr = traj.get("enrichment") or {}
+        if enr.get("quality_status") == "ready":
+            break
+        audit = enr.get("quality_audit") or {}
+        reqs = audit.get("revision_requests") or []
+        if audit.get("status") != "ok" or not reqs:
+            break                                   # skeleton / api error / nothing actionable
+        before = enr.get("quality_status")
+        try:
+            text, _usage = call_retry(base, key, model, build_repair_prompt(traj, reqs),
+                                      tries=api_retries, timeout=api_timeout)
+            revisions = _json_object_from_text(text).get("revisions") or []
+            n = apply_think_revisions(traj, revisions if isinstance(revisions, list) else [])
+        except Exception as e:  # noqa: BLE001
+            history.append({"attempt": attempt, "before": before, "error": f"{type(e).__name__}: {e}"})
+            break
+        if not n:
+            history.append({"attempt": attempt, "before": before, "revised_steps": 0})
+            break                                   # model changed nothing -> stop, avoid looping
+        traj = apply_quality_review(traj, mode=mode, base=base, key=key, model=model,
+                                    api_timeout=api_timeout, api_retries=api_retries)
+        after = (traj.get("enrichment") or {}).get("quality_status")
+        history.append({"attempt": attempt, "before": before, "revised_steps": n, "after": after})
+        # >= (not >): on a tie, prefer the REPAIRED version — it addressed the flagged issues; only a
+        # strictly-worse re-score is discarded. This keeps a fabrication fix even when residual minor
+        # issues hold the coarse status at 'repairable'.
+        if _rank(traj) >= _rank(best):
+            best = copy.deepcopy(traj)
+        if _rank(best) >= rank["repairable"]:
+            break                                   # reached a usable version -> stop before noise regresses it
+    best.setdefault("enrichment", {})["repair_history"] = history
+    return best
 
 
 def _remember_rejection(rejections: list[dict], *, attempt: int, stage: str, issues: str,
@@ -1748,7 +2668,7 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
                 model_output=text, usage=usage,
             )
             continue
-        perc = [a for a in ann if a.get("tool") in PERCEPTION]
+        perc = dedupe_perception_insertions(traj, [a for a in ann if a.get("tool") in PERCEPTION])
         errs = [a for a in ann if a.get("tool") == "error"]
         if errs and not allow_errors:
             feedback = (
@@ -1767,8 +2687,8 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
         q_hard, q_rep, q_style = quality_check(
             enr_p, traj.get("question", ""), catalog_snapshot(h)
         )
-        if not (l1p_ok and l2_ok and not q_hard):
-            feedback = "; ".join(([l1p_err] if not l1p_ok else []) + l2_issues + q_hard) or "no valid perception"
+        if not (l1p_ok and l2_ok):
+            feedback = "; ".join(([l1p_err] if not l1p_ok else []) + l2_issues) or "no valid perception"
             history.append({"attempt": attempt, "perc": len(perc), "errs": len(errs),
                             "perception_ok": False, "issues": feedback,
                             "repairable_issues": q_rep, "soft_issues": q_style,
@@ -1776,7 +2696,7 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
             _remember_rejection(
                 rejections, attempt=attempt, stage="perception_validation", issues=feedback,
                 candidate_steps=enr_p, model_output=text, usage=usage, l1_ok=l1p_ok,
-                l2_ok=l2_ok, q_ok=not q_hard, n_perception=len(perc), n_error=len(errs),
+                l2_ok=l2_ok, programmatic_q_ok=not q_hard, n_perception=len(perc), n_error=len(errs),
             )
             continue
         best = {"steps": enr_p, "mode": "perception_only", "n_perception": len(perc), "n_error": 0,
@@ -1789,21 +2709,22 @@ def enrich_one(traj: dict, base: str, key: str, model: str, max_attempts: int = 
         qf_hard, qf_rep, qf_style = quality_check(
             enr_f, traj.get("question", ""), catalog_snapshot(h)
         )
-        if l1f_ok and not qf_hard:
+        if l1f_ok:
             best = {"steps": enr_f, "mode": "full", "n_perception": len(perc), "n_error": len(errs),
                     "repairable": qf_rep, "style": qf_style}
             history.append({"attempt": attempt, "perc": len(perc), "errs": len(errs), "ok": True,
                             "model_output": text, "usage": usage})
             break
         feedback = "perception is correct; fix ONLY the error attempts: " + "; ".join(
-            ([l1f_err] if not l1f_ok else []) + qf_hard
+            ([l1f_err] if not l1f_ok else [])
         )
         history.append({"attempt": attempt, "perc": len(perc), "errs": len(errs),
                         "perception_ok": True, "errors_ok": False, "issues": feedback,
                         "model_output": text, "usage": usage})
         _remember_rejection(
             rejections, attempt=attempt, stage="correction_validation", issues=feedback,
-            candidate_steps=enr_f, model_output=text, usage=usage, l1_ok=l1f_ok, q_ok=not qf_hard,
+            candidate_steps=enr_f, model_output=text, usage=usage, l1_ok=l1f_ok,
+            programmatic_q_ok=not qf_hard,
             n_perception=len(perc), n_error=len(errs),
         )
     if best:
@@ -1850,28 +2771,34 @@ def enrich_one_staged(traj: dict, base: str, key: str, model: str, max_attempts:
     h = Harness(db_path(traj["source"]["db_id"]))
     overview = traj["initial_state"]["dataset_overview"]
     domains = column_domains(h, overview, string_filter_cols(traj["steps"]))
+    existing_describes = backbone_describe_observations(traj)
     history: list[dict] = []
     rejections: list[dict] = []
     feedback = ""
     for attempt in range(1, max_attempts + 1):
-        try:
-            obs_text, obs_usage = call_retry(
-                base, key, model, build_observation_prompt(traj, feedback),
-                tries=api_retries, timeout=api_timeout,
-            )
-        except Exception as e:  # noqa: BLE001
-            history.append({"attempt": attempt, "stage": "observation", "error": f"api: {e}"})
-            continue
-
-        obs_ann = parse_observation_insertions(obs_text)
-        describes = []
-        for a in obs_ann:
-            if a.get("tool") != "describe_table":
+        obs_text, obs_usage = "", {}
+        describes: list[dict] = []
+        if not existing_describes:
+            try:
+                obs_text, obs_usage = call_retry(
+                    base, key, model, build_observation_prompt(traj, feedback),
+                    tries=api_retries, timeout=api_timeout,
+                )
+            except Exception as e:  # noqa: BLE001
+                history.append({"attempt": attempt, "stage": "observation", "error": f"api: {e}"})
                 continue
-            b = copy.deepcopy(a)
-            b["after"] = -1
-            describes.append(b)
-        if not describes:
+
+            obs_ann = parse_observation_insertions(obs_text)
+            for a in obs_ann:
+                if a.get("tool") != "describe_table":
+                    continue
+                b = copy.deepcopy(a)
+                b["after"] = -1
+                describes.append(b)
+            describes = dedupe_perception_insertions(traj, describes)
+
+        schema_observations = existing_describes + describes
+        if not schema_observations:
             feedback = "stage 1 produced no describe_table observation; choose at least one candidate table from the catalog"
             history.append({"attempt": attempt, "stage": "observation", "ok": False,
                             "issues": feedback, "model_output": obs_text, "usage": obs_usage})
@@ -1886,7 +2813,7 @@ def enrich_one_staged(traj: dict, base: str, key: str, model: str, max_attempts:
             ctx_domains["_feedback"] = feedback
         try:
             act_text, act_usage = call_retry(
-                base, key, model, build_staged_action_prompt(traj, ctx_domains, describes),
+                base, key, model, build_staged_action_prompt(traj, ctx_domains, schema_observations),
                 tries=api_retries, timeout=api_timeout,
             )
         except Exception as e:  # noqa: BLE001
@@ -1915,7 +2842,9 @@ def enrich_one_staged(traj: dict, base: str, key: str, model: str, max_attempts:
             )
             continue
 
-        local_perc = [a for a in act_ann if a.get("tool") in {"inspect_column", "read_subtable"}]
+        local_perc = dedupe_perception_insertions(
+            traj, [a for a in act_ann if a.get("tool") in {"inspect_column", "read_subtable"}]
+        )
         errs = [a for a in act_ann if a.get("tool") == "error"]
         if errs:
             feedback = "staged_perception is observation-only; do not output error/correction insertions"
@@ -1937,7 +2866,7 @@ def enrich_one_staged(traj: dict, base: str, key: str, model: str, max_attempts:
         q_hard, q_rep, q_style = quality_check(
             steps, traj.get("question", ""), catalog_snapshot(h)
         )
-        if l1_ok and l2_ok and not q_hard:
+        if l1_ok and l2_ok:
             out = copy.deepcopy(traj)
             out["schema_version"] = "v3-enriched"
             out["label_status"] = "verified"
@@ -1957,23 +2886,27 @@ def enrich_one_staged(traj: dict, base: str, key: str, model: str, max_attempts:
                                      "observation_usage": obs_usage,
                                      "model_output": act_text, "usage": act_usage,
                                      "stage1_describes": len(describes),
+                                     "backbone_describes": len(existing_describes),
                                      "stage2_perception": len(local_perc),
                                  }]}
             return out
 
         feedback = "; ".join(([l1_err] if not l1_ok else []) +
-                             ([] if l2_ok else l2_issues) +
-                             q_hard) or "staged enrichment failed validation"
+                             ([] if l2_ok else l2_issues)) or "staged enrichment failed validation"
         history.append({"attempt": attempt, "ok": False, "issues": feedback,
                         "repairable_issues": q_rep, "soft_issues": q_style,
                         "observation_model_output": obs_text, "observation_usage": obs_usage,
                         "model_output": act_text, "usage": act_usage,
-                        "stage1_describes": len(describes), "stage2_perception": len(local_perc)})
+                        "stage1_describes": len(describes),
+                        "backbone_describes": len(existing_describes),
+                        "stage2_perception": len(local_perc)})
         _remember_rejection(
             rejections, attempt=attempt, stage="validation", issues=feedback,
             candidate_steps=steps, observation_model_output=obs_text, model_output=act_text,
-            observation_usage=obs_usage, usage=act_usage, l1_ok=l1_ok, l2_ok=l2_ok, q_ok=not q_hard,
-            stage1_describes=len(describes), stage2_perception=len(local_perc),
+            observation_usage=obs_usage, usage=act_usage, l1_ok=l1_ok, l2_ok=l2_ok,
+            programmatic_q_ok=not q_hard,
+            stage1_describes=len(describes), backbone_describes=len(existing_describes),
+            stage2_perception=len(local_perc),
         )
 
     _, _, base_steps = replay_validate(traj, spliced_sequence(traj, []))
@@ -1988,6 +2921,210 @@ def enrich_one_staged(traj: dict, base: str, key: str, model: str, max_attempts:
                          "n_perception": 0, "n_error": 0,
                          "rejected_candidates": rejections,
                          "annotation_history": history}
+    return out
+
+
+def _replay_accepted_prefix(traj: dict, accepted_steps: list[dict]):
+    h = Harness(db_path(traj["source"]["db_id"]))
+    ctx = new_ctx()
+    created: set[str] = set()
+    for step in accepted_steps:
+        call = step.get("tool_call") or {}
+        tool = call.get("tool")
+        args = call.get("arguments") or {}
+        if tool == "answer_from_context":
+            break
+        out, tname = execute_tool(h, tool, args, ctx, step.get("step_id", "step_0"))
+        if tname:
+            created.add(tname)
+        # Keep the replayed output in sync with the accepted transcript. This matters when a prior
+        # accepted step was created from a provider response but the harness owns the actual output.
+        step["tool_output"] = out
+    return h, ctx, created
+
+
+def enrich_one_stateful_step(traj: dict, base: str, key: str, model: str, max_attempts: int = 3,
+                             api_timeout: int = 180, api_retries: int = 4) -> dict:
+    """State-conditioned enrichment.
+
+    The external LLM sees one target backbone step at a time plus the actual previous tool history.
+    It may insert observation steps before that target if the visible state is insufficient, then it
+    writes the target's reasoning. This keeps generation closer to a real tool-call transcript than
+    whole-trajectory post-hoc rewriting.
+    """
+    h0 = Harness(db_path(traj["source"]["db_id"]))
+    accepted_steps: list[dict] = []
+    old_to_new: dict[str, str] = {}
+    annotation_history: list[dict] = []
+    rejections: list[dict] = []
+    added_perception = 0
+
+    for target_index, target_step in enumerate(traj["steps"]):
+        call = target_step["tool_call"]
+        target_tool = call["tool"]
+        target_args = _strip_answer_memory_args(target_tool, copy.deepcopy(call["arguments"]))
+        _remap_step_refs(target_tool, target_args, old_to_new)
+        feedback = ""
+        accepted_this_turn = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                text, usage = call_retry(
+                    base, key, model,
+                    build_stateful_step_prompt(
+                        traj, accepted_steps, target_index, target_step, target_args, feedback
+                    ),
+                    tries=api_retries, timeout=api_timeout,
+                )
+            except Exception as e:  # noqa: BLE001
+                annotation_history.append({
+                    "target_index": target_index, "attempt": attempt,
+                    "stage": "api", "error": f"{type(e).__name__}: {e}",
+                })
+                continue
+
+            insertions, target = parse_stateful_step(text)
+            insertions = _dedupe_against_state(insertions, accepted_steps)
+            if target_tool in PERCEPTION and insertions:
+                feedback = (
+                    "the target step is already an observation; do not insert another observation "
+                    "before it"
+                )
+                annotation_history.append({
+                    "target_index": target_index, "attempt": attempt, "ok": False,
+                    "issues": feedback, "model_output": text, "usage": usage,
+                })
+                _remember_rejection(
+                    rejections, attempt=attempt, stage="stateful_parse",
+                    issues=f"target {target_index}: {feedback}",
+                    model_output=text, usage=usage,
+                )
+                continue
+            target_think = str(target.get("think", "")).strip()
+            if not target_think:
+                feedback = "missing target.think for the current target tool call"
+                annotation_history.append({
+                    "target_index": target_index, "attempt": attempt, "ok": False,
+                    "issues": feedback, "model_output": text, "usage": usage,
+                })
+                _remember_rejection(
+                    rejections, attempt=attempt, stage="stateful_parse",
+                    issues=f"target {target_index}: {feedback}",
+                    model_output=text, usage=usage,
+                )
+                continue
+
+            try:
+                h, ctx, created = _replay_accepted_prefix(traj, copy.deepcopy(accepted_steps))
+                candidate_steps = copy.deepcopy(accepted_steps)
+
+                turn_steps: list[dict] = []
+                for ins in insertions:
+                    sid = f"step_{len(candidate_steps) + len(turn_steps) + 1}"
+                    out, _ = execute_tool(h, ins["tool"], ins.get("arguments", {}), ctx, sid)
+                    turn_steps.append({
+                        "step_id": sid,
+                        "think": str(ins.get("think", "")).strip(),
+                        "rationale": ins.get("rationale"),
+                        "tool_call": {"tool": ins["tool"], "arguments": ins.get("arguments", {})},
+                        "tool_output": out,
+                        "perception": True,
+                    })
+
+                sid = f"step_{len(candidate_steps) + len(turn_steps) + 1}"
+                target_record = {
+                    "step_id": sid,
+                    "think": target_think,
+                    "rationale": target.get("rationale"),
+                    "tool_call": {"tool": target_tool, "arguments": target_args},
+                }
+                if target_tool == "answer_from_context":
+                    correct, pred, gold = score(h, traj["source"]["gold_sql"], target_args, created)
+                    if not correct:
+                        raise ValueError(
+                            f"final answer no longer matches gold; pred={pred[:3]} gold={gold[:3]}"
+                        )
+                    target_record["tool_output"] = {"final_answer": target_args.get("answer")}
+                else:
+                    out, tname = execute_tool(h, target_tool, target_args, ctx, sid)
+                    if tname:
+                        created.add(tname)
+                    target_record["tool_output"] = out
+                    if target_tool in PERCEPTION:
+                        target_record["perception"] = True
+
+                turn_steps.append(target_record)
+            except Exception as e:  # noqa: BLE001
+                feedback = f"turn execution failed: {type(e).__name__}: {e}"
+                annotation_history.append({
+                    "target_index": target_index, "attempt": attempt, "ok": False,
+                    "issues": feedback, "model_output": text, "usage": usage,
+                    "n_insertions": len(insertions),
+                })
+                _remember_rejection(
+                    rejections, attempt=attempt, stage="stateful_execution",
+                    issues=f"target {target_index}: {feedback}",
+                    candidate_steps=(accepted_steps + locals().get("turn_steps", [])),
+                    model_output=text, usage=usage,
+                )
+                continue
+
+            accepted_this_turn = turn_steps
+            annotation_history.append({
+                "target_index": target_index, "attempt": attempt, "ok": True,
+                "model_output": text, "usage": usage,
+                "n_insertions": len(insertions),
+            })
+            break
+
+        if accepted_this_turn is None:
+            _, _, base_steps = replay_validate(traj, spliced_sequence(traj, []))
+            out = copy.deepcopy(traj)
+            out["schema_version"] = "v3-enriched"
+            out["label_status"] = "verified"
+            out["initial_state"]["dataset_overview"] = catalog_snapshot(h0)
+            out["steps"] = base_steps
+            out["enrichment"] = {
+                "status": "fallback_skeleton",
+                "mode": "skeleton",
+                "quality_status": "reject",
+                "generator": {"model": model, "mode_requested": "stateful_step"},
+                "n_perception": 0,
+                "n_error": 0,
+                "rejected_candidates": rejections,
+                "annotation_history": annotation_history,
+            }
+            return out
+
+        old_to_new[target_step["step_id"]] = accepted_this_turn[-1]["step_id"]
+        added_perception += sum(
+            1 for s in accepted_this_turn
+            if (s.get("tool_call") or {}).get("tool") in PERCEPTION
+            and (s.get("tool_call") or {}).get("tool") != target_tool
+        )
+        accepted_steps.extend(accepted_this_turn)
+
+    q_hard, q_rep, q_style = quality_check(
+        accepted_steps, traj.get("question", ""), catalog_snapshot(h0)
+    )
+    out = copy.deepcopy(traj)
+    out["schema_version"] = "v3-enriched"
+    out["label_status"] = "verified"
+    out["initial_state"]["dataset_overview"] = catalog_snapshot(h0)
+    out["steps"] = accepted_steps
+    out["enrichment"] = {
+        "status": "enriched",
+        "mode": "stateful_step",
+        "quality_status": "reject" if q_hard else ("repairable" if q_rep else "ready"),
+        "repairable_issues": q_rep,
+        "soft_issues": q_style,
+        "hard_issues": q_hard,
+        "generator": {"model": model, "mode_requested": "stateful_step"},
+        "n_perception": added_perception,
+        "n_error": 0,
+        "rejected_candidates": rejections,
+        "annotation_history": annotation_history,
+    }
     return out
 
 
@@ -2023,7 +3160,7 @@ def enrich_one_rewrite_only(traj: dict, base: str, key: str, model: str,
                              "annotation_history": history}
         return out
 
-    insertions = deterministic_perception_insertions(traj)
+    insertions = dedupe_perception_insertions(traj, deterministic_perception_insertions(traj))
     ok, err, steps = replay_validate(traj, spliced_sequence(traj, insertions, rewrites))
     qhard, qrep, qstyle = quality_check(
         steps, traj.get("question", ""), catalog_snapshot(h)
@@ -2032,7 +3169,7 @@ def enrich_one_rewrite_only(traj: dict, base: str, key: str, model: str,
     out["schema_version"] = "v3-enriched"
     out["label_status"] = "verified"
     out["initial_state"]["dataset_overview"] = catalog_snapshot(h)
-    if ok and not qhard:
+    if ok:
         out["steps"] = steps
         out["enrichment"] = {"status": "enriched", "mode": "semantic_rewrite",
                              "quality_status": "repairable" if qrep else "ready",
@@ -2045,10 +3182,11 @@ def enrich_one_rewrite_only(traj: dict, base: str, key: str, model: str,
                                                       "insertions": len(insertions),
                                                       "model_output": text, "usage": usage}]}
     else:
-        issues = "; ".join(([err] if not ok else []) + qhard)
+        issues = "; ".join(([err] if not ok else []))
         _remember_rejection(
             rejections, attempt=1, stage="semantic_rewrite_validation", issues=issues,
-            candidate_steps=steps, model_output=text, usage=usage, ok=ok, q_ok=not qhard,
+            candidate_steps=steps, model_output=text, usage=usage, ok=ok,
+            programmatic_q_ok=not qhard,
             n_perception=len(insertions), n_error=0,
         )
         _, _, base_steps = replay_validate(traj, spliced_sequence(traj, []))
@@ -2091,28 +3229,77 @@ def _issue_bucket(issue: str) -> str:
     return issue.split(":", 1)[0][:80]
 
 
+def _enrichment_debug_summary(enr: dict) -> dict | None:
+    history = enr.get("annotation_history") or []
+    rejected = enr.get("rejected_candidates") or []
+    if not history and not rejected:
+        return None
+    last = history[-1] if history else {}
+    last_rejected = rejected[-1] if rejected else {}
+
+    def length_of(key: str) -> int:
+        value = last.get(key)
+        if value is None:
+            value = last_rejected.get(key)
+        return len(value) if isinstance(value, str) else 0
+
+    return {
+        "annotation_attempts": len(history),
+        "rejected_candidates": len(rejected),
+        "latest_stage": last.get("stage") or last_rejected.get("stage"),
+        "latest_issues": last.get("issues") or last_rejected.get("issues"),
+        "latest_model_output_chars": length_of("model_output"),
+        "latest_observation_model_output_chars": length_of("observation_model_output"),
+        "raw_model_output_locations": [
+            "enrichment.annotation_history[*].model_output",
+            "enrichment.annotation_history[*].observation_model_output",
+            "enrichment.rejected_candidates[*].model_output",
+            "enrichment.rejected_candidates[*].observation_model_output",
+        ],
+    }
+
+
 def quality_manifest(results: list[dict], *, out_path: str, args: argparse.Namespace) -> dict:
     status_counts = collections.Counter()
     stored_status_counts = collections.Counter()
     mode_counts = collections.Counter()
     generator_counts = collections.Counter()
+    quality_source_counts = collections.Counter()
     issue_counts = collections.Counter()
+    hard_issue_counts = collections.Counter()
+    audit_decision_counts = collections.Counter()
     records = []
     for r in results:
         enr = r.get("enrichment") or {}
         generator = enr.get("generator") or {}
-        hard, issues, soft = quality_check(
-            r.get("steps", []), r.get("question", ""), r.get("initial_state", {}).get("dataset_overview")
-        )
-        q = "reject" if hard else ("repairable" if issues else "ready")
+        source = enr.get("quality_status_source", "stored")
+        if source == "programmatic" or (
+            source == "stored" and getattr(args, "quality_mode", "programmatic") == "programmatic"
+        ):
+            hard, issues, soft = quality_check(
+                r.get("steps", []), r.get("question", ""),
+                r.get("initial_state", {}).get("dataset_overview"),
+            )
+            q = "reject" if hard else ("repairable" if issues else "ready")
+        else:
+            q = enr.get("quality_status", "missing")
+            hard = enr.get("hard_issues", []) or []
+            issues = enr.get("repairable_issues", []) or []
+            soft = enr.get("soft_issues", []) or []
         stored_status_counts[enr.get("quality_status", "missing")] += 1
         status_counts[q] += 1
         mode_counts[enr.get("mode", "unknown")] += 1
         generator_counts[generator.get("model", "unknown")] += 1
+        quality_source_counts[source] += 1
         for issue in issues:
             issue_counts[_issue_bucket(issue)] += 1
+        for issue in hard:
+            hard_issue_counts[_issue_bucket(issue)] += 1
+        audit = enr.get("quality_audit") or {}
+        if audit:
+            audit_decision_counts[audit.get("decision", "unknown")] += 1
         tools = [s.get("tool_call", {}).get("tool") for s in r.get("steps", [])]
-        records.append({
+        record = {
             "trajectory_id": r.get("trajectory_id"),
             "question": r.get("question"),
             "db_id": (r.get("source") or {}).get("db_id"),
@@ -2121,6 +3308,10 @@ def quality_manifest(results: list[dict], *, out_path: str, args: argparse.Names
             "quality_status": q,
             "mode": enr.get("mode"),
             "generator_model": generator.get("model"),
+            "quality_status_source": source,
+            "quality_audit_decision": audit.get("decision"),
+            "quality_audit_summary": audit.get("summary"),
+            "quality_audit_confidence": audit.get("confidence"),
             "n_steps": len(r.get("steps", [])),
             "n_perception": enr.get("n_perception", 0),
             "n_error": enr.get("n_error", 0),
@@ -2128,12 +3319,18 @@ def quality_manifest(results: list[dict], *, out_path: str, args: argparse.Names
             "hard_issues": hard,
             "repairable_issues": issues,
             "soft_issues": soft,
+            "programmatic_quality": enr.get("programmatic_quality"),
             "recommended_action": (
                 "use_for_sft" if q == "ready" else
                 "repair_then_recheck" if q == "repairable" else
                 "drop_or_manual_review"
             ),
-        })
+        }
+        if q != "ready":
+            debug = _enrichment_debug_summary(enr)
+            if debug:
+                record["debug"] = debug
+        records.append(record)
     def manifest_scalar(counter: collections.Counter, fallback: str | None = None) -> str | None:
         keys = [key for key, count in counter.items() if count and key not in (None, "unknown")]
         if len(keys) == 1:
@@ -2154,6 +3351,9 @@ def quality_manifest(results: list[dict], *, out_path: str, args: argparse.Names
         "stored_quality_status_counts": dict(stored_status_counts),
         "mode_counts": dict(mode_counts),
         "generator_model_counts": dict(generator_counts),
+        "quality_status_source_counts": dict(quality_source_counts),
+        "audit_decision_counts": dict(audit_decision_counts),
+        "hard_issue_counts": dict(hard_issue_counts),
         "repairable_issue_counts": dict(issue_counts),
         "records": records,
     }
@@ -2166,24 +3366,40 @@ def main() -> int:
     ap.add_argument("--subset-file", default=os.path.join(ROOT, "data", "trajectories", "subset_180.jsonl"))
     ap.add_argument("--model", default="deepseek-v4-pro")
     ap.add_argument("--out", default=os.path.join(ROOT, "data", "trajectories", "smoke_enriched.jsonl"))
-    ap.add_argument("--mode", choices=["full", "perception_only", "semantic_rewrite", "staged_perception"],
+    ap.add_argument("--mode", choices=[
+        "full", "perception_only", "semantic_rewrite", "staged_perception", "stateful_step"
+    ],
                     default="full",
                     help=("full asks the LLM for rewrites+perception+optional corrections; "
                           "perception_only forbids correction/error insertions; semantic_rewrite "
                           "uses a deterministic observation scaffold and asks only for semantic thinks; "
-                          "staged_perception first chooses describe_table from catalog-only state"))
+                          "staged_perception first chooses describe_table from catalog-only state; "
+                          "stateful_step prompts one target tool call at a time from current history"))
     ap.add_argument("--limit", type=int, default=0,
                     help="optional cap for quick smoke generation")
+    ap.add_argument("--select-longest", action="store_true",
+                    help="sort selected trajectories by descending step count before applying --limit")
     ap.add_argument("--api-timeout", type=int, default=180,
                     help="seconds per external LLM request before retry/fallback")
     ap.add_argument("--api-retries", type=int, default=4,
                     help="external LLM retries per annotation attempt")
     ap.add_argument("--max-attempts", type=int, default=10,
                     help="annotation attempts per trajectory after validation feedback")
+    ap.add_argument("--workers", type=int, default=16,
+                    help="parallel trajectory enrichment workers; external API is assumed to tolerate concurrency")
+    ap.add_argument("--quality-mode", choices=["llm", "programmatic", "none"], default="llm",
+                    help=("final quality decision source. llm uses an external model reviewer; "
+                          "programmatic preserves the old rule-based status; none records no final review"))
+    ap.add_argument("--quality-model", default=None,
+                    help="external model used for quality review; default is --model")
+    ap.add_argument("--max-repair", type=int, default=3,
+                    help="max LLM think-repair rounds after a repair/reject audit (llm mode; 0 = off)")
     ap.add_argument("--quality-manifest", default=None,
                     help="path for per-trajectory quality manifest; default is OUT.quality_manifest.json")
     ap.add_argument("--audit-file", default=None,
-                    help="recompute quality manifest for an existing enriched jsonl without calling the API")
+                    help="recompute quality review/manifest for an existing enriched jsonl")
+    ap.add_argument("--audit-out", default=None,
+                    help="optional jsonl path for --audit-file after attaching refreshed quality review")
     ap.add_argument("--repair-file", default=None,
                     help="repair think/rationale text in an existing enriched jsonl without calling the API")
     ap.add_argument("--repair-out", default=None,
@@ -2194,27 +3410,73 @@ def main() -> int:
 
     if args.audit_file:
         with open(args.audit_file, encoding="utf-8") as f:
-            results = [json.loads(line) for line in f if line.strip()]
+            source = [json.loads(line) for line in f if line.strip()]
+        audit_model = args.quality_model or args.model
+        api_key = api_base = None
+        if args.quality_mode == "llm":
+            api_key, api_base = load_api()
+        results = []
+        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+            futures = {
+                pool.submit(
+                    review_and_repair,
+                    traj,
+                    mode=args.quality_mode,
+                    base=api_base,
+                    key=api_key,
+                    model=audit_model,
+                    max_repair=args.max_repair,
+                    api_timeout=args.api_timeout,
+                    api_retries=args.api_retries,
+                ): traj
+                for traj in source
+            }
+            for future in as_completed(futures):
+                results.append(future.result())
+        audit_out = args.audit_out
+        if audit_out:
+            with open(audit_out, "w", encoding="utf-8") as f:
+                for traj in results:
+                    f.write(json.dumps(traj, ensure_ascii=False, default=str) + "\n")
+            review_out = review_path_for(audit_out)
+            if review_out != audit_out:
+                with open(audit_out, encoding="utf-8") as src, open(review_out, "w", encoding="utf-8") as dst:
+                    dst.write(src.read())
         q_manifest_path = args.quality_manifest or (args.audit_file + ".quality_manifest.json")
-        manifest = quality_manifest(results, out_path=args.audit_file, args=args)
+        manifest = quality_manifest(results, out_path=(audit_out or args.audit_file), args=args)
         with open(q_manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=2, default=str)
             f.write("\n")
         print(
             f"audited {len(results)} trajectories"
             f"\nquality {manifest['quality_status_counts']}"
+            f"\nquality_source {manifest['quality_status_source_counts']}"
             f"\nissues {manifest['repairable_issue_counts']}"
-            f"\n-> {q_manifest_path}"
+            + (f"\n-> {audit_out}" if audit_out else "")
+            + f"\n-> {q_manifest_path}"
         )
         return 0
 
     if args.repair_file:
         with open(args.repair_file, encoding="utf-8") as f:
             source = [json.loads(line) for line in f if line.strip()]
+        repair_key = repair_base = None
+        if args.quality_mode == "llm":
+            repair_key, repair_base = load_api()
         results = []
         changed = 0
         for traj in source:
             repaired, n_changed = repair_reasoning(traj)
+            repaired = review_and_repair(
+                repaired,
+                mode=args.quality_mode,
+                base=repair_base,
+                key=repair_key,
+                model=args.quality_model or args.model,
+                max_repair=args.max_repair,
+                api_timeout=args.api_timeout,
+                api_retries=args.api_retries,
+            )
             results.append(repaired)
             changed += n_changed
         repair_out = args.repair_out or (args.repair_file + ".repaired.jsonl")
@@ -2241,49 +3503,80 @@ def main() -> int:
         return 0
 
     key, base = load_api()
+    audit_model = args.quality_model or args.model
     wanted = set(json.load(open(args.ids))[args.which])
     trajs = [normalize_legacy_memory(json.loads(l)) for l in open(args.subset_file) if l.strip()]
     trajs = [t for t in trajs if t["trajectory_id"] in wanted]
+    if args.select_longest:
+        trajs = sorted(trajs, key=lambda t: (-len(t.get("steps", [])), t.get("trajectory_id", "")))
     if args.limit:
         trajs = trajs[: args.limit]
     print(f"enriching {len(trajs)} ({args.which}) with {args.model}\n")
 
+    def enrich_item(t: dict) -> tuple[dict | None, int, str | None]:
+        try:
+            if args.mode == "semantic_rewrite":
+                r = enrich_one_rewrite_only(
+                    t, base, key, args.model,
+                    api_timeout=args.api_timeout, api_retries=args.api_retries,
+                )
+            elif args.mode == "staged_perception":
+                r = enrich_one_staged(
+                    t, base, key, args.model,
+                    max_attempts=args.max_attempts,
+                    api_timeout=args.api_timeout, api_retries=args.api_retries,
+                )
+            elif args.mode == "stateful_step":
+                r = enrich_one_stateful_step(
+                    t, base, key, args.model,
+                    max_attempts=args.max_attempts,
+                    api_timeout=args.api_timeout, api_retries=args.api_retries,
+                )
+            else:
+                r = enrich_one(
+                    t, base, key, args.model,
+                    max_attempts=args.max_attempts,
+                    api_timeout=args.api_timeout, api_retries=args.api_retries,
+                    allow_errors=args.mode == "full",
+                )
+        except Exception as e:  # noqa: BLE001 — one bad trajectory must never abort the whole batch
+            return None, 0, f"{t['trajectory_id']:<20} ERROR: {type(e).__name__}: {e}"
+        n_repaired = 0
+        if not args.no_auto_repair:
+            r, n_repaired = repair_reasoning(r)
+        r = review_and_repair(
+            r,
+            mode=args.quality_mode,
+            base=base,
+            key=key,
+            model=audit_model,
+            max_repair=args.max_repair,
+            api_timeout=args.api_timeout,
+            api_retries=args.api_retries,
+        )
+        return r, n_repaired, None
+
     results = []
+    done = 0
     with open(args.out, "w", encoding="utf-8") as f:
-        for t in trajs:
-            try:
-                if args.mode == "semantic_rewrite":
-                    r = enrich_one_rewrite_only(
-                        t, base, key, args.model,
-                        api_timeout=args.api_timeout, api_retries=args.api_retries,
-                    )
-                elif args.mode == "staged_perception":
-                    r = enrich_one_staged(
-                        t, base, key, args.model,
-                        max_attempts=args.max_attempts,
-                        api_timeout=args.api_timeout, api_retries=args.api_retries,
-                    )
-                else:
-                    r = enrich_one(
-                        t, base, key, args.model,
-                        max_attempts=args.max_attempts,
-                        api_timeout=args.api_timeout, api_retries=args.api_retries,
-                        allow_errors=args.mode == "full",
-                    )
-            except Exception as e:  # noqa: BLE001 — one bad trajectory must never abort the whole batch
-                print(f"  {t['trajectory_id']:<20} ERROR: {type(e).__name__}: {e}")
-                continue
-            n_repaired = 0
-            if not args.no_auto_repair:
-                r, n_repaired = repair_reasoning(r)
-            results.append(r)
-            f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
-            f.flush()
-            meta = r["enrichment"]
-            print(f"  {r['trajectory_id']:<20} len={len(r['steps']):<3} +perc={meta['n_perception']:<2} "
-                  f"+err={meta['n_error']:<2} {meta['mode']:<16} "
-                  f"quality={meta.get('quality_status', 'unknown'):<10} repair={n_repaired:<2} "
-                  f"db={r['source']['db_id']}")
+        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+            futures = {pool.submit(enrich_item, t): t for t in trajs}
+            for future in as_completed(futures):
+                t = futures[future]
+                r, n_repaired, error = future.result()
+                done += 1
+                if error:
+                    print(f"  [{done}/{len(trajs)}] {error}")
+                    continue
+                assert r is not None
+                results.append(r)
+                f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
+                f.flush()
+                meta = r["enrichment"]
+                print(f"  [{done}/{len(trajs)}] {r['trajectory_id']:<20} len={len(r['steps']):<3} "
+                      f"+perc={meta['n_perception']:<2} +err={meta['n_error']:<2} "
+                      f"{meta['mode']:<16} quality={meta.get('quality_status', 'unknown'):<10} "
+                      f"repair={n_repaired:<2} db={r['source']['db_id']}")
     enr = sum(1 for r in results if r["enrichment"]["status"] == "enriched")
     full = sum(1 for r in results if r["enrichment"].get("mode") == "full")
     q_manifest_path = args.quality_manifest or (args.out + ".quality_manifest.json")
@@ -2291,10 +3584,15 @@ def main() -> int:
     with open(q_manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2, default=str)
         f.write("\n")
+    review_out = review_path_for(args.out)
+    if review_out != args.out:
+        with open(args.out, encoding="utf-8") as src, open(review_out, "w", encoding="utf-8") as dst:
+            dst.write(src.read())
     print(
         f"\nenriched {enr}/{len(results)} (with errors {full})  fallback {len(results)-enr}"
         f"\nquality {manifest['quality_status_counts']}"
         f"\n-> {args.out}"
+        f"\n-> {review_out}"
         f"\n-> {q_manifest_path}"
     )
     return 0

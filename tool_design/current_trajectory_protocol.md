@@ -29,14 +29,25 @@ system: protocol/system prompt
 user: DATASET OVERVIEW + QUESTION
 assistant: <think>...</think>
            <tool_call>{"tool": "...", "arguments": {...}}</tool_call>
-user: {"step_id":"step_1","status":"success","output":{...},"state":{...}}
+user: {"step_id":"step_1","status":"success","output":{...}}
+user: CURRENT ENVIRONMENT STATE
+     {"plan":[...],"tables":{...}}     # ephemeral, only in the next model input
 ...
 assistant: final answer_from_context tool call
 ```
 
-The `state` block is harness-managed resident context. It groups the current task plan and known
-table context by source table or derived handle. It is optional for legacy trajectories, but new
-v2c-plan trajectories should render it after non-terminal tool calls.
+The environment state is harness-managed resident context. It groups the current task plan and
+known table context by source table or derived handle. It is NOT part of historical tool
+observations. Online rollout/RL constructs each model input as:
+
+```
+system + initial user + historical assistant/tool-output transcript + latest CURRENT ENVIRONMENT STATE
+```
+
+The latest environment message is a mutable side channel for the next model call; it is not appended
+to the durable conversation history. SFT full-transcript exports omit resident state rather than
+duplicating stale environment snapshots in every observation. If we train directly on the side
+channel later, use per-turn examples or another format that can replace the state message.
 
 Raw SQL-compiled trajectories contain the verified relational backbone only. They do not
 mechanically inject `describe_table`, `inspect_column`, or `read_subtable`; those perception steps

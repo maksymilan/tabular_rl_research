@@ -133,18 +133,26 @@ class Compiler:
         frm = sel.args.get("from_") or sel.args.get("from")
         if frm is None:
             raise CompileError("missing FROM")
-        cur = self._table_ref(frm.this, steps)
-        for join in sel.args.get("joins", []) or []:
-            right = self._table_ref(join.this, steps)
+        base = self._table_ref(frm.this, steps)
+        joins = sel.args.get("joins", []) or []
+        if not joins:
+            return base
+        # Compress the whole consecutive FROM/JOIN chain into ONE N-way join step. Non-consecutive
+        # joins live in different SELECTs (subqueries / set-op branches) and each get their own step.
+        tables = [base]
+        on_chain: list = []
+        join_types: list = []
+        for join in joins:
+            tables.append(self._table_ref(join.this, steps))
             on = join.args.get("on")
             if on is None:
                 raise CompileError("only ON-condition joins supported")
-            jt = "left" if (join.side or "").lower() == "left" else "inner"
-            sid = self._id()
-            steps.append(Step(sid, "join_tables",
-                              {"left": cur, "right": right, "on": self._join_on(on), "join_type": jt}))
-            cur = sid
-        return cur
+            on_chain.append(self._join_on(on))
+            join_types.append("left" if (join.side or "").lower() == "left" else "inner")
+        sid = self._id()
+        steps.append(Step(sid, "join_tables",
+                          {"tables": tables, "on": on_chain, "join_types": join_types}))
+        return sid
 
     def _from_qualified(self, sel: E.Select, steps: list[Step]) -> str:
         # Qualified mode WITHOUT separate rename steps: `join_tables` prefixes each base table's
@@ -153,24 +161,34 @@ class Compiler:
         # the accumulated intermediate is already prefixed and passes through (left_prefix=None).
         frm = sel.args.get("from_") or sel.args.get("from")
         first = frm.this
-        cur = self._qual[first.alias or first.name]   # base table name (resolved case-insensitively)
-        left_prefix = first.alias or first.name        # the first base table still needs prefixing
+        first_alias = first.alias or first.name
+        # Compress the whole consecutive chain into ONE N-way join step. `prefixes[i]` qualifies each
+        # base table's columns to `<alias>__<col>` internally; the accumulated intermediate is
+        # prefixed once (fold 1) then passes through. Non-consecutive joins (separate SELECTs) stay
+        # separate steps.
+        tables = [self._qual[first_alias]]   # base table name (resolved case-insensitively)
+        prefixes = [first_alias]
+        on_chain: list = []
+        join_types: list = []
+        left_prefix = first_alias            # the first base table still needs prefixing
         for join in sel.args.get("joins", []) or []:
             jn = join.this
             r_alias = jn.alias or jn.name
             on = join.args.get("on")
             if on is None:
                 raise CompileError("only ON-condition joins supported")
-            jt = "left" if (join.side or "").lower() == "left" else "inner"
-            sid = self._id()
-            steps.append(Step(sid, "join_tables", {
-                "left": cur, "right": self._qual[r_alias],
-                "on": self._join_on_internal(on, r_alias, left_prefix),
-                "join_type": jt, "left_prefix": left_prefix, "right_prefix": r_alias,
-            }))
-            cur = sid
-            left_prefix = None                          # accumulated intermediate already prefixed
-        return cur
+            tables.append(self._qual[r_alias])
+            prefixes.append(r_alias)
+            on_chain.append(self._join_on_internal(on, r_alias, left_prefix))
+            join_types.append("left" if (join.side or "").lower() == "left" else "inner")
+            left_prefix = None               # accumulated intermediate already prefixed
+        if len(tables) == 1:                 # no joins (only reached with joins present in practice)
+            return tables[0]
+        sid = self._id()
+        steps.append(Step(sid, "join_tables", {
+            "tables": tables, "on": on_chain, "join_types": join_types, "prefixes": prefixes,
+        }))
+        return sid
 
     def _join_on_internal(self, cond: E.Expression, right_alias: str, left_prefix):
         """ON keys in SOURCE terms for internalized prefixing: the right (newly-joined base) key is

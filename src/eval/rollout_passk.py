@@ -32,6 +32,7 @@ from protocol import (  # noqa: E402
     get_system_prompt,
     parse_assistant,
     tool_output_message,
+    with_environment_state,
 )
 from rollout import (  # noqa: E402
     ChatAPIError,
@@ -171,12 +172,13 @@ def run_sample(
         "turns": turns,
     }
     while steps < max_steps:
-        turn = {"turn_index": len(turns)}
+        model_input = with_environment_state(messages, ctx["environment"].snapshot())
+        turn = {"turn_index": len(turns), "model_input": deepcopy(model_input)}
         try:
             text = chat_sample(
                 base_url,
                 model,
-                messages,
+                model_input,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
@@ -244,7 +246,7 @@ def run_sample(
             created.add(table_name)
         messages.append({
             "role": "user",
-            "content": tool_output_message(step_id, out, state=ctx["environment"].snapshot()),
+            "content": tool_output_message(step_id, out),
         })
 
     if rec["failure_type"] is None:
@@ -348,9 +350,7 @@ def fewshot_text(trajectory_ids: list[str]) -> str:
                 + assistant_message(step.get("think", ""), tool_call["tool"], tool_call["arguments"])
             )
             if index < len(trajectory["steps"]) - 1:
-                lines.append(
-                    f"USER: {tool_output_message(step['step_id'], step['tool_output'], state=step.get('environment_state'))}"
-                )
+                lines.append(f"USER: {tool_output_message(step['step_id'], step['tool_output'])}")
         blocks.append("\n".join(lines))
     return "\n\nEXAMPLE SESSIONS\n" + "\n\n---\n\n".join(blocks)
 

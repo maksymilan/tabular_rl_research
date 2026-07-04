@@ -68,6 +68,10 @@ class Harness:
         cur = self.conn.execute(f"SELECT * FROM {self._src(table)} LIMIT 0")
         return [d[0] for d in cur.description]
 
+    def _cols_of_sql(self, sql: str) -> list[str]:
+        cur = self.conn.execute(f"SELECT * FROM ({sql}) LIMIT 0")
+        return [d[0] for d in cur.description]
+
     def _new(self, kind: str, sql: str) -> dict:
         self._n += 1
         name = f"{kind}_{self._n:03d}"
@@ -134,43 +138,70 @@ class Harness:
         tail = f" GROUP BY {gb}" if gb else ""
         return self._new("group", f"SELECT {sel} FROM {self._src(table)}{tail}")
 
-    def join_tables(self, left, right, on, join_type="inner", return_columns=None,
-                    left_prefix=None, right_prefix=None) -> dict:
-        # `left_prefix`/`right_prefix`: when set, rename that side's columns to `<prefix>__<col>`
-        # so a multi-table join disambiguates shared / self-join column names INTERNALLY — the
-        # compiler no longer emits separate rename steps for join disambiguation. A side with
-        # prefix=None passes through unchanged: bare single-table mode, or an already-prefixed
-        # accumulated intermediate (left side of every join after the first).
-        lc = self._cols(left)
-        rc = self._cols(right)
-        jt = {"inner": "JOIN", "left": "LEFT JOIN", "cross": "CROSS JOIN"}.get(join_type, "JOIN")
+    def join_tables(self, left=None, right=None, on=None, join_type="inner",
+                    return_columns=None, left_prefix=None, right_prefix=None,
+                    tables=None, join_types=None, prefixes=None) -> dict:
+        """N-way join folded left-to-right in ONE step (one result handle).
 
-        def qual(name: str) -> str:
-            b = name.split(".")[-1]
-            return f"L.{b}" if b in lc else f"R.{b}"
+        - `tables`: ordered source names / step handles, len >= 2.
+        - `on[k]`: the join conditions (list of {left,right}) attaching `tables[k+1]` to the
+          accumulated left; `on` has len(tables)-1 entries.
+        - `prefixes[i]`: the `<prefix>__<col>` qualifier for `tables[i]` (qualified mode, resolves
+          shared / self-join column names INTERNALLY). Omit / None = bare mode with shared-column
+          dedup. The accumulated intermediate is prefixed once (on the first fold) and thereafter
+          passes through unchanged.
+        - `join_types[k]` (or a single `join_type` for all folds): inner | left | cross.
 
-        cond = " AND ".join(
-            f"L.{o['left'].split('.')[-1]} = R.{o['right'].split('.')[-1]}" for o in (on or [])
-        )
-        oncl = f" ON {cond}" if on and join_type != "cross" else ""
-        if return_columns:
-            sel = ", ".join(f"{qual(c)} AS {c.split('.')[-1]}" for c in return_columns)
-        elif left_prefix is not None or right_prefix is not None:
-            # qualified mode: prefix each base side's columns; pass an already-prefixed side through.
-            left_sel = [f"L.{c} AS {left_prefix}__{c}" for c in lc] if left_prefix else [f"L.{c}" for c in lc]
-            right_sel = [f"R.{c} AS {right_prefix}__{c}" for c in rc] if right_prefix else [f"R.{c}" for c in rc]
-            sel = ", ".join(left_sel + right_sel)
+        The legacy 2-table call — `join_tables(left, right, on=[{...}], left_prefix, right_prefix)`
+        with a FLAT `on` list — is still accepted and mapped onto the N=2 fold."""
+        if tables is None:                       # legacy 2-table form -> N=2 fold
+            tables = [left, right]
+            on = [on or []]
+            join_types = [join_type]
+            prefixes = None if (left_prefix is None and right_prefix is None) else [left_prefix, right_prefix]
         else:
-            # No projection / no prefixing: emit all columns but DEDUPE shared names (mostly the
-            # join key) so downstream bare references are unambiguous. Case-insensitive (SQL ids),
-            # else SQLite auto-renames collisions to `col:1` (invalid). Shared columns are equal
-            # across the join, so keeping the left side is value-correct.
-            seen = {c.lower() for c in lc}
-            sel = ", ".join([f"L.{c}" for c in lc] +
-                            [f"R.{c}" for c in rc if c.lower() not in seen])
-        return self._new(
-            "join", f"SELECT {sel} FROM {self._src(left)} AS L {jt} {self._src(right)} AS R{oncl}"
-        )
+            on = on or []
+            if join_types is None:
+                join_types = [join_type] * (len(tables) - 1)
+        jt_map = {"inner": "JOIN", "left": "LEFT JOIN", "cross": "CROSS JOIN"}
+
+        cur_src = self._src(tables[0])           # parenthesized SQL usable in FROM
+        cur_cols = self._cols(tables[0])
+        cur_prefixed = False
+        last_sql = None
+        for k in range(1, len(tables)):
+            rt = tables[k]
+            rc = self._cols(rt)
+            jt = jt_map.get(join_types[k - 1] if k - 1 < len(join_types) else "inner", "JOIN")
+            edges = on[k - 1] if k - 1 < len(on) else []
+            cond = " AND ".join(
+                f"L.{e['left'].split('.')[-1]} = R.{e['right'].split('.')[-1]}" for e in edges
+            )
+            oncl = f" ON {cond}" if edges and jt != "CROSS JOIN" else ""
+            if prefixes is not None:
+                lp = prefixes[0] if not cur_prefixed else None       # prefix the base only on fold 1
+                rp = prefixes[k]
+                left_sel = ([f"L.{c} AS {lp}__{c}" for c in cur_cols] if lp
+                            else [f"L.{c}" for c in cur_cols])
+                right_sel = [f"R.{c} AS {rp}__{c}" for c in rc] if rp else [f"R.{c}" for c in rc]
+                sel = ", ".join(left_sel + right_sel)
+            else:
+                # bare mode: dedupe shared column names (case-insensitive; shared cols are equal
+                # across the join so keeping the left side is value-correct).
+                seen = {c.lower() for c in cur_cols}
+                sel = ", ".join([f"L.{c}" for c in cur_cols] +
+                                [f"R.{c}" for c in rc if c.lower() not in seen])
+            last_sql = f"SELECT {sel} FROM {cur_src} AS L {jt} {self._src(rt)} AS R{oncl}"
+            cur_cols = self._cols_of_sql(last_sql)
+            cur_src = f"({last_sql})"
+            cur_prefixed = True
+        if return_columns:                       # optional explicit projection over the final result
+            def qual(name: str) -> str:
+                b = name.split(".")[-1]
+                return b if b in cur_cols else name
+            sel = ", ".join(f"{qual(c)} AS {c.split('.')[-1]}" for c in return_columns)
+            last_sql = f"SELECT {sel} FROM ({last_sql})"
+        return self._new("join", last_sql)
 
     def set_op(self, left: str, right: str, op: str) -> dict:
         m = {"union": "UNION", "union_all": "UNION ALL",

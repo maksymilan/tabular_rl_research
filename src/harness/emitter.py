@@ -127,8 +127,11 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
     for step in plan:
         args = dict(step.args)
         for key in TABLE_REF_ARGS.get(step.tool, []):
-            if args.get(key) in id_to_table:
-                args[key] = id_to_table[args[key]]   # display/exec args: table refs are real view names
+            val = args.get(key)                      # display/exec args: table refs are real view names
+            if isinstance(val, list):                # N-way join: a list of table refs
+                args[key] = [id_to_table.get(x, x) for x in val]
+            elif val in id_to_table:
+                args[key] = id_to_table[val]
 
         if step.tool == "condition_filter":
             disp_conds = _rewrite_value_ref(resolve_cond(args.get("conditions"), id_to_table), planid_to_stepid)

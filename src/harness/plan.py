@@ -24,7 +24,7 @@ TABLE_REF_ARGS: dict[str, list[str]] = {
     "aggregate": ["table"],
     "read_subtable": ["table"],
     "window": ["table"],
-    "join_tables": ["left", "right"],
+    "join_tables": ["left", "right", "tables"],
     "set_op": ["left", "right"],
 }
 
@@ -112,7 +112,9 @@ def run_plan(harness, plan: Plan) -> list[tuple]:
         args = dict(step.args)
         for key in TABLE_REF_ARGS.get(step.tool, []):
             ref = args.get(key)
-            if ref in id_to_table:
+            if isinstance(ref, list):          # N-way join: a list of table refs
+                args[key] = [id_to_table.get(x, x) for x in ref]
+            elif ref in id_to_table:
                 args[key] = id_to_table[ref]
         if step.tool == "condition_filter":
             vals = _scalar_values(harness, args.get("conditions"), id_to_table, values)

@@ -29,10 +29,11 @@ TOOL_SPECS: dict[str, str] = {
         'ops: [{"op": create|add|update|delete, "id": "...", "goal": "...", '
         '"status": pending|in_progress|done|blocked, "depends_on": [...], '
         '"evidence_step_id": "step_k", "result": {"type": boolean|scalar|list|text|structured, '
-        '"value": ..., "summary": "..."}, "notes": "..."}]. `status` says whether the subtask is '
-        'finished; `result` records the subtask answer/conclusion (e.g. true/false, a scalar, or a '
-        'short conclusion). The plan is control state only: it cannot be used as factual evidence, '
-        'value_ref, or final-answer support.',
+        '"summary": "..."}, "notes": "..."}]. `status` says whether the subtask is finished; '
+        '`result.summary` records a short progress/conclusion statement grounded by '
+        '`evidence_step_id`. Do NOT invent factual `result.value` fields or put final answer values '
+        'in the plan; factual values must come from tool outputs. The plan is control state only: it '
+        'cannot be used as factual evidence, value_ref, or final-answer support.',
     "condition_filter":
         'condition_filter(table, conditions) -> new table with the rows that satisfy `conditions`.\n'
         '  conditions: a predicate {"column": c, "op": o, "value": v} with op in '
@@ -46,12 +47,15 @@ TOOL_SPECS: dict[str, str] = {
         'project(table, expressions) -> new table with the given columns. `expressions` is a list '
         'of column names or SQL scalar expressions, optionally with "expr AS alias".',
     "join_tables":
-        'join_tables(left, right, on, join_type="inner", left_prefix=None, right_prefix=None) -> '
-        'new table joining `left` and `right`. on: [{"left": col_in_left, "right": col_in_right}, ..]. '
-        'join_type: inner|left|cross. When the two tables share column names, set left_prefix/'
-        'right_prefix (short aliases): that side\'s columns are renamed to "<prefix>__<col>"; '
-        'a side that is already prefixed (the result of an earlier join) keeps prefix=None and '
-        'its columns are referenced as "<prefix>__<col>" in `on`.',
+        'join_tables(tables, on, join_types="inner", prefixes=None) -> ONE new table joining several '
+        'tables along a path in a single step. tables: ordered list [T1, T2, .., TN] of source names '
+        'or earlier step handles. on: a list of length N-1 where on[k] joins tables[k+1] to the tables '
+        'already joined, each entry a list [{"left": key_in_accumulated, "right": key_in_next}, ..]. '
+        'prefixes: optional list [P1, .., PN]; when set, each table i\'s columns are renamed to '
+        '"Pi__<col>" so shared / self-join names stay distinct, and `on[k].left` refers to an '
+        'accumulated column by its "Pi__<col>" name. join_types: inner|left|cross for all folds, or a '
+        'list per fold. Put a whole consecutive join chain in ONE call; joins in different subqueries '
+        'stay separate calls.',
     "group_aggregate":
         'group_aggregate(table, group_by, aggregations, passthrough=None) -> new table grouped by '
         '`group_by` (list of columns; [] = whole table as one group). aggregations: '
@@ -72,10 +76,9 @@ TOOL_SPECS: dict[str, str] = {
         'tables (tables is a list; pass several at once). The opening overview lists only table names '
         'and relations, so read the schema of the tables you need before operating on them.',
     "inspect_column":
-        'inspect_column(table, column, value?) -> the distinct count, most frequent values and NULL '
-        'flag of a column. Use it to ground a filter literal (does "France" exist? what is the exact '
-        'spelling?) before condition_filter. Pass the literal you intend to filter on as `value` to '
-        'get a definitive value_present check that is never lost to truncation.',
+        'inspect_column(table, column) -> the distinct count, most frequent values and NULL flag of a '
+        'column. Use it to ground a filter literal (does "France" exist? what is the exact spelling?) '
+        'before condition_filter.',
     "read_subtable":
         'read_subtable(table, limit=20) -> the actual rows of a table (bounded). Tool results otherwise '
         'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
@@ -97,14 +100,15 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "plan": ({"ops"}, set()),
     "condition_filter": ({"table", "conditions"}, {"return_columns", "preview_k"}),
     "project": ({"table", "expressions"}, set()),
-    "join_tables": ({"left", "right"}, {"on", "join_type", "left_prefix", "right_prefix", "return_columns"}),
+    "join_tables": (set(), {"tables", "on", "join_types", "prefixes",
+                            "left", "right", "join_type", "left_prefix", "right_prefix", "return_columns"}),
     "group_aggregate": ({"table", "group_by", "aggregations"}, {"passthrough"}),
     "aggregate": ({"table", "column", "op"}, set()),
     "extreme_value_select": ({"table", "order_by"}, {"top_k", "return_columns"}),
     "set_op": ({"left", "right", "op"}, set()),
     "derive_column": ({"table", "new_column", "expression"}, set()),
     "describe_table": ({"tables"}, set()),
-    "inspect_column": ({"table", "column"}, {"top_k", "value"}),
+    "inspect_column": ({"table", "column"}, {"top_k"}),
     "read_subtable": ({"table"}, {"limit", "columns"}),
     "answer_from_context": ({"answer", "evidence"}, {"reason"}),
 }
@@ -139,9 +143,9 @@ SYSTEM_PROMPT = (
     "columns of the tables you need with describe_table before operating. Each tool result is an "
     "observation {\"step_id\", \"status\", \"output\"}: step_id names that step so you can cite it "
     "later (e.g. as a predicate's value_ref); a table-creating tool's output is only a HANDLE "
-    "(table name, columns, row_count) — use read_subtable to SEE its rows. Observations may also "
-    "include a harness-managed resident state block that groups the current plan and known table "
-    "context by table/handle.\n\n"
+    "(table name, columns, row_count) — use read_subtable to SEE its rows. The harness may provide "
+    "a separate CURRENT ENVIRONMENT STATE message before your turn; it is the current resident "
+    "plan/table state, not another historical observation.\n\n"
     "TOOLS\n" + "\n".join(TOOL_SPECS.values()) + "\n\n"
     "RULES\n"
     "1. Each turn, output exactly: <think>brief reasoning</think> then "
@@ -164,15 +168,17 @@ SYSTEM_PROMPT_COMPACT = (
     "The opening overview is only a catalog: table names, row counts, and relations. It has no "
     "columns. Use describe_table only for relevant unresolved tables. Tool-created tables return "
     "handles (table, columns, row_count), not rows. Use existing handles instead of restarting from "
-    "source tables. Use plan first to create subgoals, then update it as work completes or changes.\n\n"
+    "source tables. Use plan first to create subgoals, then update it as work completes or changes. "
+    "A separate CURRENT ENVIRONMENT STATE message may summarize the current plan and known table "
+    "handles before your turn.\n\n"
     "POLICY\n"
     "Inspect a text column before filtering by a literal unless that column was already inspected. "
     "Avoid repeating the same observation. Use read_subtable only when row values are needed; for "
     "scalar aggregate answers, answer directly with evidence=null. Before a row-valued final answer, "
     "read the evidence table and cite it.\n\n"
     "TOOLS\n"
-    "plan(ops), describe_table(tables), inspect_column(table,column,top_k?,value?), condition_filter(table,conditions), "
-    "project(table,expressions), join_tables(left,right,on?,join_type?,left_prefix?,right_prefix?), "
+    "plan(ops), describe_table(tables), inspect_column(table,column,top_k?), condition_filter(table,conditions), "
+    "project(table,expressions), join_tables(tables,on,join_types?,prefixes?), "
     "group_aggregate(table,group_by,aggregations,passthrough?), aggregate(table,column,op), "
     "extreme_value_select(table,order_by,top_k?,return_columns?), set_op(left,right,op), "
     "read_subtable(table,limit?,columns?), answer_from_context(answer,evidence,reason?).\n"
@@ -216,6 +222,29 @@ def tool_output_message(step_id: str, output: dict, status: str = "success",
     if state is not None:
         msg["state"] = state
     return _compact(msg)
+
+
+def environment_state_message(state: dict | None) -> str:
+    return "CURRENT ENVIRONMENT STATE\n" + _compact(state or {"plan": [], "tables": {}})
+
+
+def _state_is_empty(state: dict | None) -> bool:
+    if not isinstance(state, dict):
+        return True
+    return not state.get("plan") and not state.get("tables")
+
+
+def with_environment_state(messages: list[dict], state: dict | None) -> list[dict]:
+    """Return model-input messages with the current resident state as an ephemeral side channel.
+
+    The returned state message is not meant to be appended to conversation history. It is analogous
+    to a mutable environment panel rendered once for the next model call, avoiding repeated state
+    snapshots inside every historical observation.
+    """
+    out = [dict(message) for message in messages]
+    if not _state_is_empty(state):
+        out.append({"role": "user", "content": environment_state_message(state)})
+    return out
 
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)

@@ -20,7 +20,7 @@ class DashboardDataTests(unittest.TestCase):
             else:
                 self.assertTrue(metrics["available"])
                 self.assertGreater(len(metrics["train"]), 0)
-                self.assertGreater(len(metrics["eval"]), 0)
+                self.assertIn("train_loss", metrics["summary"])
 
     def test_evaluation_summary_matches_artifacts(self):
         experiment = server.find_experiment("qwen25-7b-v1")
@@ -55,7 +55,9 @@ class DashboardDataTests(unittest.TestCase):
             },
         )
         for model in models:
-            self.assertTrue(model["adapter_path"].startswith("/home/dengyan/"))
+            self.assertTrue(
+                model["adapter_path"].startswith(("/home/dengyan/", "/data/dengyan/"))
+            )
             self.assertGreater(model["max_model_len"], 0)
 
     def test_baselines_and_all_artifacts_are_visible(self):

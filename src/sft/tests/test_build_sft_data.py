@@ -65,6 +65,20 @@ class BuildSftDataTests(unittest.TestCase):
         )
         self.assertIn("<tool_call>", record["conversations"][1]["value"])
 
+    def test_convert_does_not_persist_environment_state_in_observation(self):
+        item = trajectory()
+        item["steps"][0]["environment_state"] = {
+            "plan": [{"id": "p1", "goal": "count rows", "status": "done"}],
+            "tables": {"items": {"kind": "source", "row_count": 2}},
+        }
+
+        record = convert(item)
+        observation = record["conversations"][2]["value"]
+
+        self.assertIn('"output"', observation)
+        self.assertNotIn('"state"', observation)
+        self.assertNotIn("CURRENT ENVIRONMENT STATE", observation)
+
     def test_build_writes_record_and_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

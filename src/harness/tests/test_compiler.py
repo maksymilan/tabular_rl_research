@@ -20,20 +20,32 @@ def run():
     t.check("ORDER aggregate resolved to alias",
             p[3].args["order_by"] == ["a DESC"], str(p[3].args))
 
-    # join emitted first
+    # join emitted first (N-way form: tables list + per-join on-chain)
     pj = Compiler().compile("SELECT name FROM employees JOIN depts ON employees.dept=depts.dept")
-    t.check("join emitted", pj[0].tool == "join_tables" and pj[0].args["on"] == [{"left": "dept", "right": "dept"}],
+    t.check("join emitted",
+            pj[0].tool == "join_tables"
+            and pj[0].args["tables"] == ["employees", "depts"]
+            and pj[0].args["on"] == [[{"left": "dept", "right": "dept"}]],
             str(pj[0]))
 
     # qualified join: prefixing is internalized into join_tables (no separate rename steps)
     sch = {"employees": ["id", "name", "dept", "salary"], "depts": ["dept", "location"]}
     pq2 = Compiler(sch).compile("SELECT e.name, d.location FROM employees e JOIN depts d ON e.dept=d.dept")
     t.check("join internalizes prefixing (no rename step before join)",
-            pq2[0].tool == "join_tables" and pq2[0].args.get("left_prefix") == "e"
-            and pq2[0].args.get("right_prefix") == "d"
+            pq2[0].tool == "join_tables" and pq2[0].args.get("prefixes") == ["e", "d"]
+            and pq2[0].args.get("tables") == ["employees", "depts"]
             and [s.tool for s in pq2].count("join_tables") == 1
             and "project" not in [s.tool for s in pq2[:1]],
             str([s.tool for s in pq2]))
+
+    # a consecutive multi-table chain compresses into ONE N-way join step
+    sch3 = {"a": ["id", "bid"], "b": ["id", "cid"], "c": ["id", "v"]}
+    pn = Compiler(sch3).compile("SELECT c.v FROM a JOIN b ON a.bid=b.id JOIN c ON b.cid=c.id")
+    t.check("N-way join chain -> one step",
+            [s.tool for s in pn].count("join_tables") == 1
+            and pn[0].args["tables"] == ["a", "b", "c"]
+            and len(pn[0].args["on"]) == 2 and pn[0].args.get("prefixes") == ["a", "b", "c"],
+            str(pn[0]))
 
     # scalar aggregate (no GROUP BY) -> terminal aggregate
     ps = Compiler().compile("SELECT COUNT(*) FROM employees")

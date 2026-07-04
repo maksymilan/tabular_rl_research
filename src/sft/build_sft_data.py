@@ -64,7 +64,6 @@ def convert(traj: dict) -> dict:
                              s["step_id"],
                              output,
                              status=status,
-                             state=s.get("environment_state"),
                          )})
     return {"system": SYSTEM_PROMPT, "conversations": conv}
 

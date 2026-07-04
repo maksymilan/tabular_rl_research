@@ -42,7 +42,7 @@ from emitter import _catalog                                   # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
 from protocol import (ProtocolError, TOOLS, get_system_prompt,  # noqa: E402
                       assistant_message, first_user_message, parse_assistant,
-                      rows_equal, tool_output_message)
+                      rows_equal, tool_output_message, with_environment_state)
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 MAX_CONSECUTIVE_ERRORS = 3   # error feedback turns allowed before aborting the trajectory
@@ -250,9 +250,7 @@ def fewshot_text(trajectory_ids: list[str]) -> str:
                 f"{assistant_message(s.get('think', ''), tc['tool'], tc['arguments'])}"
             )
             if i < len(t["steps"]) - 1:
-                lines.append(
-                    f"USER: {tool_output_message(s['step_id'], s['tool_output'], state=s.get('environment_state'))}"
-                )
+                lines.append(f"USER: {tool_output_message(s['step_id'], s['tool_output'])}")
         blocks.append("\n".join(lines))
     return "\n\nEXAMPLE SESSIONS\n" + "\n\n---\n\n".join(blocks)
 
@@ -266,6 +264,7 @@ def run_live(
     max_steps: int,
     max_tokens: int,
     api_retries: int,
+    max_consecutive_errors: int = MAX_CONSECUTIVE_ERRORS,
 ) -> dict:
     h = Harness(db_path(ex["db_id"]))
     ov = overview(h)
@@ -294,9 +293,10 @@ def run_live(
     }
 
     while steps < max_steps:
-        turn = {"turn_index": len(turns), "model_input": deepcopy(messages)}
+        model_input = with_environment_state(messages, ctx["environment"].snapshot())
+        turn = {"turn_index": len(turns), "model_input": deepcopy(model_input)}
         try:
-            text = chat(base_url, model, messages, max_tokens=max_tokens, retries=api_retries)
+            text = chat(base_url, model, model_input, max_tokens=max_tokens, retries=api_retries)
         except ContextOverflowError as e:
             rec["failure_type"] = "context_overflow"
             rec["fail"] = f"api: {type(e).__name__}: {e}"
@@ -347,7 +347,7 @@ def run_live(
                 "protocol_error" if isinstance(e, ProtocolError) else "execution_error"
             )
             turns.append(turn)
-            if consecutive >= MAX_CONSECUTIVE_ERRORS:
+            if consecutive >= max_consecutive_errors:
                 rec["failure_type"] = turn["execution_error_type"]
                 rec["fail"] = f"aborted after {consecutive} consecutive errors: {error}"
                 rec["errors"] = errors
@@ -366,7 +366,7 @@ def run_live(
             created.add(tname)
         messages.append({
             "role": "user",
-            "content": tool_output_message(step_id, out, state=ctx["environment"].snapshot()),
+            "content": tool_output_message(step_id, out),
         })
 
     rec["failure_type"] = "max_steps"
@@ -424,6 +424,8 @@ def main() -> int:
                     help="per-turn generation budget; smaller values leave more room for tool context")
     ap.add_argument("--api-retries", type=int, default=2,
                     help="retry count for transient API errors; context overflow uses adaptive token shrink")
+    ap.add_argument("--max-consecutive-errors", type=int, default=MAX_CONSECUTIVE_ERRORS,
+                    help="abort after this many consecutive protocol/execution errors in one trajectory")
     ap.add_argument("--workers", type=int, default=1,
                     help="concurrent questions (vLLM batches requests; each worker owns its Harness/sqlite)")
     ap.add_argument("--result-dir", default="")
@@ -447,7 +449,7 @@ def main() -> int:
             "dev_size": args.n,
             "few_shot_ids": fewshot_ids,
             "max_steps": args.max_steps,
-            "max_consecutive_errors": MAX_CONSECUTIVE_ERRORS,
+            "max_consecutive_errors": args.max_consecutive_errors,
             "temperature": 0,
             "max_tokens": args.max_tokens,
             "api_retries": args.api_retries,
@@ -470,6 +472,7 @@ def main() -> int:
                 args.max_steps,
                 args.max_tokens,
                 args.api_retries,
+                args.max_consecutive_errors,
             )
                     for i, ex in indexed_dev]
             for fut in as_completed(futs):
@@ -490,6 +493,7 @@ def main() -> int:
                 args.max_steps,
                 args.max_tokens,
                 args.api_retries,
+                args.max_consecutive_errors,
             )
             results.append(r)
             if writer:

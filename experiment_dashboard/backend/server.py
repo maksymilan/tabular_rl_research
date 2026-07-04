@@ -149,7 +149,19 @@ def is_construction_review_file(name: str) -> bool:
         return False
     if name.startswith("recovery_candidates"):
         return False
-    return "enriched" in name or name.startswith("recovery_v10_")
+    review_prefixes = (
+        "clean_v",
+        "recovery_v",
+        "smoke_enriched",
+    )
+    if name.startswith(review_prefixes):
+        return True
+    return (
+        "enriched" in name
+        or "gated" in name
+        or name.endswith("_ready.jsonl")
+        or name.endswith("_review.jsonl")
+    )
 
 
 def data_sources(experiment: dict) -> list[dict]:

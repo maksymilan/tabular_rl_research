@@ -30,67 +30,6 @@
   "steps": [
     {
       "step_id": "step_1",
-      "think": "Read the columns and keys of the tables this question needs before operating.",
-      "tool_call": {
-        "tool": "describe_table",
-        "arguments": {
-          "tables": [
-            "employees"
-          ]
-        }
-      },
-      "references": [
-        {
-          "type": "data",
-          "source": "employees",
-          "role": "table",
-          "target": {
-            "table": "employees"
-          }
-        }
-      ],
-      "produces": {
-        "kind": "schema"
-      },
-      "tool_output": {
-        "tables": [
-          {
-            "table_name": "employees",
-            "row_count": 6,
-            "columns": [
-              {
-                "name": "id",
-                "type": "int",
-                "pk": false
-              },
-              {
-                "name": "name",
-                "type": "text",
-                "pk": false
-              },
-              {
-                "name": "dept",
-                "type": "text",
-                "pk": false
-              },
-              {
-                "name": "salary",
-                "type": "int",
-                "pk": false
-              },
-              {
-                "name": "age",
-                "type": "int",
-                "pk": false
-              }
-            ],
-            "foreign_keys": []
-          }
-        ]
-      }
-    },
-    {
-      "step_id": "step_2",
       "think": "Group the rows and compute the requested aggregates.",
       "tool_call": {
         "tool": "group_aggregate",
@@ -130,10 +69,24 @@
           "count_1"
         ],
         "row_count": 3
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "group_001": {
+            "kind": "group",
+            "row_count": 3,
+            "created_by": "step_1",
+            "columns": [
+              "dept",
+              "count_1"
+            ]
+          }
+        }
       }
     },
     {
-      "step_id": "step_3",
+      "step_id": "step_2",
       "think": "Filter to the rows that satisfy the WHERE conditions.",
       "tool_call": {
         "tool": "condition_filter",
@@ -149,7 +102,7 @@
       "references": [
         {
           "type": "data",
-          "step": "step_2",
+          "step": "step_1",
           "role": "table",
           "target": {
             "handle": "group_001"
@@ -168,10 +121,33 @@
           "count_1"
         ],
         "row_count": 2
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "group_001": {
+            "kind": "group",
+            "row_count": 3,
+            "created_by": "step_1",
+            "columns": [
+              "dept",
+              "count_1"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_2",
+            "columns": [
+              "dept",
+              "count_1"
+            ]
+          }
+        }
       }
     },
     {
-      "step_id": "step_4",
+      "step_id": "step_3",
       "think": "Project the output columns the question asks for.",
       "tool_call": {
         "tool": "project",
@@ -185,7 +161,7 @@
       "references": [
         {
           "type": "data",
-          "step": "step_3",
+          "step": "step_2",
           "role": "table",
           "target": {
             "handle": "filter_002"
@@ -203,46 +179,41 @@
           "dept"
         ],
         "row_count": 2
-      }
-    },
-    {
-      "step_id": "step_5",
-      "think": "Read the evidence rows so the answer is grounded in real data.",
-      "tool_call": {
-        "tool": "read_subtable",
-        "arguments": {
-          "table": "project_003",
-          "limit": 20
-        }
       },
-      "references": [
-        {
-          "type": "data",
-          "step": "step_4",
-          "role": "table",
-          "target": {
-            "handle": "project_003"
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "group_001": {
+            "kind": "group",
+            "row_count": 3,
+            "created_by": "step_1",
+            "columns": [
+              "dept",
+              "count_1"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_2",
+            "columns": [
+              "dept",
+              "count_1"
+            ]
+          },
+          "project_003": {
+            "kind": "project",
+            "row_count": 2,
+            "created_by": "step_3",
+            "columns": [
+              "dept"
+            ]
           }
         }
-      ],
-      "produces": {
-        "kind": "rows"
-      },
-      "tool_output": {
-        "table": "project_003",
-        "rows": [
-          [
-            "eng"
-          ],
-          [
-            "sales"
-          ]
-        ],
-        "row_count": 2
       }
     },
     {
-      "step_id": "step_6",
+      "step_id": "step_4",
       "think": "Answer the question from the final evidence rows.",
       "tool_call": {
         "tool": "answer_from_context",
@@ -264,7 +235,7 @@
       "references": [
         {
           "type": "data",
-          "step": "step_4",
+          "step": "step_3",
           "role": "table",
           "target": {
             "handle": "project_003"
@@ -283,6 +254,37 @@
             "sales"
           ]
         ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "group_001": {
+            "kind": "group",
+            "row_count": 3,
+            "created_by": "step_1",
+            "columns": [
+              "dept",
+              "count_1"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_2",
+            "columns": [
+              "dept",
+              "count_1"
+            ]
+          },
+          "project_003": {
+            "kind": "project",
+            "row_count": 2,
+            "created_by": "step_3",
+            "columns": [
+              "dept"
+            ]
+          }
+        }
       }
     }
   ],

@@ -90,6 +90,60 @@ const modelFamily = (model = "") => {
 const modelAbbrev = (model = "") => modelFamily(model).replace(/^Qwen/, "Q");
 const isDirectSqlBaseline = (item) =>
   item.kind === "baseline" && (item.tags || []).includes("direct-sql");
+const combineRunSummaries = (runs = []) => {
+  const summaries = runs.map((run) => run.summary).filter((summary) => summary?.available);
+  if (!summaries.length) return { available: false };
+  const total = summaries.reduce((sum, summary) => sum + (summary.total || 0), 0);
+  const correct = summaries.reduce((sum, summary) => sum + (summary.correct || 0), 0);
+  const passKeys = [...new Set(summaries.flatMap((summary) => Object.keys(summary.pass_at || {})))]
+    .sort((a, b) => Number(a) - Number(b));
+  const pass_at = {};
+  for (const key of passKeys) {
+    const passTotal = summaries.reduce((sum, summary) => sum + (summary.pass_at?.[key]?.total || 0), 0);
+    const passCorrect = summaries.reduce((sum, summary) => sum + (summary.pass_at?.[key]?.correct || 0), 0);
+    pass_at[key] = {
+      correct: passCorrect,
+      total: passTotal,
+      rate: passTotal ? passCorrect / passTotal : 0,
+    };
+  }
+  const legalObserved = summaries.reduce((sum, summary) => sum + (summary.legal_observed || 0), 0);
+  const legal = summaries.reduce((sum, summary) => sum + (summary.legal || 0), 0);
+  return {
+    available: true,
+    total,
+    correct,
+    accuracy: total ? correct / total : 0,
+    legal: legalObserved ? legal : null,
+    legal_rate: legalObserved ? legal / legalObserved : null,
+    legal_observed: legalObserved,
+    complete_dev: total === 1034,
+    pass_at: Object.keys(pass_at).length ? pass_at : undefined,
+  };
+};
+const displayEvaluationSummary = (item) =>
+  item.evaluation_summary?.available
+    ? item.evaluation_summary
+    : combineRunSummaries(item.evaluation_runs || []);
+const primaryMetric = (summary) => {
+  if (!summary?.available) return { label: "Acc", value: null, correct: 0, total: 0 };
+  const entries = Object.entries(summary.pass_at || {}).sort(([a], [b]) => Number(a) - Number(b));
+  if (entries.length) {
+    const [key, value] = entries[entries.length - 1];
+    return {
+      label: `pass@${key}`,
+      value: value?.rate,
+      correct: value?.correct || 0,
+      total: value?.total || 0,
+    };
+  }
+  return {
+    label: "Acc",
+    value: summary.accuracy,
+    correct: summary.correct || 0,
+    total: summary.total || 0,
+  };
+};
 const duration = (seconds) => {
   if (!Number.isFinite(seconds)) return "—";
   const hours = Math.floor(seconds / 3600);
@@ -171,19 +225,44 @@ function Overview({ experiments, onOpen }) {
     () => new Map(visibleFamilies.map((group) => [group.family, group.directSql]).filter(([, item]) => item)),
     [visibleFamilies],
   );
-  const chartData = visibleExperiments.map((item) => ({
-    name: `${modelAbbrev(item.model)} ${item.short_name}`,
-    accuracy: Number(((item.evaluation_summary?.accuracy || 0) * 100).toFixed(2)),
-    legal: Number.isFinite(item.evaluation_summary?.legal_rate)
-      ? Number((item.evaluation_summary.legal_rate * 100).toFixed(2))
-      : null,
-    evalLoss: item.training_metrics?.summary?.last_eval_loss,
-    kind: item.kind || "sft",
-    family: modelFamily(item.model),
-  }));
+  const chartData = visibleExperiments
+    .map((item) => ({ item, summary: displayEvaluationSummary(item) }))
+    .filter(({ summary }) => summary?.available)
+    .map(({ item, summary }) => {
+      const metric = primaryMetric(summary);
+      return {
+        name: `${modelAbbrev(item.model)} ${item.short_name}`,
+        accuracy: Number(((metric.value || 0) * 100).toFixed(2)),
+        metricLabel: metric.label,
+        legal: Number.isFinite(summary?.legal_rate)
+          ? Number((summary.legal_rate * 100).toFixed(2))
+          : null,
+        evalLoss: item.training_metrics?.summary?.last_eval_loss,
+        kind: item.kind || "sft",
+        family: modelFamily(item.model),
+      };
+    });
+  const passKeys = ["1", "2", "4", "8", "16", "32"];
+  const overviewPassData = visibleExperiments.flatMap((item) =>
+    (item.evaluation_runs || [])
+      .filter((run) => run.summary?.available && run.summary.pass_at)
+      .map((run) => {
+        const row = {
+          name: `${item.short_name} · ${run.label}`,
+          family: modelFamily(item.model),
+          kind: item.kind || "sft",
+        };
+        for (const key of passKeys) {
+          if (run.summary.pass_at?.[key]) {
+            row[`pass${key}`] = Number((run.summary.pass_at[key].rate * 100).toFixed(2));
+          }
+        }
+        return row;
+      })
+  );
   const trainedRuns = visibleExperiments.filter((item) => item.training_metrics?.available).length;
   const best = [...visibleExperiments].sort(
-    (a, b) => (b.evaluation_summary?.accuracy || 0) - (a.evaluation_summary?.accuracy || 0),
+    (a, b) => (displayEvaluationSummary(b)?.accuracy || 0) - (displayEvaluationSummary(a)?.accuracy || 0),
   )[0];
 
   return (
@@ -229,14 +308,14 @@ function Overview({ experiments, onOpen }) {
         <Metric label="SFT 训练" value={trainedRuns} icon={Check} />
         <Metric
           label="最佳执行准确率"
-          value={best ? pct(best.evaluation_summary?.accuracy) : "—"}
+          value={best ? pct(displayEvaluationSummary(best)?.accuracy) : "—"}
           detail={best?.short_name}
           icon={Gauge}
         />
         <Metric
           label="累计评测案例"
           value={compact.format(
-            visibleExperiments.reduce((sum, item) => sum + (item.evaluation_summary?.total || 0), 0),
+            visibleExperiments.reduce((sum, item) => sum + (displayEvaluationSummary(item)?.total || 0), 0),
           )}
           icon={Database}
         />
@@ -270,7 +349,7 @@ function Overview({ experiments, onOpen }) {
                       label={{ value: `${group.family} SQL`, fill: index ? "#6d28d9" : "#8a4b09", fontSize: 10 }}
                     />
                   ))}
-                <Bar dataKey="accuracy" name="执行准确率" fill="#087f5b" radius={[3, 3, 0, 0]}>
+                <Bar dataKey="accuracy" name="Acc / pass@k" fill="#087f5b" radius={[3, 3, 0, 0]}>
                   {chartData.map((item) => (
                     <Cell key={item.name} fill={item.kind === "baseline" ? "#b45309" : "#087f5b"} />
                   ))}
@@ -308,8 +387,15 @@ function Overview({ experiments, onOpen }) {
                       <span>{item.dataset_version}</span>
                     </div>
                     <div className="run-score">
-                      <strong>{pct(item.evaluation_summary?.accuracy)}</strong>
-                      <span>{item.evaluation_summary?.correct || 0}/{item.evaluation_summary?.total || 0}</span>
+                      {(() => {
+                        const metric = primaryMetric(displayEvaluationSummary(item));
+                        return (
+                          <>
+                            <strong>{pct(metric.value)}</strong>
+                            <span>{metric.label} · {metric.correct}/{metric.total}</span>
+                          </>
+                        );
+                      })()}
                     </div>
                     <ChevronRight size={18} />
                   </button>
@@ -319,6 +405,35 @@ function Overview({ experiments, onOpen }) {
           </div>
         </div>
       </section>
+
+      {overviewPassData.length ? (
+        <section className="panel passk-overview">
+          <div className="panel-heading">
+            <div>
+              <h2>Pass@ 采样对比</h2>
+              <p>同一模型家族内的采样评测；含 baseline pass@2/4/8/16/32 与 SFT pass@ 结果</p>
+            </div>
+            <span className="unit">%</span>
+          </div>
+          <div className="chart passk-overview-chart">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={overviewPassData} barGap={3}>
+                <CartesianGrid vertical={false} stroke="#e1e5e0" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} interval={0} angle={-12} height={58} />
+                <YAxis domain={[0, 100]} axisLine={false} tickLine={false} width={34} />
+                <Tooltip contentStyle={{ borderRadius: 6, borderColor: "#cfd5cf" }} />
+                <Legend />
+                <Bar dataKey="pass1" name="pass@1" fill="#4976a8" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="pass2" name="pass@2" fill="#087f5b" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="pass4" name="pass@4" fill="#d97706" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="pass8" name="pass@8" fill="#7c3aed" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="pass16" name="pass@16" fill="#be185d" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="pass32" name="pass@32" fill="#334155" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+      ) : null}
 
       <section className="panel baseline-map">
         <div className="panel-heading">
@@ -366,7 +481,7 @@ function Overview({ experiments, onOpen }) {
                 <th>训练样本</th>
                 <th>Train loss</th>
                 <th>Eval loss</th>
-                <th>执行准确率</th>
+                <th>Acc / pass@k</th>
                 <th>相对同系列 Direct SQL</th>
                 <th>平均步骤</th>
                 <th>评测完整性</th>
@@ -375,6 +490,8 @@ function Overview({ experiments, onOpen }) {
             <tbody>
               {visibleExperiments.map((item) => {
                 const reference = directSqlByFamily.get(modelFamily(item.model));
+                const summary = displayEvaluationSummary(item);
+                const metric = primaryMetric(summary);
                 return (
                   <tr key={item.id} onClick={() => onOpen(item.id)}>
                     <td><strong>{item.short_name}</strong></td>
@@ -383,19 +500,22 @@ function Overview({ experiments, onOpen }) {
                     <td>{item.training_metrics?.available ? compact.format(item.dataset_summary?.train?.kept || 0) : "—"}</td>
                     <td>{fixed(item.training_metrics?.summary?.train_loss)}</td>
                     <td>{fixed(item.training_metrics?.summary?.last_eval_loss)}</td>
-                    <td>{pct(item.evaluation_summary?.accuracy)}</td>
+                    <td>
+                      <strong>{pct(metric.value)}</strong>
+                      <span className="metric-label-inline">{metric.label}</span>
+                    </td>
                     <td>
                       {reference && item.id !== reference.id
-                        ? `${((item.evaluation_summary?.accuracy - reference.evaluation_summary.accuracy) * 100).toFixed(2)} pp`
+                        ? `${((summary?.accuracy - reference.evaluation_summary.accuracy) * 100).toFixed(2)} pp`
                         : reference ? "reference" : "缺少同系列 baseline"}
                     </td>
                     <td>{fixed(item.evaluation_summary?.average_steps, 2)}</td>
                     <td>
-                      {item.evaluation_summary?.complete_dev ? (
+                      {summary?.complete_dev ? (
                         <span className="inline-ok"><Check size={14} /> 1034/1034</span>
                       ) : (
                         <span className="inline-warn">
-                          <CircleAlert size={14} /> {item.evaluation_summary?.total || 0}/1034
+                          <CircleAlert size={14} /> {summary?.total || 0}/1034
                         </span>
                       )}
                     </td>
@@ -620,8 +740,8 @@ function ExperimentDetail({ experiment, onBack, onUpdated }) {
   const [notes, setNotes] = useState(experiment.notes || "");
   const [saving, setSaving] = useState(false);
   const metrics = experiment.training_metrics;
-  const evaluation = experiment.evaluation_summary;
   const evaluationRuns = experiment.evaluation_runs || [];
+  const evaluation = displayEvaluationSummary(experiment);
   const passChartData = evaluationRuns
     .filter((run) => run.summary?.available)
     .map((run) => {

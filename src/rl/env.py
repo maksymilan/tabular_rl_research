@@ -29,6 +29,7 @@ from protocol import (  # noqa: E402
     first_user_message,
     parse_assistant,
     tool_output_message,
+    with_environment_state,
 )
 from rollout import (  # noqa: E402
     MAX_CONSECUTIVE_ERRORS,
@@ -96,7 +97,7 @@ class ToolUseEnv:
         return deepcopy(self.messages)
 
     def model_messages(self) -> list[dict]:
-        return deepcopy(self.messages)
+        return with_environment_state(self.messages, self.ctx["environment"].snapshot())
 
     def record(self) -> dict:
         return {
@@ -120,7 +121,7 @@ class ToolUseEnv:
         if self.done:
             raise RuntimeError("episode is already done; call reset() before stepping again")
 
-        turn = {"turn_index": len(self.turns), "model_input": deepcopy(self.messages)}
+        turn = {"turn_index": len(self.turns), "model_input": self.model_messages()}
         turn["model_output"] = text
         self.messages.append({"role": "assistant", "content": text})
 
@@ -157,7 +158,6 @@ class ToolUseEnv:
             observation = tool_output_message(
                 step_id,
                 output,
-                state=self.ctx["environment"].snapshot(),
             )
             self.messages.append({"role": "user", "content": observation})
             if self.steps >= self.max_steps:

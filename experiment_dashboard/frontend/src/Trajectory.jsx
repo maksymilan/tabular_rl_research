@@ -13,7 +13,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { ConversationView } from "./JsonViewer";
+import { ConversationView, JsonTree } from "./JsonViewer";
 
 // Perception tools (read-only probes). Highlighted distinctly in the trajectory because the
 // research question is whether the model probes the data at a DECISION point or only as a
@@ -908,6 +908,46 @@ function RejectedCandidates({ record }) {
   );
 }
 
+function PlanOnlyReview({ record }) {
+  const parsed = record?.parsed || {};
+  if (!parsed.initial_plan && !record?.raw_model_text) return null;
+  return (
+    <div className="trajectory">
+      <div className="traj-head">
+        <div>
+          <p className="eyebrow">PLAN ONLY</p>
+          <h2>{record.question || record.trajectory_id || "Plan-only sample"}</h2>
+        </div>
+        {record.usage ? <span className="traj-tag">tokens {record.usage.total_tokens ?? "?"}</span> : null}
+      </div>
+      {parsed.initial_think ? (
+        <details className="traj-output" open>
+          <summary>initial_think</summary>
+          <pre>{parsed.initial_think}</pre>
+        </details>
+      ) : null}
+      {parsed.initial_plan ? (
+        <details className="traj-output" open>
+          <summary>initial_plan · {parsed.initial_plan.length}</summary>
+          <JsonTree value={parsed.initial_plan} />
+        </details>
+      ) : null}
+      {parsed.updates?.length ? (
+        <details className="traj-output">
+          <summary>updates · {parsed.updates.length}</summary>
+          <JsonTree value={parsed.updates} />
+        </details>
+      ) : null}
+      {record.raw_model_text ? (
+        <details className="traj-output">
+          <summary>外部模型原始输出</summary>
+          <pre>{record.raw_model_text}</pre>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 // Enriched record {steps:[{step_id,think,tool_call,tool_output,perception?,error_attempt?}]} -> the
 // shape TrajectoryView renders, carrying per-step perception/error flags for highlighting.
 export function enrichedToTrajectory(record) {
@@ -1033,7 +1073,11 @@ export function ConstructionPanel() {
                   <>
                     <GeneratorTrace record={active} />
                     <RejectedCandidates record={active} />
-                    <TrajectoryView record={enrichedToTrajectory(active)} />
+                    {active.steps?.length ? (
+                      <TrajectoryView record={enrichedToTrajectory(active)} />
+                    ) : (
+                      <PlanOnlyReview record={active} />
+                    )}
                   </>
                 ) : null}
               </div>

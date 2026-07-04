@@ -159,6 +159,8 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .status-completed > span { background: var(--green); }
 .status-running > span { background: var(--amber); box-shadow: 0 0 0 3px #fff2dd; }
 .baseline-map { margin-top: 20px; }
+.passk-overview { margin-top: 20px; }
+.passk-overview-chart { min-height: 340px; }
 .baseline-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px; padding: 14px; background: var(--surface-soft);
@@ -704,4 +706,11 @@ details .json-block { max-height: 360px; }
   gap: 8px;
   margin-bottom: 8px;
   font-size: 11px;
+}
+.metric-label-inline {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
 }

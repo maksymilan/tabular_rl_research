@@ -351,5 +351,100 @@
         "directory": "data/results/qwen3.5_9b_sft_v9_ready_4k_epoch4/tool_pass2_dev1034"
       }
     ]
+  },
+  {
+    "id": "qwen35-9b-v11-recovery-continue",
+    "name": "Qwen3.5-9B · SFT v11 recovery continuation",
+    "short_name": "9B v11 rec",
+    "status": "completed",
+    "model": "Qwen/Qwen3.5-9B",
+    "method": "QLoRA continuation SFT",
+    "dataset_version": "v9 clean subset + recovery469",
+    "description": "Continuation from the v9 adapter on the earlier v11 mixture: v9-clean subset plus recovery trajectories.",
+    "started_at": "2026-06-29T15:59:48+08:00",
+    "completed_at": "2026-06-29T21:49:00+08:00",
+    "tags": [
+      "qwen3.5",
+      "v11",
+      "recovery",
+      "continuation",
+      "4k-filtered"
+    ],
+    "dataset": {
+      "train": "data/sft/spider_v11_v9clean988_recovery469_ready_train.jsonl",
+      "train_manifest": "data/sft/spider_v11_v9clean988_recovery469_ready_train.manifest.json"
+    },
+    "training": {
+      "trainer_state": "experiment_dashboard/data/trainer_states/qwen35_v11_recovery_continue.json",
+      "remote_trainer_state": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v11-v9clean-recovery469-continue-qlora/trainer_state.json",
+      "checkpoint": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v11-v9clean-recovery469-continue-qlora",
+      "epochs": 2,
+      "cutoff_len": 4096,
+      "effective_batch_size": 8,
+      "learning_rate": 5e-05,
+      "lora_rank": 16,
+      "lora_alpha": 32
+    },
+    "evaluation": {
+      "directory": "data/results/qwen3.5_9b_sft_v11_v9clean_recovery469/tool_zero_shot_dev1034_max768_retry"
+    },
+    "notes": "Continuation from v9 on the older v11 data mixture. Full Spider dev zero-shot tool eval: 674/1034 = 65.18%, legal answers 962/1034. The clean component predates the v3 strict no-memory regeneration, so use v12 for the cleaner rerun."
+  },
+  {
+    "id": "qwen35-9b-v12-cleanv3-recovery-continue",
+    "name": "Qwen3.5-9B · SFT v12 clean-v3 + recovery",
+    "short_name": "9B v12 rec",
+    "status": "completed",
+    "model": "Qwen/Qwen3.5-9B",
+    "method": "QLoRA continuation SFT",
+    "dataset_version": "clean-v3 1594 + recovery469",
+    "description": "Continuation from the v9 adapter on regenerated v3 clean trajectories plus recovery trajectories, with legacy memory protocol residue removed.",
+    "started_at": "2026-06-29T21:06:57+08:00",
+    "completed_at": "2026-06-30T19:27:13+00:00",
+    "tags": [
+      "qwen3.5",
+      "v12",
+      "clean-v3",
+      "recovery",
+      "continuation",
+      "4k-filtered"
+    ],
+    "dataset": {
+      "train": "data/sft/spider_v12_clean1594v3_recovery469_ready_train.jsonl",
+      "train_manifest": "data/sft/spider_v12_clean1594v3_recovery469_ready_train.manifest.json"
+    },
+    "training": {
+      "trainer_state": "experiment_dashboard/data/trainer_states/qwen35_v12_cleanv3_recovery_continue.json",
+      "remote_trainer_state": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v12-clean1594v3-recovery469-continue-qlora/trainer_state.json",
+      "checkpoint": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-spider-v12-clean1594v3-recovery469-continue-qlora",
+      "epochs": 2,
+      "cutoff_len": 4096,
+      "effective_batch_size": 8,
+      "learning_rate": 5e-05,
+      "lora_rank": 16,
+      "lora_alpha": 32
+    },
+    "related_evaluations": [
+      {
+        "label": "Tool pass@1/2 full dev · default prompt · combined shards",
+        "directory": "data/results/qwen3.5_9b_sft_v12_clean1594v3_recovery469/tool_pass2_dev1034_combined"
+      },
+      {
+        "label": "Tool pass@1/2 compact-prompt ablation · 16k context",
+        "directory": "data/results/qwen3.5_9b_sft_v12_clean1594v3_recovery469/tool_pass2_dev1034_16k_compact"
+      },
+      {
+        "label": "Tool pass@1/2 shard0 source artifact",
+        "directory": "data/results/qwen3.5_9b_sft_v12_clean1594v3_recovery469/tool_pass2_dev1034_shard0"
+      },
+      {
+        "label": "Tool pass@1/2 shard1 source artifact",
+        "directory": "data/results/qwen3.5_9b_sft_v12_clean1594v3_recovery469/tool_pass2_dev1034_shard1"
+      }
+    ],
+    "notes": "Clean rerun of the v11 idea: 1594 strict v3-enriched clean trajectories + 469 recovery trajectories, no legacy memory residue. Full dev zero-shot tool eval: 622/1034 = 60.15%, legal answers 894/1034. Full dev pass@2 default-prompt eval was run in two complete shards and locally combined: pass@1 609/1034 = 58.90%, pass@2 748/1034 = 72.34%, sample legal rate 85.01%. The compact-prompt ablation at 16k context failed badly (pass@2 139/1034 = 13.44%, sample legal rate 33.56%), showing the checkpoint still depends on the long training prompt.",
+    "evaluation": {
+      "directory": "data/results/qwen3.5_9b_sft_v12_clean1594v3_recovery469/tool_zero_shot_dev1034_max768_retry"
+    }
   }
 ]

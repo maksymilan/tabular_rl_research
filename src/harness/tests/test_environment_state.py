@@ -39,7 +39,7 @@ def run():
     t.check("schema stored under table",
             snap["tables"]["employees"]["schema"]["from_step"] == "step_2", str(snap))
 
-    ins = h.inspect_column("employees", "dept", value="eng")
+    ins = h.inspect_column("employees", "dept")
     state.apply_tool_result("inspect_column", {"table": "employees", "column": "dept"}, ins, "step_3")
     snap = state.snapshot()
     t.check("column domain stored under table",
