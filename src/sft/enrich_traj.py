@@ -166,7 +166,9 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
         raise ProtocolError(f"tool {tool!r} not executable here")
 
     if tool == "plan":
-        output = ctx.setdefault("environment", EnvironmentState()).apply_plan_ops(args.get("ops"), step_id)
+        output = ctx.setdefault("environment", EnvironmentState()).apply_plan_ops(
+            args.get("ops"), step_id, ctx["history"]
+        )
         ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output}
         return output, None
 
@@ -711,6 +713,11 @@ STATEFUL_STEP_SYS = (
     "insert inspect_column first.\n"
     "- If the target depends on a derived handle's rows and those rows are not visible, insert "
     "read_subtable first when that row-level evidence is needed.\n"
+    "- Before answer_from_context, if the answer contains concrete row values from a table handle "
+    "and those rows are not already visible in PREVIOUS TOOL HISTORY, insert read_subtable on that "
+    "evidence table first. A table handle plus row_count is not enough to justify exact answer "
+    "values. Set read_subtable.limit high enough to cover the answer rows when the table row_count is "
+    "known (up to the answer cap of 50); do not rely on the default limit for a multi-row answer.\n"
     "- Existing previous observations count. Do not repeat an observation already present in the "
     "history.\n\n"
     "OBSERVATION TOOL ARGUMENTS — use these EXACT argument keys. The harness does NOT tolerate other "
@@ -719,7 +726,7 @@ STATEFUL_STEP_SYS = (
     "LIST of table-name strings. Do NOT use `table`, `table_name`, or a bare string.\n"
     "- inspect_column: {\"table\": \"TableA\", \"column\": \"ColumnX\"}  — shows a column's value domain "
     "(distinct count, most-frequent values, whether it is truncated).\n"
-    "- read_subtable: {\"table\": \"TableA\", \"columns\": [\"ColumnX\"], \"limit\": 10}  — `columns` "
+    "- read_subtable: {\"table\": \"TableA\", \"columns\": [\"ColumnX\"], \"limit\": 20}  — `columns` "
     "(a list) and `limit` (an int) are optional; `table` is required.\n\n"
     "GROUNDING HONESTY — the <think> must only claim what the observation actually returned:\n"
     "- If inspect_column's frequent_values LISTS the literal you filter on, you may say you saw it there.\n"
@@ -2164,9 +2171,10 @@ QUALITY_AUDIT_SYS = (
     "answer is correct (both are guaranteed). Judge ONLY whether the reasoning and observations teach "
     "faithful, non-hallucinated behavior: grounding, honest use of observations, no leaked hidden "
     "state, and non-formulaic reasoning.\n\n"
-    "The data is built in two stages you must both review: (1) perception + reasoning (describe_table / "
-    "inspect_column / read_subtable observations and each step's <think>), and (2) a plan tool that "
-    "records subgoals (goal/status/result). Judge both.\n\n"
+    "The data may arrive either before or after the plan-insertion pass. Always review perception + "
+    "reasoning (describe_table / inspect_column / read_subtable observations and each step's "
+    "<think>). If plan tool steps are present, also review the plan subgoals/status/evidence. If plan "
+    "tool steps are absent, do NOT reject solely for missing plan; a later pass may add it.\n\n"
     "A deterministic checker has already flagged CANDIDATE STRUCTURAL ISSUES in the user message. Treat "
     "them as leads, not verdicts: confirm the real ones (fold them into revision_requests), discard "
     "false positives, and still catch anything semantic the checker cannot see.\n\n"
@@ -2189,12 +2197,12 @@ QUALITY_AUDIT_SYS = (
     "not list it), skips a necessary observation before a risky string/value decision, has a tool/think "
     "mismatch that cannot be fixed by wording alone, ignores important tool feedback, or is dominated "
     "by templated reasoning that would make the dataset mode-collapse.\n\n"
-    "PLAN QUALITY (stage 2): the plan is control state, not evidence. KEEP plans whose subgoals map to "
-    "real backbone operations and whose `result`/status reflect what actually executed. REPAIR minor "
-    "plan wording. REJECT plan HALLUCINATION (a goal/result asserting a value, row, or outcome no step "
-    "produced; a result restating the final answer as if pre-known) and OVER-PLANNING (a subgoal per "
-    "trivial step, ritualistic updates that restate the prior state with no real progress, or more plan "
-    "calls than actual work). A good plan is a few meaningful subgoals updated when state truly changes.\n\n"
+    "PLAN QUALITY (stage 2): the plan is control state, and its evidence must be harness-grounded. "
+    "KEEP plans whose subgoals map to real backbone operations and whose status/evidence reflect "
+    "what actually executed. REPAIR minor plan wording. REJECT plan HALLUCINATION (a goal asserting "
+    "a value, row, or outcome no cited evidence step produced) and OVER-PLANNING (a subgoal per "
+    "trivial step, ritualistic updates that restate the prior state with no real progress, or more "
+    "plan calls than actual work). A good plan is a few meaningful subgoals updated when state truly changes.\n\n"
     "BAD PATTERNS to actively catch (repair if local, reject if pervasive):\n"
     "- formulaic reasoning: many steps sharing 'I now apply/compute/project X because the question asks...';\n"
     "- ritual observation: an inspect/read that no later step consumes, or describe/inspect narrated every step;\n"
@@ -2229,11 +2237,16 @@ def _clip_text(value, limit: int = 1200) -> str:
     return text[:limit] + f"... <truncated {len(text) - limit} chars>"
 
 
-def _compact_audit_output(output):
+def _compact_audit_output(output, tool: str | None = None):
     if not isinstance(output, dict):
         return output
     out = copy.deepcopy(output)
-    for key in ("rows", "result_sample"):
+    if isinstance(out.get("rows"), list):
+        if tool == "read_subtable":
+            out["rows"] = out["rows"][:50]
+        else:
+            out["rows"] = out["rows"][:5]
+    for key in ("result_sample",):
         if isinstance(out.get(key), list):
             out[key] = out[key][:5]
     if isinstance(out.get("tables"), list):
@@ -2261,16 +2274,29 @@ def _compact_trajectory_for_quality(traj: dict) -> dict:
             "rationale": step.get("rationale"),
             "tool": call.get("tool"),
             "arguments": call.get("arguments"),
-            "output": _compact_audit_output(step.get("tool_output")),
+            "output": _compact_audit_output(step.get("tool_output"), call.get("tool")),
         }
         if step.get("perception"):
             item["perception"] = True
         steps.append(item)
+    enrichment = traj.get("enrichment") or {}
+    programmatic = enrichment.get("programmatic_quality")
+    candidate_issues = {}
+    if isinstance(programmatic, dict):
+        candidate_issues = {
+            "status": programmatic.get("status"),
+            "hard_issues": programmatic.get("hard_issues") or [],
+            "repairable_issues": programmatic.get("repairable_issues") or [],
+            "soft_issues": programmatic.get("soft_issues") or [],
+        }
+    contains_plan = any((s.get("tool_call") or {}).get("tool") == "plan" for s in traj.get("steps", []))
     return {
         "trajectory_id": traj.get("trajectory_id"),
         "db_id": (traj.get("source") or {}).get("db_id"),
         "question": traj.get("question"),
+        "contains_plan_tool": contains_plan,
         "initial_catalog": (traj.get("initial_state") or {}).get("dataset_overview"),
+        "candidate_structural_issues": candidate_issues,
         "steps": steps,
         "final_answer": traj.get("final_answer"),
     }
@@ -2283,7 +2309,7 @@ def _step_ref_from_issue(text: str) -> str:
 
 def _plan_structural_issues(traj: dict) -> list[dict]:
     """Deterministic structural checks specific to the plan tool: dangling references and an
-    over-planning signal. Semantic judgements (hallucinated results, ritualistic goals) are left to
+    over-planning signal. Semantic judgements (hallucinated evidence, ritualistic goals) are left to
     the LLM auditor — these are only the mechanically decidable candidates."""
     steps = traj.get("steps", [])
     out: list[dict] = []
@@ -2297,10 +2323,10 @@ def _plan_structural_issues(traj: dict) -> list[dict]:
         tc = s.get("tool_call") or {}
         if tc.get("tool") == "plan":
             for op in (tc.get("arguments") or {}).get("ops", []) or []:
-                ev = op.get("evidence_step_id")
+                ev = op.get("evidence", op.get("evidence_step_id"))
                 if isinstance(ev, str) and ev and ev not in seen:
                     out.append({"step_id": s.get("step_id"), "severity": "major",
-                                "issue": f"plan op {op.get('id')!r} cites evidence_step_id {ev!r} "
+                                "issue": f"plan op {op.get('id')!r} cites evidence {ev!r} "
                                          f"which is not an earlier executed step"})
         seen.add(s.get("step_id"))
     return out

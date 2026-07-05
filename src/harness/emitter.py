@@ -105,7 +105,7 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
             planid_to_stepid[plan_id] = sid
         history[sid] = {"tool": tool, "arguments": display, "output": tool_output, "references": references}
         if tool == "plan":
-            env_state.apply_plan_ops(display.get("ops"), sid)
+            env_state.apply_plan_ops(display.get("ops"), sid, history)
         elif tool != "answer_from_context":
             env_state.apply_tool_result(tool, display, tool_output, sid)
         steps.append({"step_id": sid, "think": think,

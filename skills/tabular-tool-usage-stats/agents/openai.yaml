@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tabular Tool Usage Stats"
+  short_description: "Summarize trajectory tool distributions."
+  default_prompt: "Use $tabular-tool-usage-stats to summarize tool-call frequency for a trajectory JSONL file."

@@ -27,13 +27,11 @@ TOOL_SPECS: dict[str, str] = {
         'plan(ops) -> update the task plan managed by the harness. Call this first to split the '
         'question into subgoals, and later to add/update/delete subgoals as observations change. '
         'ops: [{"op": create|add|update|delete, "id": "...", "goal": "...", '
-        '"status": pending|in_progress|done|blocked, "depends_on": [...], '
-        '"evidence_step_id": "step_k", "result": {"type": boolean|scalar|list|text|structured, '
-        '"summary": "..."}, "notes": "..."}]. `status` says whether the subtask is finished; '
-        '`result.summary` records a short progress/conclusion statement grounded by '
-        '`evidence_step_id`. Do NOT invent factual `result.value` fields or put final answer values '
-        'in the plan; factual values must come from tool outputs. The plan is control state only: it '
-        'cannot be used as factual evidence, value_ref, or final-answer support.',
+        '"status": pending|in_progress|done|blocked, "evidence": "step_k"}]. '
+        'A plan item has only goal/status/evidence: goal is the intended subtask, status is progress, '
+        'and evidence is a prior step id whose actual tool output the harness will attach to the '
+        'plan state. Do NOT write result/conclusion/notes/value fields or final answer values in the '
+        'plan. The plan is control state only: it cannot be used as value_ref or final-answer support.',
     "condition_filter":
         'condition_filter(table, conditions) -> new table with the rows that satisfy `conditions`.\n'
         '  conditions: a predicate {"column": c, "op": o, "value": v} with op in '
@@ -91,7 +89,7 @@ TOOL_SPECS: dict[str, str] = {
 
 TOOLS = set(TOOL_SPECS)
 
-PROTOCOL_VERSION = "v2c-plan"   # bump when specs, rendering, or the memory model change
+PROTOCOL_VERSION = "v2d-plan-evidence"   # bump when specs, rendering, or the memory model change
 
 # Strict per-tool argument schema (required, optional). Unlisted keys are rejected so the SFT data
 # and the live rollout can never silently drift. V2b: a predicate's `value_ref` cites the producing
@@ -150,7 +148,8 @@ SYSTEM_PROMPT = (
     "RULES\n"
     "1. Each turn, output exactly: <think>brief reasoning</think> then "
     '<tool_call>{"tool": "<name>", "arguments": {...}}</tool_call>. Nothing else.\n'
-    "2. Start with plan to break the task into subgoals; update it when observations change.\n"
+    "2. Use plan for multi-step tasks to break the question into subgoals; update it when a subgoal "
+    "starts, completes, or changes. Simple direct tasks may proceed without plan.\n"
     "3. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
     "4. To use a computed scalar as a threshold, set the predicate's "
     '{"value_ref": step_id} to the step that produced that scalar.\n'
@@ -168,7 +167,7 @@ SYSTEM_PROMPT_COMPACT = (
     "The opening overview is only a catalog: table names, row counts, and relations. It has no "
     "columns. Use describe_table only for relevant unresolved tables. Tool-created tables return "
     "handles (table, columns, row_count), not rows. Use existing handles instead of restarting from "
-    "source tables. Use plan first to create subgoals, then update it as work completes or changes. "
+    "source tables. Use plan for multi-step tasks, then update it as work completes or changes. "
     "A separate CURRENT ENVIRONMENT STATE message may summarize the current plan and known table "
     "handles before your turn.\n\n"
     "POLICY\n"

@@ -34,31 +34,72 @@ def _status(value: Any) -> str:
     return s
 
 
-def _result(value: Any) -> Any:
-    """Normalize a model-authored subtask result/conclusion.
+def _compact_evidence_output(output: Any) -> Any:
+    """Keep plan evidence grounded in tool output without turning it into a large transcript."""
+    if not isinstance(output, dict):
+        return deepcopy(output)
+    if "table" in output:
+        out = {key: deepcopy(output.get(key)) for key in ("table", "kind", "columns", "row_count")
+               if output.get(key) is not None}
+        if output.get("rows"):
+            out["rows"] = deepcopy(output.get("rows", [])[:5])
+        return out
+    if "result_sample" in output:
+        return {
+            "row_count": output.get("row_count"),
+            "result_sample": deepcopy(output.get("result_sample", [])[:5]),
+        }
+    if "rows" in output:
+        out = {
+            "row_count": output.get("row_count"),
+            "rows": deepcopy(output.get("rows", [])[:5]),
+        }
+        if output.get("columns"):
+            out["columns"] = deepcopy(output.get("columns"))
+        if output.get("table"):
+            out["table"] = output.get("table")
+        return out
+    if "tables" in output:
+        tables = []
+        for table in output.get("tables", [])[:8]:
+            if not isinstance(table, dict):
+                tables.append(deepcopy(table))
+                continue
+            item = dict(table)
+            if isinstance(item.get("columns"), list):
+                item["columns"] = deepcopy(item["columns"][:40])
+            tables.append(item)
+        return {"tables": tables}
+    if "final_answer" in output:
+        return {"final_answer": deepcopy(output.get("final_answer", [])[:50])}
+    return deepcopy(output)
 
-    The harness stores this as task-control state only. It is not a factual evidence channel and
-    cannot be consumed as `value_ref` or final-answer support.
+
+def _ground_evidence(value: Any, history: dict[str, dict] | None) -> dict | None:
+    """Resolve a model-supplied evidence step id into harness-authored evidence.
+
+    The model only names the step. The environment copies that step's actual tool output into the
+    resident plan state, so plan evidence is grounded and cannot contain model-authored conclusions.
     """
     if value is None:
         return None
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        return {"type": "text", "summary": text}
-    if isinstance(value, bool):
-        return {"type": "boolean", "value": value}
-    if isinstance(value, (int, float)):
-        return {"type": "scalar", "value": value}
-    if isinstance(value, list):
-        return {"type": "list", "value": deepcopy(value)}
     if isinstance(value, dict):
-        out = deepcopy(value)
-        if "type" not in out:
-            out["type"] = "structured"
-        return out
-    raise EnvironmentStateError(f"invalid plan result type {type(value).__name__}")
+        step_id = value.get("step_id") or value.get("id")
+    else:
+        step_id = value
+    if not isinstance(step_id, str) or not step_id.strip():
+        raise EnvironmentStateError("plan evidence must be a step_id string")
+    step_id = step_id.strip()
+    if history is None:
+        return {"step_id": step_id}
+    record = history.get(step_id)
+    if not isinstance(record, dict):
+        raise EnvironmentStateError(f"plan evidence references unknown step {step_id!r}")
+    return {
+        "step_id": step_id,
+        "tool": record.get("tool"),
+        "output": _compact_evidence_output(record.get("output")),
+    }
 
 
 class EnvironmentState:
@@ -85,8 +126,19 @@ class EnvironmentState:
 
     def snapshot(self) -> dict:
         """Return a compact, JSON-serializable resident-state snapshot."""
-        plan = [deepcopy(self.plan[item_id]) for item_id in self.plan_order
-                if item_id in self.plan and self.plan[item_id].get("status") != "deleted"]
+        plan = []
+        for item_id in self.plan_order:
+            if item_id not in self.plan or self.plan[item_id].get("status") == "deleted":
+                continue
+            item = self.plan[item_id]
+            out = {
+                "id": item.get("id"),
+                "goal": item.get("goal"),
+                "status": item.get("status"),
+            }
+            if item.get("evidence") is not None:
+                out["evidence"] = deepcopy(item["evidence"])
+            plan.append(out)
         tables = {}
         for name, table in self.tables.items():
             if (
@@ -104,7 +156,8 @@ class EnvironmentState:
         return {"plan": plan, "tables": tables}
 
     # ---- plan tool ----
-    def apply_plan_ops(self, ops: list[dict], step_id: str) -> dict:
+    def apply_plan_ops(self, ops: list[dict], step_id: str,
+                       history: dict[str, dict] | None = None) -> dict:
         if not isinstance(ops, list) or not ops:
             raise EnvironmentStateError("plan.ops must be a non-empty list")
         changes = []
@@ -131,13 +184,10 @@ class EnvironmentState:
                     "created_by": step_id,
                     "updated_by": step_id,
                 }
-                for key in ("depends_on", "notes", "evidence_step_id"):
-                    if key in op:
-                        item[key] = deepcopy(op[key])
-                if "result" in op:
-                    item["result"] = _result(op["result"])
-                elif "conclusion" in op:
-                    item["result"] = _result(op["conclusion"])
+                evidence_value = op.get("evidence", op.get("evidence_step_id"))
+                evidence = _ground_evidence(evidence_value, history)
+                if evidence is not None:
+                    item["evidence"] = evidence
                 self.plan[item_id] = item
                 if item_id not in self.plan_order:
                     self.plan_order.append(item_id)
@@ -154,19 +204,19 @@ class EnvironmentState:
                 changes.append({"op": "delete", "id": item_id})
                 continue
 
-            allowed = {"goal", "status", "depends_on", "notes", "evidence_step_id", "result", "conclusion"}
+            allowed = {"goal", "status", "evidence", "evidence_step_id"}
             updated = False
             for key in allowed:
                 if key not in op:
                     continue
                 if key == "status":
                     self.plan[item_id][key] = _status(op[key])
-                elif key in {"result", "conclusion"}:
-                    normalized = _result(op[key])
-                    if normalized is None:
-                        self.plan[item_id].pop("result", None)
+                elif key in {"evidence", "evidence_step_id"}:
+                    evidence = _ground_evidence(op[key], history)
+                    if evidence is None:
+                        self.plan[item_id].pop("evidence", None)
                     else:
-                        self.plan[item_id]["result"] = normalized
+                        self.plan[item_id]["evidence"] = evidence
                 else:
                     self.plan[item_id][key] = deepcopy(op[key])
                 updated = True

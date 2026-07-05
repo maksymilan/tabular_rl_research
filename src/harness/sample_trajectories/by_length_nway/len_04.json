@@ -1,0 +1,340 @@
+{
+  "trajectory_id": "spider_dev_8",
+  "schema_version": "v3",
+  "source": {
+    "dataset": "spider",
+    "db_id": "concert_singer",
+    "gold_sql": "SELECT DISTINCT country FROM singer WHERE age  >  20"
+  },
+  "question": "What are all distinct countries where singers above age 20 are from?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "stadium",
+          "num_rows": 9
+        },
+        {
+          "table_name": "singer",
+          "num_rows": 6
+        },
+        {
+          "table_name": "concert",
+          "num_rows": 6
+        },
+        {
+          "table_name": "singer_in_concert",
+          "num_rows": 10
+        }
+      ],
+      "relations": [
+        {
+          "from": "concert.Stadium_ID",
+          "to": "stadium.Stadium_ID"
+        },
+        {
+          "from": "singer_in_concert.Singer_ID",
+          "to": "singer.Singer_ID"
+        },
+        {
+          "from": "singer_in_concert.concert_ID",
+          "to": "concert.concert_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "singer",
+          "conditions": {
+            "column": "age",
+            "op": ">",
+            "value": 20
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "singer",
+          "role": "table",
+          "target": {
+            "table": "singer"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_001"
+      },
+      "tool_output": {
+        "table": "filter_001",
+        "kind": "filter",
+        "columns": [
+          "Singer_ID",
+          "Name",
+          "Country",
+          "Song_Name",
+          "Song_release_year",
+          "Age",
+          "Is_male"
+        ],
+        "row_count": 6
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "Singer_ID",
+              "Name",
+              "Country",
+              "Song_Name",
+              "Song_release_year",
+              "Age",
+              "Is_male"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_001",
+          "expressions": [
+            "country"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_1",
+          "role": "table",
+          "target": {
+            "handle": "filter_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_002"
+      },
+      "tool_output": {
+        "table": "project_002",
+        "kind": "project",
+        "columns": [
+          "country"
+        ],
+        "row_count": 6
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "Singer_ID",
+              "Name",
+              "Country",
+              "Song_Name",
+              "Song_release_year",
+              "Age",
+              "Is_male"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 6,
+            "created_by": "step_2",
+            "columns": [
+              "country"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "project_002",
+          "group_by": [
+            "country"
+          ],
+          "aggregations": []
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "project_002"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "group_003"
+      },
+      "tool_output": {
+        "table": "group_003",
+        "kind": "group",
+        "columns": [
+          "country"
+        ],
+        "row_count": 3
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "Singer_ID",
+              "Name",
+              "Country",
+              "Song_Name",
+              "Song_release_year",
+              "Age",
+              "Is_male"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 6,
+            "created_by": "step_2",
+            "columns": [
+              "country"
+            ]
+          },
+          "group_003": {
+            "kind": "group",
+            "row_count": 3,
+            "created_by": "step_3",
+            "columns": [
+              "country"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "France"
+            ],
+            [
+              "Netherlands"
+            ],
+            [
+              "United States"
+            ]
+          ],
+          "evidence": {
+            "table": "group_003"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_3",
+          "role": "table",
+          "target": {
+            "handle": "group_003"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "France"
+          ],
+          [
+            "Netherlands"
+          ],
+          [
+            "United States"
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "Singer_ID",
+              "Name",
+              "Country",
+              "Song_Name",
+              "Song_release_year",
+              "Age",
+              "Is_male"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 6,
+            "created_by": "step_2",
+            "columns": [
+              "country"
+            ]
+          },
+          "group_003": {
+            "kind": "group",
+            "row_count": 3,
+            "created_by": "step_3",
+            "columns": [
+              "country"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "France"
+    ],
+    [
+      "Netherlands"
+    ],
+    [
+      "United States"
+    ]
+  ]
+}

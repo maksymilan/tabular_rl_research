@@ -14,23 +14,25 @@ def run():
 
     out = state.apply_plan_ops([
         {"op": "create", "id": "p1", "goal": "find relevant employee rows"},
-        {"op": "update", "id": "p1", "status": "in_progress", "notes": "schema next"},
+        {"op": "update", "id": "p1", "status": "in_progress"},
     ], "step_1")
     t.check("plan creates one item", len(out["plan"]) == 1, str(out))
     t.check("plan updates status", out["plan"][0]["status"] == "in_progress", str(out))
+    history = {
+        "step_0": {
+            "tool": "condition_filter",
+            "output": {"table": "filter_001", "kind": "table", "columns": ["id", "dept"], "row_count": 2},
+        }
+    }
     out = state.apply_plan_ops([
-        {"op": "update", "id": "p1", "status": "done",
-         "result": {"type": "boolean", "value": True, "summary": "engineering rows were found"},
-         "evidence_step_id": "step_0"},
-    ], "step_1b")
-    t.check("plan stores result object",
-            out["plan"][0]["result"]["value"] is True and out["plan"][0]["status"] == "done",
+        {"op": "update", "id": "p1", "status": "done", "evidence": "step_0"},
+    ], "step_1b", history)
+    t.check("plan stores grounded evidence",
+            out["plan"][0]["evidence"]["output"]["table"] == "filter_001" and
+            out["plan"][0]["status"] == "done",
             str(out))
-    state.apply_plan_ops([
-        {"op": "update", "id": "p1", "conclusion": "Use the filtered employee rows next."},
-    ], "step_1c")
-    t.check("plan conclusion normalizes to result text",
-            state.snapshot()["plan"][0]["result"]["summary"] == "Use the filtered employee rows next.",
+    t.check("plan snapshot hides internal bookkeeping",
+            set(state.snapshot()["plan"][0]) == {"id", "goal", "status", "evidence"},
             str(state.snapshot()))
 
     desc = h.describe_table(["employees"])

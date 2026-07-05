@@ -48,17 +48,16 @@ SYSTEM = (
     "project, extreme_value_select, read_subtable, and answer_from_context. Do not tell the agent "
     "to execute a SQL query or use hidden SQL; the agent can only call the listed tools.\n\n"
     "The plan is control state only. It must not claim unsupported facts, leak final answers, or "
-    "invent table values. It can say what needs to be checked or computed, and later mark a "
-    "subgoal done when a corresponding tool step has executed. A done or blocked subgoal should "
-    "also record `result.summary`: a short text conclusion grounded by `evidence_step_id`. Do NOT "
-    "write factual `result.value` fields, lists, scalars, booleans, or final answer values into the "
-    "plan; factual values belong to tool outputs, not model-authored plan state. `status` says "
-    "whether the subtask is complete; `result.summary` says what changed at the task-state level.\n\n"
+    "invent table values. A plan item has only goal/status/evidence: `goal` says the intended "
+    "subtask, `status` says whether the subtask is complete, and `evidence` is a prior step id whose "
+    "actual tool output the harness will attach to the environment state. Do NOT write result, "
+    "conclusion, notes, booleans, scalars, lists, or final answer values into the plan; factual "
+    "values belong to tool outputs, not model-authored plan state.\n\n"
     "Plan updates should be sparse and state-change-based, not mechanical. Do NOT update the plan after every tool call. "
     "Update only when a meaningful milestone happens: a branch/subgoal starts, completes, becomes "
-    "blocked, gets revised by an observation, or obtains a reusable conclusion. Pure schema reads, "
+    "blocked, or gets revised by an observation. Pure schema reads, "
     "row reads, and intermediate handle creation do not need plan updates unless they change a "
-    "subgoal's status or result. Do not spend an update block merely to say that schemas, columns, "
+    "subgoal's status or evidence. Do not spend an update block merely to say that schemas, columns, "
     "or sample rows have been inspected; put that progress in the next step's think instead. "
     "Tool types are only clues: update the plan when the task state changes, not because a specific "
     "tool was called.\n\n"
@@ -66,24 +65,22 @@ SYSTEM = (
     "{\n"
     "  \"initial_think\": \"first-person reason for creating the plan\",\n"
     "  \"initial_plan\": [\n"
-    "    {\"id\":\"p1\", \"goal\":\"...\", \"status\":\"pending\", \"depends_on\":[]}\n"
+    "    {\"id\":\"p1\", \"goal\":\"...\", \"status\":\"pending\"}\n"
     "  ],\n"
     "  \"updates\": [\n"
     "    {\"after_step\": 1, \"think\":\"first-person reason for updating the plan\", "
-    "\"ops\":[{\"op\":\"update\", \"id\":\"p1\", \"status\":\"done\", "
-    "\"evidence_step_id\":\"step_1\", \"result\":{\"type\":\"text\", \"summary\":\"...\"}, "
-    "\"notes\":\"...\"}]}\n"
+    "\"ops\":[{\"op\":\"update\", \"id\":\"p1\", \"status\":\"done\", \"evidence\":\"step_1\"}]}\n"
     "  ]\n"
     "}\n\n"
     "`after_step` is the 1-based index of the raw backbone step after which to insert the update. "
     "Do not insert updates after the final answer_from_context step; the final answer must remain "
     "terminal. Use ids p1, p2, ... . Initial plan items must be pending only: no initial item may "
-    "be done, blocked, or contain result/conclusion. Do not create plan items whose only purpose is "
+    "be done, blocked, or contain evidence/result/conclusion. Do not create plan items whose only purpose is "
     "describe_table, inspect_column, schema discovery, or row reading; those observations belong in "
     "think text, while plan items should be semantic task goals. Do not write natural-language "
-    "step numbers like step_1 or step 2 in plan think text; use evidence_step_id fields instead. "
-    "For `result`, prefer {\"type\":\"text\",\"summary\":\"...\"}. If the evidence step produced a "
-    "scalar/list/boolean, summarize the conclusion without copying the value."
+    "step numbers like step_1 or step 2 in plan think text; put the cited step id only in the "
+    "`evidence` field. If a tool output contains a scalar/list/boolean/final value, cite that step "
+    "as evidence but do not copy the value into the plan."
 )
 
 
@@ -219,7 +216,7 @@ def build_messages(traj: dict, feedback: str = "") -> list[dict]:
         "it remains explicitly pending or blocked, and never mark such a subgoal done. Prefer "
         "subgoals that summarize the actual backbone operations. "
         "Do not reveal final answer values unless they are already in the raw step outputs above. "
-        "Even then, do not copy those values into plan result fields; summarize the milestone only."
+        "Even then, cite the step id as evidence instead of copying values or summaries into the plan."
     )
     if feedback:
         user += (
@@ -274,21 +271,18 @@ def template_plan(traj: dict) -> dict:
         updates.append({
             "after_step": first_after,
             "think": "The intermediate computation is underway, so I update the plan to track progress.",
-            "ops": [{"op": "update", "id": "p1", "status": "done", "evidence_step_id": "step_1",
-                     "result": {"type": "text", "summary": "The relevant intermediate result has been started."}}],
+            "ops": [{"op": "update", "id": "p1", "status": "done", "evidence": "step_1"}],
         })
         updates.append({
             "after_step": mid_after,
             "think": "The main relational operations have produced a useful intermediate state.",
-            "ops": [{"op": "update", "id": "p2", "status": "done", "evidence_step_id": f"step_{mid_after}",
-                     "result": {"type": "text", "summary": "The required relational operations are complete."}}],
+            "ops": [{"op": "update", "id": "p2", "status": "done", "evidence": f"step_{mid_after}"}],
         })
         updates.append({
             "after_step": final_after,
             "think": "The final answer step has been reached, so I close the remaining plan items.",
             "ops": [
-                {"op": "update", "id": "p3", "status": "done", "evidence_step_id": f"step_{final_after}",
-                 "result": {"type": "text", "summary": "The final answer is ready to submit."}},
+                {"op": "update", "id": "p3", "status": "done", "evidence": f"step_{final_after}"},
             ],
         })
     return {
@@ -296,19 +290,6 @@ def template_plan(traj: dict) -> dict:
         "initial_plan": initial,
         "updates": updates,
     }
-
-
-def sanitize_plan_result(result: Any) -> Any:
-    """Keep model-authored plan results as summaries, not factual value stores."""
-    if not isinstance(result, dict):
-        return result
-    clean = {k: copy.deepcopy(v) for k, v in result.items() if k != "value"}
-    clean_type = str(clean.get("type") or "text")
-    clean["type"] = clean_type if clean_type in {"text", "structured", "boolean", "scalar", "list"} else "text"
-    summary = clean.get("summary")
-    if not isinstance(summary, str) or not summary.strip():
-        clean["summary"] = "The cited evidence step contains the subgoal result."
-    return clean
 
 
 def normalize_plan_payload(
@@ -337,9 +318,6 @@ def normalize_plan_payload(
         if not goal:
             raise ValueError(f"plan item {item_id} has no goal")
         op = {"op": "create", "id": item_id, "goal": goal, "status": "pending"}
-        for key in ("depends_on", "notes"):
-            if key in item:
-                op[key] = item[key]
         create_ops.append(op)
 
     updates = []
@@ -375,15 +353,10 @@ def normalize_plan_payload(
                 if not isinstance(goal, str) or not goal.strip():
                     continue
             clean = {"op": action, "id": item_id}
-            for key in ("goal", "status", "depends_on", "notes", "reason", "evidence_step_id",
-                        "result", "conclusion"):
+            for key in ("goal", "status", "evidence", "evidence_step_id"):
                 if key in op:
-                    if key == "depends_on" and isinstance(op[key], list):
-                        clean[key] = [dep for dep in op[key] if dep in known_ids]
-                    elif key == "result":
-                        clean[key] = sanitize_plan_result(op[key])
-                    elif key == "conclusion":
-                        clean[key] = sanitize_plan_result(op[key])
+                    if key == "evidence_step_id":
+                        clean["evidence"] = op[key]
                     else:
                         clean[key] = op[key]
             clean_ops.append(clean)
@@ -436,16 +409,18 @@ def validate_plan_payload(plan_payload: dict, traj: dict, requirements: dict) ->
     def check_no_step_refs(obj: Any, label: str) -> None:
         if isinstance(obj, dict):
             for key, value in obj.items():
-                if key == "evidence_step_id":
+                if key in {"evidence", "evidence_step_id"}:
                     continue
                 if key == "value":
-                    issues.append(f"{label} must not contain model-authored factual result.value")
+                    issues.append(f"{label} must not contain model-authored factual values")
+                if key in {"result", "conclusion", "notes", "depends_on"}:
+                    issues.append(f"{label} must not contain {key}; plan items only keep goal/status/evidence")
                 check_no_step_refs(value, f"{label}.{key}")
         elif isinstance(obj, list):
             for i, value in enumerate(obj):
                 check_no_step_refs(value, f"{label}[{i}]")
         elif isinstance(obj, str) and STEP_REF_RE.search(obj):
-            issues.append(f"{label} must not mention natural-language step numbers; use evidence_step_id")
+            issues.append(f"{label} must not mention natural-language step numbers; use the evidence field")
 
     plan_state: dict[str, dict] = {}
     for op in initial_ops:
@@ -461,18 +436,18 @@ def validate_plan_payload(plan_payload: dict, traj: dict, requirements: dict) ->
             )
         if op.get("status") not in {"pending", "in_progress"}:
             issues.append(f"initial plan item {item_id} must start pending/in_progress, not {op.get('status')}")
-        if op.get("result") is not None or op.get("conclusion") is not None:
-            issues.append(f"initial plan item {item_id} must not contain result/conclusion")
+        if any(op.get(key) is not None for key in ("evidence", "evidence_step_id", "result", "conclusion")):
+            issues.append(f"initial plan item {item_id} must not contain evidence/result/conclusion")
         plan_state[item_id] = {
             "goal": goal,
             "status": op.get("status") or "pending",
-            "result": op.get("result") or op.get("conclusion"),
+            "evidence": op.get("evidence") or op.get("evidence_step_id"),
         }
 
     for block in updates:
         think = str(block.get("think") or "")
         if STEP_REF_RE.search(think):
-            issues.append("plan update think must not mention natural-language step numbers; use evidence_step_id only")
+            issues.append("plan update think must not mention natural-language step numbers; use the evidence field only")
         if SCHEMA_ONLY_GOAL_RE.search(think) and not TASK_GOAL_RE.search(think):
             issues.append("plan update think is only about schema/inspection progress, not a task-state change")
         after = int(block.get("after_step") or 0)
@@ -487,22 +462,17 @@ def validate_plan_payload(plan_payload: dict, traj: dict, requirements: dict) ->
                 plan_state[item_id] = {
                     "goal": goal,
                     "status": op.get("status") or "pending",
-                    "result": op.get("result") or op.get("conclusion"),
+                    "evidence": op.get("evidence") or op.get("evidence_step_id"),
                 }
             elif action == "update" and item_id in plan_state:
                 if op.get("status"):
                     plan_state[item_id]["status"] = op.get("status")
-                if op.get("result") is not None or op.get("conclusion") is not None:
-                    plan_state[item_id]["result"] = op.get("result") or op.get("conclusion")
-                    result_obj = op.get("result") or op.get("conclusion")
-                    if isinstance(result_obj, dict) and "value" in result_obj:
-                        issues.append(f"update for {item_id} must not contain model-authored result.value")
+                if op.get("evidence") is not None or op.get("evidence_step_id") is not None:
+                    plan_state[item_id]["evidence"] = op.get("evidence") or op.get("evidence_step_id")
                 if op.get("status") in {"done", "blocked"}:
-                    if op.get("result") is None and op.get("conclusion") is None:
-                        issues.append(f"done/blocked update for {item_id} should include result/conclusion")
-                    ev = op.get("evidence_step_id")
+                    ev = op.get("evidence") or op.get("evidence_step_id")
                     if not isinstance(ev, str) or not ev.strip():
-                        issues.append(f"done/blocked update for {item_id} should include evidence_step_id")
+                        issues.append(f"done/blocked update for {item_id} should include evidence")
             elif action == "delete":
                 plan_state.pop(item_id, None)
 
@@ -519,7 +489,7 @@ def remap_step_refs(obj: Any, old_to_new: dict[str, str]) -> Any:
         return obj
     out = {}
     for key, value in obj.items():
-        if key in {"value_ref", "evidence_step_id"} and isinstance(value, str):
+        if key in {"value_ref", "evidence", "evidence_step_id"} and isinstance(value, str):
             out[key] = old_to_new.get(value, value)
         elif key == "in_table" and isinstance(value, str):
             out[key] = old_to_new.get(value, value)

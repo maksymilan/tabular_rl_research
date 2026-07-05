@@ -76,13 +76,17 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   §5. Deferred (in SSOT §2): C (perception grounding edges + reward), F (subtable consolidation —
   empirically triggered by the first perception-SFT failure modes), D-3/D-4 (regenerate perception
   data + SFT).
-- **V2c-plan/context scaffolding started (2026-07-02)**: `plan(ops)` is now a model-visible,
+- **V2d plan/context scaffolding (2026-07-05)**: `plan(ops)` is now a model-visible,
   harness-managed task-control tool for creating/updating/deleting subgoals. Plan state is not
   factual evidence: it cannot support `value_ref` or final answers and is excluded from data/value
-  provenance slices. Plan items separate `status` (completion) from `result` (model-authored
-  subtask answer/conclusion such as boolean/scalar/text); `result` is still control state, not
-  grounded memory. New shared `src/harness/environment_state.py` maintains resident context with
-  plan items plus per-table/handle schema, inspected column domains, reads, and produced handles.
+  provenance slices. New data must not let the model author `result`, `conclusion`, `notes`,
+  scalar/list/boolean values, or final answer values inside plan items. Model-visible plan item
+  state is only `goal`, `status`, and `evidence` (plus item id): the model supplies `evidence` as a
+  prior `step_id` string, and the harness expands it into `{step_id, tool, output}` from actual tool
+  history in the environment snapshot. `evidence_step_id` is tolerated only as a legacy alias; do
+  not emit it in new prompts/data. PROTOCOL_VERSION is **v2d-plan-evidence**. New shared
+  `src/harness/environment_state.py` maintains resident context with plan items plus per-table/handle
+  schema, inspected column domains, reads, and produced handles.
   Online rollout/RL env and offline SFT rendering can include this `state` snapshot in observation
   envelopes. The raw SQL→trajectory emitter now produces the verified relational backbone only; it
   does **not** mechanically inject `describe_table` / `inspect_column` / `read_subtable`. External-

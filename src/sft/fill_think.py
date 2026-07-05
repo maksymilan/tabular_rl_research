@@ -87,6 +87,10 @@ def call(base: str, key: str, model: str, messages: list[dict], timeout: int = 1
     payload = {"model": model, "messages": messages}
     if not model.startswith("claude-"):
         payload["temperature"] = 0.3
+    else:
+        # aihubmix's OpenAI-compatible interface defaults Claude to max_tokens=4096, which truncates
+        # our long JSON outputs (whole-trajectory rewrites / audits) into invalid JSON. Raise it.
+        payload["max_tokens"] = 16000
     body = json.dumps(payload).encode()
     req = urllib.request.Request(base.rstrip("/") + "/chat/completions", data=body,
                                  headers={"Content-Type": "application/json",

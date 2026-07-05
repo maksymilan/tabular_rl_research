@@ -253,7 +253,7 @@ class Harness:
             out["note"] = f"showing first {len(rows)} of {total} rows (exceeds {cell_limit}-cell preview budget)"
         return out
 
-    def read_subtable(self, table, columns=None, limit=10):
+    def read_subtable(self, table, columns=None, limit=20):
         cols = ", ".join(columns) if columns else "*"
         return self.conn.execute(
             f"SELECT {cols} FROM {self._src(table)} LIMIT {int(limit)}"
@@ -282,18 +282,22 @@ class Harness:
             out.append({"table_name": t, "row_count": n, "columns": columns, "foreign_keys": fks})
         return {"tables": out}
 
-    def inspect_column(self, table: str, column: str, top_k: int = 10) -> dict:
+    def inspect_column(self, table: str, column: str, top_k: int = 10, full_below: int = 50) -> dict:
         """Value-domain of one column for grounding a filter literal (does 'France' exist? spelling?):
         distinct count + most frequent values + NULL flag. NO numeric aggregates. Joins the RESIDENT
-        world-model. Bounded by top_k so it stays small even for high-cardinality columns."""
+        world-model. A small enum-like column (distinct-count <= `full_below`) is shown in FULL, so a
+        filter literal on it is genuinely visible instead of lost to truncation; a larger column shows
+        the `top_k` most-frequent values and is marked `truncated` (there the literal cannot be
+        confirmed here — the condition_filter result validates it)."""
         src = self._src(table)
         n_distinct = self.conn.execute(f"SELECT COUNT(DISTINCT {column}) FROM {src}").fetchone()[0]
         n_null = self.conn.execute(f"SELECT COUNT(*) FROM {src} WHERE {column} IS NULL").fetchone()[0]
+        limit = n_distinct if n_distinct <= full_below else int(top_k)
         freq = self.conn.execute(
-            f"SELECT {column}, COUNT(*) c FROM {src} GROUP BY {column} ORDER BY c DESC LIMIT {int(top_k)}"
+            f"SELECT {column}, COUNT(*) c FROM {src} GROUP BY {column} ORDER BY c DESC LIMIT {limit}"
         ).fetchall()
         return {"column": column, "distinct_count": n_distinct, "has_null": bool(n_null),
-                "frequent_values": [v for v, _ in freq], "truncated": n_distinct > int(top_k)}
+                "frequent_values": [v for v, _ in freq], "truncated": n_distinct > limit}
 
     # ---- verification ----
     def gold(self, sql: str) -> list[tuple]:

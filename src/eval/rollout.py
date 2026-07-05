@@ -106,7 +106,7 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
     references = build_references(tool, args, resolve_step)
 
     if tool == "plan":
-        output = ctx["environment"].apply_plan_ops(args.get("ops"), step_id)
+        output = ctx["environment"].apply_plan_ops(args.get("ops"), step_id, ctx["history"])
         ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
         return output, None
 
