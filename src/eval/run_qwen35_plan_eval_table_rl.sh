@@ -24,6 +24,7 @@ ROLLOUT_WORKERS=${ROLLOUT_WORKERS:-3}
 MAX_STEPS=${MAX_STEPS:-20}
 MAX_TOKENS=${MAX_TOKENS:-768}
 MAX_CONSECUTIVE_ERRORS=${MAX_CONSECUTIVE_ERRORS:-3}
+TABLE_OUTPUT_ROWS=${TABLE_OUTPUT_ROWS:-0}
 N_DEV=${N_DEV:-1034}
 
 mkdir -p "$LOG_DIR"
@@ -47,6 +48,7 @@ trap cleanup EXIT INT TERM
   echo "[$(date)] gpu=$GPU_ID port=$VLLM_PORT"
   echo "[$(date)] lora=$LORA_DIR"
   echo "[$(date)] result_dir=$RESULT_DIR"
+  echo "[$(date)] max_model_len=$MAX_MODEL_LEN max_steps=$MAX_STEPS max_consecutive_errors=$MAX_CONSECUTIVE_ERRORS table_output_rows=$TABLE_OUTPUT_ROWS"
 
   export CUDA_VISIBLE_DEVICES="$GPU_ID"
   export HF_HUB_OFFLINE=1
@@ -90,6 +92,7 @@ trap cleanup EXIT INT TERM
     --workers "$ROLLOUT_WORKERS" \
     --max-steps "$MAX_STEPS" \
     --max-consecutive-errors "$MAX_CONSECUTIVE_ERRORS" \
+    --table-output-rows "$TABLE_OUTPUT_ROWS" \
     --max-tokens "$MAX_TOKENS" \
     --api-retries 3 \
     --result-dir "$RESULT_DIR" \

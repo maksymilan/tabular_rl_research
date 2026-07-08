@@ -1,0 +1,616 @@
+{
+  "trajectory_id": "spider_train_6",
+  "schema_version": "v4-agg-unified",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT DISTINCT T1.creation FROM department AS T1 JOIN management AS T2 ON T1.department_id  =  T2.department_id JOIN head AS T3 ON T2.head_id  =  T3.head_id WHERE T3.born_state  =  'Alabama'"
+  },
+  "question": "What are the distinct creation years of the departments managed by a secretary born in state 'Alabama'?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5
+        }
+      ],
+      "relations": [
+        {
+          "from": "management.head_ID",
+          "to": "head.head_ID"
+        },
+        {
+          "from": "management.department_ID",
+          "to": "department.Department_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "tables": [
+            "department",
+            "management",
+            "head"
+          ],
+          "on": [
+            [
+              {
+                "left": "department_id",
+                "right": "department_id"
+              }
+            ],
+            [
+              {
+                "left": "T2__head_id",
+                "right": "head_id"
+              }
+            ]
+          ],
+          "join_types": [
+            "inner",
+            "inner"
+          ],
+          "prefixes": [
+            "T1",
+            "T2",
+            "T3"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "department",
+          "role": "table",
+          "target": {
+            "table": "department"
+          }
+        },
+        {
+          "type": "data",
+          "source": "management",
+          "role": "table",
+          "target": {
+            "table": "management"
+          }
+        },
+        {
+          "type": "data",
+          "source": "head",
+          "role": "table",
+          "target": {
+            "table": "head"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__Department_ID",
+          "T1__Name",
+          "T1__Creation",
+          "T1__Ranking",
+          "T1__Budget_in_Billions",
+          "T1__Num_Employees",
+          "T2__department_ID",
+          "T2__head_ID",
+          "T2__temporary_acting",
+          "T3__head_ID",
+          "T3__name",
+          "T3__born_state",
+          "T3__age"
+        ],
+        "row_count": 5
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 5,
+            "created_by": "step_1",
+            "columns": [
+              "T1__Department_ID",
+              "T1__Name",
+              "T1__Creation",
+              "T1__Ranking",
+              "T1__Budget_in_Billions",
+              "T1__Num_Employees",
+              "T2__department_ID",
+              "T2__head_ID",
+              "T2__temporary_acting",
+              "T3__head_ID",
+              "T3__name",
+              "T3__born_state",
+              "T3__age"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_001",
+          "conditions": {
+            "column": "T3__born_state",
+            "op": "=",
+            "value": "Alabama"
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_1",
+          "role": "table",
+          "target": {
+            "handle": "join_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_002"
+      },
+      "tool_output": {
+        "table": "filter_002",
+        "kind": "filter",
+        "columns": [
+          "T1__Department_ID",
+          "T1__Name",
+          "T1__Creation",
+          "T1__Ranking",
+          "T1__Budget_in_Billions",
+          "T1__Num_Employees",
+          "T2__department_ID",
+          "T2__head_ID",
+          "T2__temporary_acting",
+          "T3__head_ID",
+          "T3__name",
+          "T3__born_state",
+          "T3__age"
+        ],
+        "row_count": 1
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 5,
+            "created_by": "step_1",
+            "columns": [
+              "T1__Department_ID",
+              "T1__Name",
+              "T1__Creation",
+              "T1__Ranking",
+              "T1__Budget_in_Billions",
+              "T1__Num_Employees",
+              "T2__department_ID",
+              "T2__head_ID",
+              "T2__temporary_acting",
+              "T3__head_ID",
+              "T3__name",
+              "T3__born_state",
+              "T3__age"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_2",
+            "columns": [
+              "T1__Department_ID",
+              "T1__Name",
+              "T1__Creation",
+              "T1__Ranking",
+              "T1__Budget_in_Billions",
+              "T1__Num_Employees",
+              "T2__department_ID",
+              "T2__head_ID",
+              "T2__temporary_acting",
+              "T3__head_ID",
+              "T3__name",
+              "T3__born_state",
+              "T3__age"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_002",
+          "expressions": [
+            "T1__creation"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "filter_002"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_003"
+      },
+      "tool_output": {
+        "table": "project_003",
+        "kind": "project",
+        "columns": [
+          "T1__Creation"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            "1903"
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 5,
+            "created_by": "step_1",
+            "columns": [
+              "T1__Department_ID",
+              "T1__Name",
+              "T1__Creation",
+              "T1__Ranking",
+              "T1__Budget_in_Billions",
+              "T1__Num_Employees",
+              "T2__department_ID",
+              "T2__head_ID",
+              "T2__temporary_acting",
+              "T3__head_ID",
+              "T3__name",
+              "T3__born_state",
+              "T3__age"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_2",
+            "columns": [
+              "T1__Department_ID",
+              "T1__Name",
+              "T1__Creation",
+              "T1__Ranking",
+              "T1__Budget_in_Billions",
+              "T1__Num_Employees",
+              "T2__department_ID",
+              "T2__head_ID",
+              "T2__temporary_acting",
+              "T3__head_ID",
+              "T3__name",
+              "T3__born_state",
+              "T3__age"
+            ]
+          },
+          "project_003": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_3",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    "1903"
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_3",
+            "columns": [
+              "T1__Creation"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "project_003",
+          "group_by": [
+            "T1__creation"
+          ],
+          "aggregations": []
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_3",
+          "role": "table",
+          "target": {
+            "handle": "project_003"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "group_004"
+      },
+      "tool_output": {
+        "table": "group_004",
+        "kind": "group",
+        "columns": [
+          "T1__Creation"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            "1903"
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 5,
+            "created_by": "step_1",
+            "columns": [
+              "T1__Department_ID",
+              "T1__Name",
+              "T1__Creation",
+              "T1__Ranking",
+              "T1__Budget_in_Billions",
+              "T1__Num_Employees",
+              "T2__department_ID",
+              "T2__head_ID",
+              "T2__temporary_acting",
+              "T3__head_ID",
+              "T3__name",
+              "T3__born_state",
+              "T3__age"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_2",
+            "columns": [
+              "T1__Department_ID",
+              "T1__Name",
+              "T1__Creation",
+              "T1__Ranking",
+              "T1__Budget_in_Billions",
+              "T1__Num_Employees",
+              "T2__department_ID",
+              "T2__head_ID",
+              "T2__temporary_acting",
+              "T3__head_ID",
+              "T3__name",
+              "T3__born_state",
+              "T3__age"
+            ]
+          },
+          "project_003": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_3",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    "1903"
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_3",
+            "columns": [
+              "T1__Creation"
+            ]
+          },
+          "group_004": {
+            "kind": "group",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_4",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    "1903"
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_4",
+            "columns": [
+              "T1__Creation"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "1903"
+            ]
+          ],
+          "evidence": {
+            "table": "group_004"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "group_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "1903"
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 5,
+            "created_by": "step_1",
+            "columns": [
+              "T1__Department_ID",
+              "T1__Name",
+              "T1__Creation",
+              "T1__Ranking",
+              "T1__Budget_in_Billions",
+              "T1__Num_Employees",
+              "T2__department_ID",
+              "T2__head_ID",
+              "T2__temporary_acting",
+              "T3__head_ID",
+              "T3__name",
+              "T3__born_state",
+              "T3__age"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_2",
+            "columns": [
+              "T1__Department_ID",
+              "T1__Name",
+              "T1__Creation",
+              "T1__Ranking",
+              "T1__Budget_in_Billions",
+              "T1__Num_Employees",
+              "T2__department_ID",
+              "T2__head_ID",
+              "T2__temporary_acting",
+              "T3__head_ID",
+              "T3__name",
+              "T3__born_state",
+              "T3__age"
+            ]
+          },
+          "project_003": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_3",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    "1903"
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_3",
+            "columns": [
+              "T1__Creation"
+            ]
+          },
+          "group_004": {
+            "kind": "group",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_4",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    "1903"
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_4",
+            "columns": [
+              "T1__Creation"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "1903"
+    ]
+  ]
+}

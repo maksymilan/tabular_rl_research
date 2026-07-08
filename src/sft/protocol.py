@@ -49,19 +49,17 @@ TOOL_SPECS: dict[str, str] = {
         'tables along a path in a single step. tables: ordered list [T1, T2, .., TN] of source names '
         'or earlier step handles. on: a list of length N-1 where on[k] joins tables[k+1] to the tables '
         'already joined, each entry a list [{"left": key_in_accumulated, "right": key_in_next}, ..]. '
-        'prefixes: optional list [P1, .., PN]; when set, each table i\'s columns are renamed to '
+        'prefixes: optional COLUMN prefixes [P1, .., PN], not table names; when set, each table i\'s columns are renamed to '
         '"Pi__<col>" so shared / self-join names stay distinct, and `on[k].left` refers to an '
         'accumulated column by its "Pi__<col>" name. join_types: inner|left|cross for all folds, or a '
         'list per fold. Put a whole consecutive join chain in ONE call; joins in different subqueries '
         'stay separate calls.',
     "group_aggregate":
         'group_aggregate(table, group_by, aggregations, passthrough=None) -> new table grouped by '
-        '`group_by` (list of columns; [] = whole table as one group). aggregations: '
+        '`group_by` (list of columns; [] = whole table as one group, used for scalar count/sum/'
+        'avg/min/max answers too). aggregations: '
         '[{"op": sum|count|count_distinct|mean|min|max, "column": col or "*", "as": name}, ..] '
         '([] with group_by = DISTINCT). passthrough: extra non-grouped columns to carry through.',
-    "aggregate":
-        'aggregate(table, column, op) -> a single scalar (op: sum|count|count_distinct|mean|min|max; '
-        'column "*" allowed for count).',
     "extreme_value_select":
         'extreme_value_select(table, order_by, top_k=None, return_columns=None) -> new table with '
         'the rows ordered by `order_by` (list of "col" or "col DESC") keeping the top `top_k` '
@@ -82,14 +80,17 @@ TOOL_SPECS: dict[str, str] = {
         'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
         'the evidence rows before answering.',
     "answer_from_context":
-        'answer_from_context(answer, evidence, reason) -> TERMINAL. answer: the '
-        'result rows as a list of rows (each row a list of cells; at most 50 rows). evidence: {"table": '
-        'name of the table holding the answer rows, or null for a scalar}. reason: one short sentence.',
+        'answer_from_context(evidence, answer=[], reason="") -> TERMINAL. evidence: {"table": name} '
+        'for a table holding the answer rows, or null for a scalar. For table answers, cite the table '
+        'and keep answer empty or as a short preview; do NOT handwrite long row lists because the '
+        'harness reads the cited evidence table. For scalar answers, put the scalar in answer.',
 }
 
 TOOLS = set(TOOL_SPECS)
+LEGACY_TOOLS = {"aggregate"}
+ACCEPTED_TOOLS = TOOLS | LEGACY_TOOLS
 
-PROTOCOL_VERSION = "v2d-plan-evidence"   # bump when specs, rendering, or the memory model change
+PROTOCOL_VERSION = "v2f-agg-unified"   # bump when specs, rendering, or the memory model change
 
 # Strict per-tool argument schema (required, optional). Unlisted keys are rejected so the SFT data
 # and the live rollout can never silently drift. V2b: a predicate's `value_ref` cites the producing
@@ -108,7 +109,7 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "describe_table": ({"tables"}, set()),
     "inspect_column": ({"table", "column"}, {"top_k"}),
     "read_subtable": ({"table"}, {"limit", "columns"}),
-    "answer_from_context": ({"answer", "evidence"}, {"reason"}),
+    "answer_from_context": (set(), {"answer", "evidence", "reason"}),
 }
 
 
@@ -125,6 +126,8 @@ def validate_arguments(tool: str, args: dict) -> None:
     extra = keys - required - optional
     if extra:
         raise ProtocolError(f"{tool}: unexpected arguments {sorted(extra)}")
+    if tool == "answer_from_context" and "answer" not in keys and "evidence" not in keys:
+        raise ProtocolError('answer_from_context requires at least "evidence" or "answer"')
 
 
 def protocol_hash() -> str:
@@ -153,7 +156,9 @@ SYSTEM_PROMPT = (
     "3. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
     "4. To use a computed scalar as a threshold, set the predicate's "
     '{"value_ref": step_id} to the step that produced that scalar.\n'
-    "5. read_subtable the evidence table, then finish with answer_from_context citing that table.\n"
+    "5. read_subtable the evidence table, then finish with answer_from_context citing that table. "
+    "For row-valued answers, you may leave answer empty because the harness reads the evidence table; "
+    "do not handwrite long row lists.\n"
 )
 
 SYSTEM_PROMPT_COMPACT = (
@@ -174,11 +179,11 @@ SYSTEM_PROMPT_COMPACT = (
     "Inspect a text column before filtering by a literal unless that column was already inspected. "
     "Avoid repeating the same observation. Use read_subtable only when row values are needed; for "
     "scalar aggregate answers, answer directly with evidence=null. Before a row-valued final answer, "
-    "read the evidence table and cite it.\n\n"
+    "read the evidence table and cite it; keep answer empty or short for large tables.\n\n"
     "TOOLS\n"
     "plan(ops), describe_table(tables), inspect_column(table,column,top_k?), condition_filter(table,conditions), "
     "project(table,expressions), join_tables(tables,on,join_types?,prefixes?), "
-    "group_aggregate(table,group_by,aggregations,passthrough?), aggregate(table,column,op), "
+    "group_aggregate(table,group_by,aggregations,passthrough?), "
     "extreme_value_select(table,order_by,top_k?,return_columns?), set_op(left,right,op), "
     "read_subtable(table,limit?,columns?), answer_from_context(answer,evidence,reason?).\n"
 )
@@ -250,21 +255,140 @@ _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.S)
 
 
+def _extract_balanced_json(text: str, start: int) -> str | None:
+    """Extract one balanced JSON object from text[start:], respecting strings.
+
+    This only helps when the model emits a complete JSON object but forgets the closing
+    </tool_call> tag. Truncated JSON remains a protocol error.
+    """
+    begin = text.find("{", start)
+    if begin < 0:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(begin, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[begin:i + 1]
+    return None
+
+
+def _tool_call_payloads(text: str) -> list[str]:
+    payloads = _TOOL_CALL_RE.findall(text)
+    if payloads:
+        return payloads
+    tag = text.rfind("<tool_call>")
+    if tag < 0:
+        return []
+    balanced = _extract_balanced_json(text, tag + len("<tool_call>"))
+    return [balanced] if balanced else []
+
+
+def _loads_tool_call(raw: str) -> dict:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # Common unambiguous shorthand:
+        #   {"answer_from_context","arguments":{...}}
+        # Treat it as {"tool":"answer_from_context","arguments":{...}}.
+        m = re.match(r'\s*\{\s*"(?P<tool>[A-Za-z_][\w]*)"\s*,\s*"arguments"\s*:\s*(?P<args>\{.*\})\s*\}\s*$', raw, re.S)
+        if m and m.group("tool") in ACCEPTED_TOOLS:
+            return {"tool": m.group("tool"), "arguments": json.loads(m.group("args"))}
+        raise
+
+
+_HANDLE_RE = re.compile(r"\b(?:project|filter|join|group|top|setop|derive)_\d{3}\b")
+
+
+def _repair_truncated_answer_call(text: str) -> dict | None:
+    """Recover an answer_from_context call when only the long answer JSON was truncated.
+
+    This is intentionally narrow: it only synthesizes the terminal call when the model clearly
+    attempted answer_from_context and cited a concrete evidence table handle. The harness still
+    scores the cited table; no answer values are guessed from free text.
+    """
+    if "answer_from_context" not in text:
+        return None
+    table = None
+    m = re.search(r'"evidence"\s*:\s*\{\s*"table"\s*:\s*"([^"]+)"', text)
+    if m:
+        table = m.group(1)
+    if table is None:
+        m = re.search(r"evidence table\s+`?((?:project|filter|join|group|top|setop|derive)_\d{3})`?", text, re.I)
+        if m:
+            table = m.group(1)
+    if table is None:
+        handles = _HANDLE_RE.findall(text)
+        if handles:
+            table = handles[-1]
+    if table is None:
+        return None
+    return {
+        "tool": "answer_from_context",
+        "arguments": {
+            "answer": [],
+            "evidence": {"table": table},
+            "reason": "Derived by the cited evidence table.",
+        },
+    }
+
+
+def _normalize_answer_args(args: dict) -> dict:
+    args = dict(args)
+    evidence = args.get("evidence")
+    if isinstance(evidence, str):
+        args["evidence"] = {"table": evidence}
+    elif evidence is None and "evidence" not in args:
+        args["evidence"] = None
+    if "answer" not in args:
+        args["answer"] = []
+    return args
+
+
 def parse_assistant(text: str) -> tuple[str, str, dict]:
     """Parse a model turn into (think, tool, arguments). Raises ProtocolError."""
-    m = _TOOL_CALL_RE.findall(text)
+    m = _tool_call_payloads(text)
     if not m:
-        raise ProtocolError("no <tool_call>{...}</tool_call> block found")
-    try:
-        call = json.loads(m[-1])  # last block wins if the model quoted an example
-    except json.JSONDecodeError as e:
-        raise ProtocolError(f"tool_call is not valid JSON: {e}") from e
+        call = _repair_truncated_answer_call(text)
+        if call is None:
+            raise ProtocolError("no <tool_call>{...}</tool_call> block found")
+    else:
+        try:
+            call = _loads_tool_call(m[-1])  # last block wins if the model quoted an example
+        except json.JSONDecodeError as e:
+            call = _repair_truncated_answer_call(text)
+            if call is None:
+                raise ProtocolError(f"tool_call is not valid JSON: {e}") from e
     tool = call.get("tool")
     args = call.get("arguments")
-    if tool not in TOOLS:
+    if tool is None:
+        # Another common answer shorthand:
+        #   {"answer_from_context": {"answer": ..., "evidence": ...}}
+        shorthand = [(key, value) for key, value in call.items() if key in ACCEPTED_TOOLS]
+        if len(shorthand) == 1:
+            tool, value = shorthand[0]
+            args = value.get("arguments") if isinstance(value, dict) and isinstance(value.get("arguments"), dict) else value
+    if tool not in ACCEPTED_TOOLS:
         raise ProtocolError(f"unknown tool {tool!r}; legal tools: {sorted(TOOLS)}")
     if not isinstance(args, dict):
         raise ProtocolError('tool_call must have an "arguments" object')
+    if tool == "answer_from_context":
+        args = _normalize_answer_args(args)
     validate_arguments(tool, args)
     tm = _THINK_RE.search(text)
     return (tm.group(1).strip() if tm else ""), tool, args

@@ -34,10 +34,14 @@ def trajectory(trajectory_id: str = "traj_1") -> dict:
                 "step_id": "step_1",
                 "think": "Count all rows in items.",
                 "tool_call": {
-                    "tool": "aggregate",
-                    "arguments": {"table": "items", "column": "*", "op": "count"},
+                    "tool": "group_aggregate",
+                    "arguments": {
+                        "table": "items",
+                        "group_by": [],
+                        "aggregations": [{"op": "count", "column": "*", "as": "count_1"}],
+                    },
                 },
-                "tool_output": {"result_sample": [[2]], "row_count": 1},
+                "tool_output": {"table": "group_001", "columns": ["count_1"], "rows": [[2]], "row_count": 1},
             },
             {
                 "step_id": "step_2",
@@ -46,8 +50,8 @@ def trajectory(trajectory_id: str = "traj_1") -> dict:
                     "tool": "answer_from_context",
                     "arguments": {
                         "answer": [[2]],
-                        "evidence": {"table": None},
-                        "reason": "The aggregate returned two rows.",
+                        "evidence": {"table": "group_001"},
+                        "reason": "The aggregate evidence table contains the count.",
                     },
                 },
                 "tool_output": {"final_answer": [[2]]},

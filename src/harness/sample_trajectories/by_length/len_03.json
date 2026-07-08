@@ -1,0 +1,261 @@
+{
+  "trajectory_id": "spider_train_0",
+  "schema_version": "v4-agg-unified",
+  "source": {
+    "dataset": "spider",
+    "db_id": "department_management",
+    "gold_sql": "SELECT count(*) FROM head WHERE age  >  56"
+  },
+  "question": "How many heads of the departments are older than 56 ?",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "department",
+          "num_rows": 15
+        },
+        {
+          "table_name": "head",
+          "num_rows": 10
+        },
+        {
+          "table_name": "management",
+          "num_rows": 5
+        }
+      ],
+      "relations": [
+        {
+          "from": "management.head_ID",
+          "to": "head.head_ID"
+        },
+        {
+          "from": "management.department_ID",
+          "to": "department.Department_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "head",
+          "conditions": {
+            "column": "age",
+            "op": ">",
+            "value": 56
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "head",
+          "role": "table",
+          "target": {
+            "table": "head"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_001"
+      },
+      "tool_output": {
+        "table": "filter_001",
+        "kind": "filter",
+        "columns": [
+          "head_ID",
+          "name",
+          "born_state",
+          "age"
+        ],
+        "row_count": 5
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 5,
+            "created_by": "step_1",
+            "columns": [
+              "head_ID",
+              "name",
+              "born_state",
+              "age"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "filter_001",
+          "group_by": [],
+          "aggregations": [
+            {
+              "op": "count",
+              "column": "*",
+              "as": "count_1"
+            }
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_1",
+          "role": "table",
+          "target": {
+            "handle": "filter_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "group_002"
+      },
+      "tool_output": {
+        "table": "group_002",
+        "kind": "group",
+        "columns": [
+          "count_1"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            5
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 5,
+            "created_by": "step_1",
+            "columns": [
+              "head_ID",
+              "name",
+              "born_state",
+              "age"
+            ]
+          },
+          "group_002": {
+            "kind": "group",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_2",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    5
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_2",
+            "columns": [
+              "count_1"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              5
+            ]
+          ],
+          "evidence": {
+            "table": "group_002"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "group_002"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            5
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 5,
+            "created_by": "step_1",
+            "columns": [
+              "head_ID",
+              "name",
+              "born_state",
+              "age"
+            ]
+          },
+          "group_002": {
+            "kind": "group",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_2",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    5
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_2",
+            "columns": [
+              "count_1"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      5
+    ]
+  ]
+}

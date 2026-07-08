@@ -353,6 +353,50 @@
     ]
   },
   {
+    "id": "qwen25-7b-v9-ready-988-epoch4",
+    "name": "Qwen2.5-7B · SFT v9 ready 988 · 4 epoch",
+    "short_name": "7B v9 e4",
+    "status": "completed",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "method": "QLoRA SFT",
+    "dataset_version": "Spider tools v9 ready · 988 clean records",
+    "description": "Four-epoch QLoRA run on the same 988 ready clean v9 records, using the previously validated Qwen2.5-7B 8k training setup.",
+    "started_at": "2026-07-05T22:46:50+08:00",
+    "completed_at": "2026-07-06T02:27:00+08:00",
+    "tags": [
+      "qwen2.5",
+      "v9",
+      "perception",
+      "epoch4",
+      "8k"
+    ],
+    "dataset": {
+      "train": "data/sft/spider_v9_ready_train.jsonl",
+      "train_manifest": "data/sft/spider_v9_ready_train.manifest.json"
+    },
+    "training": {
+      "trainer_state": "experiment_dashboard/data/trainer_states/qwen25_7b_v9_ready_988_epoch4.json",
+      "remote_trainer_state": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen2.5-7b-spider-v9-ready-988-epoch4-qlora/trainer_state.json",
+      "checkpoint": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen2.5-7b-spider-v9-ready-988-epoch4-qlora",
+      "epochs": 4,
+      "cutoff_len": 8192,
+      "effective_batch_size": 16,
+      "learning_rate": 0.0001,
+      "lora_rank": 16,
+      "lora_alpha": 32
+    },
+    "evaluation": {
+      "directory": "data/results/qwen2.5_7b_sft_v9_ready_988_epoch4/tool_zero_shot_dev1034_epoch4"
+    },
+    "related_evaluations": [
+      {
+        "label": "Tool zero-shot full dev · epoch 2 checkpoint",
+        "directory": "data/results/qwen2.5_7b_sft_v9_ready_988_epoch4/tool_zero_shot_dev1034_epoch2"
+      }
+    ],
+    "notes": "Trained on all 988 v9 ready clean records with Qwen2.5-7B tokenizer max length 7677, so no training records were truncated at cutoff_len 8192. Training completed 248 optimizer steps / 4 epochs in 3:39:34 with final train_loss 0.4172. Full Spider dev zero-shot tool eval: epoch2 478/1034 = 46.23% with 916 legal answers; epoch4 539/1034 = 52.13% with 914 legal answers."
+  },
+  {
     "id": "qwen35-9b-v11-recovery-continue",
     "name": "Qwen3.5-9B · SFT v11 recovery continuation",
     "short_name": "9B v11 rec",
@@ -446,5 +490,165 @@
     "evaluation": {
       "directory": "data/results/qwen3.5_9b_sft_v12_clean1594v3_recovery469/tool_zero_shot_dev1034_max768_retry"
     }
+  },
+  {
+    "id": "external-rollout-flash100-pro-rescue",
+    "name": "External Rollout · Flash100 + Pro rescue",
+    "short_name": "Ext 100",
+    "kind": "data-construction",
+    "status": "completed",
+    "model": "deepseek-v4-flash + deepseek-v4-pro",
+    "method": "Closed-loop external LLM rollout pass@5 with pro rescue",
+    "dataset_version": "Spider train first 100 · external rollout smoke",
+    "description": "Closed-loop data-construction smoke over the first 100 Spider train examples. DS v4 flash gets up to 5 whole-trajectory attempts per example; flash failures are retried with DS v4 pro up to 5 attempts. Only verifier-correct trajectories are kept.",
+    "started_at": "2026-07-06T21:55:00+08:00",
+    "completed_at": "2026-07-06T22:30:00+08:00",
+    "tags": [
+      "data-construction",
+      "external-rollout",
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
+      "harness-verified",
+      "pass5",
+      "pro-rescue",
+      "smoke100"
+    ],
+    "dataset": {
+      "train": "data/trajectories/external_rollout_flash100_pro_rescue_pass5_success71_review.jsonl",
+      "train_manifest": "data/trajectories/external_rollout_flash100_pro_rescue_pass5_success71.manifest.json"
+    },
+    "notes": "Flash pass@5 over the first 100 train examples produced 64 verifier-correct trajectories from 291 attempts. The 36 flash failures were retried with v4 pro pass@5, rescuing 7 more. Final kept set: 71 trajectories, median length 6, max length 25, 7 error-observation steps retained. Generated SFT conversion is available at data/sft/external_rollout_flash100_pro_rescue_pass5_success71_train.jsonl. Continue generation by rerunning the same flash output prefix with --resume and a larger --limit so these first 100 examples are skipped."
+  },
+  {
+    "id": "external-rollout-flash-train1k-v3-success881",
+    "name": "External Rollout · Flash train1k v3 · 881 verified",
+    "short_name": "Ext 1k v3",
+    "kind": "data-construction",
+    "status": "completed",
+    "model": "deepseek-v4-flash",
+    "method": "Closed-loop external LLM rollout, mixed pass@5/pass@3",
+    "dataset_version": "Spider train first 1000 · external rollout v3",
+    "description": "Verifier-correct closed-loop tool trajectories generated directly by DS v4 flash interacting with the harness. The first 100 were rescored from pass@5, a checkpointed middle slice used pass@5, and the remaining slice used pass@3.",
+    "started_at": "2026-07-07T10:31:00+08:00",
+    "completed_at": "2026-07-07T11:42:00+08:00",
+    "tags": [
+      "data-construction",
+      "external-rollout",
+      "deepseek-v4-flash",
+      "harness-verified",
+      "mixed-pass",
+      "train1k"
+    ],
+    "dataset": {
+      "train": "data/trajectories/external_rollout_flash_train1k_v3_mixedpass_success881_review.jsonl",
+      "train_manifest": "data/trajectories/external_rollout_flash_train1k_v3_mixedpass_success881.manifest.json",
+      "sft_train": "data/sft/external_rollout_flash_train1k_v3_success881_train.jsonl",
+      "sft_train_manifest": "data/sft/external_rollout_flash_train1k_v3_success881_train.manifest.json",
+      "sft_train_4k": "data/sft/external_rollout_flash_train1k_v3_success881_4k_train.jsonl",
+      "sft_train_4k_manifest": "data/sft/external_rollout_flash_train1k_v3_success881_4k_train.manifest.json"
+    },
+    "notes": "Merged success set: 881/1000 source examples, no duplicate trajectory_id. 7B SFT export keeps 880 records at max_est_tokens 8192; 9B 4k export keeps 831 records at max_est_tokens 4096. Mean trajectory length 6.08, p95 11, max 18. 123 trajectories contain plan calls."
+  },
+  {
+    "id": "qwen25-7b-external-rollout-v3-epoch4",
+    "name": "Qwen2.5-7B · SFT external rollout v3 · 4 epoch",
+    "short_name": "7B ext v3",
+    "status": "completed",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "method": "QLoRA SFT",
+    "dataset_version": "External rollout train1k v3 · 880 records",
+    "description": "Four-epoch QLoRA run on the DS v4 flash closed-loop external-rollout dataset. Each epoch was checkpointed; epoch2 and epoch4 were evaluated on Spider dev, then their context_overflow/execution_error buckets were rerun with only context length and max trajectory steps relaxed.",
+    "started_at": "2026-07-07T12:15:00+08:00",
+    "tags": [
+      "qwen2.5",
+      "external-rollout",
+      "deepseek-v4-flash",
+      "epoch4",
+      "8k"
+    ],
+    "dataset": {
+      "train": "data/sft/external_rollout_flash_train1k_v3_success881_train.jsonl",
+      "train_manifest": "data/sft/external_rollout_flash_train1k_v3_success881_train.manifest.json"
+    },
+    "training": {
+      "remote_trainer_state": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen2.5-7b-external-rollout-v3-success880-epoch4-qlora/trainer_state.json",
+      "checkpoint": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen2.5-7b-external-rollout-v3-success880-epoch4-qlora",
+      "epochs": 4,
+      "cutoff_len": 8192,
+      "effective_batch_size": 16,
+      "learning_rate": 0.0001,
+      "lora_rank": 16,
+      "lora_alpha": 32
+    },
+    "evaluation": {
+      "directory": "data/results/qwen2.5_7b_sft_external_rollout_v3_epoch4/tool_zero_shot_dev1034_epoch4"
+    },
+    "related_evaluations": [
+      {
+        "label": "Tool zero-shot full dev · epoch 2 checkpoint · original",
+        "directory": "data/results/qwen2.5_7b_sft_external_rollout_v3_epoch4/tool_zero_shot_dev1034_epoch2"
+      },
+      {
+        "label": "Tool zero-shot full dev · epoch 4 checkpoint · original",
+        "directory": "data/results/qwen2.5_7b_sft_external_rollout_v3_epoch4/tool_zero_shot_dev1034_epoch4"
+      },
+      {
+        "label": "Retry only context_overflow+execution_error · epoch 2 · ctx16k/max_steps50",
+        "directory": "data/results/qwen2.5_7b_sft_external_rollout_v3_epoch4/tool_zero_shot_dev1034_epoch2_retry_envfix_ctx_step"
+      },
+      {
+        "label": "Retry only context_overflow+execution_error · epoch 4 · ctx16k/max_steps50",
+        "directory": "data/results/qwen2.5_7b_sft_external_rollout_v3_epoch4/tool_zero_shot_dev1034_epoch4_retry_envfix_ctx_step"
+      }
+    ],
+    "notes": "Training completed on table_rl. Original full Spider dev: epoch2 682/1034 = 65.96% (97 context_overflow, 42 execution_error); epoch4 715/1034 = 69.15% (71 context_overflow, 40 execution_error). Controlled retry on only the original context_overflow+execution_error buckets relaxed only context length to 16k and max_steps to 50: epoch2 recovered 35/139, implying an upper merged score about 717/1034 = 69.34%; epoch4 recovered 32/111, implying about 747/1034 = 72.24%. Error retry budget remained 3. Scoring audit after registration found the previous broad-evidence projection rule was optimistic: among recorded successes, old broad-table projection accounted for 146 epoch2 original, 11 epoch2 retry, 142 epoch4 original, and 9 epoch4 retry cases. Current rollout.py is tightened to allow same-width column-order permutations only; rerun before treating these numbers as strict final scores. Audit artifact: data/results/scoring_audit_external_rollout_v3_20260708.json.",
+    "completed_at": "2026-07-07T18:33:07+08:00"
+  },
+  {
+    "id": "qwen35-9b-external-rollout-v3-4k-epoch4",
+    "name": "Qwen3.5-9B · SFT external rollout v3 4k · 4 epoch",
+    "short_name": "9B ext v3",
+    "status": "completed",
+    "model": "Qwen/Qwen3.5-9B",
+    "method": "QLoRA SFT",
+    "dataset_version": "External rollout train1k v3 · 831 records <=4k",
+    "description": "Four-epoch QLoRA run on the 4k-filtered DS v4 flash closed-loop external-rollout dataset. Each epoch was checkpointed; epoch2 and epoch4 were evaluated on Spider dev.",
+    "started_at": "2026-07-07T12:15:00+08:00",
+    "tags": [
+      "qwen3.5",
+      "external-rollout",
+      "deepseek-v4-flash",
+      "4k-filtered",
+      "epoch4"
+    ],
+    "dataset": {
+      "train": "data/sft/external_rollout_flash_train1k_v3_success881_4k_train.jsonl",
+      "train_manifest": "data/sft/external_rollout_flash_train1k_v3_success881_4k_train.manifest.json"
+    },
+    "training": {
+      "remote_trainer_state": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-external-rollout-v3-success831-4k-epoch4-qlora/trainer_state.json",
+      "checkpoint": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-external-rollout-v3-success831-4k-epoch4-qlora",
+      "epochs": 4,
+      "cutoff_len": 4096,
+      "effective_batch_size": 8,
+      "learning_rate": 0.0001,
+      "lora_rank": 16,
+      "lora_alpha": 32
+    },
+    "evaluation": {
+      "directory": "data/results/qwen3.5_9b_sft_external_rollout_v3_4k_epoch4/tool_zero_shot_dev1034_epoch4"
+    },
+    "related_evaluations": [
+      {
+        "label": "Tool zero-shot full dev · epoch 2 checkpoint",
+        "directory": "data/results/qwen3.5_9b_sft_external_rollout_v3_4k_epoch4/tool_zero_shot_dev1034_epoch2"
+      },
+      {
+        "label": "Tool zero-shot full dev · epoch 4 checkpoint",
+        "directory": "data/results/qwen3.5_9b_sft_external_rollout_v3_4k_epoch4/tool_zero_shot_dev1034_epoch4"
+      }
+    ],
+    "notes": "Training completed on table_rl. Full Spider dev eval: epoch2 633/1034 = 61.22% with 285 context_overflow, 31 execution_error, 82 wrong_answer; epoch4 612/1034 = 59.19% with 268 context_overflow, 62 execution_error, 92 wrong_answer. Epoch4 underperforms epoch2 despite lower training loss, so epoch2 is currently the stronger checkpoint for this 9B 4k-filtered external-rollout run. Scoring audit after registration found the previous broad-evidence projection rule was optimistic: among recorded successes, old broad-table projection accounted for 191 epoch2 cases and 169 epoch4 cases. Current rollout.py is tightened to allow same-width column-order permutations only; rerun before treating these numbers as strict final scores. Audit artifact: data/results/scoring_audit_external_rollout_v3_20260708.json.",
+    "completed_at": "2026-07-07T21:33:07+08:00"
   }
 ]

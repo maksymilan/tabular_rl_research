@@ -80,7 +80,12 @@ SYSTEM = (
     "think text, while plan items should be semantic task goals. Do not write natural-language "
     "step numbers like step_1 or step 2 in plan think text; put the cited step id only in the "
     "`evidence` field. If a tool output contains a scalar/list/boolean/final value, cite that step "
-    "as evidence but do not copy the value into the plan."
+    "as evidence but do not copy the value into the plan. If the initial plan creates a final, "
+    "combine, set-operation, count, output, or answer subgoal, that subgoal must be marked done "
+    "with evidence before the final answer step; otherwise do not create that subgoal. "
+    "For example, if you create p3 = 'combine both sets and answer', add an update after the "
+    "set_op/read_subtable that marks p3 done with that step as evidence. If you do not want to "
+    "spend an update on p3, omit p3 and keep only the branch subgoals."
 )
 
 
@@ -95,6 +100,11 @@ TASK_GOAL_RE = re.compile(
     r"\b(join|filter|aggregate|average|count|sum|min|max|mean|sort|order|top|lowest|highest|"
     r"intersect|except|union|set|project|deduplicate|group|compute|compare|combine|threshold|"
     r"identify .* set|find .* set|answer)\b",
+    re.I,
+)
+FINAL_LIKE_GOAL_RE = re.compile(
+    r"\b(final|answer|output|present|return|produce|combine|union|intersect|except|subtract|"
+    r"difference|count(?:ing)?|resulting|result set|final result)\b",
     re.I,
 )
 
@@ -159,7 +169,7 @@ def plan_requirements(traj: dict) -> dict:
     work_tools = [t for t in tools if t and t not in PERCEPTION_TOOLS and t != "answer_from_context"]
     non_perception = len(work_tools)
     set_ops = sum(1 for t in work_tools if t == "set_op")
-    aggregates = sum(1 for t in work_tools if t == "aggregate")
+    aggregates = sum(1 for t in work_tools if t in {"aggregate", "group_aggregate"})
     group_or_extreme = sum(1 for t in work_tools if t in {"group_aggregate", "extreme_value_select"})
     value_refs = 0
     for step in steps:
@@ -215,6 +225,14 @@ def build_messages(traj: dict, feedback: str = "") -> list[dict]:
         "raw backbone: do not create a subgoal that requires a tool absent from the backbone unless "
         "it remains explicitly pending or blocked, and never mark such a subgoal done. Prefer "
         "subgoals that summarize the actual backbone operations. "
+        "Do not leave final-like subgoals unfinished: if you create a goal for combining sets, "
+        "union/intersect/except/subtract, counting the result, outputting, returning, presenting, "
+        "or answering, add a later update that marks it done with evidence before the final answer. "
+        "If the update budget would not allow that, omit the final-like subgoal from the initial plan. "
+        "Good patterns are either: (A) create branch subgoals only and let the final answer step close "
+        "the trajectory, or (B) create a combine/count/output subgoal and explicitly mark it done after "
+        "the corresponding set_op/aggregate/read_subtable/project step. Bad pattern: create p4='count "
+        "the result' and then leave p4 pending when answer_from_context is called. "
         "Do not reveal final answer values unless they are already in the raw step outputs above. "
         "Even then, cite the step id as evidence instead of copying values or summaries into the plan."
     )
@@ -373,11 +391,55 @@ def normalize_plan_payload(
 
     updates = sorted(updates, key=lambda b: b["after_step"])[:max_updates]
 
+    create_ops, updates = _drop_unclosed_final_like_items(create_ops, updates)
+
     return {
         "initial_think": str(payload.get("initial_think") or "Create a task plan before using tools.").strip(),
         "initial_ops": create_ops,
         "updates": updates,
     }
+
+
+def _drop_unclosed_final_like_items(create_ops: list[dict], updates: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Remove over-planned final/answer goals unless the model actually closes them.
+
+    The initial plan is useful control state; a dangling "answer/final output" goal is just a
+    ritual item that forces an otherwise-good trajectory to fail validation. Keeping only final-like
+    items that are marked done preserves meaningful plan state while making large-batch generation
+    robust to this common model habit.
+    """
+    goals: dict[str, str] = {
+        str(op.get("id")): str(op.get("goal") or "")
+        for op in create_ops
+        if op.get("op") == "create" and op.get("id")
+    }
+    final_like = {item_id for item_id, goal in goals.items() if FINAL_LIKE_GOAL_RE.search(goal)}
+    if not final_like:
+        return create_ops, updates
+
+    closed: set[str] = set()
+    for block in updates:
+        for op in block.get("ops", []) or []:
+            if (
+                op.get("id") in final_like
+                and op.get("op", "update") == "update"
+                and op.get("status") == "done"
+                and (op.get("evidence") or op.get("evidence_step_id"))
+            ):
+                closed.add(op["id"])
+    dangling = final_like - closed
+    if not dangling:
+        return create_ops, updates
+
+    create_ops = [op for op in create_ops if op.get("id") not in dangling]
+    clean_updates = []
+    for block in updates:
+        ops = [op for op in block.get("ops", []) or [] if op.get("id") not in dangling]
+        if ops:
+            clean = dict(block)
+            clean["ops"] = ops
+            clean_updates.append(clean)
+    return create_ops, clean_updates
 
 
 def is_observation_only_goal(goal: str) -> bool:
@@ -478,6 +540,15 @@ def validate_plan_payload(plan_payload: dict, traj: dict, requirements: dict) ->
 
         if after >= len(traj.get("steps", [])):
             issues.append("plan update cannot be inserted after the final answer step")
+
+    for item_id, item in sorted(plan_state.items()):
+        goal = str(item.get("goal") or "")
+        status = str(item.get("status") or "pending")
+        if status != "done" and FINAL_LIKE_GOAL_RE.search(goal):
+            issues.append(
+                f"final-like plan item {item_id} is still {status!r} before the answer; "
+                "mark it done with evidence before answer_from_context or remove it from the initial plan"
+            )
 
     return issues
 

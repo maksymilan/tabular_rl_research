@@ -12,6 +12,7 @@ tools, answer_from_context, provenance/row-id bookkeeping. This module is the re
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from typing import Any
 
@@ -19,6 +20,10 @@ _AGG = {
     "sum": "SUM", "count": "COUNT", "count_distinct": "COUNT", "mean": "AVG",
     "avg": "AVG", "min": "MIN", "max": "MAX", "total": "TOTAL",
 }
+
+
+def _qid(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
 
 
 def _lit(v: Any) -> str:
@@ -32,6 +37,7 @@ def _lit(v: Any) -> str:
 class Harness:
     def __init__(self, db_path: str = ":memory:"):
         self.conn = sqlite3.connect(db_path)
+        self.conn.text_factory = lambda b: b.decode("utf-8", "replace")
         self.views: dict[str, str] = {}
         self._lc: dict[str, str] = {}  # lowercased name -> canonical (SQL identifiers are case-insensitive)
         self._n = 0
@@ -59,7 +65,10 @@ class Harness:
         canon = self._lc.get(table.lower())  # case-insensitive fallback (SQL identifiers)
         if canon is not None:
             return self.views[canon]
-        raise KeyError(f"unknown table: {table}")
+        alias = self._prefix_alias(table)
+        if alias is not None:
+            return self.views[alias]
+        raise KeyError(f"unknown table: {table}; valid tables/handles: {self.available_tables()}")
 
     def _src(self, table: str) -> str:
         return f"({self._sql(table)})"
@@ -82,40 +91,159 @@ class Harness:
     def rows(self, table: str) -> list[tuple]:
         return self.conn.execute(self._sql(table)).fetchall()
 
-    # ---- table-producing tools ----
-    def _render_leaf(self, c: dict) -> str:
-        col, op = c["column"], c.get("op", "=")
-        if op == "contains":
-            return f"{col} LIKE '%' || {_lit(c['value'])} || '%'"
-        if op == "like":
-            return f"{col} LIKE {_lit(c['value'])}"
-        if op == "in" and "in_table" in c:  # membership against an IN-subquery's (single-column) table
-            return f"{col} IN (SELECT * FROM ({self._sql(c['in_table'])}))"
-        if op == "in":
-            return f"{col} IN ({', '.join(_lit(v) for v in c['values'])})"
-        if op == "between":
-            return f"{col} BETWEEN {_lit(c['low'])} AND {_lit(c['high'])}"
-        if op == "is_null":
-            return f"{col} IS NULL"
-        if "column_value" in c:  # column-vs-column predicate
-            return f"{col} {op} {c['column_value']}"
-        return f"{col} {op} {_lit(c['value'])}"
+    def available_tables(self) -> list[str]:
+        return sorted(self.views)
 
-    def _render_cond(self, cond) -> str:
+    def _prefix_alias(self, table: str) -> str | None:
+        """Map a unique column prefix like T1 back to the one handle that contains T1__* columns.
+
+        This is a compatibility shim for models that confuse join column prefixes with table
+        handles. Ambiguous prefixes are left unresolved so the error remains explicit.
+        """
+        marker = f"{table}__"
+        matches = []
+        for name, sql in self.views.items():
+            try:
+                cols = self._cols_of_sql(sql)
+            except sqlite3.Error:
+                continue
+            if any(c.startswith(marker) for c in cols):
+                matches.append(name)
+        return matches[0] if len(matches) == 1 else None
+
+    @staticmethod
+    def _resolve_col(cols: list[str], requested: str) -> str:
+        if not isinstance(requested, str):
+            return requested
+        base = requested.split(".")[-1]
+        lowered = {c.lower(): c for c in cols}
+        if base.lower() in lowered:
+            return lowered[base.lower()]
+        suffix_matches = [c for c in cols if c.lower().endswith("__" + base.lower())]
+        return suffix_matches[0] if len(suffix_matches) == 1 else base
+
+    def _col_sql(self, cols: list[str], requested: str) -> str:
+        resolved = self._resolve_col(cols, requested)
+        return _qid(resolved) if resolved in cols else str(requested)
+
+    def _single_col_select(self, table: str, target_column: str) -> str:
+        cols = self._cols(table)
+        if len(cols) == 1:
+            return cols[0]
+        resolved = self._resolve_col(cols, target_column)
+        if resolved in cols:
+            return resolved
+        raise ValueError(
+            f"in_table {table!r} must resolve to one column for membership against {target_column!r}; "
+            f"available columns: {cols}"
+        )
+
+    def _resolve_cond_columns(self, cols: list[str], cond):
+        cond = self._normalize_condition(cond)
+        if isinstance(cond, list):
+            return [self._resolve_cond_columns(cols, item) for item in cond]
+        if not isinstance(cond, dict):
+            return cond
+        out = {}
+        for key, value in cond.items():
+            if key in {"and", "or"}:
+                out[key] = [self._resolve_cond_columns(cols, item) for item in value]
+            elif key == "not":
+                out[key] = self._resolve_cond_columns(cols, value)
+            elif key == "column" and value != "*":
+                out[key] = self._resolve_col(cols, value)
+            elif key == "column_value":
+                out[key] = self._resolve_col(cols, value)
+            else:
+                out[key] = value
+        return out
+
+    def _normalize_condition(self, cond):
+        if isinstance(cond, list):
+            return [self._normalize_condition(item) for item in cond]
+        if not isinstance(cond, dict):
+            return cond
+        if len(cond) == 1:
+            key, value = next(iter(cond.items()))
+            if key in {"contains", "like", "in"} and isinstance(value, dict):
+                out = dict(value)
+                out.setdefault("op", key)
+                return self._normalize_condition(out)
+        out = {}
+        for key, value in cond.items():
+            if key in {"and", "or"}:
+                out[key] = [self._normalize_condition(item) for item in value]
+            elif key == "not":
+                out[key] = self._normalize_condition(value)
+            elif key == "op" and isinstance(value, str):
+                out[key] = value.strip().lower().replace("_", " ")
+            else:
+                out[key] = value
+        return out
+
+    # ---- table-producing tools ----
+    def _render_leaf(self, c: dict, cols: list[str] | None = None) -> str:
+        col, op = c["column"], str(c.get("op", "=")).strip().lower().replace("_", " ")
+        qcol = self._col_sql(cols, col) if cols and col != "*" else (_qid(col) if col != "*" else "*")
+        if col == "*" and c.get("value") is None:
+            return "1=1"
+        if op == "contains":
+            return f"{qcol} LIKE '%' || {_lit(c['value'])} || '%'"
+        if op == "not contains":
+            return f"{qcol} NOT LIKE '%' || {_lit(c['value'])} || '%'"
+        if op == "like":
+            value = str(c["value"]).replace("*", "%")
+            return f"{qcol} LIKE {_lit(value)}"
+        if op == "not like":
+            value = str(c["value"]).replace("*", "%")
+            return f"{qcol} NOT LIKE {_lit(value)}"
+        if op in {"in", "not in"} and "in_table" in c:  # membership against an IN-subquery's (single-column) table
+            member_col = self._single_col_select(c["in_table"], col)
+            neg = "NOT " if op == "not in" else ""
+            return f"{qcol} {neg}IN (SELECT {_qid(member_col)} FROM ({self._sql(c['in_table'])}))"
+        if op in {"in", "not in"}:
+            neg = "NOT " if op == "not in" else ""
+            values = c.get("values", c.get("value", []))
+            if not isinstance(values, (list, tuple)):
+                values = [values]
+            return f"{qcol} {neg}IN ({', '.join(_lit(v) for v in values)})"
+        if op == "between":
+            return f"{qcol} BETWEEN {_lit(c['low'])} AND {_lit(c['high'])}"
+        if op == "is_null":
+            return f"{qcol} IS NULL"
+        if op == "is not null":
+            return f"{qcol} IS NOT NULL"
+        if "column_value" in c:  # column-vs-column predicate
+            rhs = self._col_sql(cols, c["column_value"]) if cols else _qid(c["column_value"])
+            return f"{qcol} {op} {rhs}"
+        return f"{qcol} {op} {_lit(c['value'])}"
+
+    def _render_cond(self, cond, cols: list[str] | None = None) -> str:
         """Render a boolean condition (tree dict with and/or/not, or a list = implicit AND)."""
         if isinstance(cond, list):
             cond = {"and": cond}
         if "and" in cond:
-            return "(" + " AND ".join(self._render_cond(x) for x in cond["and"]) + ")"
+            return "(" + " AND ".join(self._render_cond(x, cols) for x in cond["and"]) + ")"
         if "or" in cond:
-            return "(" + " OR ".join(self._render_cond(x) for x in cond["or"]) + ")"
+            return "(" + " OR ".join(self._render_cond(x, cols) for x in cond["or"]) + ")"
         if "not" in cond:
-            return "NOT (" + self._render_cond(cond["not"]) + ")"
-        return self._render_leaf(cond)
+            return "NOT (" + self._render_cond(cond["not"], cols) + ")"
+        return self._render_leaf(cond, cols)
 
-    def condition_filter(self, table: str, conditions) -> dict:
-        where = self._render_cond(conditions) if conditions else "1=1"
-        return self._new("filter", f"SELECT * FROM {self._src(table)} WHERE {where}")
+    def condition_filter(self, table: str, conditions, return_columns: list[str] | None = None,
+                         preview_k: int | None = None) -> dict:
+        source_cols = self._cols(table)
+        conditions = self._resolve_cond_columns(source_cols, conditions)
+        where = self._render_cond(conditions, source_cols) if conditions else "1=1"
+        sql = f"SELECT * FROM {self._src(table)} WHERE {where}"
+        if return_columns:
+            cols = self._cols_of_sql(sql)
+            sel = ", ".join(
+                f"{_qid(self._resolve_col(cols, col))} AS {_qid(col.split('.')[-1])}"
+                for col in return_columns
+            )
+            sql = f"SELECT {sel} FROM ({sql})"
+        return self._new("filter", sql)
 
     def derive_column(self, table: str, new_column: str, expression: str) -> dict:
         return self._new(
@@ -126,11 +254,32 @@ class Harness:
                         passthrough: list[str] | None = None) -> dict:
         # passthrough: columns selected but not grouped/aggregated (SQLite's lenient bare-column
         # extension; they are functionally dependent on the group key in practice).
-        gb = ", ".join(group_by)
-        extra = ", ".join(passthrough or [])
+        cols = self._cols(table)
+        group_by = [self._resolve_col(cols, col) for col in group_by]
+        passthrough = [self._resolve_col(cols, col) for col in (passthrough or [])]
+        gb = ", ".join(self._col_sql(cols, col) for col in group_by)
+        extra = ", ".join(self._col_sql(cols, col) for col in passthrough)
+        if aggregations and all(str(a.get("op", "")).lower() == "distinct" for a in aggregations):
+            sel = ", ".join(
+                f"{self._col_sql(cols, a.get('column', '*'))} AS {_qid(a.get('as', a.get('column', 'value')))}"
+                for a in aggregations
+                if a.get("column", "*") != "*"
+            )
+            return self._new("group", f"SELECT DISTINCT {sel or '*'} FROM {self._src(table)}")
+        if (
+            len(aggregations) == 1
+            and str(aggregations[0].get("op", "")).lower() == "count_distinct"
+            and aggregations[0].get("column", "*") == "*"
+            and not group_by
+        ):
+            alias = aggregations[0].get("as", "count")
+            return self._new(
+                "group",
+                f"SELECT COUNT(*) AS {_qid(alias)} FROM (SELECT DISTINCT * FROM {self._src(table)})",
+            )
         aggs = ", ".join(
             f"{_AGG[a['op']]}({'DISTINCT ' if a['op'] == 'count_distinct' else ''}"
-            f"{a.get('column', '*')}) AS {a['as']}"
+            f"{self._col_sql(cols, a.get('column', '*')) if a.get('column', '*') != '*' else '*'}) AS {_qid(a['as'])}"
             for a in aggregations
         )
         parts = [p for p in (gb, extra, aggs) if p]
@@ -161,8 +310,29 @@ class Harness:
             prefixes = None if (left_prefix is None and right_prefix is None) else [left_prefix, right_prefix]
         else:
             on = on or []
+            if isinstance(on, dict):
+                on = [[on]]
+            elif isinstance(on, list) and on and isinstance(on[0], dict):
+                # Model-facing n-way joins use nested on-chain syntax:
+                #   on=[[{left,right}], ...]
+                # In 2-table cases, models often emit the older flat syntax:
+                #   on=[{left,right}, ...]
+                # Accept that form as a compatibility shim.
+                if len(tables) == 2:
+                    on = [on]
+                elif len(on) == len(tables) - 1:
+                    on = [[edge] for edge in on]
+                else:
+                    raise ValueError(
+                        "join_tables.on must be a list of per-join edge lists; "
+                        "flat on is only unambiguous for two-table joins"
+                    )
             if join_types is None:
                 join_types = [join_type] * (len(tables) - 1)
+            elif isinstance(join_types, str):
+                join_types = [join_types] * (len(tables) - 1)
+            if prefixes is not None and len(prefixes) < len(tables):
+                prefixes = list(prefixes) + [None] * (len(tables) - len(prefixes))
         jt_map = {"inner": "JOIN", "left": "LEFT JOIN", "cross": "CROSS JOIN"}
 
         cur_src = self._src(tables[0])           # parenthesized SQL usable in FROM
@@ -175,38 +345,72 @@ class Harness:
             jt = jt_map.get(join_types[k - 1] if k - 1 < len(join_types) else "inner", "JOIN")
             edges = on[k - 1] if k - 1 < len(on) else []
             cond = " AND ".join(
-                f"L.{e['left'].split('.')[-1]} = R.{e['right'].split('.')[-1]}" for e in edges
+                f"L.{self._col_sql(cur_cols, e['left'])} = R.{self._col_sql(rc, e['right'])}" for e in edges
             )
             oncl = f" ON {cond}" if edges and jt != "CROSS JOIN" else ""
             if prefixes is not None:
                 lp = prefixes[0] if not cur_prefixed else None       # prefix the base only on fold 1
                 rp = prefixes[k]
-                left_sel = ([f"L.{c} AS {lp}__{c}" for c in cur_cols] if lp
-                            else [f"L.{c}" for c in cur_cols])
-                right_sel = [f"R.{c} AS {rp}__{c}" for c in rc] if rp else [f"R.{c}" for c in rc]
+                left_sel = ([f"L.{_qid(c)} AS {_qid(f'{lp}__{c}')}" for c in cur_cols] if lp
+                            else [f"L.{_qid(c)}" for c in cur_cols])
+                right_sel = [f"R.{_qid(c)} AS {_qid(f'{rp}__{c}')}" for c in rc] if rp else [f"R.{_qid(c)}" for c in rc]
                 sel = ", ".join(left_sel + right_sel)
             else:
                 # bare mode: dedupe shared column names (case-insensitive; shared cols are equal
                 # across the join so keeping the left side is value-correct).
                 seen = {c.lower() for c in cur_cols}
-                sel = ", ".join([f"L.{c}" for c in cur_cols] +
-                                [f"R.{c}" for c in rc if c.lower() not in seen])
+                sel = ", ".join([f"L.{_qid(c)}" for c in cur_cols] +
+                                [f"R.{_qid(c)}" for c in rc if c.lower() not in seen])
             last_sql = f"SELECT {sel} FROM {cur_src} AS L {jt} {self._src(rt)} AS R{oncl}"
             cur_cols = self._cols_of_sql(last_sql)
             cur_src = f"({last_sql})"
             cur_prefixed = True
         if return_columns:                       # optional explicit projection over the final result
             def qual(name: str) -> str:
-                b = name.split(".")[-1]
-                return b if b in cur_cols else name
-            sel = ", ".join(f"{qual(c)} AS {c.split('.')[-1]}" for c in return_columns)
+                return self._resolve_col(cur_cols, name)
+            sel = ", ".join(f"{_qid(qual(c))} AS {_qid(c.split('.')[-1])}" for c in return_columns)
             last_sql = f"SELECT {sel} FROM ({last_sql})"
         return self._new("join", last_sql)
 
     def set_op(self, left: str, right: str, op: str) -> dict:
         m = {"union": "UNION", "union_all": "UNION ALL",
              "intersect": "INTERSECT", "except": "EXCEPT"}
-        return self._new("setop", f"{self._sql(left)} {m[op]} {self._sql(right)}")
+        left = self._unwrap_table_ref(left)
+        right = self._unwrap_table_ref(right)
+        left_sql, left_cols = self._set_side_sql(left)
+        right_sql, right_cols = self._set_side_sql(right)
+        if len(left_cols) != len(right_cols):
+            projected = []
+            for col in left_cols:
+                resolved = self._resolve_col(right_cols, col)
+                if resolved not in right_cols:
+                    projected = []
+                    break
+                projected.append(resolved)
+            if projected:
+                right_sql = "SELECT " + ", ".join(
+                    f"{_qid(src)} AS {_qid(dst)}" for src, dst in zip(projected, left_cols)
+                ) + f" FROM ({right_sql})"
+            else:
+                raise ValueError(
+                    f"set_op {op} requires aligned columns; left {left} columns={left_cols}, "
+                    f"right {right} columns={right_cols}. Project both sides to the same columns first."
+                )
+        return self._new("setop", f"{left_sql} {m[op]} {right_sql}")
+
+    @staticmethod
+    def _unwrap_table_ref(ref):
+        if isinstance(ref, dict) and set(ref) == {"table"}:
+            return ref["table"]
+        return ref
+
+    def _set_side_sql(self, ref) -> tuple[str, list[str]]:
+        if isinstance(ref, str) and "." in ref and ref not in self.views and ref.lower() not in self._lc:
+            table, column = ref.rsplit(".", 1)
+            cols = self._cols(table)
+            resolved = self._resolve_col(cols, column)
+            return f"SELECT {self._col_sql(cols, column)} AS {_qid(column)} FROM {self._src(table)}", [column]
+        return self._sql(ref), self._cols(ref)
 
     def window(self, table, partition_by, order_by, fn, as_) -> dict:
         part = f"PARTITION BY {', '.join(partition_by)} " if partition_by else ""
@@ -218,8 +422,11 @@ class Harness:
     # ---- reading / scalar tools ----
     def aggregate(self, table: str, column: str, op: str):
         d = "DISTINCT " if op == "count_distinct" else ""
+        cols = self._cols(table)
+        if column != "*":
+            column = self._col_sql(cols, column)
         return self.conn.execute(
-            f"SELECT {_AGG[op]}({d}{column}) FROM {self._src(table)}"
+            f"SELECT {_AGG[op]}({d}{column if column != '*' else '*'}) FROM {self._src(table)}"
         ).fetchone()[0]
 
     def extreme_value_select(self, table, order_by, top_k=None, return_columns=None) -> dict:
@@ -227,15 +434,43 @@ class Harness:
         Merged from the old `order_limit` — one tool now covers a plain ORDER BY/LIMIT, a top-k
         pick, and multi-column ordering. `order_by`: list of 'col' or 'col DESC'.
         `return_columns`: optional projection. The result is small and inlined by `preview`."""
-        order = f" ORDER BY {', '.join(order_by)}" if order_by else ""
+        cols = self._cols(table)
+
+        def render_order(item: str) -> str:
+            parts = item.rsplit(" ", 1)
+            if len(parts) == 2 and parts[1].upper() in {"ASC", "DESC"}:
+                return f"{self._col_sql(cols, parts[0])} {parts[1].upper()}"
+            return self._col_sql(cols, item)
+
+        order = f" ORDER BY {', '.join(render_order(item) for item in order_by)}" if order_by else ""
         lim = f" LIMIT {int(top_k)}" if top_k is not None else ""
-        sel = ", ".join(return_columns) if return_columns else "*"
+        sel = ", ".join(self._col_sql(cols, col) for col in return_columns) if return_columns else "*"
         return self._new("top", f"SELECT {sel} FROM {self._src(table)}{order}{lim}")
 
     def project(self, table, expressions) -> dict:
         """Realize a SELECT projection: SELECT <expressions> FROM (src). Table-producing.
         `expressions` are SQL column/expression strings, optionally `expr AS alias`."""
-        sel = ", ".join(expressions) if expressions else "*"
+        cols = self._cols(table)
+
+        def render(expr: str) -> str:
+            cast = re.match(
+                r"^\s*([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)\s*::\s*([A-Za-z_][\w]*)"
+                r"(?:\s+AS\s+([A-Za-z_][\w]*))?\s*$",
+                expr,
+                re.I,
+            )
+            if cast:
+                col = self._resolve_col(cols, cast.group(1))
+                alias = cast.group(3) or col
+                return f"CAST({self._col_sql(cols, col)} AS {cast.group(2).upper()}) AS {_qid(alias)}"
+            m = re.match(r"^\s*([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)\s+AS\s+([A-Za-z_][\w]*)\s*$", expr, re.I)
+            if m:
+                return f"{self._col_sql(cols, m.group(1))} AS {_qid(m.group(2))}"
+            if re.match(r"^\s*[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?\s*$", expr):
+                return self._col_sql(cols, expr)
+            return expr
+
+        sel = ", ".join(render(expr) for expr in expressions) if expressions else "*"
         return self._new("project", f"SELECT {sel} FROM {self._src(table)}")
 
     def preview(self, table: str, cell_limit: int = 100) -> dict:
@@ -254,7 +489,11 @@ class Harness:
         return out
 
     def read_subtable(self, table, columns=None, limit=20):
-        cols = ", ".join(columns) if columns else "*"
+        if columns:
+            available = self._cols(table)
+            cols = ", ".join(self._col_sql(available, col) for col in columns)
+        else:
+            cols = "*"
         return self.conn.execute(
             f"SELECT {cols} FROM {self._src(table)} LIMIT {int(limit)}"
         ).fetchall()
@@ -290,11 +529,12 @@ class Harness:
         the `top_k` most-frequent values and is marked `truncated` (there the literal cannot be
         confirmed here — the condition_filter result validates it)."""
         src = self._src(table)
-        n_distinct = self.conn.execute(f"SELECT COUNT(DISTINCT {column}) FROM {src}").fetchone()[0]
-        n_null = self.conn.execute(f"SELECT COUNT(*) FROM {src} WHERE {column} IS NULL").fetchone()[0]
+        qcol = self._col_sql(self._cols(table), column)
+        n_distinct = self.conn.execute(f"SELECT COUNT(DISTINCT {qcol}) FROM {src}").fetchone()[0]
+        n_null = self.conn.execute(f"SELECT COUNT(*) FROM {src} WHERE {qcol} IS NULL").fetchone()[0]
         limit = n_distinct if n_distinct <= full_below else int(top_k)
         freq = self.conn.execute(
-            f"SELECT {column}, COUNT(*) c FROM {src} GROUP BY {column} ORDER BY c DESC LIMIT {limit}"
+            f"SELECT {qcol}, COUNT(*) c FROM {src} GROUP BY {qcol} ORDER BY c DESC LIMIT {limit}"
         ).fetchall()
         return {"column": column, "distinct_count": n_distinct, "has_null": bool(n_null),
                 "frequent_values": [v for v, _ in freq], "truncated": n_distinct > limit}

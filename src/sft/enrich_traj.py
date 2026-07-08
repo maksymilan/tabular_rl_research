@@ -48,6 +48,7 @@ from plan import resolve_cond                                             # noqa
 from scalar_grounding import extract_scalar                               # noqa: E402
 from protocol import ProtocolError, TOOLS, rows_equal                     # noqa: E402
 from fill_think import call, load_api                                     # noqa: E402
+from rollout import answer_row_candidates, projected_row_candidates        # noqa: E402
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 PERCEPTION = ("describe_table", "inspect_column", "read_subtable")
@@ -102,7 +103,10 @@ TOOL_ACTION_CUES = {
         r"\bkeep only (?:the|these|those)?\s*(?:fields|columns)\b",
     ),
     "join_tables": (r"\bjoin\b", r"\bconnect\b", r"\blink\b"),
-    "group_aggregate": (r"\bgroup\b", r"\bdeduplicate\b", r"\bgroup_aggregate\b"),
+    "group_aggregate": (
+        r"\bgroup\b", r"\bdeduplicate\b", r"\bgroup_aggregate\b", r"\baggregate\b",
+        r"\bcompute\b", r"\bcount\b", r"\bsum\b", r"\baverage\b", r"\bminimum\b", r"\bmaximum\b",
+    ),
     "aggregate": (r"\baggregate\b", r"\bcompute\b", r"\bcount\b", r"\bsum\b", r"\baverage\b", r"\bminimum\b", r"\bmaximum\b"),
     "extreme_value_select": (r"\bsort\b", r"\border\b", r"\btop\b", r"\bhighest\b", r"\blowest\b", r"\bsmallest\b", r"\blargest\b"),
     "set_op": (r"\bintersect\b", r"\bintersection\b", r"\bunion\b", r"\bexcept\b", r"\bset\b"),
@@ -204,19 +208,36 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
 def score(h: Harness, gold_sql: str, answer_args: dict, created: set) -> tuple[bool, list, list]:
     gold = h.gold(gold_sql)
     ev = (answer_args.get("evidence") or {}).get("table")
-    pred = None
+    evidence_rows = None
     if ev and ev in created:
         try:
-            pred = h.rows(ev)
+            evidence_rows = h.rows(ev)
         except Exception:
-            pred = None
-    if pred is None:
-        pred = answer_args.get("answer") or []
+            evidence_rows = None
     try:
-        ok = rows_equal(pred, gold)
+        if evidence_rows is not None and rows_equal(evidence_rows, gold):
+            return True, evidence_rows[:5], gold[:5]
     except Exception:
-        ok = False
-    return ok, pred[:5], gold[:5]
+        pass
+
+    answer_candidates = answer_row_candidates(answer_args.get("answer"), gold)
+    for candidate in answer_candidates:
+        try:
+            if rows_equal(candidate, gold):
+                return True, candidate[:5], gold[:5]
+        except Exception:
+            continue
+
+    if evidence_rows is not None:
+        for candidate in projected_row_candidates(evidence_rows, gold):
+            try:
+                if rows_equal(candidate, gold):
+                    return True, candidate[:5], gold[:5]
+            except Exception:
+                continue
+
+    pred = evidence_rows if evidence_rows is not None else (answer_candidates[0] if answer_candidates else [])
+    return False, pred[:5], gold[:5]
 
 
 # ---------------------------------------------------------------- context for the LLM ------------
@@ -1946,6 +1967,11 @@ def _action_repair_text(tool: str, args: dict, question: str) -> str:
             f"`{args.get('column')}` from `{args.get('table')}` is the needed computation."
         )
     if tool == "group_aggregate":
+        if not args.get("group_by"):
+            return (
+                f"The question needs a scalar summary from `{args.get('table')}`, so I compute "
+                f"`{_compact_json(args.get('aggregations', []))}` as a one-row evidence table."
+            )
         return (
             f"The comparison needs grouped evidence from `{args.get('table')}`: group by "
             f"`{_compact_json(args.get('group_by', []))}` and compute "
@@ -2171,6 +2197,13 @@ QUALITY_AUDIT_SYS = (
     "answer is correct (both are guaranteed). Judge ONLY whether the reasoning and observations teach "
     "faithful, non-hallucinated behavior: grounding, honest use of observations, no leaked hidden "
     "state, and non-formulaic reasoning.\n\n"
+    "The user message includes GOLD SQL and a VERIFIED PARSED TOOLCHAIN: the non-plan, non-perception "
+    "tool calls compiled from that SQL. If you suspect a tool-chain problem, compare against those "
+    "authoritative fields first. Do NOT ask to delete, replace, or reinterpret verified backbone tool "
+    "calls merely because the natural-language question admits another reading. If the natural-language "
+    "question and gold SQL appear to disagree, treat the gold SQL/toolchain as the dataset label "
+    "authority and focus your repair request on misleading think/plan wording, not on changing the "
+    "verified tool calls or final answer.\n\n"
     "The data may arrive either before or after the plan-insertion pass. Always review perception + "
     "reasoning (describe_table / inspect_column / read_subtable observations and each step's "
     "<think>). If plan tool steps are present, also review the plan subgoals/status/evidence. If plan "
@@ -2215,18 +2248,32 @@ QUALITY_AUDIT_SYS = (
     "  \"decision\": \"keep|repair|reject\",\n"
     "  \"confidence\": 0.0,\n"
     "  \"summary\": \"one sentence\",\n"
+    "  \"case_analysis\": {\n"
+    "    \"question_intent\": \"what the gold SQL/toolchain is doing in this specific case\",\n"
+    "    \"backbone_summary\": \"how the verified toolchain answers this case\",\n"
+    "    \"quality_boundary\": \"which parts are fixed/verified and which wording or plan state may be revised\"\n"
+    "  },\n"
     "  \"strengths\": [\"...\"],\n"
     "  \"risks\": [\"...\"],\n"
     "  \"revision_requests\": [\n"
     "    {\"step_id\": \"step_3\", \"severity\": \"minor|major|fatal\", "
-    "\"requirement\": \"what must change\", \"reason\": \"why\"}\n"
+    "\"current_problem\": \"quote or describe the exact bad wording/state\", "
+    "\"requirement\": \"the concrete replacement direction, naming this case's table/handle/column/evidence\", "
+    "\"reason\": \"why this specific change follows from the gold SQL/backbone and visible observations\"}\n"
     "  ]\n"
     "}\n"
     "For keep, revision_requests should usually be empty. For BOTH repair AND reject, you MUST return "
     "revision_requests — one per real problem, each naming the exact step_id and a concrete, actionable "
     "requirement a later generator can apply to fix that step's think or plan (repair keeps the same tool "
     "calls/outputs; reject may need a regenerated observation/plan). Never return an empty "
-    "revision_requests for repair or reject."
+    "revision_requests for repair or reject.\n\n"
+    "Revision requests must be case-specific and directly executable. BAD requirements: 'make the "
+    "rationale less generic', 'add rationale', 'be more specific', 'fix wording'. GOOD requirements: "
+    "'In step_6, replace the claim that the schema was inspected with a statement that filter_003 "
+    "already contains columns X and Y and project keeps X for the later union.' For ordinary tool "
+    "steps, you may ask to rewrite `think` and/or the structured `rationale` fields. For plan steps, "
+    "do NOT ask to add a separate rationale field; ask to rewrite the plan step's `think` or to "
+    "regenerate the plan goal/update/evidence."
 )
 
 
@@ -2293,13 +2340,39 @@ def _compact_trajectory_for_quality(traj: dict) -> dict:
     return {
         "trajectory_id": traj.get("trajectory_id"),
         "db_id": (traj.get("source") or {}).get("db_id"),
+        "gold_sql": (traj.get("source") or {}).get("gold_sql"),
         "question": traj.get("question"),
         "contains_plan_tool": contains_plan,
         "initial_catalog": (traj.get("initial_state") or {}).get("dataset_overview"),
         "candidate_structural_issues": candidate_issues,
+        "verified_parsed_toolchain": _compact_verified_backbone(traj),
         "steps": steps,
         "final_answer": traj.get("final_answer"),
     }
+
+
+def _compact_verified_backbone(traj: dict) -> list[dict]:
+    """Non-plan, non-perception tool chain compiled from the gold SQL.
+
+    The full trajectory may contain inserted perception and plan steps.  This compact view gives the
+    judge the authoritative parsed backbone so it does not re-litigate tool choices from only the
+    natural-language question.
+    """
+    skip_tools = set(PERCEPTION) | {"plan"}
+    out = []
+    for i, step in enumerate(traj.get("steps", []), 1):
+        call = step.get("tool_call") or {}
+        tool = call.get("tool")
+        if not tool or tool in skip_tools:
+            continue
+        out.append({
+            "index": i,
+            "step_id": step.get("step_id"),
+            "tool": tool,
+            "arguments": call.get("arguments"),
+            "output": _compact_audit_output(step.get("tool_output"), tool),
+        })
+    return out
 
 
 def _step_ref_from_issue(text: str) -> str:
@@ -2352,6 +2425,8 @@ def structural_diagnosis(traj: dict) -> list[dict]:
 def build_quality_audit_prompt(traj: dict) -> list[dict]:
     payload = _compact_trajectory_for_quality(traj)
     diagnosis = structural_diagnosis(traj)
+    gold_sql = (traj.get("source") or {}).get("gold_sql") or "<missing>"
+    verified_backbone = _compact_verified_backbone(traj)
     diag_block = (
         "CANDIDATE STRUCTURAL ISSUES (found by a deterministic checker — VERIFY each against the "
         "trajectory; confirm real ones in your revision_requests, ignore false positives, and add any "
@@ -2362,6 +2437,11 @@ def build_quality_audit_prompt(traj: dict) -> list[dict]:
     )
     user = (
         "Review this trajectory for SFT data quality.\n\n"
+        "GOLD SQL (dataset label authority for tool-chain semantics):\n"
+        f"{gold_sql}\n\n"
+        "VERIFIED PARSED TOOLCHAIN (non-plan, non-perception calls compiled from the gold SQL; "
+        "do not ask to change these calls unless the reasoning text misrepresents them):\n"
+        f"{_clip_text(verified_backbone, 10000)}\n\n"
         f"TRAJECTORY:\n{_clip_text(payload, 24000)}\n\n"
         f"{diag_block}\n\n"
         "Return the JSON review now."
@@ -2414,6 +2494,8 @@ def parse_quality_audit(text: str) -> dict:
     except (TypeError, ValueError):
         obj["confidence"] = 0.0
     obj["summary"] = str(obj.get("summary", "")).strip()
+    if not isinstance(obj.get("case_analysis"), dict):
+        obj["case_analysis"] = {}
     return obj
 
 
@@ -2559,7 +2641,10 @@ REPAIR_SYS = (
 
 def build_repair_prompt(traj: dict, revision_requests: list[dict]) -> list[dict]:
     payload = _compact_trajectory_for_quality(traj)
-    reqs = [{"step_id": r.get("step_id"), "requirement": r.get("requirement"), "reason": r.get("reason")}
+    reqs = [{"step_id": r.get("step_id"),
+             "current_problem": r.get("current_problem"),
+             "requirement": r.get("requirement"),
+             "reason": r.get("reason")}
             for r in revision_requests if isinstance(r, dict)]
     user = (
         f"TRAJECTORY:\n{_clip_text(payload, 24000)}\n\n"
@@ -2598,8 +2683,8 @@ def review_and_repair(
     def _rank(t: dict) -> int:
         return rank.get((t.get("enrichment") or {}).get("quality_status"), -1)
 
-    # Monotonic: keep the best-status version ever seen (including the pre-repair one). A repair round
-    # that the noisy judge re-scores worse can never drag the record below where it already was.
+    # Monotonic: keep the best-status version ever seen (including the pre-repair one). Repair tries
+    # to reach ready; if a noisy re-score gets worse, continue from the best known version.
     best = copy.deepcopy(traj)
     history: list[dict] = []
     for attempt in range(1, max_repair + 1):
@@ -2631,8 +2716,11 @@ def review_and_repair(
         # issues hold the coarse status at 'repairable'.
         if _rank(traj) >= _rank(best):
             best = copy.deepcopy(traj)
-        if _rank(best) >= rank["repairable"]:
-            break                                   # reached a usable version -> stop before noise regresses it
+        else:
+            traj = copy.deepcopy(best)
+            history[-1]["continued_from_best"] = True
+        if _rank(best) >= rank["ready"]:
+            break
     best.setdefault("enrichment", {})["repair_history"] = history
     return best
 

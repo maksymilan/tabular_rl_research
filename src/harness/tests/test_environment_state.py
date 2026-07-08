@@ -35,6 +35,25 @@ def run():
             set(state.snapshot()["plan"][0]) == {"id", "goal", "status", "evidence"},
             str(state.snapshot()))
 
+    upsert = state.apply_plan_ops([
+        {"op": "update", "id": "p2", "goal": "check whether a follow-up join is needed", "status": "pending"},
+        {"op": "update", "id": "p2", "evidence": "none", "status": "done"},
+    ], "step_1c", history)
+    t.check("plan update on unknown item upserts",
+            any(item["id"] == "p2" and item["status"] == "done" for item in upsert["plan"]),
+            str(upsert))
+    t.check("plan evidence none clears evidence",
+            all(item.get("evidence") is None for item in upsert["plan"] if item["id"] == "p2"),
+            str(upsert))
+
+    unresolved = state.apply_plan_ops([
+        {"op": "update", "id": "p2", "evidence": "step_future"},
+    ], "step_1d", history)
+    p2 = [item for item in unresolved["plan"] if item["id"] == "p2"][0]
+    t.check("plan unknown evidence is nonfatal",
+            p2["evidence"]["step_id"] == "step_future" and p2["evidence"]["unresolved"],
+            str(unresolved))
+
     desc = h.describe_table(["employees"])
     state.apply_tool_result("describe_table", {"tables": ["employees"]}, desc, "step_2")
     snap = state.snapshot()
@@ -65,6 +84,9 @@ def run():
     t.check("read rows grouped under handle",
             snap["tables"][f["table_name"]]["reads"][0]["from_step"] == "step_5", str(snap))
 
-    state.apply_plan_ops([{"op": "delete", "id": "p1", "reason": "complete"}], "step_6")
+    state.apply_plan_ops([
+        {"op": "delete", "id": "p1", "reason": "complete"},
+        {"op": "delete", "id": "p2", "reason": "complete"},
+    ], "step_6")
     t.check("deleted plan hidden from snapshot", state.snapshot()["plan"] == [], str(state.snapshot()))
     return t.result()

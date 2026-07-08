@@ -283,16 +283,21 @@ class Compiler:
     def _in_subquery(self, this_node: E.Expression, sub: E.Expression, steps: list[Step], colmap):
         """`col IN (subquery)` -> compile the subquery to a single-column table and test membership
         against it (`in_table`); a set-valued subquery stays a table. If the subquery is scalar
-        (ends in `aggregate`), `IN` degenerates to equality whose `value_ref` cites that aggregate
-        step directly. `NOT IN` is the parser's `Not(In(...))`, rendered as `NOT (col IN ...)`."""
+        (ends in a scalar-shaped 1x1 aggregate table), `IN` degenerates to equality whose
+        `value_ref` cites that producing step directly. `NOT IN` is the parser's `Not(In(...))`,
+        rendered as `NOT (col IN ...)`."""
         inner = sub.this if isinstance(sub, (E.Subquery, E.Paren)) else sub
         sub_steps = self._node(inner)   # SELECT or a set-op (UNION/INTERSECT/EXCEPT) -> a table
         steps.extend(sub_steps)
         last = sub_steps[-1]
         col = self._resolve(this_node, colmap)
-        if last.tool == "aggregate":          # IN (scalar subquery) == equality to that scalar
-            # the predicate cites the aggregate step directly; the harness grounds the scalar from it
-            # at resolve time (no separate add_to_memory step).
+        if (
+            last.tool == "group_aggregate"
+            and not last.args.get("group_by")
+            and len(last.args.get("aggregations", [])) == 1
+        ):
+            # the predicate cites the scalar-shaped aggregate table directly; the harness grounds
+            # the 1x1 value from it at resolve time (no separate add_to_memory step).
             return {"column": col, "op": "=", "value_ref": last.id}
         return {"column": col, "op": "in", "in_table": last.id}
 
@@ -391,11 +396,6 @@ class Compiler:
         limit = sel.args.get("limit")
 
         if group is None and aggs and not keys:
-            if len(aggs) == 1:
-                a = aggs[0]
-                sid = self._id()
-                steps.append(Step(sid, "aggregate", {"table": cur, "column": a["column"], "op": a["op"]}))
-                return steps
             sid = self._id()
             steps.append(Step(sid, "group_aggregate", {"table": cur, "group_by": [], "aggregations": aggs}))
             return steps

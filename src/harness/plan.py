@@ -29,6 +29,8 @@ TABLE_REF_ARGS: dict[str, list[str]] = {
 }
 
 # Tools whose result is a value/rows (terminal) rather than a registered table.
+# `aggregate` is legacy-compatible; new compiler output uses group_aggregate(group_by=[]) so scalar
+# summaries are table-producing and can be cited as evidence directly.
 # (`extreme_value_select` is now table-producing — merged with the old `order_limit`.)
 TERMINAL_TOOLS = {"aggregate", "read_subtable"}
 

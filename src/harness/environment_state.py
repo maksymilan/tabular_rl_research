@@ -87,6 +87,8 @@ def _ground_evidence(value: Any, history: dict[str, dict] | None) -> dict | None
         step_id = value.get("step_id") or value.get("id")
     else:
         step_id = value
+    if isinstance(step_id, str) and step_id.strip().lower() in {"none", "null", "n/a", "na"}:
+        return None
     if not isinstance(step_id, str) or not step_id.strip():
         raise EnvironmentStateError("plan evidence must be a step_id string")
     step_id = step_id.strip()
@@ -94,7 +96,7 @@ def _ground_evidence(value: Any, history: dict[str, dict] | None) -> dict | None
         return {"step_id": step_id}
     record = history.get(step_id)
     if not isinstance(record, dict):
-        raise EnvironmentStateError(f"plan evidence references unknown step {step_id!r}")
+        return {"step_id": step_id, "unresolved": True}
     return {
         "step_id": step_id,
         "tool": record.get("tool"),
@@ -195,6 +197,24 @@ class EnvironmentState:
                 continue
 
             if item_id not in self.plan or self.plan[item_id].get("status") == "deleted":
+                if action == "update":
+                    goal = op.get("goal")
+                    item = {
+                        "id": item_id,
+                        "goal": goal.strip() if isinstance(goal, str) and goal.strip() else item_id,
+                        "status": _status(op.get("status")),
+                        "created_by": step_id,
+                        "updated_by": step_id,
+                    }
+                    evidence_value = op.get("evidence", op.get("evidence_step_id"))
+                    evidence = _ground_evidence(evidence_value, history)
+                    if evidence is not None:
+                        item["evidence"] = evidence
+                    self.plan[item_id] = item
+                    if item_id not in self.plan_order:
+                        self.plan_order.append(item_id)
+                    changes.append({"op": "upsert", "id": item_id})
+                    continue
                 raise EnvironmentStateError(f"unknown plan item {item_id!r}")
             if action == "delete":
                 self.plan[item_id]["status"] = "deleted"
@@ -281,8 +301,10 @@ class EnvironmentState:
                 entry.setdefault("reads", []).append({
                     "from_step": step_id,
                     "row_count": output.get("row_count"),
+                    "limit": output.get("preview_limit"),
+                    "truncated": output.get("rows_truncated"),
                     "rows": deepcopy(output.get("rows", [])),
-                    "note": "scalar-shaped table output",
+                    "note": "inline table output preview",
                 })
 
     def _ensure_table(self, name: str) -> dict:

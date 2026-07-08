@@ -2,8 +2,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Check,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   Eye,
   FileJson,
@@ -14,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { ConversationView, JsonTree } from "./JsonViewer";
+import { PaginationControls } from "./PaginationControls";
 
 // Perception tools (read-only probes). Highlighted distinctly in the trajectory because the
 // research question is whether the model probes the data at a DECISION point or only as a
@@ -695,25 +694,7 @@ export function TrainingBoard({ experiment }) {
               ) : null}
             </div>
           </div>
-          <div className="pagination">
-            <button
-              className="icon-button"
-              title="上一页"
-              disabled={page <= 1}
-              onClick={() => setPage((value) => value - 1)}
-            >
-              <ChevronLeft size={18} />
-            </button>
-            <span>第 {data.page} / {data.pages} 页</span>
-            <button
-              className="icon-button"
-              title="下一页"
-              disabled={page >= data.pages}
-              onClick={() => setPage((value) => value + 1)}
-            >
-              <ChevronRight size={18} />
-            </button>
-          </div>
+          <PaginationControls page={data.page} pages={data.pages} onPageChange={setPage} />
         </>
       ) : null}
     </div>
@@ -1082,15 +1063,7 @@ export function ConstructionPanel() {
                 ) : null}
               </div>
             </div>
-            <div className="pagination">
-              <button className="icon-button" disabled={page <= 1} onClick={() => setPage((v) => v - 1)}>
-                <ChevronLeft size={18} />
-              </button>
-              <span>第 {data.page} / {data.pages} 页</span>
-              <button className="icon-button" disabled={page >= data.pages} onClick={() => setPage((v) => v + 1)}>
-                <ChevronRight size={18} />
-              </button>
-            </div>
+            <PaginationControls page={data.page} pages={data.pages} onPageChange={setPage} />
           </>
         ) : null}
       </section>

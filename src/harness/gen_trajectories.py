@@ -5,13 +5,14 @@ For each Spider (db_id, question, gold_sql): open the real SQLite DB, emit a tra
 (compile -> run the tool chain -> verify against the gold SQL's result), and keep ONLY trajectories
 that are execution-verified AND structurally legal. Failures are skipped and bucketed.
 
-Run:   .venv/bin/python src/harness/gen_trajectories.py [N] [train|dev]
+Run:   .venv/bin/python src/harness/gen_trajectories.py [train|dev] [N] [--tag=_v4_agg]
 Output: data/trajectories/spider_<split>.jsonl   (one trajectory per line; /data is gitignored)
         src/harness/sample_trajectories/*.json   (a few committed samples for inspection)
         printed summary + data/trajectories/spider_<split>.manifest.json
 """
 from __future__ import annotations
 
+import argparse
 import collections
 import json
 import os
@@ -32,17 +33,34 @@ def db_path(db_id: str) -> str:
     return os.path.join(SPIDER, "database", db_id, f"{db_id}.sqlite")
 
 
-def main() -> int:
-    n = None
-    split = "train"
-    tag = ""                      # output suffix: "" = v1 path (default), "_v2" = data-v2 path
-    for a in sys.argv[1:]:
-        if a.isdigit():
-            n = int(a)
-        elif a in ("train", "dev"):
-            split = a
-        elif a.startswith("--tag="):
-            tag = a.split("=", 1)[1]
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("positional", nargs="*", help="backward-compatible [N] [train|dev]")
+    parser.add_argument("--split", choices=["train", "dev"], default=None)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--tag", default="", help='output suffix such as "_v4_agg_unified"')
+    parser.add_argument("--out", default=None, help="explicit output JSONL path")
+    args = parser.parse_args(argv)
+
+    split = args.split or "train"
+    limit = args.limit
+    for item in args.positional:
+        if item.isdigit():
+            limit = int(item)
+        elif item in ("train", "dev"):
+            split = item
+        else:
+            parser.error(f"unrecognized positional argument: {item}")
+    args.split = split
+    args.limit = limit
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    n = args.limit
+    split = args.split
+    tag = args.tag
     src = os.path.join(SPIDER, "train_spider.json" if split == "train" else "dev.json")
     if not os.path.exists(src):
         print(f"missing {src} — download Spider DBs first (see src/harness/README.md)")
@@ -53,7 +71,7 @@ def main() -> int:
 
     out_dir = os.path.join(ROOT, "data", "trajectories")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"spider_{split}{tag}.jsonl")
+    out_path = args.out or os.path.join(out_dir, f"spider_{split}{tag}.jsonl")
     sample_dir = os.path.join(HERE, "sample_trajectories")
     os.makedirs(sample_dir, exist_ok=True)
 

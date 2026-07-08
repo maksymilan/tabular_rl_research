@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   Bot,
   Check,
-  ChevronLeft,
   ChevronRight,
   CircleAlert,
   Clock3,
@@ -39,6 +38,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { PaginationControls } from "./PaginationControls";
 import {
   AttributionPanel,
   attributeRecord,
@@ -708,25 +708,7 @@ function RecordBrowser({ experiment }) {
               {active && view === "json" ? <JsonBlock value={active.record} /> : null}
             </div>
           </div>
-          <div className="pagination">
-            <button
-              className="icon-button"
-              title="上一页"
-              disabled={page <= 1}
-              onClick={() => setPage((value) => value - 1)}
-            >
-              <ChevronLeft size={18} />
-            </button>
-            <span>第 {data.page} / {data.pages} 页</span>
-            <button
-              className="icon-button"
-              title="下一页"
-              disabled={page >= data.pages}
-              onClick={() => setPage((value) => value + 1)}
-            >
-              <ChevronRight size={18} />
-            </button>
-          </div>
+          <PaginationControls page={data.page} pages={data.pages} onPageChange={setPage} />
         </>
       ) : null}
     </div>

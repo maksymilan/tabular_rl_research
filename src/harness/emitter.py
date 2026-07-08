@@ -25,10 +25,10 @@ from __future__ import annotations
 
 from compiler import Compiler
 from environment_state import EnvironmentState
-from plan import TABLE_REF_ARGS, resolve_cond
+from plan import TABLE_REF_ARGS, resolve_cond, _scalar_values
 from provenance import backward_slice, build_references
 
-SCHEMA_VERSION = "v3"  # V2b memory removal + unified references; lazy catalog, metadata-only outputs
+SCHEMA_VERSION = "v4-agg-unified"  # V2b references + lazy catalog + unified table-producing aggregate
 
 # every tool the model may call (table-producing + reading/scalar + perception + memory/terminal)
 TOOLS = set(TABLE_REF_ARGS) | {
@@ -136,7 +136,8 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
         if step.tool == "condition_filter":
             disp_conds = _rewrite_value_ref(resolve_cond(args.get("conditions"), id_to_table), planid_to_stepid)
             display = {**args, "conditions": disp_conds}
-            exec_args = {**args, "conditions": resolve_cond(args.get("conditions"), id_to_table, values)}
+            exec_values = _scalar_values(h, args.get("conditions"), id_to_table, values)
+            exec_args = {**args, "conditions": resolve_cond(args.get("conditions"), id_to_table, exec_values)}
         else:
             display = exec_args = args
 

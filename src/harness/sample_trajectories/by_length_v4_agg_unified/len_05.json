@@ -1,0 +1,531 @@
+{
+  "trajectory_id": "spider_dev_43",
+  "schema_version": "v4-agg-unified",
+  "source": {
+    "dataset": "spider",
+    "db_id": "concert_singer",
+    "gold_sql": "select count(*) from concert where stadium_id = (select stadium_id from stadium order by capacity desc limit 1)"
+  },
+  "question": "Find the number of concerts happened in the stadium with the highest capacity .",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "stadium",
+          "num_rows": 9
+        },
+        {
+          "table_name": "singer",
+          "num_rows": 6
+        },
+        {
+          "table_name": "concert",
+          "num_rows": 6
+        },
+        {
+          "table_name": "singer_in_concert",
+          "num_rows": 10
+        }
+      ],
+      "relations": [
+        {
+          "from": "concert.Stadium_ID",
+          "to": "stadium.Stadium_ID"
+        },
+        {
+          "from": "singer_in_concert.Singer_ID",
+          "to": "singer.Singer_ID"
+        },
+        {
+          "from": "singer_in_concert.concert_ID",
+          "to": "concert.concert_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Order the rows and keep the top ones (the extreme values).",
+      "tool_call": {
+        "tool": "extreme_value_select",
+        "arguments": {
+          "table": "stadium",
+          "order_by": [
+            "capacity DESC"
+          ],
+          "top_k": 1
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "stadium",
+          "role": "table",
+          "target": {
+            "table": "stadium"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "top_001"
+      },
+      "tool_output": {
+        "table": "top_001",
+        "kind": "top",
+        "columns": [
+          "Stadium_ID",
+          "Location",
+          "Name",
+          "Capacity",
+          "Highest",
+          "Lowest",
+          "Average"
+        ],
+        "row_count": 1
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "top_001": {
+            "kind": "top",
+            "row_count": 1,
+            "created_by": "step_1",
+            "columns": [
+              "Stadium_ID",
+              "Location",
+              "Name",
+              "Capacity",
+              "Highest",
+              "Lowest",
+              "Average"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "top_001",
+          "expressions": [
+            "stadium_id"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_1",
+          "role": "table",
+          "target": {
+            "handle": "top_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_002"
+      },
+      "tool_output": {
+        "table": "project_002",
+        "kind": "project",
+        "columns": [
+          "Stadium_ID"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            4
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "top_001": {
+            "kind": "top",
+            "row_count": 1,
+            "created_by": "step_1",
+            "columns": [
+              "Stadium_ID",
+              "Location",
+              "Name",
+              "Capacity",
+              "Highest",
+              "Lowest",
+              "Average"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_2",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    4
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_2",
+            "columns": [
+              "Stadium_ID"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "concert",
+          "conditions": {
+            "column": "stadium_id",
+            "op": "=",
+            "value_ref": "step_2"
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "concert",
+          "role": "table",
+          "target": {
+            "table": "concert"
+          }
+        },
+        {
+          "type": "value",
+          "step": "step_2",
+          "role": "value_ref",
+          "target": {
+            "column": "stadium_id"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_003"
+      },
+      "tool_output": {
+        "table": "filter_003",
+        "kind": "filter",
+        "columns": [
+          "concert_ID",
+          "concert_Name",
+          "Theme",
+          "Stadium_ID",
+          "Year"
+        ],
+        "row_count": 0
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "top_001": {
+            "kind": "top",
+            "row_count": 1,
+            "created_by": "step_1",
+            "columns": [
+              "Stadium_ID",
+              "Location",
+              "Name",
+              "Capacity",
+              "Highest",
+              "Lowest",
+              "Average"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_2",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    4
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_2",
+            "columns": [
+              "Stadium_ID"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 0,
+            "created_by": "step_3",
+            "columns": [
+              "concert_ID",
+              "concert_Name",
+              "Theme",
+              "Stadium_ID",
+              "Year"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Group the rows and compute the requested aggregates.",
+      "tool_call": {
+        "tool": "group_aggregate",
+        "arguments": {
+          "table": "filter_003",
+          "group_by": [],
+          "aggregations": [
+            {
+              "op": "count",
+              "column": "*",
+              "as": "count_1"
+            }
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_3",
+          "role": "table",
+          "target": {
+            "handle": "filter_003"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "group_004"
+      },
+      "tool_output": {
+        "table": "group_004",
+        "kind": "group",
+        "columns": [
+          "count_1"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            0
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "top_001": {
+            "kind": "top",
+            "row_count": 1,
+            "created_by": "step_1",
+            "columns": [
+              "Stadium_ID",
+              "Location",
+              "Name",
+              "Capacity",
+              "Highest",
+              "Lowest",
+              "Average"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_2",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    4
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_2",
+            "columns": [
+              "Stadium_ID"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 0,
+            "created_by": "step_3",
+            "columns": [
+              "concert_ID",
+              "concert_Name",
+              "Theme",
+              "Stadium_ID",
+              "Year"
+            ]
+          },
+          "group_004": {
+            "kind": "group",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_4",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    0
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_4",
+            "columns": [
+              "count_1"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              0
+            ]
+          ],
+          "evidence": {
+            "table": "group_004"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "group_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            0
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "top_001": {
+            "kind": "top",
+            "row_count": 1,
+            "created_by": "step_1",
+            "columns": [
+              "Stadium_ID",
+              "Location",
+              "Name",
+              "Capacity",
+              "Highest",
+              "Lowest",
+              "Average"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_2",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    4
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_2",
+            "columns": [
+              "Stadium_ID"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 0,
+            "created_by": "step_3",
+            "columns": [
+              "concert_ID",
+              "concert_Name",
+              "Theme",
+              "Stadium_ID",
+              "Year"
+            ]
+          },
+          "group_004": {
+            "kind": "group",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_4",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    0
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_4",
+            "columns": [
+              "count_1"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      0
+    ]
+  ]
+}

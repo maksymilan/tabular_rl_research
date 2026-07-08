@@ -1,0 +1,608 @@
+{
+  "trajectory_id": "spider_train_50",
+  "schema_version": "v4-agg-unified",
+  "source": {
+    "dataset": "spider",
+    "db_id": "farm",
+    "gold_sql": "SELECT Status FROM city WHERE Population  >  1500 INTERSECT SELECT Status FROM city WHERE Population  <  500"
+  },
+  "question": "Show the status shared by cities with population bigger than 1500 and smaller than 500.",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "city",
+          "num_rows": 5
+        },
+        {
+          "table_name": "farm",
+          "num_rows": 8
+        },
+        {
+          "table_name": "farm_competition",
+          "num_rows": 6
+        },
+        {
+          "table_name": "competition_record",
+          "num_rows": 12
+        }
+      ],
+      "relations": [
+        {
+          "from": "farm_competition.Host_city_ID",
+          "to": "city.City_ID"
+        },
+        {
+          "from": "competition_record.Farm_ID",
+          "to": "farm.Farm_ID"
+        },
+        {
+          "from": "competition_record.Competition_ID",
+          "to": "farm_competition.Competition_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "city",
+          "conditions": {
+            "column": "Population",
+            "op": ">",
+            "value": 1500
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "city",
+          "role": "table",
+          "target": {
+            "table": "city"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_001"
+      },
+      "tool_output": {
+        "table": "filter_001",
+        "kind": "filter",
+        "columns": [
+          "City_ID",
+          "Official_Name",
+          "Status",
+          "Area_km_2",
+          "Population",
+          "Census_Ranking"
+        ],
+        "row_count": 2
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_1",
+            "columns": [
+              "City_ID",
+              "Official_Name",
+              "Status",
+              "Area_km_2",
+              "Population",
+              "Census_Ranking"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_001",
+          "expressions": [
+            "Status"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_1",
+          "role": "table",
+          "target": {
+            "handle": "filter_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_002"
+      },
+      "tool_output": {
+        "table": "project_002",
+        "kind": "project",
+        "columns": [
+          "Status"
+        ],
+        "row_count": 2
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_1",
+            "columns": [
+              "City_ID",
+              "Official_Name",
+              "Status",
+              "Area_km_2",
+              "Population",
+              "Census_Ranking"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 2,
+            "created_by": "step_2",
+            "columns": [
+              "Status"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "city",
+          "conditions": {
+            "column": "Population",
+            "op": "<",
+            "value": 500
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "city",
+          "role": "table",
+          "target": {
+            "table": "city"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_003"
+      },
+      "tool_output": {
+        "table": "filter_003",
+        "kind": "filter",
+        "columns": [
+          "City_ID",
+          "Official_Name",
+          "Status",
+          "Area_km_2",
+          "Population",
+          "Census_Ranking"
+        ],
+        "row_count": 1
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_1",
+            "columns": [
+              "City_ID",
+              "Official_Name",
+              "Status",
+              "Area_km_2",
+              "Population",
+              "Census_Ranking"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 2,
+            "created_by": "step_2",
+            "columns": [
+              "Status"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_3",
+            "columns": [
+              "City_ID",
+              "Official_Name",
+              "Status",
+              "Area_km_2",
+              "Population",
+              "Census_Ranking"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_003",
+          "expressions": [
+            "Status"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_3",
+          "role": "table",
+          "target": {
+            "handle": "filter_003"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_004"
+      },
+      "tool_output": {
+        "table": "project_004",
+        "kind": "project",
+        "columns": [
+          "Status"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            "Village"
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_1",
+            "columns": [
+              "City_ID",
+              "Official_Name",
+              "Status",
+              "Area_km_2",
+              "Population",
+              "Census_Ranking"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 2,
+            "created_by": "step_2",
+            "columns": [
+              "Status"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_3",
+            "columns": [
+              "City_ID",
+              "Official_Name",
+              "Status",
+              "Area_km_2",
+              "Population",
+              "Census_Ranking"
+            ]
+          },
+          "project_004": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_4",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    "Village"
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_4",
+            "columns": [
+              "Status"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Combine the two row sets with the set operation.",
+      "tool_call": {
+        "tool": "set_op",
+        "arguments": {
+          "left": "project_002",
+          "right": "project_004",
+          "op": "intersect"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "project_002"
+          }
+        },
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "project_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "setop_005"
+      },
+      "tool_output": {
+        "table": "setop_005",
+        "kind": "setop",
+        "columns": [
+          "Status"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            "Village"
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_1",
+            "columns": [
+              "City_ID",
+              "Official_Name",
+              "Status",
+              "Area_km_2",
+              "Population",
+              "Census_Ranking"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 2,
+            "created_by": "step_2",
+            "columns": [
+              "Status"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_3",
+            "columns": [
+              "City_ID",
+              "Official_Name",
+              "Status",
+              "Area_km_2",
+              "Population",
+              "Census_Ranking"
+            ]
+          },
+          "project_004": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_4",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    "Village"
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_4",
+            "columns": [
+              "Status"
+            ]
+          },
+          "setop_005": {
+            "kind": "setop",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_5",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    "Village"
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_5",
+            "columns": [
+              "Status"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "Village"
+            ]
+          ],
+          "evidence": {
+            "table": "setop_005"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_5",
+          "role": "table",
+          "target": {
+            "handle": "setop_005"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "Village"
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "filter_001": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_1",
+            "columns": [
+              "City_ID",
+              "Official_Name",
+              "Status",
+              "Area_km_2",
+              "Population",
+              "Census_Ranking"
+            ]
+          },
+          "project_002": {
+            "kind": "project",
+            "row_count": 2,
+            "created_by": "step_2",
+            "columns": [
+              "Status"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_3",
+            "columns": [
+              "City_ID",
+              "Official_Name",
+              "Status",
+              "Area_km_2",
+              "Population",
+              "Census_Ranking"
+            ]
+          },
+          "project_004": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_4",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    "Village"
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_4",
+            "columns": [
+              "Status"
+            ]
+          },
+          "setop_005": {
+            "kind": "setop",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_5",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    "Village"
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_5",
+            "columns": [
+              "Status"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "Village"
+    ]
+  ]
+}

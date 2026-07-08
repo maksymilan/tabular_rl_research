@@ -1,6 +1,6 @@
 {
   "trajectory_id": "sample_having",
-  "schema_version": "v3",
+  "schema_version": "v4-agg-unified",
   "source": {
     "dataset": "synthetic",
     "db_id": "employees",

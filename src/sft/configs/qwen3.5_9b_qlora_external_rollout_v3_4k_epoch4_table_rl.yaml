@@ -1,0 +1,48 @@
+# LLaMA-Factory SFT config — Qwen3.5-9B QLoRA on DS v4 flash external-rollout v3 <=4k data.
+# table_rl server variant: paths live under /home/dengyan/tabular_rl_outputs.
+
+### model
+model_name_or_path: /home/dengyan/models/Qwen3.5-9B
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: external_rollout_flash_train1k_v3_success881_4k
+dataset_dir: /home/dengyan/tabular_rl_outputs/sft
+template: qwen
+cutoff_len: 4096
+overwrite_cache: true
+preprocessing_num_workers: 4
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-external-rollout-v3-success831-4k-epoch4-qlora
+logging_steps: 5
+save_strategy: "epoch"
+plot_loss: true
+overwrite_output_dir: true
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 1.0e-4
+num_train_epochs: 4.0
+optim: paged_adamw_8bit
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+
+### eval
+val_size: 0
+eval_strategy: "no"

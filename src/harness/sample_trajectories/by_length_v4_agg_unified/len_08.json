@@ -1,0 +1,1041 @@
+{
+  "trajectory_id": "spider_dev_41",
+  "schema_version": "v4-agg-unified",
+  "source": {
+    "dataset": "spider",
+    "db_id": "concert_singer",
+    "gold_sql": "SELECT T2.name ,  T2.location FROM concert AS T1 JOIN stadium AS T2 ON T1.stadium_id  =  T2.stadium_id WHERE T1.Year  =  2014 INTERSECT SELECT T2.name ,  T2.location FROM concert AS T1 JOIN stadium AS T2 ON T1.stadium_id  =  T2.stadium_id WHERE T1.Year  =  2015"
+  },
+  "question": "Find the name and location of the stadiums which some concerts happened in the years of both 2014 and 2015.",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "stadium",
+          "num_rows": 9
+        },
+        {
+          "table_name": "singer",
+          "num_rows": 6
+        },
+        {
+          "table_name": "concert",
+          "num_rows": 6
+        },
+        {
+          "table_name": "singer_in_concert",
+          "num_rows": 10
+        }
+      ],
+      "relations": [
+        {
+          "from": "concert.Stadium_ID",
+          "to": "stadium.Stadium_ID"
+        },
+        {
+          "from": "singer_in_concert.Singer_ID",
+          "to": "singer.Singer_ID"
+        },
+        {
+          "from": "singer_in_concert.concert_ID",
+          "to": "concert.concert_ID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "tables": [
+            "concert",
+            "stadium"
+          ],
+          "on": [
+            [
+              {
+                "left": "stadium_id",
+                "right": "stadium_id"
+              }
+            ]
+          ],
+          "join_types": [
+            "inner"
+          ],
+          "prefixes": [
+            "T1",
+            "T2"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "concert",
+          "role": "table",
+          "target": {
+            "table": "concert"
+          }
+        },
+        {
+          "type": "data",
+          "source": "stadium",
+          "role": "table",
+          "target": {
+            "table": "stadium"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__concert_ID",
+          "T1__concert_Name",
+          "T1__Theme",
+          "T1__Stadium_ID",
+          "T1__Year",
+          "T2__Stadium_ID",
+          "T2__Location",
+          "T2__Name",
+          "T2__Capacity",
+          "T2__Highest",
+          "T2__Lowest",
+          "T2__Average"
+        ],
+        "row_count": 6
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_001",
+          "conditions": {
+            "column": "T1__Year",
+            "op": "=",
+            "value": 2014
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_1",
+          "role": "table",
+          "target": {
+            "handle": "join_001"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_002"
+      },
+      "tool_output": {
+        "table": "filter_002",
+        "kind": "filter",
+        "columns": [
+          "T1__concert_ID",
+          "T1__concert_Name",
+          "T1__Theme",
+          "T1__Stadium_ID",
+          "T1__Year",
+          "T2__Stadium_ID",
+          "T2__Location",
+          "T2__Name",
+          "T2__Capacity",
+          "T2__Highest",
+          "T2__Lowest",
+          "T2__Average"
+        ],
+        "row_count": 3
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_002",
+          "expressions": [
+            "T2__name",
+            "T2__location"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "filter_002"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_003"
+      },
+      "tool_output": {
+        "table": "project_003",
+        "kind": "project",
+        "columns": [
+          "T2__Name",
+          "T2__Location"
+        ],
+        "row_count": 3
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "project_003": {
+            "kind": "project",
+            "row_count": 3,
+            "created_by": "step_3",
+            "columns": [
+              "T2__Name",
+              "T2__Location"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "tables": [
+            "concert",
+            "stadium"
+          ],
+          "on": [
+            [
+              {
+                "left": "stadium_id",
+                "right": "stadium_id"
+              }
+            ]
+          ],
+          "join_types": [
+            "inner"
+          ],
+          "prefixes": [
+            "T1",
+            "T2"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "concert",
+          "role": "table",
+          "target": {
+            "table": "concert"
+          }
+        },
+        {
+          "type": "data",
+          "source": "stadium",
+          "role": "table",
+          "target": {
+            "table": "stadium"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_004"
+      },
+      "tool_output": {
+        "table": "join_004",
+        "kind": "join",
+        "columns": [
+          "T1__concert_ID",
+          "T1__concert_Name",
+          "T1__Theme",
+          "T1__Stadium_ID",
+          "T1__Year",
+          "T2__Stadium_ID",
+          "T2__Location",
+          "T2__Name",
+          "T2__Capacity",
+          "T2__Highest",
+          "T2__Lowest",
+          "T2__Average"
+        ],
+        "row_count": 6
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "project_003": {
+            "kind": "project",
+            "row_count": 3,
+            "created_by": "step_3",
+            "columns": [
+              "T2__Name",
+              "T2__Location"
+            ]
+          },
+          "join_004": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_4",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_004",
+          "conditions": {
+            "column": "T1__Year",
+            "op": "=",
+            "value": 2015
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "table",
+          "target": {
+            "handle": "join_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_005"
+      },
+      "tool_output": {
+        "table": "filter_005",
+        "kind": "filter",
+        "columns": [
+          "T1__concert_ID",
+          "T1__concert_Name",
+          "T1__Theme",
+          "T1__Stadium_ID",
+          "T1__Year",
+          "T2__Stadium_ID",
+          "T2__Location",
+          "T2__Name",
+          "T2__Capacity",
+          "T2__Highest",
+          "T2__Lowest",
+          "T2__Average"
+        ],
+        "row_count": 3
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "project_003": {
+            "kind": "project",
+            "row_count": 3,
+            "created_by": "step_3",
+            "columns": [
+              "T2__Name",
+              "T2__Location"
+            ]
+          },
+          "join_004": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_4",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "filter_005": {
+            "kind": "filter",
+            "row_count": 3,
+            "created_by": "step_5",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_005",
+          "expressions": [
+            "T2__name",
+            "T2__location"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_5",
+          "role": "table",
+          "target": {
+            "handle": "filter_005"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_006"
+      },
+      "tool_output": {
+        "table": "project_006",
+        "kind": "project",
+        "columns": [
+          "T2__Name",
+          "T2__Location"
+        ],
+        "row_count": 3
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "project_003": {
+            "kind": "project",
+            "row_count": 3,
+            "created_by": "step_3",
+            "columns": [
+              "T2__Name",
+              "T2__Location"
+            ]
+          },
+          "join_004": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_4",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "filter_005": {
+            "kind": "filter",
+            "row_count": 3,
+            "created_by": "step_5",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "project_006": {
+            "kind": "project",
+            "row_count": 3,
+            "created_by": "step_6",
+            "columns": [
+              "T2__Name",
+              "T2__Location"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Combine the two row sets with the set operation.",
+      "tool_call": {
+        "tool": "set_op",
+        "arguments": {
+          "left": "project_003",
+          "right": "project_006",
+          "op": "intersect"
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_3",
+          "role": "table",
+          "target": {
+            "handle": "project_003"
+          }
+        },
+        {
+          "type": "data",
+          "step": "step_6",
+          "role": "table",
+          "target": {
+            "handle": "project_006"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "setop_007"
+      },
+      "tool_output": {
+        "table": "setop_007",
+        "kind": "setop",
+        "columns": [
+          "T2__Name",
+          "T2__Location"
+        ],
+        "row_count": 1
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "project_003": {
+            "kind": "project",
+            "row_count": 3,
+            "created_by": "step_3",
+            "columns": [
+              "T2__Name",
+              "T2__Location"
+            ]
+          },
+          "join_004": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_4",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "filter_005": {
+            "kind": "filter",
+            "row_count": 3,
+            "created_by": "step_5",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "project_006": {
+            "kind": "project",
+            "row_count": 3,
+            "created_by": "step_6",
+            "columns": [
+              "T2__Name",
+              "T2__Location"
+            ]
+          },
+          "setop_007": {
+            "kind": "setop",
+            "row_count": 1,
+            "created_by": "step_7",
+            "columns": [
+              "T2__Name",
+              "T2__Location"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_8",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "Somerset Park",
+              "Ayr United"
+            ]
+          ],
+          "evidence": {
+            "table": "setop_007"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_7",
+          "role": "table",
+          "target": {
+            "handle": "setop_007"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "Somerset Park",
+            "Ayr United"
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_1",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "filter_002": {
+            "kind": "filter",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "project_003": {
+            "kind": "project",
+            "row_count": 3,
+            "created_by": "step_3",
+            "columns": [
+              "T2__Name",
+              "T2__Location"
+            ]
+          },
+          "join_004": {
+            "kind": "join",
+            "row_count": 6,
+            "created_by": "step_4",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "filter_005": {
+            "kind": "filter",
+            "row_count": 3,
+            "created_by": "step_5",
+            "columns": [
+              "T1__concert_ID",
+              "T1__concert_Name",
+              "T1__Theme",
+              "T1__Stadium_ID",
+              "T1__Year",
+              "T2__Stadium_ID",
+              "T2__Location",
+              "T2__Name",
+              "T2__Capacity",
+              "T2__Highest",
+              "T2__Lowest",
+              "T2__Average"
+            ]
+          },
+          "project_006": {
+            "kind": "project",
+            "row_count": 3,
+            "created_by": "step_6",
+            "columns": [
+              "T2__Name",
+              "T2__Location"
+            ]
+          },
+          "setop_007": {
+            "kind": "setop",
+            "row_count": 1,
+            "created_by": "step_7",
+            "columns": [
+              "T2__Name",
+              "T2__Location"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "Somerset Park",
+      "Ayr United"
+    ]
+  ]
+}

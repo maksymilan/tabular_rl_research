@@ -3,14 +3,14 @@
 
 The output is still a skeleton trajectory file, not final SFT-ready clean data. For clean SFT, run
 `enrich_traj.py` on the selected ids and train only on the resulting `quality_status == "ready"`
-v3-enriched file.
+current enriched file.
 
 Why: the full set is overkill for the new (more expensive, LLM-in-the-loop) enrichment. A length-
 stratified, DB-diverse subset keeps the difficulty spread of the original while cutting API cost and
 training time.
 
 Outputs (under data/trajectories/):
-  subset_<N>.jsonl        selected current-protocol skeleton trajectories (v3, no memory)
+  subset_<N>.jsonl        selected current-protocol skeleton trajectories (no memory)
   subset_<N>.ids.json     {"subset": [...ids], "smoke": [...10 ids]} for downstream stages
 The 10 smoke ids span the length range EVENLY (not all short), for the human-reviewed smoke test.
 
@@ -30,14 +30,13 @@ import random
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-DEFAULT_SOURCE = os.path.join(ROOT, "data", "trajectories", "spider_train_v3.jsonl")
+DEFAULT_SOURCE = os.path.join(ROOT, "data", "trajectories", "spider_train_v4_agg_unified.jsonl")
 MEMORY_TOOLS = {"add_to_memory", "refine_memory"}
 OPERATION_TOOLS = {
     "condition_filter",
     "project",
     "join_tables",
     "group_aggregate",
-    "aggregate",
     "extreme_value_select",
     "set_op",
     "derive_column",
@@ -75,10 +74,12 @@ def load_skeletons(path: str, *, allow_legacy_source: bool = False) -> list[dict
             if line:
                 traj = json.loads(line)
                 schema_version = str(traj.get("schema_version", ""))
-                if not allow_legacy_source and not schema_version.startswith("v3"):
+                if not allow_legacy_source and not (
+                    schema_version.startswith("v3") or schema_version.startswith("v4")
+                ):
                     raise ValueError(
-                        f"{path}:{line_no}: expected current v3 schema, got {schema_version!r}. "
-                        "Regenerate with `src/harness/gen_trajectories.py train --tag=_v3` or pass "
+                        f"{path}:{line_no}: expected current v3/v4 schema, got {schema_version!r}. "
+                        "Regenerate with `src/harness/gen_trajectories.py train --tag=_v4_agg_unified` or pass "
                         "--allow-legacy-source only for migration/debugging."
                     )
                 if not allow_legacy_source and has_memory_residue(traj):
@@ -141,11 +142,11 @@ def trajectory_tags(traj: dict) -> set[str]:
             aggs = args.get("aggregations") or []
             if not group_by:
                 tags.add("feature:whole_table_group_aggregate")
+                if len(aggs) == 1:
+                    tags.add("feature:single_scalar_group_aggregate")
             if len(aggs) >= 2:
                 tags.add("feature:multi_aggregate")
                 tags.add("feature:grouped_multi_agg" if group_by else "feature:whole_table_multi_agg")
-        elif tool == "aggregate":
-            tags.add("feature:single_scalar_aggregate")
         elif tool == "extreme_value_select":
             tags.add("feature:extreme_value_select")
     return tags
@@ -275,7 +276,7 @@ def build_tool_targets(
         name = tag.removeprefix("feature:")
         if name in RARE_FEATURES:
             targets[tag] = min(available, max(rare_min, min(available, feature_min)))
-        elif name in {"join_2way", "single_scalar_aggregate", "extreme_value_select"}:
+        elif name in {"join_2way", "single_scalar_group_aggregate", "extreme_value_select"}:
             targets[tag] = min(available, feature_min)
     return {tag: quota for tag, quota in targets.items() if quota > 0}
 
@@ -431,7 +432,7 @@ def print_tool_report(label: str, trajs: list[dict]) -> None:
         tag: count for tag, count in tag_counts.items()
         if tag.startswith("feature:") and (
             tag.removeprefix("feature:") in RARE_FEATURES
-            or tag.removeprefix("feature:") in {"join_2way", "single_scalar_aggregate", "extreme_value_select"}
+            or tag.removeprefix("feature:") in {"join_2way", "single_scalar_group_aggregate", "extreme_value_select"}
         )
     }
     if interesting:
@@ -462,7 +463,7 @@ def main() -> int:
     ap.add_argument("--out-prefix", default=None,
                     help="output prefix under data/trajectories; default subset_<N>")
     ap.add_argument("--source", default=DEFAULT_SOURCE,
-                    help="current-protocol skeleton JSONL source; default spider_train_v3.jsonl")
+                    help="current-protocol skeleton JSONL source; default spider_train_v4_agg_unified.jsonl")
     ap.add_argument("--allow-legacy-source", action="store_true",
                     help="allow non-v3/memory-bearing sources for one-off migration/debugging only")
     ap.add_argument("--exclude-ids", action="append", default=[],

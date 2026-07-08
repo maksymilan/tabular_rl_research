@@ -47,9 +47,12 @@ def run():
             and len(pn[0].args["on"]) == 2 and pn[0].args.get("prefixes") == ["a", "b", "c"],
             str(pn[0]))
 
-    # scalar aggregate (no GROUP BY) -> terminal aggregate
+    # scalar aggregate (no GROUP BY) -> single-row group_aggregate
     ps = Compiler().compile("SELECT COUNT(*) FROM employees")
-    t.check("scalar aggregate terminal", ps[-1].tool == "aggregate" and ps[-1].args["op"] == "count", str(ps))
+    t.check("scalar aggregate as group_aggregate",
+            ps[-1].tool == "group_aggregate"
+            and ps[-1].args["group_by"] == []
+            and ps[-1].args["aggregations"][0]["op"] == "count", str(ps))
 
     # DISTINCT -> group_aggregate with no aggregations
     pd = Compiler().compile("SELECT DISTINCT dept FROM employees")
@@ -73,13 +76,13 @@ def run():
     pm = Compiler().compile("SELECT MAX(salary), MIN(salary) FROM employees")
     t.check("multi scalar agg", pm[-1].tool == "group_aggregate" and pm[-1].args["group_by"] == [], str(pm[-1]))
 
-    # scalar subquery -> aggregate + filter referencing it directly via value_ref (no memory step)
+    # scalar subquery -> scalar-shaped group_aggregate + filter referencing it directly via value_ref
     psub = Compiler().compile("SELECT name FROM employees WHERE salary > (SELECT AVG(salary) FROM employees)")
     tools = [s.tool for s in psub]
-    agg = next(s for s in psub if s.tool == "aggregate")
+    agg = next(s for s in psub if s.tool == "group_aggregate" and s.args.get("group_by") == [])
     filt = next(s for s in psub if s.tool == "condition_filter")
-    t.check("scalar subquery -> aggregate + value_ref(step)",
-            tools[:2] == ["aggregate", "condition_filter"]
+    t.check("scalar subquery -> group_aggregate + value_ref(step)",
+            tools[:2] == ["group_aggregate", "condition_filter"]
             and filt.args["conditions"].get("value_ref") == agg.id, str(tools))
 
     # IN (subquery) -> compile the subquery to a table, test membership via in_table

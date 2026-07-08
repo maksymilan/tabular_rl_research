@@ -18,13 +18,14 @@ def run():
     gold = h.gold("SELECT dept,AVG(salary) FROM employees WHERE salary>1000 GROUP BY dept")
     t.check("step-id threading s1->s2", norm(got) == norm(gold), str(got))
 
-    # terminal scalar tool returns one row
+    # whole-table scalar aggregate returns one row as a table
     plan2 = [
         Step("s1", "condition_filter",
              {"table": "employees", "conditions": [{"column": "dept", "op": "=", "value": "eng"}]}),
-        Step("s2", "aggregate", {"table": "s1", "column": "*", "op": "count"}),
+        Step("s2", "group_aggregate",
+             {"table": "s1", "group_by": [], "aggregations": [{"op": "count", "column": "*", "as": "count_1"}]}),
     ]
-    t.check("terminal scalar wraps as row", run_plan(h, plan2) == [(3,)], str(run_plan(h, plan2)))
+    t.check("scalar aggregate table returns one row", run_plan(h, plan2) == [(3,)], str(run_plan(h, plan2)))
 
     # source-table reference (no step id) passes through unchanged
     plan3 = [Step("s1", "project", {"table": "depts", "expressions": ["location"]})]

@@ -10,8 +10,8 @@ online.
 
 `history` is `{step_id -> {"tool", "arguments", "output", "references"}}` for already-executed,
 successful steps (the emitter's running step list / the rollout tool history). `output` is the
-step's tool_output dict (`aggregate -> {"result_sample": [[v]], ...}`; a table -> a metadata handle
-that carries `rows`/`columns` only when it is a 1x1 scalar-shaped result).
+step's tool_output dict (legacy `aggregate -> {"result_sample": [[v]], ...}`; a table -> a
+metadata handle that carries `rows`/`columns` only when it is a 1x1 scalar-shaped result).
 
 Only an unambiguous scalar source is accepted: a scalar tool result, or a one-row one-column table,
 non-NULL. Everything else is rejected (never guessed), so a `value_ref` can never resolve to an

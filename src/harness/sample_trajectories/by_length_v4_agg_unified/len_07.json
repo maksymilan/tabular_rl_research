@@ -1,0 +1,1053 @@
+{
+  "trajectory_id": "spider_dev_65",
+  "schema_version": "v4-agg-unified",
+  "source": {
+    "dataset": "spider",
+    "db_id": "pets_1",
+    "gold_sql": "SELECT T1.fname ,  T1.age FROM student AS T1 JOIN has_pet AS T2 ON T1.stuid  =  T2.stuid JOIN pets AS T3 ON T3.petid  =  T2.petid WHERE T3.pettype  =  'dog' AND T1.stuid NOT IN (SELECT T1.stuid FROM student AS T1 JOIN has_pet AS T2 ON T1.stuid  =  T2.stuid JOIN pets AS T3 ON T3.petid  =  T2.petid WHERE T3.pettype  =  'cat')"
+  },
+  "question": "Find the first name and age of students who have a dog but do not have a cat as a pet.",
+  "label_status": "verified",
+  "initial_state": {
+    "dataset_overview": {
+      "tables": [
+        {
+          "table_name": "Student",
+          "num_rows": 34
+        },
+        {
+          "table_name": "Has_Pet",
+          "num_rows": 3
+        },
+        {
+          "table_name": "Pets",
+          "num_rows": 3
+        }
+      ],
+      "relations": [
+        {
+          "from": "Has_Pet.StuID",
+          "to": "Student.StuID"
+        },
+        {
+          "from": "Has_Pet.PetID",
+          "to": "Pets.PetID"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "tables": [
+            "student",
+            "has_pet",
+            "pets"
+          ],
+          "on": [
+            [
+              {
+                "left": "stuid",
+                "right": "stuid"
+              }
+            ],
+            [
+              {
+                "left": "T2__petid",
+                "right": "petid"
+              }
+            ]
+          ],
+          "join_types": [
+            "inner",
+            "inner"
+          ],
+          "prefixes": [
+            "T1",
+            "T2",
+            "T3"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "student",
+          "role": "table",
+          "target": {
+            "table": "student"
+          }
+        },
+        {
+          "type": "data",
+          "source": "has_pet",
+          "role": "table",
+          "target": {
+            "table": "has_pet"
+          }
+        },
+        {
+          "type": "data",
+          "source": "pets",
+          "role": "table",
+          "target": {
+            "table": "pets"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_001"
+      },
+      "tool_output": {
+        "table": "join_001",
+        "kind": "join",
+        "columns": [
+          "T1__StuID",
+          "T1__LName",
+          "T1__Fname",
+          "T1__Age",
+          "T1__Sex",
+          "T1__Major",
+          "T1__Advisor",
+          "T1__city_code",
+          "T2__StuID",
+          "T2__PetID",
+          "T3__PetID",
+          "T3__PetType",
+          "T3__pet_age",
+          "T3__weight"
+        ],
+        "row_count": 3
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_1",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_2",
+      "think": "Join the two tables on their key to combine the needed columns.",
+      "tool_call": {
+        "tool": "join_tables",
+        "arguments": {
+          "tables": [
+            "student",
+            "has_pet",
+            "pets"
+          ],
+          "on": [
+            [
+              {
+                "left": "stuid",
+                "right": "stuid"
+              }
+            ],
+            [
+              {
+                "left": "T2__petid",
+                "right": "petid"
+              }
+            ]
+          ],
+          "join_types": [
+            "inner",
+            "inner"
+          ],
+          "prefixes": [
+            "T1",
+            "T2",
+            "T3"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "source": "student",
+          "role": "table",
+          "target": {
+            "table": "student"
+          }
+        },
+        {
+          "type": "data",
+          "source": "has_pet",
+          "role": "table",
+          "target": {
+            "table": "has_pet"
+          }
+        },
+        {
+          "type": "data",
+          "source": "pets",
+          "role": "table",
+          "target": {
+            "table": "pets"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "join_002"
+      },
+      "tool_output": {
+        "table": "join_002",
+        "kind": "join",
+        "columns": [
+          "T1__StuID",
+          "T1__LName",
+          "T1__Fname",
+          "T1__Age",
+          "T1__Sex",
+          "T1__Major",
+          "T1__Advisor",
+          "T1__city_code",
+          "T2__StuID",
+          "T2__PetID",
+          "T3__PetID",
+          "T3__PetType",
+          "T3__pet_age",
+          "T3__weight"
+        ],
+        "row_count": 3
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_1",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "join_002": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_3",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_002",
+          "conditions": {
+            "column": "T3__pettype",
+            "op": "=",
+            "value": "cat"
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_2",
+          "role": "table",
+          "target": {
+            "handle": "join_002"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_003"
+      },
+      "tool_output": {
+        "table": "filter_003",
+        "kind": "filter",
+        "columns": [
+          "T1__StuID",
+          "T1__LName",
+          "T1__Fname",
+          "T1__Age",
+          "T1__Sex",
+          "T1__Major",
+          "T1__Advisor",
+          "T1__city_code",
+          "T2__StuID",
+          "T2__PetID",
+          "T3__PetID",
+          "T3__PetType",
+          "T3__pet_age",
+          "T3__weight"
+        ],
+        "row_count": 1
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_1",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "join_002": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_3",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_4",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_003",
+          "expressions": [
+            "T1__stuid"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_3",
+          "role": "table",
+          "target": {
+            "handle": "filter_003"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_004"
+      },
+      "tool_output": {
+        "table": "project_004",
+        "kind": "project",
+        "columns": [
+          "T1__StuID"
+        ],
+        "row_count": 1,
+        "rows": [
+          [
+            1001
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_1",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "join_002": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_3",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "project_004": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_4",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    1001
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_4",
+            "columns": [
+              "T1__StuID"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_5",
+      "think": "Filter to the rows that satisfy the WHERE conditions.",
+      "tool_call": {
+        "tool": "condition_filter",
+        "arguments": {
+          "table": "join_001",
+          "conditions": {
+            "and": [
+              {
+                "column": "T3__pettype",
+                "op": "=",
+                "value": "dog"
+              },
+              {
+                "not": {
+                  "column": "T1__stuid",
+                  "op": "in",
+                  "in_table": "project_004"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_1",
+          "role": "table",
+          "target": {
+            "handle": "join_001"
+          }
+        },
+        {
+          "type": "data",
+          "step": "step_4",
+          "role": "in_table",
+          "target": {
+            "handle": "project_004"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "filter_005"
+      },
+      "tool_output": {
+        "table": "filter_005",
+        "kind": "filter",
+        "columns": [
+          "T1__StuID",
+          "T1__LName",
+          "T1__Fname",
+          "T1__Age",
+          "T1__Sex",
+          "T1__Major",
+          "T1__Advisor",
+          "T1__city_code",
+          "T2__StuID",
+          "T2__PetID",
+          "T3__PetID",
+          "T3__PetType",
+          "T3__pet_age",
+          "T3__weight"
+        ],
+        "row_count": 2
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_1",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "join_002": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_3",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "project_004": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_4",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    1001
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_4",
+            "columns": [
+              "T1__StuID"
+            ]
+          },
+          "filter_005": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_5",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_6",
+      "think": "Project the output columns the question asks for.",
+      "tool_call": {
+        "tool": "project",
+        "arguments": {
+          "table": "filter_005",
+          "expressions": [
+            "T1__fname",
+            "T1__age"
+          ]
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_5",
+          "role": "table",
+          "target": {
+            "handle": "filter_005"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "table",
+        "handle": "project_006"
+      },
+      "tool_output": {
+        "table": "project_006",
+        "kind": "project",
+        "columns": [
+          "T1__Fname",
+          "T1__Age"
+        ],
+        "row_count": 2
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_1",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "join_002": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_3",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "project_004": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_4",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    1001
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_4",
+            "columns": [
+              "T1__StuID"
+            ]
+          },
+          "filter_005": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_5",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "project_006": {
+            "kind": "project",
+            "row_count": 2,
+            "created_by": "step_6",
+            "columns": [
+              "T1__Fname",
+              "T1__Age"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step_id": "step_7",
+      "think": "Answer the question from the final evidence rows.",
+      "tool_call": {
+        "tool": "answer_from_context",
+        "arguments": {
+          "answer": [
+            [
+              "Tracy",
+              19
+            ],
+            [
+              "Tracy",
+              19
+            ]
+          ],
+          "evidence": {
+            "table": "project_006"
+          },
+          "reason": "Derived by the verified tool chain."
+        }
+      },
+      "references": [
+        {
+          "type": "data",
+          "step": "step_6",
+          "role": "table",
+          "target": {
+            "handle": "project_006"
+          }
+        }
+      ],
+      "produces": {
+        "kind": "answer"
+      },
+      "tool_output": {
+        "final_answer": [
+          [
+            "Tracy",
+            19
+          ],
+          [
+            "Tracy",
+            19
+          ]
+        ]
+      },
+      "environment_state": {
+        "plan": [],
+        "tables": {
+          "join_001": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_1",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "join_002": {
+            "kind": "join",
+            "row_count": 3,
+            "created_by": "step_2",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "filter_003": {
+            "kind": "filter",
+            "row_count": 1,
+            "created_by": "step_3",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "project_004": {
+            "kind": "project",
+            "row_count": 1,
+            "reads": [
+              {
+                "from_step": "step_4",
+                "row_count": 1,
+                "limit": null,
+                "truncated": null,
+                "rows": [
+                  [
+                    1001
+                  ]
+                ],
+                "note": "inline table output preview"
+              }
+            ],
+            "created_by": "step_4",
+            "columns": [
+              "T1__StuID"
+            ]
+          },
+          "filter_005": {
+            "kind": "filter",
+            "row_count": 2,
+            "created_by": "step_5",
+            "columns": [
+              "T1__StuID",
+              "T1__LName",
+              "T1__Fname",
+              "T1__Age",
+              "T1__Sex",
+              "T1__Major",
+              "T1__Advisor",
+              "T1__city_code",
+              "T2__StuID",
+              "T2__PetID",
+              "T3__PetID",
+              "T3__PetType",
+              "T3__pet_age",
+              "T3__weight"
+            ]
+          },
+          "project_006": {
+            "kind": "project",
+            "row_count": 2,
+            "created_by": "step_6",
+            "columns": [
+              "T1__Fname",
+              "T1__Age"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "final_answer": [
+    [
+      "Tracy",
+      19
+    ],
+    [
+      "Tracy",
+      19
+    ]
+  ]
+}

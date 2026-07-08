@@ -108,7 +108,7 @@ def validate_trajectory(
         raise ValueError(f"{where}: trajectory is not execution-verified")
     if not allow_legacy_memory and has_memory_residue(traj):
         raise ValueError(
-            f"{where}: memory residue found. Current SFT exports must use the v3 no-memory "
+            f"{where}: memory residue found. Current SFT exports must use the current no-memory "
             "trajectory protocol; pass --allow-legacy-memory only for reproducing old runs."
         )
     steps = traj.get("steps")

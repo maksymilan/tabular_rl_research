@@ -13,15 +13,18 @@ Modes
            No model: re-executes recorded dev trajectories through the same loop machinery.
            Verified data must score ~100% — this validates executor wiring + scoring.
 
-Scoring: prefer the rows of the evidence table the model cites (answers are grounded in
-cited tables; also robust to >50-row answers, which the answer field truncates); fall back
-to the literal answer rows for scalars / missing citation.
+Scoring: prefer the rows of the evidence table the model cites when that table already matches
+the gold answer. If the cited table is broader than the final answer, fall back to the explicit
+`answer` field so a correct scalar/projection is not marked wrong just because the evidence table
+contains extra columns.
 """
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -40,7 +43,7 @@ from scalar_grounding import extract_scalar                    # noqa: E402
 from provenance import build_references                        # noqa: E402
 from emitter import _catalog                                   # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
-from protocol import (ProtocolError, TOOLS, get_system_prompt,  # noqa: E402
+from protocol import (ACCEPTED_TOOLS, ProtocolError, get_system_prompt,  # noqa: E402
                       assistant_message, first_user_message, parse_assistant,
                       rows_equal, tool_output_message, with_environment_state)
 
@@ -88,14 +91,47 @@ def new_ctx(catalog: dict | None = None) -> dict:
     return {"history": {}, "handle_to_step": {}, "environment": EnvironmentState(catalog)}
 
 
-def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
+def _preview_table_rows(h: Harness, table: str, limit: int) -> list[list]:
+    """Return a bounded inline preview for a table handle without materializing the full table."""
+    if limit <= 0:
+        return []
+    rows = h.conn.execute(f"SELECT * FROM {h._src(table)} LIMIT {int(limit)}").fetchall()
+    return [list(r) for r in rows]
+
+
+def _table_from_step(ctx: dict, ref):
+    if not isinstance(ref, str):
+        return ref
+    record = ctx.get("history", {}).get(ref)
+    if not isinstance(record, dict):
+        return ref
+    output = record.get("output") or {}
+    return output.get("table") or ref
+
+
+def _normalize_table_refs(args, ctx: dict, parent_key: str | None = None):
+    table_keys = {"table", "left", "right", "in_table"}
+    if isinstance(args, list):
+        return [_normalize_table_refs(item, ctx, parent_key) for item in args]
+    if isinstance(args, dict):
+        if parent_key in {"left", "right"} and set(args) == {"table"}:
+            return _table_from_step(ctx, args["table"])
+        return {key: _normalize_table_refs(value, ctx, key) for key, value in args.items()}
+    if parent_key in table_keys:
+        return _table_from_step(ctx, args)
+    return args
+
+
+def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
+                 table_output_rows: int = 0):
     """Run one tool call, threading online provenance in `ctx`. Returns (output, created|None).
 
     V2b: a predicate's `value_ref` cites the producing step_id directly (no add_to_memory); the
     harness grounds the scalar from `ctx["history"]` with strict validation. An illegal value_ref
     (unknown step / non-scalar source) raises ScalarGroundingError -> surfaced as an execution_error."""
-    if tool not in TOOLS or tool == "answer_from_context":
+    if tool not in ACCEPTED_TOOLS or tool == "answer_from_context":
         raise ProtocolError(f"tool {tool!r} not executable here")
+    args = _normalize_table_refs(args, ctx)
 
     def resolve_step(ref):
         if ref in ctx["handle_to_step"]:
@@ -127,8 +163,14 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
     if isinstance(out, dict) and "table_name" in out:
         output = {"table": out["table_name"], "kind": out["kind"],     # V2-ctx: metadata-only handle
                   "columns": out["columns"], "row_count": out["row_count"]}
-        if out["row_count"] == 1 and len(out["columns"]) == 1:         # scalar-shaped result keeps its cell
-            output["rows"] = [list(r) for r in h.rows(out["table_name"])]
+        preview_limit = max(0, int(table_output_rows or 0))
+        if preview_limit:
+            rows = _preview_table_rows(h, out["table_name"], preview_limit)
+            output["rows"] = rows
+            output["preview_limit"] = preview_limit
+            output["rows_truncated"] = out["row_count"] > len(rows)
+        elif out["row_count"] == 1 and len(out["columns"]) == 1:       # scalar-shaped result keeps its cell
+            output["rows"] = _preview_table_rows(h, out["table_name"], 1)
         ctx["handle_to_step"][out["table_name"]] = step_id
         created = out["table_name"]
     else:
@@ -140,22 +182,207 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str):
     return output, created
 
 
+def _evidence_table(evidence) -> str | None:
+    if isinstance(evidence, str):
+        return evidence
+    if isinstance(evidence, dict):
+        return evidence.get("table")
+    return None
+
+
+def _gold_width(gold: list) -> int | None:
+    if not gold:
+        return None
+    first = gold[0]
+    try:
+        return len(first)
+    except TypeError:
+        return 1
+
+
+def _dedupe_row_candidates(candidates: list[list]) -> list[list]:
+    seen = set()
+    out = []
+    for rows in candidates:
+        try:
+            key = json.dumps(rows, ensure_ascii=False, sort_keys=True, default=str)
+        except TypeError:
+            key = repr(rows)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(rows)
+    return out
+
+
+def answer_row_candidates(answer, gold: list | None = None) -> list[list]:
+    """Return plausible row-shaped interpretations of a model-authored final answer.
+
+    The model often writes compact scalar answers as `151` or `[151]`, while SQL gold rows are
+    represented as `[[151]]`. For single-column multi-row answers it may write `["a", "b"]`.
+    Keep evidence-table scoring strict, but make this explicit-answer fallback tolerant.
+    """
+    width = _gold_width(gold or [])
+    candidates: list[list] = []
+    if answer is None:
+        return [[]]
+    if isinstance(answer, (str, int, float, bool)):
+        return [[[answer]]]
+    if isinstance(answer, tuple):
+        answer = list(answer)
+    if not isinstance(answer, list):
+        return [[[answer]]]
+    if not answer:
+        return [[]]
+
+    if all(isinstance(item, (list, tuple)) for item in answer):
+        candidates.append([list(row) for row in answer])
+    elif any(isinstance(item, (list, tuple)) for item in answer):
+        candidates.append([list(item) if isinstance(item, (list, tuple)) else [item] for item in answer])
+    else:
+        if width == 1 or width is None:
+            candidates.append([[item] for item in answer])
+        if width and len(answer) == width:
+            candidates.append([answer])
+        if len(answer) == 1:
+            candidates.append([[answer[0]]])
+        candidates.append([answer])
+    return _dedupe_row_candidates(candidates)
+
+
+def _rows_equal_safe(pred, gold) -> bool:
+    try:
+        return rows_equal(pred, gold)
+    except Exception:
+        return False
+
+
+def projected_row_candidates(rows, gold: list | None = None, max_combinations: int = 5000) -> list[list]:
+    """Permute same-width evidence columns to tolerate answer-column order differences.
+
+    This is only used after exact evidence matching and explicit-answer matching fail. It must not
+    drop columns from a broader evidence table: answer_from_context cites the table as the final
+    answer, so a table with extra helper columns is not an exact final answer.
+    """
+    width = _gold_width(gold or [])
+    if width is None or width <= 0 or not rows:
+        return []
+    try:
+        row_width = len(rows[0])
+    except TypeError:
+        return []
+    if row_width != width:
+        return []
+
+    candidates: list[list] = []
+    for count, cols in enumerate(itertools.permutations(range(row_width), width), 1):
+        if count > max_combinations:
+            break
+        try:
+            candidates.append([[row[i] for i in cols] for row in rows])
+        except (IndexError, TypeError):
+            continue
+    return _dedupe_row_candidates(candidates)
+
+
 def score(h: Harness, gold_sql: str, answer_args: dict, created: set) -> tuple[bool, list, list]:
     gold = h.gold(gold_sql)
-    ev = (answer_args.get("evidence") or {}).get("table")
-    pred = None
-    if ev and ev in created:
+    ev = _evidence_table(answer_args.get("evidence"))
+    evidence_rows = None
+    if ev and (ev in created or ev in getattr(h, "views", {})):
         try:
-            pred = h.rows(ev)
+            evidence_rows = h.rows(ev)
         except Exception:
-            pred = None
-    if pred is None:
-        pred = answer_args.get("answer") or []
+            evidence_rows = None
+    if evidence_rows is not None and _rows_equal_safe(evidence_rows, gold):
+        return True, evidence_rows[:5], gold[:5]
+
+    answer_candidates = answer_row_candidates(answer_args.get("answer"), gold)
+    for candidate in answer_candidates:
+        if _rows_equal_safe(candidate, gold):
+            return True, candidate[:5], gold[:5]
+
+    if evidence_rows is not None:
+        for candidate in projected_row_candidates(evidence_rows, gold):
+            if _rows_equal_safe(candidate, gold):
+                return True, candidate[:5], gold[:5]
+
+    pred = evidence_rows if evidence_rows is not None else (answer_candidates[0] if answer_candidates else [])
+    return False, pred[:5], gold[:5]
+
+
+def _condition_table_refs(cond) -> list[str]:
+    if isinstance(cond, list):
+        refs = []
+        for item in cond:
+            refs.extend(_condition_table_refs(item))
+        return refs
+    if not isinstance(cond, dict):
+        return []
+    refs = []
+    if isinstance(cond.get("in_table"), str):
+        refs.append(cond["in_table"])
+    for key in ("and", "or"):
+        for item in cond.get(key, []) or []:
+            refs.extend(_condition_table_refs(item))
+    if "not" in cond:
+        refs.extend(_condition_table_refs(cond["not"]))
+    return refs
+
+
+def _arg_table_refs(tool: str | None, args: dict | None) -> list[str]:
+    if not isinstance(args, dict):
+        return []
+    refs = []
+    for key in ("table", "left", "right"):
+        if isinstance(args.get(key), str):
+            refs.append(args[key])
+    if isinstance(args.get("tables"), list):
+        refs.extend(item for item in args["tables"] if isinstance(item, str))
+    refs.extend(_condition_table_refs(args.get("conditions")))
+    return refs
+
+
+def _safe_cols(h: Harness, table: str) -> list[str]:
     try:
-        ok = rows_equal(pred, gold)
+        return h._cols(table)  # noqa: SLF001 - diagnostic-only, same harness boundary
     except Exception:
-        ok = False
-    return ok, pred[:5], gold[:5]
+        return []
+
+
+def format_tool_error(exc: Exception, h: Harness, tool: str | None, args: dict | None) -> str:
+    """Attach compact, actionable environment hints to tool/protocol feedback."""
+    base = f"{type(exc).__name__}: {exc}"
+    hints = []
+    text = base.lower()
+    valid = h.available_tables() if hasattr(h, "available_tables") else sorted(getattr(h, "views", {}))
+    if "unknown table" in text:
+        hints.append(f"valid table handles are {valid}")
+        if re.search(r"unknown table: T\d+", base):
+            hints.append("T1/T2/etc. are column prefixes, not table handles; use the produced handle such as join_001/project_002")
+    if "no such column" in text or "ambiguous column" in text:
+        refs = []
+        for table in _arg_table_refs(tool, args):
+            cols = _safe_cols(h, table)
+            if cols:
+                refs.append({"table": table, "columns": cols})
+        if refs:
+            hints.append(f"available columns for referenced tables: {refs}")
+    if "set_op" in base or "selects to the left and right" in text or "aligned columns" in text:
+        refs = []
+        for table in _arg_table_refs(tool, args):
+            cols = _safe_cols(h, table)
+            if cols:
+                refs.append({"table": table, "columns": cols})
+        if refs:
+            hints.append(f"set_op requires both sides to have the same output columns; current columns: {refs}")
+    if "scalargroundingerror" in text or "not scalar" in text:
+        hints.append("value_ref must cite a scalar-producing step; use in_table for membership against a table")
+    if 'near "*"' in text:
+        hints.append('condition_filter cannot filter column "*"; use project(table, expressions=[...]) or conditions=null/no-op')
+    if hints:
+        return base + " | " + " | ".join(hints)
+    return base
 
 
 # ---------------- live mode ----------------
@@ -265,6 +492,7 @@ def run_live(
     max_tokens: int,
     api_retries: int,
     max_consecutive_errors: int = MAX_CONSECUTIVE_ERRORS,
+    table_output_rows: int = 0,
 ) -> dict:
     h = Harness(db_path(ex["db_id"]))
     ov = overview(h)
@@ -336,12 +564,13 @@ def run_live(
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
             step_id = f"step_{steps + 1}"
-            out, tname = execute_tool(h, tool, args, ctx, step_id)
+            out, tname = execute_tool(h, tool, args, ctx, step_id, table_output_rows=table_output_rows)
             turn["tool_output"] = out
         except (ProtocolError, Exception) as e:  # noqa: BLE001 — every failure becomes feedback
             errors += 1
             consecutive += 1
-            error = f"{type(e).__name__}: {e}"
+            parsed = turn.get("parsed") or {}
+            error = format_tool_error(e, h, parsed.get("tool"), parsed.get("arguments"))
             turn["execution_error"] = error
             turn["execution_error_type"] = (
                 "protocol_error" if isinstance(e, ProtocolError) else "execution_error"
@@ -411,6 +640,48 @@ def run_replay(n: int, path: str = "") -> int:
     return 0 if ok_score == total else 1
 
 
+def load_indices_file(path: str) -> set[int]:
+    """Load dev example indices from JSON or plain text.
+
+    Accepted shapes:
+      - [1, 2, 3]
+      - {"indices": [1, 2, 3]}
+      - JSONL records with example_index/index
+      - plain text with one integer per line
+    """
+    if not path:
+        return set()
+    raw = open(path, encoding="utf-8").read().strip()
+    if not raw:
+        return set()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        indices = set()
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            indices.add(int(line.split()[0]))
+        return indices
+    if isinstance(payload, dict):
+        payload = payload.get("indices", payload.get("example_indices", []))
+    if isinstance(payload, list):
+        indices = set()
+        for item in payload:
+            if isinstance(item, int):
+                indices.add(item)
+            elif isinstance(item, dict):
+                if "example_index" in item:
+                    indices.add(int(item["example_index"]))
+                elif "index" in item:
+                    indices.add(int(item["index"]))
+            else:
+                indices.add(int(item))
+        return indices
+    raise ValueError(f"unsupported indices file shape: {path}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--replay", type=int, default=0, help="replay N dev trajectories (no model)")
@@ -426,8 +697,12 @@ def main() -> int:
                     help="retry count for transient API errors; context overflow uses adaptive token shrink")
     ap.add_argument("--max-consecutive-errors", type=int, default=MAX_CONSECUTIVE_ERRORS,
                     help="abort after this many consecutive protocol/execution errors in one trajectory")
+    ap.add_argument("--table-output-rows", type=int, default=0,
+                    help="include up to N rows in each table-producing tool observation (0 = metadata only)")
     ap.add_argument("--workers", type=int, default=1,
                     help="concurrent questions (vLLM batches requests; each worker owns its Harness/sqlite)")
+    ap.add_argument("--indices-file", default="",
+                    help="optional JSON/text file of dev example indices to run instead of the first --n")
     ap.add_argument("--result-dir", default="")
     ap.add_argument("--resume", action="store_true")
     args = ap.parse_args()
@@ -435,7 +710,13 @@ def main() -> int:
     if args.replay:
         return run_replay(args.replay)
 
-    indexed_dev = list(enumerate(json.load(open(os.path.join(SPIDER, "dev.json")))[: args.n]))
+    selected_indices = load_indices_file(args.indices_file)
+    dev_examples = json.load(open(os.path.join(SPIDER, "dev.json")))
+    if selected_indices:
+        indexed_dev = [(i, dev_examples[i]) for i in sorted(selected_indices)
+                       if 0 <= i < len(dev_examples)]
+    else:
+        indexed_dev = list(enumerate(dev_examples[: args.n]))
     indexed_dev = [(i, ex) for i, ex in indexed_dev if os.path.exists(db_path(ex["db_id"]))]
     fewshot_ids = args.few_shot_ids[:args.few_shot] if args.few_shot else []
     prompt_variant = os.environ.get("EVAL_SYSTEM_PROMPT_VARIANT") or "default"
@@ -447,12 +728,15 @@ def main() -> int:
             "model": args.model,
             "base_url": args.base_url,
             "dev_size": args.n,
+            "indices_file": args.indices_file or None,
+            "selected_indices": sorted(selected_indices) if selected_indices else None,
             "few_shot_ids": fewshot_ids,
             "max_steps": args.max_steps,
             "max_consecutive_errors": args.max_consecutive_errors,
             "temperature": 0,
             "max_tokens": args.max_tokens,
             "api_retries": args.api_retries,
+            "table_output_rows": args.table_output_rows,
             "min_context_retry_tokens": MIN_CONTEXT_RETRY_TOKENS,
             "system_prompt_variant": prompt_variant,
             "system_prompt": system,
@@ -473,6 +757,7 @@ def main() -> int:
                 args.max_tokens,
                 args.api_retries,
                 args.max_consecutive_errors,
+                args.table_output_rows,
             )
                     for i, ex in indexed_dev]
             for fut in as_completed(futs):
@@ -494,6 +779,7 @@ def main() -> int:
                 args.max_tokens,
                 args.api_retries,
                 args.max_consecutive_errors,
+                args.table_output_rows,
             )
             results.append(r)
             if writer:
