@@ -361,14 +361,50 @@ def group_loss(model, tokenizer, samples: list[Sample], logprob_micro_batch_size
     return (torch.stack(terms).mean() if terms else None), advantages
 
 
-def group_loss_with_retry(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int):
+def backward_group_loss(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int,
+                        accelerator: Accelerator) -> tuple[float | None, list[float]]:
+    """Backpropagate the group loss incrementally so long episodes do not retain every graph."""
+    rewards = torch.tensor([sample.reward for sample in samples], dtype=torch.float32)
+    if rewards.std(unbiased=False).item() == 0.0:
+        return None, [0.0] * len(samples)
+    advantages = ((rewards - rewards.mean()) / (rewards.std(unbiased=False) + 1e-6)).tolist()
+    device = next(model.parameters()).device
+    entries: list[tuple[int, tuple[list[int], list[int]]]] = []
+    turn_counts = []
+    for sample_index, sample in enumerate(samples):
+        turns = [turn for turn in sample.turns if turn[1]]
+        turn_counts.append(len(turns))
+        entries.extend((sample_index, turn) for turn in turns)
+    if not entries:
+        return None, advantages
+
+    loss_value = 0.0
+    micro_batch_size = max(1, int(logprob_micro_batch_size))
+    for offset in range(0, len(entries), micro_batch_size):
+        chunk = entries[offset: offset + micro_batch_size]
+        logps = response_logprobs_batched(model, tokenizer, [turn for _, turn in chunk], device)
+        terms = []
+        for (sample_index, _), logp in zip(chunk, logps, strict=True):
+            # Original objective: mean over samples of advantage * mean turn log-probability.
+            weight = -float(advantages[sample_index]) / (len(samples) * max(1, turn_counts[sample_index]))
+            terms.append(weight * logp)
+        micro_loss = torch.stack(terms).sum()
+        loss_value += float(micro_loss.detach().cpu())
+        accelerator.backward(micro_loss)
+    return loss_value, advantages
+
+
+def backward_group_loss_with_retry(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int,
+                                   accelerator: Accelerator, optimizer):
     """Retry the gradient path with smaller logprob microbatches after OOM."""
     micro_batch_size = max(1, int(logprob_micro_batch_size))
     while True:
+        optimizer.zero_grad(set_to_none=True)
         try:
-            loss, advantages = group_loss(model, tokenizer, samples, micro_batch_size)
-            return loss, advantages, micro_batch_size, None
+            loss_value, advantages = backward_group_loss(model, tokenizer, samples, micro_batch_size, accelerator)
+            return loss_value, advantages, micro_batch_size, None
         except torch.OutOfMemoryError:
+            optimizer.zero_grad(set_to_none=True)
             torch.cuda.empty_cache()
             if micro_batch_size == 1:
                 return None, [0.0] * len(samples), micro_batch_size, "gradient_oom"
@@ -409,20 +445,18 @@ def main() -> int:
         rollout_seconds = time.time() - rollout_started
         model.train()
         optimization_error = None
-        optimizer.zero_grad(set_to_none=True)
-        loss, advantages, used_logprob_micro_batch_size, optimization_error = group_loss_with_retry(
-            model, tokenizer, samples, args.logprob_micro_batch_size
+        loss_value, advantages, used_logprob_micro_batch_size, optimization_error = backward_group_loss_with_retry(
+            model, tokenizer, samples, args.logprob_micro_batch_size, accelerator, optimizer
         )
-        updated = loss is not None
+        updated = loss_value is not None
         if updated:
             try:
-                accelerator.backward(loss)
                 accelerator.clip_grad_norm_((param for param in model.parameters() if param.requires_grad), 1.0)
                 optimizer.step()
             except torch.OutOfMemoryError:
                 optimization_error = "backward_oom"
                 updated = False
-                loss = None
+                loss_value = None
         if not updated:
             optimizer.zero_grad(set_to_none=True)
             torch.cuda.empty_cache()
@@ -434,7 +468,7 @@ def main() -> int:
             "correct_count": sum(sample.correct for sample in samples),
             "failure_types": [sample.failure_type for sample in samples],
             "sample_turns": [len(sample.turns) for sample in samples],
-            "loss": float(loss.detach().cpu()) if loss is not None else None,
+            "loss": loss_value,
             "updated": updated,
             "optimization_error": optimization_error,
             "rollout_batch_size": args.rollout_batch_size or args.group_size,
