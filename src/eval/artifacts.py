@@ -31,6 +31,8 @@ class ArtifactWriter:
         self.manifest_path = self.path / "manifest.json"
         self.summary_path = self.path / "summary.json"
         self.completed: set[int] = set()
+        self.fsync_every = int(os.environ.get("ARTIFACT_FSYNC_EVERY", "1"))
+        self.append_count = 0
         self.success_cases.mkdir(exist_ok=True)
         self.failure_cases.mkdir(exist_ok=True)
 
@@ -59,6 +61,7 @@ class ArtifactWriter:
     def append(self, record: dict) -> None:
         record = {**record, "recorded_at_utc": utc_now()}
         line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
+        self.append_count += 1
         for path in (
             self.all_path,
             self.success_path if record["correct"] else self.failure_path,
@@ -66,7 +69,8 @@ class ArtifactWriter:
             with path.open("a", encoding="utf-8") as f:
                 f.write(line)
                 f.flush()
-                os.fsync(f.fileno())
+                if self.fsync_every > 0 and self.append_count % self.fsync_every == 0:
+                    os.fsync(f.fileno())
         case_dir = self.success_cases if record["correct"] else self.failure_cases
         case_path = case_dir / f"q{record['example_index']:04d}.json"
         case_path.write_text(

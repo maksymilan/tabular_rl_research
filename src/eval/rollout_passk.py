@@ -311,10 +311,19 @@ def run_one(
     }
     if stop_on_success:
         samples = []
-        for sample_index in range(n_samples):
-            sample = run_sample(ex, sample_index, base_url, model, system, **sample_kwargs)
-            samples.append(sample)
-            if sample["correct"]:
+        for start in range(0, n_samples, sample_workers):
+            end = min(n_samples, start + sample_workers)
+            pending: list[dict | None] = [None] * (end - start)
+            with ThreadPoolExecutor(max_workers=sample_workers) as pool:
+                futures = {
+                    pool.submit(run_sample, ex, sample_index, base_url, model, system, **sample_kwargs): sample_index
+                    for sample_index in range(start, end)
+                }
+                for future in as_completed(futures):
+                    sample_index = futures[future]
+                    pending[sample_index - start] = future.result()
+            samples.extend(sample for sample in pending if sample is not None)
+            if any(sample and sample["correct"] for sample in pending):
                 break
     else:
         pending: list[dict | None] = [None] * n_samples

@@ -17,11 +17,14 @@ SFT_PY=${SFT_PY:-/home/dengyan/miniconda3/envs/sft/bin/python}
 RUN_ID=${RUN_ID:-${SERVED_MODEL}_passk_$(date +%Y%m%d_%H%M%S)}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-8192}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.88}
+VLLM_ENFORCE_EAGER=${VLLM_ENFORCE_EAGER:-0}
+VLLM_MAX_NUM_SEQS=${VLLM_MAX_NUM_SEQS:-32}
+VLLM_MAX_NUM_BATCHED_TOKENS=${VLLM_MAX_NUM_BATCHED_TOKENS:-16384}
 N_EXAMPLES=${N_EXAMPLES:-0}
 N_SAMPLES=${N_SAMPLES:-16}
 PASS_K=${PASS_K:-1,2,4,8,16}
-ROLLOUT_WORKERS=${ROLLOUT_WORKERS:-1}
-SAMPLE_WORKERS=${SAMPLE_WORKERS:-4}
+ROLLOUT_WORKERS=${ROLLOUT_WORKERS:-4}
+SAMPLE_WORKERS=${SAMPLE_WORKERS:-8}
 STOP_ON_SUCCESS=${STOP_ON_SUCCESS:-1}
 MAX_STEPS=${MAX_STEPS:-20}
 MAX_TOKENS=${MAX_TOKENS:-768}
@@ -46,12 +49,20 @@ trap cleanup EXIT INT TERM
   echo "[$(date)] run_id=$RUN_ID gpu=$GPU_ID n_examples=$N_EXAMPLES n_samples=$N_SAMPLES pass_k=$PASS_K"
   export CUDA_VISIBLE_DEVICES="$GPU_ID"
   export HF_HUB_OFFLINE=1
-  "$VLLM_PY" -m vllm.entrypoints.openai.api_server \
-    --model "$MODEL_DIR" --served-model-name "$SERVED_MODEL" \
-    --host 127.0.0.1 --port "$VLLM_PORT" \
-    --max-model-len "$MAX_MODEL_LEN" --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
-    --enforce-eager --enable-lora --max-lora-rank 16 \
-    --lora-modules "$SERVED_MODEL=$LORA_DIR" >"$VLLM_LOG" 2>&1 &
+  export ARTIFACT_FSYNC_EVERY="${ARTIFACT_FSYNC_EVERY:-50}"
+  vllm_args=(
+    -m vllm.entrypoints.openai.api_server
+    --model "$MODEL_DIR" --served-model-name "$SERVED_MODEL"
+    --host 127.0.0.1 --port "$VLLM_PORT"
+    --max-model-len "$MAX_MODEL_LEN" --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION"
+    --max-num-seqs "$VLLM_MAX_NUM_SEQS" --max-num-batched-tokens "$VLLM_MAX_NUM_BATCHED_TOKENS"
+    --enable-lora --max-lora-rank 16
+    --lora-modules "$SERVED_MODEL=$LORA_DIR"
+  )
+  if [ "$VLLM_ENFORCE_EAGER" = "1" ]; then
+    vllm_args+=(--enforce-eager)
+  fi
+  "$VLLM_PY" "${vllm_args[@]}" >"$VLLM_LOG" 2>&1 &
   VLLM_PID=$!
 
   ready=0

@@ -20,7 +20,10 @@ RUN_ID=${RUN_ID:-${SERVED_MODEL}_$(date +%Y%m%d_%H%M%S)}
 
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-8192}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.88}
-ROLLOUT_WORKERS=${ROLLOUT_WORKERS:-3}
+VLLM_ENFORCE_EAGER=${VLLM_ENFORCE_EAGER:-0}
+VLLM_MAX_NUM_SEQS=${VLLM_MAX_NUM_SEQS:-32}
+VLLM_MAX_NUM_BATCHED_TOKENS=${VLLM_MAX_NUM_BATCHED_TOKENS:-16384}
+ROLLOUT_WORKERS=${ROLLOUT_WORKERS:-8}
 MAX_STEPS=${MAX_STEPS:-20}
 MAX_TOKENS=${MAX_TOKENS:-768}
 MAX_CONSECUTIVE_ERRORS=${MAX_CONSECUTIVE_ERRORS:-3}
@@ -52,17 +55,24 @@ trap cleanup EXIT INT TERM
 
   export CUDA_VISIBLE_DEVICES="$GPU_ID"
   export HF_HUB_OFFLINE=1
-  "$VLLM_PY" -m vllm.entrypoints.openai.api_server \
+  export ARTIFACT_FSYNC_EVERY="${ARTIFACT_FSYNC_EVERY:-50}"
+  vllm_args=(
+    -m vllm.entrypoints.openai.api_server
     --model "$MODEL_DIR" \
     --served-model-name "$SERVED_MODEL" \
     --host 127.0.0.1 --port "$VLLM_PORT" \
     --max-model-len "$MAX_MODEL_LEN" \
     --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
-    --enforce-eager \
+    --max-num-seqs "$VLLM_MAX_NUM_SEQS" \
+    --max-num-batched-tokens "$VLLM_MAX_NUM_BATCHED_TOKENS" \
     --enable-lora \
     --max-lora-rank 16 \
-    --lora-modules "$SERVED_MODEL=$LORA_DIR" \
-    > "$VLLM_LOG" 2>&1 &
+    --lora-modules "$SERVED_MODEL=$LORA_DIR"
+  )
+  if [ "$VLLM_ENFORCE_EAGER" = "1" ]; then
+    vllm_args+=(--enforce-eager)
+  fi
+  "$VLLM_PY" "${vllm_args[@]}" > "$VLLM_LOG" 2>&1 &
   VLLM_PID=$!
   echo "[$(date)] started vLLM pid=$VLLM_PID log=$VLLM_LOG"
 

@@ -12,12 +12,14 @@ import argparse
 import json
 import random
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 import bitsandbytes as bnb
+import torch.nn.functional as F
 from accelerate import Accelerator
 from peft import PeftModel, prepare_model_for_kbit_training
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -46,6 +48,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--group-size", type=int, default=4)
+    parser.add_argument("--rollout-batch-size", type=int, default=0,
+                        help="parallel active episodes during sampling; default = group-size")
+    parser.add_argument("--logprob-micro-batch-size", type=int, default=2,
+                        help="turns per gradient forward pass; lower this if logprob still OOMs")
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--max-new-tokens", type=int, default=512)
@@ -69,6 +75,7 @@ def load_model(args: argparse.Namespace, accelerator: Accelerator):
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
     model = AutoModelForCausalLM.from_pretrained(
         args.model_path,
         quantization_config=quant,
@@ -88,30 +95,41 @@ def load_model(args: argparse.Namespace, accelerator: Accelerator):
     return model, tokenizer, bnb.optim.PagedAdamW8bit(trainable, lr=args.learning_rate)
 
 
-def render_prompt(tokenizer, messages: list[dict[str, str]], device: torch.device) -> list[int]:
+def render_prompt(tokenizer, messages: list[dict[str, str]], device: torch.device | None = None) -> list[int]:
     # Transformers 5.x Qwen tokenizers may return rendered text even when ``tokenize=True``.
     # Render first, then use the ordinary tokenizer API so the runner is version-independent.
     text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     return tokenizer(text, add_special_tokens=False).input_ids
 
 
-@torch.inference_mode()
-def sample_episode(model, tokenizer, metadata: dict[str, Any], args: argparse.Namespace) -> Sample:
-    example = {"db_id": metadata["db_id"], "question": metadata["question"], "query": metadata["gold_sql"]}
-    env = ToolUseEnv(example, example_index=int(metadata["example_index"]), max_steps=args.max_steps)
-    device = next(model.parameters()).device
-    turns: list[tuple[list[int], list[int]]] = []
-    model.eval()
-    while not env.done:
-        prompt_ids = render_prompt(tokenizer, env.model_messages(), device)
-        if len(prompt_ids) + args.max_new_tokens > args.max_context_tokens:
-            env.done = True
-            env.failure_type = "context_overflow"
-            break
-        input_ids = torch.tensor([prompt_ids], device=device, dtype=torch.long)
+def _trim_generated_response(ids: list[int], *, eos_token_id: int | None, pad_token_id: int | None) -> list[int]:
+    """Keep the generated assistant turn and drop padding added after EOS in batched generation."""
+    if eos_token_id is not None:
+        for index, token_id in enumerate(ids):
+            if token_id == eos_token_id:
+                return ids[: index + 1]
+    if pad_token_id is not None:
+        while ids and ids[-1] == pad_token_id:
+            ids.pop()
+    return ids
+
+
+def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]], *,
+                            device: torch.device, args: argparse.Namespace) -> list[tuple[int, list[int], list[int]]]:
+    """Generate one batched assistant turn, splitting on OOM for 24GB cards."""
+    max_prompt_len = max(len(prompt_ids) for _, prompt_ids in chunk)
+    input_rows = []
+    mask_rows = []
+    for _, prompt_ids in chunk:
+        pad_len = max_prompt_len - len(prompt_ids)
+        input_rows.append([tokenizer.pad_token_id] * pad_len + prompt_ids)
+        mask_rows.append([0] * pad_len + [1] * len(prompt_ids))
+    input_ids = torch.tensor(input_rows, device=device, dtype=torch.long)
+    attention_mask = torch.tensor(mask_rows, device=device, dtype=torch.long)
+    try:
         generated = model.generate(
             input_ids=input_ids,
-            attention_mask=torch.ones_like(input_ids),
+            attention_mask=attention_mask,
             max_new_tokens=args.max_new_tokens,
             do_sample=True,
             temperature=args.temperature,
@@ -119,47 +137,171 @@ def sample_episode(model, tokenizer, metadata: dict[str, Any], args: argparse.Na
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
             use_cache=True,
-        )[0]
-        response_ids = generated[len(prompt_ids):].tolist()
-        if not response_ids:
-            env.done = True
-            env.failure_type = "empty_generation"
+        )
+    except torch.OutOfMemoryError:
+        del input_ids, attention_mask
+        torch.cuda.empty_cache()
+        if len(chunk) == 1:
+            env_index, prompt_ids = chunk[0]
+            return [(env_index, prompt_ids, [])]
+        midpoint = len(chunk) // 2
+        return (
+            _generate_rollout_chunk(model, tokenizer, chunk[:midpoint], device=device, args=args)
+            + _generate_rollout_chunk(model, tokenizer, chunk[midpoint:], device=device, args=args)
+        )
+    return [
+        (
+            env_index,
+            prompt_ids,
+            _trim_generated_response(
+                generated[row_index, max_prompt_len:].tolist(),
+                eos_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id,
+            ),
+        )
+        for row_index, (env_index, prompt_ids) in enumerate(chunk)
+    ]
+
+
+@torch.inference_mode()
+def sample_group(model, tokenizer, metadata: dict[str, Any], args: argparse.Namespace) -> list[Sample]:
+    example = {"db_id": metadata["db_id"], "question": metadata["question"], "query": metadata["gold_sql"]}
+    device = next(model.parameters()).device
+    envs = [
+        ToolUseEnv(example, example_index=int(metadata["example_index"]), max_steps=args.max_steps)
+        for _ in range(args.group_size)
+    ]
+    turns: list[list[tuple[list[int], list[int]]]] = [[] for _ in envs]
+    rollout_batch_size = args.rollout_batch_size or args.group_size
+    model.eval()
+    while any(not env.done for env in envs):
+        active: list[tuple[int, list[int]]] = []
+        for env_index, env in enumerate(envs):
+            if env.done:
+                continue
+            prompt_ids = render_prompt(tokenizer, env.model_messages())
+            if len(prompt_ids) + args.max_new_tokens > args.max_context_tokens:
+                env.done = True
+                env.failure_type = "context_overflow"
+                continue
+            active.append((env_index, prompt_ids))
+        if not active:
             break
-        text = tokenizer.decode(response_ids, skip_special_tokens=True)
-        turns.append((prompt_ids, response_ids))
-        env.apply_model_output(text)
-    record = env.record()
-    return Sample(
-        reward=1.0 if record["correct"] else 0.0,
-        correct=bool(record["correct"]),
-        failure_type=record["failure_type"],
-        turns=turns,
+
+        for offset in range(0, len(active), rollout_batch_size):
+            chunk = active[offset: offset + rollout_batch_size]
+            for env_index, prompt_ids, response_ids in _generate_rollout_chunk(
+                model, tokenizer, chunk, device=device, args=args
+            ):
+                env = envs[env_index]
+                if not response_ids:
+                    env.done = True
+                    env.failure_type = "generation_oom"
+                    continue
+                text = tokenizer.decode(response_ids, skip_special_tokens=True)
+                turns[env_index].append((prompt_ids, response_ids))
+                env.apply_model_output(text)
+
+    samples = []
+    for env, sample_turns in zip(envs, turns, strict=True):
+        record = env.record()
+        samples.append(Sample(
+            reward=1.0 if record["correct"] else 0.0,
+            correct=bool(record["correct"]),
+            failure_type=record["failure_type"],
+            turns=sample_turns,
+        ))
+    return samples
+
+
+def _model_logits_for_response(model, input_ids: torch.Tensor, attention_mask: torch.Tensor,
+                               logits_to_keep: int) -> torch.Tensor:
+    """Return only the response-prediction logits when the model supports it.
+
+    Qwen-family causal LM forward methods in recent Transformers accept ``logits_to_keep``.
+    Avoiding full-context logits is the difference between a usable long-context RL step and a
+    gradient OOM on 24GB cards.  The fallback keeps compatibility with older installs.
+    """
+    try:
+        logits = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=False,
+            logits_to_keep=logits_to_keep,
+        ).logits
+    except TypeError:
+        logits = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False).logits
+    return logits[:, -logits_to_keep:, :]
+
+
+def response_logprobs_batched(model, tokenizer, turns: list[tuple[list[int], list[int]]],
+                              device: torch.device) -> list[torch.Tensor]:
+    """Mean log-probabilities for assistant turns, padded into one training microbatch."""
+    max_response_len = max(len(response_ids) for _, response_ids in turns)
+    sequences = [prompt_ids + response_ids[:-1] for prompt_ids, response_ids in turns]
+    max_sequence_len = max(len(seq) for seq in sequences)
+    input_rows = []
+    mask_rows = []
+    target_rows = []
+    for seq, (_, response_ids) in zip(sequences, turns, strict=True):
+        pad_len = max_sequence_len - len(seq)
+        input_rows.append([tokenizer.pad_token_id] * pad_len + seq)
+        mask_rows.append([0] * pad_len + [1] * len(seq))
+        target_pad = max_response_len - len(response_ids)
+        target_rows.append([-100] * target_pad + response_ids)
+    input_ids = torch.tensor(input_rows, device=device, dtype=torch.long)
+    attention_mask = torch.tensor(mask_rows, device=device, dtype=torch.long)
+    targets = torch.tensor(target_rows, device=device, dtype=torch.long)
+    logits = _model_logits_for_response(model, input_ids, attention_mask, max_response_len)
+    token_losses = F.cross_entropy(
+        logits.float().transpose(1, 2),
+        targets,
+        ignore_index=-100,
+        reduction="none",
     )
+    mask = targets.ne(-100)
+    return [-(token_losses[index][mask[index]].mean()) for index in range(len(turns))]
 
 
-def response_logprob(model, prompt_ids: list[int], response_ids: list[int], device: torch.device) -> torch.Tensor:
-    """Mean log-probability of one assistant turn; observations are never optimized."""
-    ids = torch.tensor([prompt_ids + response_ids], device=device, dtype=torch.long)
-    logits = model(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False).logits
-    start = len(prompt_ids) - 1
-    token_logits = logits[:, start : start + len(response_ids), :]
-    token_ids = ids[:, len(prompt_ids) :]
-    return torch.log_softmax(token_logits, dim=-1).gather(-1, token_ids.unsqueeze(-1)).squeeze(-1).mean()
-
-
-def group_loss(model, samples: list[Sample]) -> tuple[torch.Tensor | None, list[float]]:
+def group_loss(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int) -> tuple[torch.Tensor | None, list[float]]:
     rewards = torch.tensor([sample.reward for sample in samples], dtype=torch.float32)
     if rewards.std(unbiased=False).item() == 0.0:
         return None, [0.0] * len(samples)
     advantages = ((rewards - rewards.mean()) / (rewards.std(unbiased=False) + 1e-6)).tolist()
     device = next(model.parameters()).device
+    entries: list[tuple[int, tuple[list[int], list[int]]]] = []
+    for sample_index, sample in enumerate(samples):
+        entries.extend((sample_index, turn) for turn in sample.turns if turn[1])
+    if not entries:
+        return None, advantages
+
+    per_sample_logps: list[list[torch.Tensor]] = [[] for _ in samples]
+    micro_batch_size = max(1, int(logprob_micro_batch_size))
+    for offset in range(0, len(entries), micro_batch_size):
+        chunk = entries[offset: offset + micro_batch_size]
+        logps = response_logprobs_batched(model, tokenizer, [turn for _, turn in chunk], device)
+        for (sample_index, _), logp in zip(chunk, logps, strict=True):
+            per_sample_logps[sample_index].append(logp)
+
     terms = []
-    for sample, advantage in zip(samples, advantages, strict=True):
-        if not sample.turns:
-            continue
-        turn_logps = torch.stack([response_logprob(model, prompt, response, device) for prompt, response in sample.turns])
-        terms.append(-float(advantage) * turn_logps.mean())
+    for sample_logps, advantage in zip(per_sample_logps, advantages, strict=True):
+        if sample_logps:
+            terms.append(-float(advantage) * torch.stack(sample_logps).mean())
     return (torch.stack(terms).mean() if terms else None), advantages
+
+
+def group_loss_with_retry(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int):
+    """Retry the gradient path with smaller logprob microbatches after OOM."""
+    micro_batch_size = max(1, int(logprob_micro_batch_size))
+    while True:
+        try:
+            loss, advantages = group_loss(model, tokenizer, samples, micro_batch_size)
+            return loss, advantages, micro_batch_size, None
+        except torch.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if micro_batch_size == 1:
+                return None, [0.0] * len(samples), micro_batch_size, "gradient_oom"
+            micro_batch_size = max(1, micro_batch_size // 2)
 
 
 def save_adapter(model, output_dir: Path, step: int) -> None:
@@ -172,6 +314,8 @@ def main() -> int:
     args = parse_args()
     if args.group_size < 2:
         raise SystemExit("--group-size must be at least 2 for a group-relative baseline")
+    if args.rollout_batch_size < 0:
+        raise SystemExit("--rollout-batch-size must be non-negative")
     accelerator = Accelerator()
     if accelerator.num_processes != 1:
         raise SystemExit("this baseline is intentionally single-GPU; launch without accelerate multi-process")
@@ -187,27 +331,30 @@ def main() -> int:
     model, tokenizer, optimizer = load_model(args, accelerator)
     log_path = args.output_dir / "metrics.jsonl"
     for step in range(1, args.steps + 1):
+        step_started = time.time()
         record = records[(step - 1) % len(records)]
-        samples = [sample_episode(model, tokenizer, record["environment"], args) for _ in range(args.group_size)]
+        rollout_started = time.time()
+        samples = sample_group(model, tokenizer, record["environment"], args)
+        rollout_seconds = time.time() - rollout_started
         model.train()
         optimization_error = None
-        try:
-            loss, advantages = group_loss(model, samples)
-            updated = loss is not None
-            if updated:
-                optimizer.zero_grad(set_to_none=True)
+        optimizer.zero_grad(set_to_none=True)
+        loss, advantages, used_logprob_micro_batch_size, optimization_error = group_loss_with_retry(
+            model, tokenizer, samples, args.logprob_micro_batch_size
+        )
+        updated = loss is not None
+        if updated:
+            try:
                 accelerator.backward(loss)
                 accelerator.clip_grad_norm_((param for param in model.parameters() if param.requires_grad), 1.0)
                 optimizer.step()
-        except torch.OutOfMemoryError:
-            # A rare long interaction must not discard the completed full-train run. Its rollout
-            # remains visible in the log, but it contributes no gradient on this 24GB baseline.
+            except torch.OutOfMemoryError:
+                optimization_error = "backward_oom"
+                updated = False
+                loss = None
+        if not updated:
             optimizer.zero_grad(set_to_none=True)
             torch.cuda.empty_cache()
-            loss = None
-            advantages = [0.0] * len(samples)
-            updated = False
-            optimization_error = "gradient_oom"
         event = {
             "step": step,
             "example_index": record["environment"]["example_index"],
@@ -215,9 +362,15 @@ def main() -> int:
             "advantages": advantages,
             "correct_count": sum(sample.correct for sample in samples),
             "failure_types": [sample.failure_type for sample in samples],
+            "sample_turns": [len(sample.turns) for sample in samples],
             "loss": float(loss.detach().cpu()) if loss is not None else None,
             "updated": updated,
             "optimization_error": optimization_error,
+            "rollout_batch_size": args.rollout_batch_size or args.group_size,
+            "requested_logprob_micro_batch_size": args.logprob_micro_batch_size,
+            "used_logprob_micro_batch_size": used_logprob_micro_batch_size,
+            "rollout_seconds": round(rollout_seconds, 3),
+            "step_seconds": round(time.time() - step_started, 3),
         }
         with log_path.open("a", encoding="utf-8") as sink:
             sink.write(json.dumps(event, ensure_ascii=False) + "\n")
