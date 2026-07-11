@@ -52,6 +52,8 @@ def parse_args() -> argparse.Namespace:
                         help="parallel active episodes during sampling; default = group-size")
     parser.add_argument("--logprob-micro-batch-size", type=int, default=2,
                         help="turns per gradient forward pass; lower this if logprob still OOMs")
+    parser.add_argument("--train-turns", choices=("last", "all"), default="last",
+                        help="which assistant turns receive REINFORCE loss; last is much faster on 24GB GPUs")
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--max-new-tokens", type=int, default=512)
@@ -334,6 +336,13 @@ def response_logprobs_batched(model, tokenizer, turns: list[tuple[list[int], lis
     return [-(token_losses[index][mask[index]].mean()) for index in range(len(turns))]
 
 
+def trainable_turns(sample: Sample, mode: str) -> list[tuple[list[int], list[int]]]:
+    turns = [turn for turn in sample.turns if turn[1]]
+    if mode == "all":
+        return turns
+    return turns[-1:] if turns else []
+
+
 def group_loss(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int) -> tuple[torch.Tensor | None, list[float]]:
     rewards = torch.tensor([sample.reward for sample in samples], dtype=torch.float32)
     if rewards.std(unbiased=False).item() == 0.0:
@@ -342,7 +351,7 @@ def group_loss(model, tokenizer, samples: list[Sample], logprob_micro_batch_size
     device = next(model.parameters()).device
     entries: list[tuple[int, tuple[list[int], list[int]]]] = []
     for sample_index, sample in enumerate(samples):
-        entries.extend((sample_index, turn) for turn in sample.turns if turn[1])
+        entries.extend((sample_index, turn) for turn in trainable_turns(sample, "all"))
     if not entries:
         return None, advantages
 
@@ -361,7 +370,7 @@ def group_loss(model, tokenizer, samples: list[Sample], logprob_micro_batch_size
     return (torch.stack(terms).mean() if terms else None), advantages
 
 
-def backward_group_loss(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int,
+def backward_group_loss(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int, train_turns: str,
                         accelerator: Accelerator) -> tuple[float | None, list[float]]:
     """Backpropagate the group loss incrementally so long episodes do not retain every graph."""
     rewards = torch.tensor([sample.reward for sample in samples], dtype=torch.float32)
@@ -372,7 +381,7 @@ def backward_group_loss(model, tokenizer, samples: list[Sample], logprob_micro_b
     entries: list[tuple[int, tuple[list[int], list[int]]]] = []
     turn_counts = []
     for sample_index, sample in enumerate(samples):
-        turns = [turn for turn in sample.turns if turn[1]]
+        turns = trainable_turns(sample, train_turns)
         turn_counts.append(len(turns))
         entries.extend((sample_index, turn) for turn in turns)
     if not entries:
@@ -395,13 +404,16 @@ def backward_group_loss(model, tokenizer, samples: list[Sample], logprob_micro_b
 
 
 def backward_group_loss_with_retry(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int,
+                                   train_turns: str,
                                    accelerator: Accelerator, optimizer):
     """Retry the gradient path with smaller logprob microbatches after OOM."""
     micro_batch_size = max(1, int(logprob_micro_batch_size))
     while True:
         optimizer.zero_grad(set_to_none=True)
         try:
-            loss_value, advantages = backward_group_loss(model, tokenizer, samples, micro_batch_size, accelerator)
+            loss_value, advantages = backward_group_loss(
+                model, tokenizer, samples, micro_batch_size, train_turns, accelerator
+            )
             return loss_value, advantages, micro_batch_size, None
         except torch.OutOfMemoryError:
             optimizer.zero_grad(set_to_none=True)
@@ -446,7 +458,7 @@ def main() -> int:
         model.train()
         optimization_error = None
         loss_value, advantages, used_logprob_micro_batch_size, optimization_error = backward_group_loss_with_retry(
-            model, tokenizer, samples, args.logprob_micro_batch_size, accelerator, optimizer
+            model, tokenizer, samples, args.logprob_micro_batch_size, args.train_turns, accelerator, optimizer
         )
         updated = loss_value is not None
         if updated:
@@ -468,6 +480,7 @@ def main() -> int:
             "correct_count": sum(sample.correct for sample in samples),
             "failure_types": [sample.failure_type for sample in samples],
             "sample_turns": [len(sample.turns) for sample in samples],
+            "train_turns": args.train_turns,
             "loss": loss_value,
             "updated": updated,
             "optimization_error": optimization_error,
