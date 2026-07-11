@@ -114,10 +114,41 @@ def _trim_generated_response(ids: list[int], *, eos_token_id: int | None, pad_to
     return ids
 
 
+def _has_balanced_tool_call_json(text: str) -> bool:
+    tag = text.rfind("<tool_call>")
+    if tag < 0:
+        return False
+    begin = text.find("{", tag + len("<tool_call>"))
+    if begin < 0:
+        return False
+    depth = 0
+    in_string = False
+    escaped = False
+    for ch in text[begin:]:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return True
+    return False
+
+
 class ForceEosAfterStop(LogitsProcessor):
     """Force per-row EOS after a protocol stop string appears in generated tokens."""
 
-    def __init__(self, stop_ids: list[int], *, prompt_width: int, eos_token_id: int | None):
+    def __init__(self, tokenizer, stop_ids: list[int], *, prompt_width: int, eos_token_id: int | None):
+        self.tokenizer = tokenizer
         self.stop_ids = stop_ids
         self.prompt_width = prompt_width
         self.eos_token_id = eos_token_id
@@ -130,11 +161,18 @@ class ForceEosAfterStop(LogitsProcessor):
             generated = input_ids[row_index, self.prompt_width:]
             if generated.numel() < stop_len:
                 continue
+            should_stop = False
             for end in range(stop_len, generated.numel() + 1):
                 if generated[end - stop_len: end].tolist() == self.stop_ids:
-                    scores[row_index, :] = -torch.inf
-                    scores[row_index, self.eos_token_id] = 0
+                    should_stop = True
                     break
+            if not should_stop and _has_balanced_tool_call_json(
+                self.tokenizer.decode(generated.tolist(), skip_special_tokens=False)
+            ):
+                should_stop = True
+            if should_stop:
+                scores[row_index, :] = -torch.inf
+                scores[row_index, self.eos_token_id] = 0
         return scores
 
 
@@ -162,7 +200,12 @@ def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]]
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
             logits_processor=LogitsProcessorList([
-                ForceEosAfterStop(stop_ids, prompt_width=max_prompt_len, eos_token_id=tokenizer.eos_token_id)
+                ForceEosAfterStop(
+                    tokenizer,
+                    stop_ids,
+                    prompt_width=max_prompt_len,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
             ]),
             use_cache=True,
         )
