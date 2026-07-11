@@ -95,6 +95,29 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   it calls the external model for initial `plan` + updates, splices plan steps into a verified
   trajectory, then replays through the harness so `EnvironmentState` and terminal correctness are
   checked. Its `--dry-run-template` mode is only for local smoke tests, not final training data.
+- **Spider scale/context audit (2026-07-08)**: current `data/spider_data` is classic Spider 1.x, not
+  Spider 2.0-Lite. It contains 166 DBs / 873 tables; table rows have median 12, p90 100, p95 2240,
+  p99 25575, max 510437 (`wta_1.rankings`). Classic Spider dev examples whose DB has any table
+  over 500 rows are only `world_1`, `flight_2`, and `wta_1` (**262/1034** examples). Latest 7B
+  external-rollout-v3 scores on that large-table subset: epoch2 original **142/262 = 54.20%**,
+  epoch4 original **148/262 = 56.49%**; retrying only context/execution-failure cases with larger
+  limits raises the approximate merged scores to **59.16%** and **61.83%** respectively. Context
+  overflow is dominated by `read_subtable` row payloads duplicated between historical tool
+  observations and `CURRENT ENVIRONMENT STATE`; plan state is small (~1% of overflow payload).
+- **Spider 2.0-Lite local adapter prepared (2026-07-08)**: official `xlang-ai/Spider2` is downloaded
+  under `data/spider2/Spider2` (gitignored), and official `local_sqlite.zip` is unpacked into
+  `data/spider2/Spider2/spider2-lite/resource/databases/spider2-localdb`. Lite has 547 examples:
+  BigQuery 205, Snowflake 207, SQLite/local 135. The local zip contains 30 SQLite DB files and
+  maps all 135 local examples. New adapter `src/harness/spider2_adapter.py` can summarize Lite,
+  execute local gold SQL, run current compiler+tool round-trip smoke, and export normalized local
+  records to `data/eval_inputs/spider2_lite_local.jsonl`. Dataset adapters should convert examples
+  to the common `DatasetTask` IR (`src/harness/dataset_ir.py`) first; SQL-to-tool compilation is now
+  used only as an environment-support/coverage check, not as the default SFT construction path.
+  Current smoke: all 30 local SQLite DBs pass basic `describe_table`/`read_subtable` tool access;
+  official local gold SQL is available for 24 local examples and executes **24/24** directly; current
+  SQL compiler/tool round trip covers only **2/24**, mainly failing on CTE/derived CTE handles and
+  `USING`/complex joins. Direct SQL baseline for the released-gold local subset lives at
+  `src/eval/text2sql_spider2_lite.py`.
 - **7B / V2a and V2-ctx evaluations done (2026-06-15)**: V2a scores **66.83%** and V2-ctx scores
   **62.77%** on the full 1,034-example Spider dev set, versus v1 **68.38%** and direct SQL
   **69.25%**. V2-ctx preserves the large-database context invariant but exposes a planning weakness:
@@ -128,6 +151,14 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   max-steps get penalties). Before any PPO/GRPO run, use `build_reward_report.py` on rollout/pass@k
   artifacts and manually audit a sample; use `select_pilot_tasks.py` to choose mixed-success or
   legal-but-wrong tasks. Do not train RL directly on API/protocol failure-heavy buckets.
+- **Result-only RL baseline (2026-07-11)**: reusable task/environment/reward logic lives directly
+  under `src/rl/`; backend glue is isolated under `src/rl/frameworks/<backend>/`. The current
+  hardware-compatible implementation is `frameworks/accelerate/group_reinforce.py`: single-GPU
+  4-bit LoRA group-REINFORCE with exactly `reward = 1` for an execution-correct final denotation and
+  `0` otherwise; it has no process shaping, error penalty, KL term, or length reward. The 881
+  external-rollout trajectories are only the SFT adapter initialization, never the RL task filter.
+  The full baseline samples the complete **7,000-question Spider train split** (four episodes per
+  question) and automatically evaluates the final adapter on all 1,034 Spider dev questions.
 - **Next data iteration (SFT v10 two-lane plan, 2026-06-28)**: do not add a reflection tool,
   `invalidate` state, memory, or any model-visible sidecar. Use two data lanes: (A) clean canonical
   data from gold-SQL verified trajectories with observation/think enrichment; (B) recovery data only

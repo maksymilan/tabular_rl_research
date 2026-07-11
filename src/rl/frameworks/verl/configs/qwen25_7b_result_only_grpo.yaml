@@ -1,0 +1,110 @@
+# Result-only RL baseline. Reward is supplied by TableToolAgentLoop: exact terminal execution is 1,
+# all other terminal states are 0. Keep all algorithm settings fixed for later reward ablations.
+defaults:
+  - ppo_trainer
+  - _self_
+
+# ``ppo_trainer`` is shipped inside the installed verl package; retain it as the canonical
+# framework default instead of copying a version-sensitive configuration into this repository.
+hydra:
+  searchpath:
+    - pkg://verl.trainer.config
+
+# This machine's two 3090s do not expose CUDA peer access.  Propagate the fallback to every Ray
+# worker, not only the shell that launches the controller.
+ray_kwargs:
+  ray_init:
+    runtime_env:
+      env_vars:
+        NCCL_P2P_DISABLE: "1"
+        NCCL_P2P_LEVEL: "LOC"
+        NCCL_IB_DISABLE: "1"
+        TABLE_RL_REPLICATED_LORA: "1"
+
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: false
+  norm_adv_by_std_in_grpo: true
+
+data:
+  train_files: /home/dengyan/tabular_rl_outputs/rl/result_only/train.parquet
+  val_files: /home/dengyan/tabular_rl_outputs/rl/result_only/dev.parquet
+  train_batch_size: 8
+  val_batch_size: 8
+  max_prompt_length: 4096
+  max_response_length: 4096
+  return_raw_chat: true
+  filter_overlong_prompts: true
+  truncation: left
+  dataloader_num_workers: 2
+
+actor_rollout_ref:
+  model:
+    path: /home/dengyan/models/Qwen2.5-7B-Instruct
+    trust_remote_code: true
+    # The server image has no FlashAttention wheel for torch 2.10/CUDA 12.6.  SDPA is slower,
+    # but keeps this result-reward baseline reproducible without changing model semantics.
+    override_config:
+      _attn_implementation: sdpa
+    use_remove_padding: false
+    enable_gradient_checkpointing: true
+    lora_rank: 16
+    lora_alpha: 32
+    target_modules: all-linear
+    lora_adapter_path: /home/dengyan/tabular_rl_outputs/checkpoints/qwen2.5-7b-external-rollout-v3-success880-epoch4-qlora
+  actor:
+    optim:
+      lr: 5.0e-7
+    # Verl validates this against the number of prompts (not sampled completions).
+    ppo_mini_batch_size: 8
+    ppo_micro_batch_size_per_gpu: 1
+    use_kl_loss: false
+    fsdp_config:
+      model_dtype: bfloat16
+      # Required when frozen base weights and trainable replicated LoRA modules coexist.
+      use_orig_params: true
+      param_offload: false
+      optimizer_offload: false
+  rollout:
+    name: vllm
+    mode: async
+    tensor_model_parallel_size: 2
+    gpu_memory_utilization: 0.40
+    max_num_batched_tokens: 4096
+    max_model_len: 6144
+    max_num_seqs: 8
+    log_prob_micro_batch_size_per_gpu: 1
+    prompt_length: ${data.max_prompt_length}
+    response_length: ${data.max_response_length}
+    n: 4
+    temperature: 0.7
+    top_p: 0.95
+    enforce_eager: true
+    free_cache_engine: true
+    load_format: safetensors
+    layered_summon: true
+    calculate_log_probs: true
+    multi_turn:
+      enable: true
+      use_inference_chat_template: false
+    agent:
+      default_agent_loop: table_tool_agent
+      agent_loop_config_path: /home/dengyan/tabular_rl_project/src/rl/frameworks/verl/configs/table_agent_loops.yaml
+
+reward_model:
+  enable: false
+
+trainer:
+  project_name: table_rl_verl
+  experiment_name: qwen25_7b_result_only_grpo
+  n_gpus_per_node: 2
+  nnodes: 1
+  total_training_steps: 200
+  total_epochs: 1
+  critic_warmup: 0
+  logger: ["console"]
+  default_local_dir: /home/dengyan/tabular_rl_outputs/checkpoints/verl-qwen25-7b-result-only-grpo
+  save_freq: 25
+  test_freq: 25
+  val_before_train: false
+  rollout_data_dir: /home/dengyan/tabular_rl_outputs/rl/result_only/rollouts

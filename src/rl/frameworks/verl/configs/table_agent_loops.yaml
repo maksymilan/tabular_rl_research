@@ -1,0 +1,5 @@
+- name: table_tool_agent
+  _target_: frameworks.verl.agent_loop.TableToolAgentLoop
+  max_steps: 20
+  max_consecutive_errors: 3
+  table_output_rows: 0

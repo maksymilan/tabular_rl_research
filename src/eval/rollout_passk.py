@@ -14,6 +14,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -266,6 +267,7 @@ def run_one(
     *,
     n_samples: int,
     sample_workers: int,
+    stop_on_success: bool,
     pass_k: tuple[int, ...],
     max_steps: int,
     max_tokens: int,
@@ -290,6 +292,7 @@ def run_one(
         "initial_model_input": initial_input,
         "n_samples": n_samples,
         "sample_workers": sample_workers,
+        "stop_on_success": stop_on_success,
         "pass_k": list(pass_k),
         "temperature": temperature,
         "top_p": top_p,
@@ -299,28 +302,32 @@ def run_one(
         "correct": False,
         "failure_type": None,
     }
-    samples: list[dict | None] = [None] * n_samples
-    with ThreadPoolExecutor(max_workers=sample_workers) as pool:
-        futures = {
-            pool.submit(
-                run_sample,
-                ex,
-                sample_index,
-                base_url,
-                model,
-                system,
-                max_steps=max_steps,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                api_retries=api_retries,
-            ): sample_index
-            for sample_index in range(n_samples)
-        }
-        for future in as_completed(futures):
-            sample_index = futures[future]
-            samples[sample_index] = future.result()
-    attach_passk_fields(record, [sample for sample in samples if sample is not None], pass_k)
+    sample_kwargs = {
+        "max_steps": max_steps,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
+        "api_retries": api_retries,
+    }
+    if stop_on_success:
+        samples = []
+        for sample_index in range(n_samples):
+            sample = run_sample(ex, sample_index, base_url, model, system, **sample_kwargs)
+            samples.append(sample)
+            if sample["correct"]:
+                break
+    else:
+        pending: list[dict | None] = [None] * n_samples
+        with ThreadPoolExecutor(max_workers=sample_workers) as pool:
+            futures = {
+                pool.submit(run_sample, ex, sample_index, base_url, model, system, **sample_kwargs): sample_index
+                for sample_index in range(n_samples)
+            }
+            for future in as_completed(futures):
+                pending[futures[future]] = future.result()
+        samples = [sample for sample in pending if sample is not None]
+    attach_passk_fields(record, samples, pass_k)
+    record["attempted_samples"] = len(samples)
     record["elapsed_seconds"] = round(time.time() - started, 3)
     return record
 
@@ -372,6 +379,8 @@ def main() -> int:
     parser.add_argument("--n-samples", type=int, default=32)
     parser.add_argument("--sample-workers", type=int, default=1,
                         help="parallel rollouts per question; pass@k is computed in sample_index order")
+    parser.add_argument("--stop-on-success", action="store_true",
+                        help="sample sequentially and stop a question after its first correct trajectory")
     parser.add_argument("--pass-k", default="2,4,8,16,32")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
@@ -401,6 +410,7 @@ def main() -> int:
         "requested_size": args.n,
         "n_samples": args.n_samples,
         "sample_workers": args.sample_workers,
+        "stop_on_success": args.stop_on_success,
         "pass_k": list(pass_k),
         "temperature": args.temperature,
         "top_p": args.top_p,
@@ -430,6 +440,7 @@ def main() -> int:
                 system,
                 n_samples=args.n_samples,
                 sample_workers=args.sample_workers,
+                stop_on_success=args.stop_on_success,
                 pass_k=pass_k,
                 max_steps=args.max_steps,
                 max_tokens=args.max_tokens,
@@ -446,6 +457,7 @@ def main() -> int:
             print(
                 f"[{position}/{len(pending)}] {flag} q{record['example_index']} "
                 f"correct_samples={record.get('sample_correct_count', 0)} "
+                f"attempted={record.get('attempted_samples', 0)} "
                 f"legal_samples={record.get('sample_legal_count', 0)} "
                 f"{record['question'][:60]}",
                 flush=True,

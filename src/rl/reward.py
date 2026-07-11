@@ -26,6 +26,16 @@ DEFAULT_WEIGHTS = {
 }
 
 
+def terminal_result_reward(correct: object) -> float:
+    """Return the framework-independent binary baseline reward.
+
+    This is intentionally separate from ``score_episode``: framework adapters may use it
+    online at the terminal transition, while the richer pilot reward remains available for
+    later reward-shaping experiments.
+    """
+    return 1.0 if bool(correct) else 0.0
+
+
 @dataclass
 class RewardBreakdown:
     reward: float = 0.0
