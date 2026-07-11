@@ -22,7 +22,7 @@ import bitsandbytes as bnb
 import torch.nn.functional as F
 from accelerate import Accelerator
 from peft import PeftModel, prepare_model_for_kbit_training
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, LogitsProcessor, LogitsProcessorList
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path[:0] = [str(ROOT / "src" / "rl"), str(ROOT / "src" / "eval"), str(ROOT / "src" / "harness"), str(ROOT / "src" / "sft")]
@@ -114,6 +114,30 @@ def _trim_generated_response(ids: list[int], *, eos_token_id: int | None, pad_to
     return ids
 
 
+class ForceEosAfterStop(LogitsProcessor):
+    """Force per-row EOS after a protocol stop string appears in generated tokens."""
+
+    def __init__(self, stop_ids: list[int], *, prompt_width: int, eos_token_id: int | None):
+        self.stop_ids = stop_ids
+        self.prompt_width = prompt_width
+        self.eos_token_id = eos_token_id
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        if self.eos_token_id is None or not self.stop_ids:
+            return scores
+        stop_len = len(self.stop_ids)
+        for row_index in range(input_ids.shape[0]):
+            generated = input_ids[row_index, self.prompt_width:]
+            if generated.numel() < stop_len:
+                continue
+            for end in range(stop_len, generated.numel() + 1):
+                if generated[end - stop_len: end].tolist() == self.stop_ids:
+                    scores[row_index, :] = -torch.inf
+                    scores[row_index, self.eos_token_id] = 0
+                    break
+        return scores
+
+
 def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]], *,
                             device: torch.device, args: argparse.Namespace) -> list[tuple[int, list[int], list[int]]]:
     """Generate one batched assistant turn, splitting on OOM for 24GB cards."""
@@ -127,6 +151,7 @@ def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]]
     input_ids = torch.tensor(input_rows, device=device, dtype=torch.long)
     attention_mask = torch.tensor(mask_rows, device=device, dtype=torch.long)
     try:
+        stop_ids = tokenizer("</tool_call>", add_special_tokens=False).input_ids
         generated = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -136,6 +161,9 @@ def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]]
             top_p=args.top_p,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
+            logits_processor=LogitsProcessorList([
+                ForceEosAfterStop(stop_ids, prompt_width=max_prompt_len, eos_token_id=tokenizer.eos_token_id)
+            ]),
             use_cache=True,
         )
     except torch.OutOfMemoryError:
