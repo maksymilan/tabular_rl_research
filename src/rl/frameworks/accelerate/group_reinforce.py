@@ -52,8 +52,8 @@ def parse_args() -> argparse.Namespace:
                         help="parallel active episodes during sampling; default = group-size")
     parser.add_argument("--logprob-micro-batch-size", type=int, default=2,
                         help="turns per gradient forward pass; lower this if logprob still OOMs")
-    parser.add_argument("--train-turns", choices=("last", "all"), default="last",
-                        help="which assistant turns receive REINFORCE loss; last is much faster on 24GB GPUs")
+    parser.add_argument("--train-turns", choices=("all", "last"), default="all",
+                        help="assistant turns receiving REINFORCE loss; use last only for an explicit speed ablation")
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--max-new-tokens", type=int, default=512)

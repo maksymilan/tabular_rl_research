@@ -26,7 +26,7 @@ EVAL_RUNNER="$PROJECT_DIR/src/eval/run_qwen35_plan_eval_table_rl.sh"
 # The explicit exit-status file lets the independent evaluation watcher distinguish completion from failure.
 nohup env CUDA_VISIBLE_DEVICES="$TRAIN_GPU" MODEL_PATH="$MODEL_PATH" ADAPTER_PATH="$INITIAL_ADAPTER" \
 OUTPUT_DIR="$OUTPUT_DIR" \
-bash -c 'bash "$1" --steps "$2" --group-size 4 --rollout-batch-size 4 --logprob-micro-batch-size 4 --train-turns last --max-steps 12 --max-new-tokens 128 --max-context-tokens 6144 --learning-rate 5e-6 --save-every 100; status=$?; printf "%s\\n" "$status" > "$3"; exit "$status"' \
+bash -c 'bash "$1" --steps "$2" --group-size 4 --rollout-batch-size 4 --logprob-micro-batch-size 4 --train-turns all --max-steps 12 --max-new-tokens 128 --max-context-tokens 6144 --learning-rate 5e-6 --save-every 100; status=$?; printf "%s\\n" "$status" > "$3"; exit "$status"' \
   _ "$TRAIN_RUNNER" "$TRAIN_STEPS" "$TRAIN_STATUS" >"$TRAIN_LOG" 2>&1 &
 TRAIN_PID=$!
 
