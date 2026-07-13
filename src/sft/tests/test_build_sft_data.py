@@ -42,6 +42,20 @@ def trajectory(trajectory_id: str = "traj_1") -> dict:
                     },
                 },
                 "tool_output": {"table": "group_001", "columns": ["count_1"], "rows": [[2]], "row_count": 1},
+                "environment_state_before": {"plan": [], "tables": {}, "values": {}},
+                "environment_state": {
+                    "plan": [],
+                    "tables": {
+                        "group_001": {
+                            "kind": "derived",
+                            "created_by": "step_1",
+                            "columns": ["count_1"],
+                            "row_count": 1,
+                            "reads": [{"from_step": "step_1", "rows": [[2]], "row_count": 1}],
+                        }
+                    },
+                    "values": {},
+                },
             },
             {
                 "step_id": "step_2",
@@ -55,6 +69,32 @@ def trajectory(trajectory_id: str = "traj_1") -> dict:
                     },
                 },
                 "tool_output": {"final_answer": [[2]]},
+                "environment_state_before": {
+                    "plan": [],
+                    "tables": {
+                        "group_001": {
+                            "kind": "derived",
+                            "created_by": "step_1",
+                            "columns": ["count_1"],
+                            "row_count": 1,
+                            "reads": [{"from_step": "step_1", "rows": [[2]], "row_count": 1}],
+                        }
+                    },
+                    "values": {},
+                },
+                "environment_state": {
+                    "plan": [],
+                    "tables": {
+                        "group_001": {
+                            "kind": "derived",
+                            "created_by": "step_1",
+                            "columns": ["count_1"],
+                            "row_count": 1,
+                            "reads": [{"from_step": "step_1", "rows": [[2]], "row_count": 1}],
+                        }
+                    },
+                    "values": {},
+                },
             },
         ],
     }
@@ -65,23 +105,34 @@ class BuildSftDataTests(unittest.TestCase):
         record = convert(trajectory())
         self.assertEqual(
             [message["from"] for message in record["conversations"]],
-            ["human", "gpt", "observation", "gpt"],
+            ["human", "gpt", "human", "gpt"],
         )
         self.assertIn("<tool_call>", record["conversations"][1]["value"])
+        self.assertNotIn("observation", [message["from"] for message in record["conversations"]])
 
-    def test_convert_does_not_persist_environment_state_in_observation(self):
+    def test_convert_renders_state_only_between_assistant_turns(self):
         item = trajectory()
         item["steps"][0]["environment_state"] = {
             "plan": [{"id": "p1", "goal": "count rows", "status": "done"}],
             "tables": {"items": {"kind": "source", "row_count": 2}},
+            "values": {},
         }
 
         record = convert(item)
-        observation = record["conversations"][2]["value"]
+        state_turn = record["conversations"][2]["value"]
 
-        self.assertIn('"output"', observation)
-        self.assertNotIn('"state"', observation)
-        self.assertNotIn("CURRENT ENVIRONMENT STATE", observation)
+        self.assertIn("CURRENT ENVIRONMENT STATE", state_turn)
+        self.assertIn('"tables"', state_turn)
+        self.assertNotIn('"output"', state_turn)
+
+    def test_convert_does_not_leak_current_step_output_to_its_prompt(self):
+        record = convert(trajectory())
+
+        first_prompt = record["conversations"][0]["value"]
+        second_prompt = record["conversations"][2]["value"]
+
+        self.assertNotIn("group_001", first_prompt)
+        self.assertIn("group_001", second_prompt)
 
     def test_build_writes_record_and_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -112,6 +112,7 @@ class EnvironmentState:
         self.plan: dict[str, dict] = {}
         self.plan_order: list[str] = []
         self.tables: dict[str, dict] = {}
+        self.values: dict[str, dict] = {}
         for table in self.catalog.get("tables", []):
             name = table.get("table_name")
             if not name:
@@ -155,7 +156,7 @@ class EnvironmentState:
             out = {k: deepcopy(v) for k, v in table.items()
                    if v not in (None, {}, [])}
             tables[name] = out
-        return {"plan": plan, "tables": tables}
+        return {"plan": plan, "tables": tables, "values": deepcopy(self.values)}
 
     # ---- plan tool ----
     def apply_plan_ops(self, ops: list[dict], step_id: str,
@@ -287,7 +288,7 @@ class EnvironmentState:
                     "row_count": output.get("row_count"),
                     "rows": deepcopy(output.get("rows", [])),
                 }
-                entry.setdefault("reads", []).append(read)
+                self._upsert_read(entry, read)
             return
 
         table_name = output.get("table")
@@ -298,7 +299,7 @@ class EnvironmentState:
             entry["columns"] = deepcopy(output.get("columns"))
             entry["row_count"] = output.get("row_count", entry.get("row_count"))
             if output.get("rows"):
-                entry.setdefault("reads", []).append({
+                self._upsert_read(entry, {
                     "from_step": step_id,
                     "row_count": output.get("row_count"),
                     "limit": output.get("preview_limit"),
@@ -306,6 +307,15 @@ class EnvironmentState:
                     "rows": deepcopy(output.get("rows", [])),
                     "note": "inline table output preview",
                 })
+            return
+
+        if "result_sample" in output:
+            self.values[step_id] = {
+                "from_step": step_id,
+                "row_count": output.get("row_count"),
+                "result_sample": deepcopy(output.get("result_sample", [])),
+            }
+            return
 
     def _ensure_table(self, name: str) -> dict:
         key = _table_key(name)
@@ -320,3 +330,24 @@ class EnvironmentState:
                 "columns": None,
             }
         return self.tables[key]
+
+    def _upsert_read(self, entry: dict, read: dict) -> None:
+        reads = entry.setdefault("reads", [])
+        key = (
+            tuple(read.get("columns") or []),
+            read.get("limit"),
+            read.get("note"),
+        )
+        for idx, old in enumerate(reads):
+            old_key = (
+                tuple(old.get("columns") or []),
+                old.get("limit"),
+                old.get("note"),
+            )
+            if old_key == key:
+                reads[idx] = read
+                break
+        else:
+            reads.append(read)
+        if len(reads) > 4:
+            del reads[:-4]

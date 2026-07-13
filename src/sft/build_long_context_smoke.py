@@ -66,7 +66,6 @@ def main() -> int:
             "content_tag": "value",
             "user_tag": "human",
             "assistant_tag": "gpt",
-            "observation_tag": "observation",
         },
     }
     dataset_info_path.write_text(

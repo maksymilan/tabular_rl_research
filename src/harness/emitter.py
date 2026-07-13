@@ -101,6 +101,7 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
 
     def emit_step(tool, display, references, produces, tool_output, think, *, plan_id=None) -> str:
         sid = f"step_{len(steps) + 1}"
+        state_before = env_state.snapshot()
         if plan_id is not None:
             planid_to_stepid[plan_id] = sid
         history[sid] = {"tool": tool, "arguments": display, "output": tool_output, "references": references}
@@ -111,6 +112,7 @@ def emit(h, question: str, gold_sql: str, *, dataset: str = "", db_id: str = "",
         steps.append({"step_id": sid, "think": think,
                       "tool_call": {"tool": tool, "arguments": display},
                       "references": references, "produces": produces, "tool_output": tool_output,
+                      "environment_state_before": state_before,
                       "environment_state": env_state.snapshot()})
         return sid
 

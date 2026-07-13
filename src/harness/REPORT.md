@@ -1,13 +1,13 @@
 # Harness + Compiler — Test Report
 
-Generated 2026-07-07 23:27 · `python src/harness/run_all.py`
+Generated 2026-07-13 15:40 · `python src/harness/run_all.py`
 
-## Unit tests — 131/131 passed
+## Unit tests — 133/133 passed
 
 | module | passed | failed |
 |---|---|---|
 | test_executor | 26 | 0 |
-| test_environment_state | 12 | 0 |
+| test_environment_state | 14 | 0 |
 | test_plan | 3 | 0 |
 | test_compiler | 16 | 0 |
 | test_verify | 51 | 0 |

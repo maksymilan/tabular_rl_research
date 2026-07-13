@@ -58,7 +58,6 @@ def main() -> int:
             "content_tag": "value",
             "user_tag": "human",
             "assistant_tag": "gpt",
-            "observation_tag": "observation",
         },
     }
     info_path.parent.mkdir(parents=True, exist_ok=True)

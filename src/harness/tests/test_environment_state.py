@@ -83,6 +83,26 @@ def run():
             snap["tables"][f["table_name"]]["created_by"] == "step_4", str(snap))
     t.check("read rows grouped under handle",
             snap["tables"][f["table_name"]]["reads"][0]["from_step"] == "step_5", str(snap))
+    state.apply_tool_result(
+        "read_subtable",
+        {"table": f["table_name"], "limit": 2},
+        {"rows": [["replacement"]], "row_count": f["row_count"]},
+        "step_5b",
+    )
+    snap = state.snapshot()
+    reads = snap["tables"][f["table_name"]]["reads"]
+    t.check("duplicate read_subtable replaces previous read",
+            len(reads) == 1 and reads[0]["from_step"] == "step_5b", str(snap))
+
+    state.apply_tool_result(
+        "aggregate",
+        {"table": f["table_name"], "column": "*", "op": "count"},
+        {"result_sample": [[2]], "row_count": 1},
+        "step_5c",
+    )
+    snap = state.snapshot()
+    t.check("scalar result stored in values",
+            snap["values"]["step_5c"]["result_sample"] == [[2]], str(snap))
 
     state.apply_plan_ops([
         {"op": "delete", "id": "p1", "reason": "complete"},

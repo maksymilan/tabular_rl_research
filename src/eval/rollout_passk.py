@@ -33,9 +33,11 @@ from protocol import (  # noqa: E402
     assistant_message,
     first_user_message,
     get_system_prompt,
+    model_context_messages,
     parse_assistant,
+    state_context_message,
+    tool_error_message,
     tool_output_message,
-    with_environment_state,
 )
 from rollout import (  # noqa: E402
     ChatAPIError,
@@ -163,6 +165,7 @@ def run_sample(
     ]
     created: set[str] = set()
     ctx = new_ctx(ov)
+    last_error: dict | None = None
     steps = errors = consecutive = 0
     turns = []
     started = time.time()
@@ -176,7 +179,7 @@ def run_sample(
         "turns": turns,
     }
     while steps < max_steps:
-        model_input = with_environment_state(messages, ctx["environment"].snapshot())
+        model_input = model_context_messages(system, ov, ex["question"], ctx["environment"].snapshot(), last_error)
         turn = {"turn_index": len(turns), "model_input": deepcopy(model_input)}
         try:
             if request_semaphore is None:
@@ -245,18 +248,20 @@ def run_sample(
                 rec["steps"] = steps
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
+            last_error = {
+                "step_id": f"step_{steps + 1}",
+                "status": "error",
+                "error": {"type": error_type, "message": error},
+            }
             messages.append({
                 "role": "user",
-                "content": json.dumps({
-                    "step_id": f"step_{steps + 1}",
-                    "status": "error",
-                    "error": {"type": error_type, "message": error},
-                }),
+                "content": tool_error_message(last_error["step_id"], error_type, error),
             })
             continue
 
         turns.append(turn)
         consecutive = 0
+        last_error = None
         steps += 1
         if table_name:
             created.add(table_name)
@@ -403,13 +408,17 @@ def fewshot_text(trajectory_ids: list[str]) -> str:
         overview_payload = trajectory["initial_state"]["dataset_overview"]
         lines = [f"USER: {first_user_message(overview_payload, trajectory['question'])}"]
         for index, step in enumerate(trajectory["steps"]):
+            if index > 0:
+                previous = trajectory["steps"][index - 1]
+                lines.append(
+                    "USER: "
+                    + state_context_message(step.get("environment_state_before", previous.get("environment_state")))
+                )
             tool_call = step["tool_call"]
             lines.append(
                 "ASSISTANT: "
                 + assistant_message(step.get("think", ""), tool_call["tool"], tool_call["arguments"])
             )
-            if index < len(trajectory["steps"]) - 1:
-                lines.append(f"USER: {tool_output_message(step['step_id'], step['tool_output'])}")
         blocks.append("\n".join(lines))
     return "\n\nEXAMPLE SESSIONS\n" + "\n\n---\n\n".join(blocks)
 

@@ -104,6 +104,20 @@ tool-call trajectories** (not LLM-guessed), so every trajectory is execution-ver
   limits raises the approximate merged scores to **59.16%** and **61.83%** respectively. Context
   overflow is dominated by `read_subtable` row payloads duplicated between historical tool
   observations and `CURRENT ENVIRONMENT STATE`; plan state is small (~1% of overflow payload).
+- **V2g state-only model context switch (2026-07-13)**: model-visible context is now rebuilt from
+  the resident `EnvironmentState` before each assistant turn instead of accumulating a full
+  assistant/tool-observation transcript. `PROTOCOL_VERSION` is **v2g-state-only**. SFT records render
+  as `human,gpt,human,gpt,...`: the first human turn is the catalog+question, later human turns are
+  `CURRENT ENVIRONMENT STATE` plus optional `LAST TOOL ERROR`; there are no `observation` role turns
+  and no `observation_tag` in new dataset registries. The emitter and external-rollout generator
+  write `environment_state_before` and post-step `environment_state`; SFT must use the before-state
+  for the current assistant step, or the previous step's after-state only as legacy fallback. Online
+  eval, pass@k filtering, external rollout generation, and accelerate RL all call the shared
+  `model_context_messages()` renderer, so old tool outputs may remain in debug artifacts but must not
+  enter `model_input`. `EnvironmentState` also stores scalar `values` and deduplicates repeated
+  `read_subtable`/inline row reads. Clean-switch gates used here: SFT unit tests, harness `run_all`,
+  Python compile check, sample SFT render audit, and grep for `with_environment_state`,
+  `observation_tag`, and `from:"observation"` returning no active-path matches.
 - **Spider 2.0-Lite local adapter prepared (2026-07-08)**: official `xlang-ai/Spider2` is downloaded
   under `data/spider2/Spider2` (gitignored), and official `local_sqlite.zip` is unpacked into
   `data/spider2/Spider2/spider2-lite/resource/databases/spider2-localdb`. Lite has 547 examples:

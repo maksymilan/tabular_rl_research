@@ -49,10 +49,10 @@ from protocol import (  # noqa: E402
     assistant_message,
     first_user_message,
     get_system_prompt,
+    model_context_messages,
     parse_assistant,
     protocol_hash,
     tool_output_message,
-    with_environment_state,
 )
 
 SPIDER = ROOT / "data" / "spider_data"
@@ -320,6 +320,7 @@ def run_rollout(
     ]
     created: set[str] = set()
     ctx = new_ctx(dataset_overview)
+    last_error: dict | None = None
     turns: list[dict] = []
     steps: list[dict] = []
     errors = consecutive = 0
@@ -342,7 +343,14 @@ def run_rollout(
     }
 
     while successful_tool_steps < max_steps:
-        model_input = with_environment_state(messages, ctx["environment"].snapshot())
+        state_before = ctx["environment"].snapshot()
+        model_input = model_context_messages(
+            system_prompt,
+            dataset_overview,
+            ex["question"],
+            state_before,
+            last_error,
+        )
         turn = {"turn_index": len(turns), "model_input": deepcopy(model_input)}
         try:
             text, call_usage, reasoning_content = chat_with_retries(
@@ -404,6 +412,8 @@ def run_rollout(
                     "think_source": think_source,
                     "tool_call": {"tool": tool, "arguments": args},
                     "tool_output": {"final_answer": args.get("answer")},
+                    "environment_state_before": state_before,
+                    "environment_state": ctx["environment"].snapshot(),
                 })
                 break
 
@@ -423,9 +433,12 @@ def run_rollout(
                 "think_source": think_source,
                 "tool_call": {"tool": tool, "arguments": args},
                 "tool_output": out,
+                "environment_state_before": state_before,
+                "environment_state": ctx["environment"].snapshot(),
             })
             turns.append(turn)
             consecutive = 0
+            last_error = None
             successful_tool_steps += 1
             if table_name:
                 created.add(table_name)
@@ -453,6 +466,8 @@ def run_rollout(
                     },
                     "tool_status": "error",
                     "tool_output": {"error": {"type": error_type, "message": message}},
+                    "environment_state_before": state_before,
+                    "environment_state": ctx["environment"].snapshot(),
                 })
             if consecutive >= max_consecutive_errors:
                 rec.update({
@@ -462,6 +477,11 @@ def run_rollout(
                     "errors": errors,
                 })
                 break
+            last_error = {
+                "step_id": step_id,
+                "status": "error",
+                "error": {"type": error_type, "message": message},
+            }
             messages.append({"role": "user", "content": observation_for_error(step_id, error_type, message)})
             continue
     else:

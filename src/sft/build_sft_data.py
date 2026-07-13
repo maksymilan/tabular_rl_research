@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Convert verified harness trajectories into LLaMA-Factory ShareGPT SFT data.
 
-Record shape: {"system": SYSTEM_PROMPT, "conversations": [human, gpt, observation, gpt, ...]}.
-Loss is computed on "gpt" turns only; "observation" (tool outputs) and "human" are masked by
-LLaMA-Factory. The terminal answer_from_context call is the last gpt turn (no observation after).
+Record shape: {"system": SYSTEM_PROMPT, "conversations": [human, gpt, human, gpt, ...]}.
+Loss is computed on "gpt" turns only; human state-context turns are masked by LLaMA-Factory.
+The terminal answer_from_context call is the last gpt turn.
 
 Examples:
   # Backward-compatible v0 build.
@@ -32,7 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
 from protocol import (SYSTEM_PROMPT, PROTOCOL_VERSION, assistant_message,  # noqa: E402
-                      first_user_message, protocol_hash, tool_output_message)
+                      first_user_message, protocol_hash, state_context_message)
 
 CHARS_PER_TOKEN = 3.5  # rough for English+JSON; manifest reports char counts too
 DEFAULT_INPUT_PATTERN = "data/trajectories/spider_{split}.jsonl"
@@ -48,23 +48,19 @@ def convert(traj: dict) -> dict:
              "value": first_user_message(traj["initial_state"]["dataset_overview"], traj["question"])}]
     steps = traj["steps"]
     for i, s in enumerate(steps):
+        if i > 0:
+            previous = steps[i - 1]
+            state = s.get("environment_state_before", previous.get("environment_state"))
+            last_error = None
+            if previous.get("tool_status") == "error":
+                output = previous.get("tool_output") or {}
+                error = output.get("error") if isinstance(output, dict) else None
+                if error:
+                    last_error = {"step_id": previous.get("step_id"), "status": "error", "error": error}
+            conv.append({"from": "human", "value": state_context_message(state, last_error)})
         tc = s["tool_call"]
         conv.append({"from": "gpt",
                      "value": assistant_message(s.get("think", ""), tc["tool"], tc["arguments"])})
-        if i < len(steps) - 1:  # terminal call has no observation
-            status = s.get("tool_status", "success")
-            output = s["tool_output"]
-            # Backward compatibility for older enriched smoke files that stored a whole observation
-            # envelope inside tool_output.
-            if isinstance(output, dict) and {"step_id", "status"} <= set(output):
-                status = output.get("status", status)
-                output = output.get("output", {"error": output.get("error")})
-            conv.append({"from": "observation",
-                         "value": tool_output_message(
-                             s["step_id"],
-                             output,
-                             status=status,
-                         )})
     return {"system": SYSTEM_PROMPT, "conversations": conv}
 
 
@@ -231,8 +227,7 @@ def dataset_info_entry(dataset_name: str, output_prefix: str) -> dict:
             "formatting": "sharegpt",
             "columns": {"messages": "conversations", "system": "system"},
             "tags": {"role_tag": "from", "content_tag": "value",
-                     "user_tag": "human", "assistant_tag": "gpt",
-                     "observation_tag": "observation"},
+                     "user_tag": "human", "assistant_tag": "gpt"},
         }
     }
 

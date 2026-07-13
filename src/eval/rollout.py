@@ -45,7 +45,8 @@ from emitter import _catalog                                   # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
 from protocol import (ACCEPTED_TOOLS, ProtocolError, get_system_prompt,  # noqa: E402
                       assistant_message, first_user_message, parse_assistant,
-                      rows_equal, tool_output_message, with_environment_state)
+                      model_context_messages, rows_equal, tool_error_message,
+                      state_context_message, tool_output_message)
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 MAX_CONSECUTIVE_ERRORS = 3   # error feedback turns allowed before aborting the trajectory
@@ -471,13 +472,17 @@ def fewshot_text(trajectory_ids: list[str]) -> str:
         ov = t["initial_state"]["dataset_overview"]
         lines = [f"USER: {first_user_message(ov, t['question'])}"]
         for i, s in enumerate(t["steps"]):
+            if i > 0:
+                prev = t["steps"][i - 1]
+                lines.append(
+                    "USER: "
+                    + state_context_message(s.get("environment_state_before", prev.get("environment_state")))
+                )
             tc = s["tool_call"]
             lines.append(
                 f"ASSISTANT: "
                 f"{assistant_message(s.get('think', ''), tc['tool'], tc['arguments'])}"
             )
-            if i < len(t["steps"]) - 1:
-                lines.append(f"USER: {tool_output_message(s['step_id'], s['tool_output'])}")
         blocks.append("\n".join(lines))
     return "\n\nEXAMPLE SESSIONS\n" + "\n\n---\n\n".join(blocks)
 
@@ -501,6 +506,7 @@ def run_live(
     initial_messages = deepcopy(messages)
     created: set[str] = set()
     ctx = new_ctx(ov)
+    last_error: dict | None = None
     steps = errors = consecutive = 0
     text = ""
     turns = []
@@ -521,7 +527,7 @@ def run_live(
     }
 
     while steps < max_steps:
-        model_input = with_environment_state(messages, ctx["environment"].snapshot())
+        model_input = model_context_messages(system, ov, ex["question"], ctx["environment"].snapshot(), last_error)
         turn = {"turn_index": len(turns), "model_input": deepcopy(model_input)}
         try:
             text = chat(base_url, model, model_input, max_tokens=max_tokens, retries=api_retries)
@@ -584,12 +590,20 @@ def run_live(
                 rec["final_messages"] = messages
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
-            messages.append({"role": "user", "content": json.dumps(
-                {"step_id": f"step_{steps + 1}", "status": "error",
-                 "error": {"type": turn["execution_error_type"], "message": error}})})
+            last_error = {
+                "step_id": f"step_{steps + 1}",
+                "status": "error",
+                "error": {"type": turn["execution_error_type"], "message": error},
+            }
+            messages.append({"role": "user", "content": tool_error_message(
+                last_error["step_id"],
+                turn["execution_error_type"],
+                error,
+            )})
             continue
         turns.append(turn)
         consecutive = 0
+        last_error = None
         steps += 1
         if tname:
             created.add(tname)

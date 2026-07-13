@@ -27,7 +27,6 @@ def dataset_entry(file_name: str) -> dict:
             "content_tag": "value",
             "user_tag": "human",
             "assistant_tag": "gpt",
-            "observation_tag": "observation",
         },
     }
 

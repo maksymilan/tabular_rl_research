@@ -27,9 +27,9 @@ from protocol import (  # noqa: E402
     ProtocolError,
     SYSTEM_PROMPT,
     first_user_message,
+    model_context_messages,
     parse_assistant,
     tool_output_message,
-    with_environment_state,
 )
 from rollout import (  # noqa: E402
     MAX_CONSECUTIVE_ERRORS,
@@ -74,17 +74,18 @@ class ToolUseEnv:
 
     def reset(self) -> list[dict]:
         self.harness = Harness(db_path(self.example["db_id"]))
-        ov = overview(self.harness)
+        self.overview = overview(self.harness)
         self.messages = [
             {"role": "system", "content": self.system_prompt},
             {
                 "role": "user",
-                "content": first_user_message(ov, self.example["question"]),
+                "content": first_user_message(self.overview, self.example["question"]),
             },
         ]
         self.initial_messages = deepcopy(self.messages)
         self.created: set[str] = set()
-        self.ctx = new_ctx(ov)
+        self.ctx = new_ctx(self.overview)
+        self.last_error: dict | None = None
         self.steps = 0
         self.errors = 0
         self.consecutive_errors = 0
@@ -97,7 +98,13 @@ class ToolUseEnv:
         return deepcopy(self.messages)
 
     def model_messages(self) -> list[dict]:
-        return with_environment_state(self.messages, self.ctx["environment"].snapshot())
+        return model_context_messages(
+            self.system_prompt,
+            self.overview,
+            self.example["question"],
+            self.ctx["environment"].snapshot(),
+            self.last_error,
+        )
 
     def record(self) -> dict:
         return {
@@ -152,6 +159,7 @@ class ToolUseEnv:
             turn["tool_output"] = output
             self.turns.append(turn)
             self.consecutive_errors = 0
+            self.last_error = None
             self.steps += 1
             if table_name:
                 self.created.add(table_name)
@@ -182,6 +190,7 @@ class ToolUseEnv:
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
+            self.last_error = json.loads(observation)
             if self.consecutive_errors >= self.max_consecutive_errors:
                 self.done = True
                 self.failure_type = error_type

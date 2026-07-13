@@ -8,9 +8,12 @@ Message protocol (chat roles):
   system   : agent role + tool specs + interaction rules            (SYSTEM_PROMPT)
   user #1  : dataset overview JSON + the question                   (first_user_message)
   assistant: "<think>...</think>\n<tool_call>{...}</tool_call>"     (assistant_message)
-  user     : compact JSON of the harness tool_output                (tool_output_message)
-  ... repeats; the dialogue ends with the assistant's answer_from_context call
-      (terminal — no tool_output follows it).
+  user     : CURRENT ENVIRONMENT STATE rendered from harness state  (state_context_message)
+  ... repeats; the dialogue ends with the assistant's answer_from_context call.
+
+Tool outputs are kept in the harness/debug event log, but the model-visible context is rebuilt
+from resident environment state before each turn. This keeps SFT, eval and RL from accumulating a
+duplicated transcript of old observations.
 """
 from __future__ import annotations
 
@@ -90,7 +93,7 @@ TOOLS = set(TOOL_SPECS)
 LEGACY_TOOLS = {"aggregate"}
 ACCEPTED_TOOLS = TOOLS | LEGACY_TOOLS
 
-PROTOCOL_VERSION = "v2f-agg-unified"   # bump when specs, rendering, or the memory model change
+PROTOCOL_VERSION = "v2g-state-only"   # bump when specs, rendering, or the memory model change
 
 # Strict per-tool argument schema (required, optional). Unlisted keys are rejected so the SFT data
 # and the live rollout can never silently drift. V2b: a predicate's `value_ref` cites the producing
@@ -141,12 +144,13 @@ SYSTEM_PROMPT = (
     "You are a table-reasoning agent. You answer questions over a relational dataset by calling "
     "tools, one call per turn. The opening overview is a CATALOG: table names + row counts + "
     "foreign-key relations only (no columns) — so it stays small on large databases. Read the "
-    "columns of the tables you need with describe_table before operating. Each tool result is an "
-    "observation {\"step_id\", \"status\", \"output\"}: step_id names that step so you can cite it "
-    "later (e.g. as a predicate's value_ref); a table-creating tool's output is only a HANDLE "
-    "(table name, columns, row_count) — use read_subtable to SEE its rows. The harness may provide "
-    "a separate CURRENT ENVIRONMENT STATE message before your turn; it is the current resident "
-    "plan/table state, not another historical observation.\n\n"
+    "columns of the tables you need with describe_table before operating. After each tool call, "
+    "the harness updates a CURRENT ENVIRONMENT STATE message. Treat that state as the authoritative "
+    "workspace: it contains the resident plan, known schemas, inspected values, table handles, row "
+    "reads, scalar values, and the step ids you may cite later (e.g. as a predicate's value_ref). "
+    "You will not receive a full transcript of old tool observations; use the state instead of "
+    "repeating previous reads. A table-producing tool's state entry is only a HANDLE (table name, "
+    "columns, row_count) until you call read_subtable to see rows.\n\n"
     "TOOLS\n" + "\n".join(TOOL_SPECS.values()) + "\n\n"
     "RULES\n"
     "1. Each turn, output exactly: <think>brief reasoning</think> then "
@@ -156,7 +160,8 @@ SYSTEM_PROMPT = (
     "3. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
     "4. To use a computed scalar as a threshold, set the predicate's "
     '{"value_ref": step_id} to the step that produced that scalar.\n'
-    "5. read_subtable the evidence table, then finish with answer_from_context citing that table. "
+    "5. read_subtable the evidence table when row values are needed, then finish with "
+    "answer_from_context citing that table. "
     "For row-valued answers, you may leave answer empty because the harness reads the evidence table; "
     "do not handwrite long row lists.\n"
 )
@@ -228,27 +233,46 @@ def tool_output_message(step_id: str, output: dict, status: str = "success",
     return _compact(msg)
 
 
-def environment_state_message(state: dict | None) -> str:
-    return "CURRENT ENVIRONMENT STATE\n" + _compact(state or {"plan": [], "tables": {}})
+def tool_error_message(step_id: str, error_type: str, message: str) -> str:
+    return _compact({
+        "step_id": step_id,
+        "status": "error",
+        "error": {"type": error_type, "message": message},
+    })
+
+
+def environment_state_message(state: dict | None, last_error: dict | None = None) -> str:
+    text = "CURRENT ENVIRONMENT STATE\n" + _compact(state or {"plan": [], "tables": {}, "values": {}})
+    if last_error:
+        text += "\n\nLAST TOOL ERROR\n" + _compact(last_error)
+    return text
+
+
+def state_context_message(state: dict | None, last_error: dict | None = None) -> str:
+    """Model-visible mutable context between assistant turns."""
+    return environment_state_message(state, last_error=last_error)
 
 
 def _state_is_empty(state: dict | None) -> bool:
     if not isinstance(state, dict):
         return True
-    return not state.get("plan") and not state.get("tables")
+    return not state.get("plan") and not state.get("tables") and not state.get("values")
 
 
-def with_environment_state(messages: list[dict], state: dict | None) -> list[dict]:
-    """Return model-input messages with the current resident state as an ephemeral side channel.
+def model_context_messages(system: str, overview: dict, question: str, state: dict | None,
+                           last_error: dict | None = None) -> list[dict]:
+    """Build the complete model-visible context for one turn from resident state.
 
-    The returned state message is not meant to be appended to conversation history. It is analogous
-    to a mutable environment panel rendered once for the next model call, avoiding repeated state
-    snapshots inside every historical observation.
+    This is the state-only path used by online eval/RL. It deliberately ignores any accumulated
+    debug transcript so old observations cannot re-enter the prompt.
     """
-    out = [dict(message) for message in messages]
-    if not _state_is_empty(state):
-        out.append({"role": "user", "content": environment_state_message(state)})
-    return out
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": first_user_message(overview, question)},
+    ]
+    if not _state_is_empty(state) or last_error:
+        messages.append({"role": "user", "content": state_context_message(state, last_error)})
+    return messages
 
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
