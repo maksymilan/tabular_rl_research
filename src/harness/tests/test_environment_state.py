@@ -45,6 +45,13 @@ def run():
     t.check("plan evidence none clears evidence",
             all(item.get("evidence") is None for item in upsert["plan"] if item["id"] == "p2"),
             str(upsert))
+    empty_evidence = state.apply_plan_ops([
+        {"op": "update", "id": "p2", "evidence": "", "status": "pending"},
+    ], "step_1c_empty", history)
+    p2_empty = [item for item in empty_evidence["plan"] if item["id"] == "p2"][0]
+    t.check("plan empty-string evidence is treated as absent",
+            "evidence" not in p2_empty,
+            str(empty_evidence))
 
     unresolved = state.apply_plan_ops([
         {"op": "update", "id": "p2", "evidence": "step_future"},

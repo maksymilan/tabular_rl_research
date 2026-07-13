@@ -89,6 +89,8 @@ def _ground_evidence(value: Any, history: dict[str, dict] | None) -> dict | None
         step_id = value
     if isinstance(step_id, str) and step_id.strip().lower() in {"none", "null", "n/a", "na"}:
         return None
+    if isinstance(step_id, str) and not step_id.strip():
+        return None
     if not isinstance(step_id, str) or not step_id.strip():
         raise EnvironmentStateError("plan evidence must be a step_id string")
     step_id = step_id.strip()

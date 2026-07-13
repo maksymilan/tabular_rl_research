@@ -66,7 +66,10 @@ DATA_GENERATION_SUFFIX = (
     "Your <think> block must be non-empty on every turn. Put the reason inside <think> tags, "
     "not as plain text before the tool call. The reason should be specific to the current question, "
     "visible schema/observations, and the next tool arguments. After the first turn, do not restate "
-    "the original user question; continue from the latest observation or error feedback."
+    "the original user question; continue from the current environment state or error feedback. "
+    "Do not call read_subtable again for the same table, columns, and limit if that read is already "
+    "present in CURRENT ENVIRONMENT STATE. If a plan item has no evidence yet, omit the evidence "
+    "field or set it to null; never use an empty string for evidence."
 )
 
 
