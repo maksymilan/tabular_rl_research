@@ -51,6 +51,7 @@ from protocol import (ACCEPTED_TOOLS, ProtocolError, get_system_prompt,  # noqa:
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 MAX_ERRORS_PER_TYPE = 3
+MAX_CONSECUTIVE_ERRORS = 3
 DEFAULT_FEWSHOT_IDS = ["spider_train_0", "spider_train_1"]
 DEFAULT_MAX_TOKENS = 768
 MIN_CONTEXT_RETRY_TOKENS = 128
