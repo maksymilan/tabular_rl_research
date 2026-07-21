@@ -192,17 +192,22 @@ def data_sources(experiment: dict) -> list[dict]:
     add("trainer_state", "Trainer State", "training", training.get("trainer_state"))
 
     evaluation_dirs = []
-    primary_dir = experiment.get("evaluation", {}).get("directory")
-    if primary_dir:
-        evaluation_dirs.append(("eval", "完整评测", primary_dir))
+    primary = experiment.get("evaluation", {})
+    primary_path = primary.get("file") or primary.get("directory")
+    if primary_path:
+        evaluation_dirs.append(("eval", primary.get("label") or "完整评测", primary_path))
     for index, related in enumerate(experiment.get("related_evaluations", []), start=1):
         evaluation_dirs.append((
             f"related_{index}",
             related.get("label") or f"附加评测 {index}",
-            related.get("directory"),
+            related.get("file") or related.get("directory"),
         ))
     for prefix, run_label, directory in evaluation_dirs:
         if not directory:
+            continue
+        path = resolve_repo_path(directory)
+        if path.is_file():
+            add(f"{prefix}_all", f"{run_label} · 全部案例", "evaluation", directory)
             continue
         add(f"{prefix}_all", f"{run_label} · 全部案例", "evaluation", f"{directory}/all.jsonl")
         add(
@@ -232,11 +237,11 @@ def data_sources(experiment: dict) -> list[dict]:
     return candidates
 
 
-def evaluation_summary(directory: Path) -> dict:
-    all_path = directory / "all.jsonl"
+def evaluation_summary(path: Path, expected_total: int | None = None) -> dict:
+    all_path = path if path.is_file() else path / "all.jsonl"
     if not all_path.exists():
         return {"available": False}
-    cache_key = str(all_path)
+    cache_key = f"{all_path}:{expected_total}"
     mtime = all_path.stat().st_mtime
     cached = _eval_cache.get(cache_key)
     if cached and cached[0] == mtime:
@@ -247,7 +252,7 @@ def evaluation_summary(directory: Path) -> dict:
     steps_observed = elapsed_observed = 0
     failures = Counter()
     pass_at = None
-    summary_path = directory / "summary.json"
+    summary_path = all_path.parent / "summary.json"
     if summary_path.exists():
         try:
             pass_at = read_json(summary_path).get("pass_at")
@@ -295,7 +300,9 @@ def evaluation_summary(directory: Path) -> dict:
         "average_steps": total_steps / steps_observed if steps_observed else None,
         "average_elapsed_seconds": total_elapsed / elapsed_observed if elapsed_observed else None,
         "failure_types": dict(failures),
-        "complete_dev": total == 1034,
+        "expected_total": expected_total,
+        "complete": total == expected_total if expected_total else None,
+        "complete_dev": expected_total == 1034 and total == 1034,
     }
     if pass_at:
         summary["pass_at"] = pass_at
@@ -363,25 +370,26 @@ def dataset_summary(experiment: dict) -> dict:
 
 def evaluation_runs(experiment: dict) -> list[dict]:
     runs = []
-    primary_dir = experiment.get("evaluation", {}).get("directory")
-    if primary_dir:
+    primary = experiment.get("evaluation", {})
+    primary_path = primary.get("file") or primary.get("directory")
+    if primary_path:
         runs.append({
             "id": "eval",
-            "label": experiment.get("evaluation", {}).get("label") or "完整评测",
-            "directory": primary_dir,
+            "label": primary.get("label") or "完整评测",
+            "directory": primary_path,
             "primary": True,
-            "summary": evaluation_summary(resolve_repo_path(primary_dir)),
+            "summary": evaluation_summary(resolve_repo_path(primary_path), primary.get("expected_total")),
         })
     for index, related in enumerate(experiment.get("related_evaluations", []), start=1):
-        directory = related.get("directory")
-        if not directory:
+        path = related.get("file") or related.get("directory")
+        if not path:
             continue
         runs.append({
             "id": f"related_{index}",
             "label": related.get("label") or f"附加评测 {index}",
-            "directory": directory,
+            "directory": path,
             "primary": False,
-            "summary": evaluation_summary(resolve_repo_path(directory)),
+            "summary": evaluation_summary(resolve_repo_path(path), related.get("expected_total")),
         })
     return runs
 
@@ -390,9 +398,11 @@ def enrich_experiment(experiment: dict) -> dict:
     result = dict(experiment)
     result["training_metrics"] = training_metrics(experiment)
     result["dataset_summary"] = dataset_summary(experiment)
-    eval_dir = experiment.get("evaluation", {}).get("directory")
+    evaluation = experiment.get("evaluation", {})
+    eval_dir = evaluation.get("file") or evaluation.get("directory")
     result["evaluation_summary"] = (
-        evaluation_summary(resolve_repo_path(eval_dir)) if eval_dir else {"available": False}
+        evaluation_summary(resolve_repo_path(eval_dir), evaluation.get("expected_total"))
+        if eval_dir else {"available": False}
     )
     result["evaluation_runs"] = evaluation_runs(experiment)
     result["data_sources"] = data_sources(experiment)

@@ -27,6 +27,88 @@
     "notes": "Direct-SQL capability reference. This is the primary accuracy baseline for judging whether tool use preserves answer quality."
   },
   {
+    "id": "qwen25-7b-bird-dev-direct-sql",
+    "name": "Qwen2.5-7B · BIRD Dev Direct SQL",
+    "short_name": "7B BIRD SQL",
+    "benchmark": "bird",
+    "kind": "baseline",
+    "status": "completed",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "method": "Zero-shot direct SQL",
+    "dataset_version": "BIRD public Dev 2024-06-27",
+    "description": "Base model generates one SQLite query from the complete schema and official evidence. No LoRA, tools, or execution feedback.",
+    "completed_at": "2026-07-15T15:23:00+08:00",
+    "tags": ["baseline", "bird", "direct-sql", "zero-shot", "large-db"],
+    "evaluation": {
+      "label": "BIRD Dev full 1534",
+      "directory": "data/results/qwen2.5_7b_bird_dev_direct_sql_base_v4",
+      "expected_total": 1534
+    },
+    "notes": "Execution accuracy: 598/1534 = 38.98%. Simple 433/925 = 46.81%; moderate 137/464 = 29.53%; challenging 28/145 = 19.31%. Generated SQL has a 5-second SQLite VM limit and a 30-second task watchdog: 583 wrong_result, 349 execution_error, 4 task_timeout. Official hidden BIRD Test requires submission; this is the released local Dev benchmark."
+  },
+  {
+    "id": "bird-flash-context100-rolling4",
+    "name": "BIRD · Flash Context-100 Rolling-4",
+    "short_name": "BIRD roll-4",
+    "benchmark": "bird",
+    "kind": "data-construction",
+    "status": "completed",
+    "model": "deepseek-v4-flash",
+    "method": "Closed-loop tool rollout · rolling legal history (4)",
+    "dataset_version": "BIRD train-compatible fixed 100",
+    "description": "Paired teacher rollout over the same 100 BIRD train tasks. Only verifier-correct trajectories are retained; rolling legal history is an experimental teacher context, not yet a state-only SFT mixture.",
+    "completed_at": "2026-07-15T12:00:00+08:00",
+    "tags": ["bird", "data-construction", "deepseek-v4-flash", "rolling-history", "context100"],
+    "dataset": {
+      "train": "data/trajectories/bird_ds_flash_v4_context100_rolling4_success.jsonl",
+      "train_manifest": "data/trajectories/bird_ds_flash_v4_context100_rolling4_success.manifest.json"
+    },
+    "evaluation": {
+      "label": "Rolling legal history · 100 paired tasks",
+      "file": "data/trajectories/bird_ds_flash_v4_context100_rolling4_all.jsonl",
+      "expected_total": 100
+    },
+    "related_evaluations": [
+      {
+        "label": "State-only paired control · 100 tasks",
+        "file": "data/trajectories/bird_ds_flash_v4_context100_state_only_all.jsonl",
+        "expected_total": 100
+      }
+    ],
+    "notes": "Rolling-4: 47/100 verified, 89/100 legal finals, 28 clean + 19 recovered successes; easy/medium/hard 19/40, 17/30, 11/30. State-only control: 35/100 verified, 73/100 legal; easy/medium/hard 15/40, 13/30, 7/30. Pairwise: 23 both-pass, 24 state-only-fail→rolling-pass, 12 rolling-fail→state-only-pass, 41 both-fail; McNemar two-sided p=0.065. The 47 successful rolling episodes are split deterministically into 40 train (16/15/9) and 7 holdout (3/2/2), seed 20260715."
+  },
+  {
+    "id": "bird-flash-context100-rolling4-compactpilot100",
+    "name": "BIRD · Flash Context-100 Rolling-4 Compact Pilot",
+    "short_name": "BIRD compact-4",
+    "benchmark": "bird",
+    "kind": "data-construction",
+    "status": "completed",
+    "model": "deepseek-v4-flash",
+    "method": "Closed-loop tool rollout · compact rolling legal history (4)",
+    "dataset_version": "BIRD train-compatible fixed 100",
+    "description": "Same stratified 100 BIRD train tasks as the full-prompt control, generated with the safe compact rolling prompt. Canonical metrics retain each task's first observed attempt; duplicate writes are audit-only.",
+    "completed_at": "2026-07-15T16:25:00+08:00",
+    "tags": ["bird", "data-construction", "deepseek-v4-flash", "rolling-history", "compact-prompt", "pilot"],
+    "dataset": {
+      "train": "data/trajectories/bird_ds_flash_v4_context100_rolling4_compactpilot100_first_attempt_success.jsonl",
+      "train_manifest": "data/trajectories/bird_ds_flash_v4_context100_rolling4_compactpilot100_first_attempt.manifest.json"
+    },
+    "evaluation": {
+      "label": "Compact rolling legal history · first attempt · 100 paired tasks",
+      "file": "data/trajectories/bird_ds_flash_v4_context100_rolling4_compactpilot100_first_attempt_all.jsonl",
+      "expected_total": 100
+    },
+    "related_evaluations": [
+      {
+        "label": "Full-prompt paired control · 100 tasks",
+        "file": "data/trajectories/bird_ds_flash_v4_context100_rolling4_all.jsonl",
+        "expected_total": 100
+      }
+    ],
+    "notes": "First-attempt compact result: 10/100 verified and 35/100 legal finals; easy/medium/hard 5/40, 5/30, 0/30. Relative to the full-prompt paired control (47/100), 38 full-success tasks regressed and only 1 full-failure task improved. Compact reduced prompt tokens 27.9% (3.141M to 2.263M), but the quality regression blocks scale-up. Audit: 64 legal targets, 6 feedback-recovery targets, all 10 candidates structurally valid and prompt-variant matched. Four same-attempt duplicate raw records are retained only in the all-record audit file; canonical metrics use first observed attempts."
+  },
+  {
     "id": "qwen25-7b-base-tool-2shot",
     "name": "Qwen2.5-7B · Tool 2-shot Baseline",
     "short_name": "Base Tool",

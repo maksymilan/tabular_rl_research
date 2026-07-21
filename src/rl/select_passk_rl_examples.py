@@ -66,11 +66,12 @@ def classify(record: dict[str, Any], *, target_k: int) -> str:
     return "all_attempted_failed"
 
 
-def as_training_example(record: dict[str, Any], *, bucket: str, source_path: Path, target_k: int) -> dict[str, Any]:
+def as_training_example(record: dict[str, Any], *, bucket: str, source_path: Path, target_k: int,
+                        task: dict[str, Any] | None = None) -> dict[str, Any]:
     query = record.get("query") or record.get("gold_sql")
     if not query:
         raise ValueError(f"record {record.get('example_index')} is missing query/gold_sql")
-    return {
+    example = {
         "example_index": int(record["example_index"]),
         "dataset_split": "train",
         "db_id": record["db_id"],
@@ -87,11 +88,23 @@ def as_training_example(record: dict[str, Any], *, bucket: str, source_path: Pat
             "failure_type": record.get("failure_type"),
         },
     }
+    if task is not None:
+        if int(task["example_index"]) != int(record["example_index"]):
+            raise ValueError("task/rollout example_index mismatch")
+        example.update({
+            "db_path": task.get("db_path"),
+            "gold_sql": task.get("gold_sql") or task.get("query"),
+            "external_knowledge": task.get("external_knowledge"),
+            "metadata": task.get("metadata"),
+        })
+    return example
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True, help="pass@k all.jsonl")
+    parser.add_argument("--tasks", type=Path,
+                        help="optional DatasetTask JSON/JSONL supplying db_path and external knowledge")
     parser.add_argument("--output", type=Path, required=True,
                         help="trainer-ready JSON accepted by group_reinforce.py --examples-json")
     parser.add_argument("--target-pass-k", type=int, default=None,
@@ -104,6 +117,20 @@ def main() -> int:
     args = parser.parse_args()
 
     records = load_jsonl(args.input)
+    task_map: dict[int, dict[str, Any]] = {}
+    if args.tasks:
+        task_rows = load_jsonl(args.tasks) if args.tasks.suffix == ".jsonl" else json.loads(
+            args.tasks.read_text(encoding="utf-8")
+        )
+        if isinstance(task_rows, dict):
+            task_rows = task_rows.get("examples")
+        if not isinstance(task_rows, list):
+            raise ValueError("--tasks must contain a JSON list/JSONL or an object with examples")
+        task_map = {int(task["example_index"]): task for task in task_rows}
+        missing = sorted(int(record["example_index"]) for record in records
+                         if int(record["example_index"]) not in task_map)
+        if missing:
+            raise ValueError(f"--tasks is missing {len(missing)} rollout ids: {missing[:20]}")
     target_k = target_pass_k(records, args.target_pass_k)
     buckets = [(record, classify(record, target_k=target_k)) for record in records]
     if args.mode == "all":
@@ -116,7 +143,13 @@ def main() -> int:
         selected = selected[:args.limit]
 
     examples = [
-        as_training_example(record, bucket=bucket, source_path=args.input, target_k=target_k)
+        as_training_example(
+            record,
+            bucket=bucket,
+            source_path=args.input,
+            target_k=target_k,
+            task=task_map.get(int(record["example_index"])),
+        )
         for record, bucket in selected
     ]
     summary = {

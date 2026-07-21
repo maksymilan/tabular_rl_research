@@ -11,9 +11,25 @@ import random
 from pathlib import Path
 from typing import Any
 
+from emitter import _catalog
 from executor import Harness
 from protocol import SYSTEM_PROMPT, first_user_message
-from rollout import db_path, overview
+
+
+def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+    with path.open(encoding="utf-8") as source:
+        return [json.loads(line) for line in source if line.strip()]
+
+
+def _task_db_path(example: dict[str, Any]) -> str:
+    provided = example.get("db_path")
+    if provided:
+        return str(provided)
+    return str(Path("data/spider_data/database") / example["db_id"] / f"{example['db_id']}.sqlite")
+
+
+def _task_gold_sql(example: dict[str, Any]) -> str | None:
+    return example.get("gold_sql") or example.get("query")
 
 
 def load_selection(path: Path | None) -> list[int] | None:
@@ -40,10 +56,13 @@ def load_result_only_task_records(
     if examples_json is not None:
         if split != "train":
             raise ValueError("examples_json is only valid for the training split")
-        payload = json.loads(examples_json.read_text(encoding="utf-8"))
-        examples = payload.get("examples") if isinstance(payload, dict) else payload
-        if not isinstance(examples, list):
-            raise ValueError("examples_json must be a JSON list or an object with an examples list")
+        if examples_json.suffix == ".jsonl":
+            examples = _load_jsonl(examples_json)
+        else:
+            payload = json.loads(examples_json.read_text(encoding="utf-8"))
+            examples = payload.get("examples") if isinstance(payload, dict) else payload
+            if not isinstance(examples, list):
+                raise ValueError("examples_json must be a JSON list/JSONL or an object with examples")
         indexed = [(int(example["example_index"]), example) for example in examples]
     else:
         examples = json.loads(source_path.read_text(encoding="utf-8"))
@@ -65,21 +84,32 @@ def load_result_only_task_records(
         db_id = example["db_id"]
         catalog = catalogs.get(db_id)
         if catalog is None:
-            catalog = overview(Harness(db_path(db_id)))
+            db_path = _task_db_path(example)
+            if not Path(db_path).is_absolute():
+                db_path = str(project_root / db_path)
+            harness = Harness(db_path)
+            try:
+                catalog = _catalog(harness)
+            finally:
+                harness.conn.close()
             catalogs[db_id] = catalog
         records.append(
             {
                 "data_source": "spider_table_result_only",
                 "prompt": [
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": first_user_message(catalog, example["question"])},
+                    {"role": "user", "content": first_user_message(
+                        catalog, example["question"], example.get("external_knowledge"),
+                    )},
                 ],
                 "environment": {
                     "dataset_split": split,
                     "example_index": index,
                     "db_id": db_id,
+                    "db_path": db_path,
                     "question": example["question"],
-                    "gold_sql": example["query"],
+                    "gold_sql": _task_gold_sql(example),
+                    "external_knowledge": example.get("external_knowledge"),
                 },
             }
         )

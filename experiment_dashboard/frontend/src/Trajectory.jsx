@@ -199,6 +199,7 @@ export function TrajectoryView({ record }) {
   const attr = attributeRecord(record);
   const meta = BUCKET_META[attr.bucket] || BUCKET_META.unknown;
   const turns = record.turns || [];
+  const errorEvents = record.error_events || record.rollout_generation?.error_events || [];
   return (
     <div className="trajectory">
       <div className="traj-head">
@@ -227,6 +228,12 @@ export function TrajectoryView({ record }) {
           <Sample title={`答案 ${attr.goldShape ? attr.goldShape.join("×") : ""}`} rows={record.gold_sample} tone="ok" />
         </div>
       ) : null}
+      {errorEvents.length ? (
+        <details className="traj-output">
+          <summary>完整错误事件 · {errorEvents.length}</summary>
+          <JsonTree value={errorEvents} />
+        </details>
+      ) : null}
       <ol className="traj-steps">
         {turns.map((turn, i) => {
           const nextTurn = turns[i + 1];
@@ -241,6 +248,7 @@ export function TrajectoryView({ record }) {
           const tool = turn.parsed && turn.parsed.tool;
           const Icon = TOOL_ICON[tool] || Wrench;
           const isError = !!turn.error_attempt;
+          const isRecovery = !!turn.feedback_recovery;
           const isPerception = !isError && (turn.perception != null ? turn.perception : PERCEPTION.has(tool));
           const isRitualRead = tool === "read_subtable" && i >= turns.length - 2;
           const cls = isError ? " error-attempt" : isPerception ? " perception" : "";
@@ -252,6 +260,8 @@ export function TrajectoryView({ record }) {
                 <strong>{tool || "—"}</strong>
                 {isError ? (
                   <span className="traj-tag err">纠错 · 错误尝试</span>
+                ) : isRecovery ? (
+                  <span className="traj-tag recovery">错误反馈恢复</span>
                 ) : isPerception ? (
                   <span className={`traj-tag${isRitualRead ? " ritual" : ""}`}>
                     {tool === "read_subtable" ? (isRitualRead ? "答案前固定读" : "决策点主动读") : "感知"}
@@ -969,8 +979,10 @@ export function ConstructionPanel() {
   }, [file, page]);
 
   const active = data?.records?.[selected]?.record;
-  const modeName = active ? enrichmentField(active, "mode", "skeleton") : null;
-  const mode = active ? MODE_META[modeName] || MODE_META.skeleton : null;
+  const isRawRollout = Array.isArray(active?.turns);
+  const rawMeta = isRawRollout ? BUCKET_META[attributeRecord(active).bucket] || BUCKET_META.unknown : null;
+  const modeName = active && !isRawRollout ? enrichmentField(active, "mode", "skeleton") : null;
+  const mode = isRawRollout ? rawMeta : active ? MODE_META[modeName] || MODE_META.skeleton : null;
 
   return (
     <main className="content">
@@ -978,7 +990,7 @@ export function ConstructionPanel() {
         <div>
           <p className="eyebrow">DATA CONSTRUCTION</p>
           <h1>数据构造审核</h1>
-          <p>反思/感知富化轨迹:开场目录 → describe_table 取列 → inspect_column 确认字面量 → 纠错(错误→观察→改正) → 执行</p>
+          <p>审核验证成功训练候选，以及完整 rollout 中的工具执行、错误反馈与恢复过程。</p>
         </div>
         <div className="construction-picker">
           <span className="construction-picker-title">
@@ -1016,7 +1028,10 @@ export function ConstructionPanel() {
               <div className="record-index">
                 {data.records.map((item, index) => {
                   const r = item.record;
-                  const m = MODE_META[enrichmentField(r, "mode", "skeleton")] || MODE_META.skeleton;
+                  const raw = Array.isArray(r.turns);
+                  const m = raw
+                    ? BUCKET_META[attributeRecord(r).bucket] || BUCKET_META.unknown
+                    : MODE_META[enrichmentField(r, "mode", "skeleton")] || MODE_META.skeleton;
                   return (
                     <button
                       key={item.index}
@@ -1027,7 +1042,9 @@ export function ConstructionPanel() {
                       <strong>{r.question || r.trajectory_id}</strong>
                       <em className="case-bucket" style={{ color: m.color }}>
                         {m.label}
-                        {m === MODE_META.failure_recovery
+                        {raw
+                          ? ` · ${r.correct ? "验证通过" : r.failure_type || "失败"} · ${r.steps || 0} 步`
+                          : m === MODE_META.failure_recovery
                           ? ` · 失败前缀 ${enrichmentField(r, "n_failed_prefix_steps", 0)}`
                           : ` · 感${enrichmentField(r, "n_perception", 0)}/纠${enrichmentField(r, "n_error", 0)}`}
                       </em>
@@ -1041,7 +1058,9 @@ export function ConstructionPanel() {
                     {active ? (
                       <>
                         <span className="bucket-badge" style={{ "--badge": mode.color }}>{mode.label}</span>
-                        {modeName === "failure_recovery"
+                        {isRawRollout
+                          ? ` ${active.correct ? "执行验证通过" : active.failure_type || "未通过"} · ${active.steps || 0} 步 · 错误事件 ${(active.error_events || []).length}`
+                          : modeName === "failure_recovery"
                           ? ` 失败前缀 ${enrichmentField(active, "n_failed_prefix_steps", 0)}`
                           : ` 感知 ${enrichmentField(active, "n_perception", 0)} · 纠错 ${enrichmentField(active, "n_error", 0)}`}
                         {active.enrichment?.generator?.model ? ` · ${active.enrichment.generator.model}` : ""}
@@ -1054,7 +1073,9 @@ export function ConstructionPanel() {
                   <>
                     <GeneratorTrace record={active} />
                     <RejectedCandidates record={active} />
-                    {active.steps?.length ? (
+                    {isRawRollout ? (
+                      <TrajectoryView record={active} />
+                    ) : Array.isArray(active.steps) && active.steps.length ? (
                       <TrajectoryView record={enrichedToTrajectory(active)} />
                     ) : (
                       <PlanOnlyReview record={active} />

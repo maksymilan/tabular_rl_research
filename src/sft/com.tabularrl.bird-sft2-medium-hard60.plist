@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tabularrl.bird-sft2-medium-hard60</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-dims</string>
+    <string>/Users/hudou/Research/tabular_rl_research/src/sft/run_bird_sft2_student_medium_hard60.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/hudou/Research/tabular_rl_research</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/bird_sft2_medium_hard60_launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/bird_sft2_medium_hard60_launchd.err</string>
+</dict>
+</plist>

@@ -40,19 +40,20 @@ from executor import Harness                                    # noqa: E402
 from environment_state import EnvironmentState                  # noqa: E402
 from plan import resolve_cond, _value_ref_ids                  # noqa: E402
 from scalar_grounding import extract_scalar                    # noqa: E402
-from provenance import build_references                        # noqa: E402
+from provenance import build_grounding_references, build_references  # noqa: E402
 from emitter import _catalog                                   # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
 from protocol import (ACCEPTED_TOOLS, ProtocolError, get_system_prompt,  # noqa: E402
-                      assistant_message, first_user_message, parse_assistant,
-                      model_context_messages, rows_equal, tool_error_message,
+                      assistant_message, first_user_message, parse_assistant_strict,
+                      model_context_messages, protocol_hash, rows_equal, tool_error_message,
+                      rolling_legal_history_messages, rolling_system_prompt,
                       state_context_message, tool_output_message)
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
-MAX_CONSECUTIVE_ERRORS = 3   # error feedback turns allowed before aborting the trajectory
+MAX_ERRORS_PER_TYPE = 3
 DEFAULT_FEWSHOT_IDS = ["spider_train_0", "spider_train_1"]
 DEFAULT_MAX_TOKENS = 768
-MIN_CONTEXT_RETRY_TOKENS = 256
+MIN_CONTEXT_RETRY_TOKENS = 128
 
 
 class ChatAPIError(RuntimeError):
@@ -79,6 +80,41 @@ def is_context_overflow(text: str) -> bool:
 
 def db_path(db_id: str) -> str:
     return os.path.join(SPIDER, "database", db_id, f"{db_id}.sqlite")
+
+
+def task_db_path(ex: dict) -> str:
+    """Use an adapter-provided SQLite path, with Spider as the legacy default."""
+    return str(ex.get("db_path") or db_path(ex["db_id"]))
+
+
+def task_gold_sql(ex: dict) -> str | None:
+    return ex.get("gold_sql") or ex.get("query")
+
+
+def protocol_failure_type(exc: ProtocolError) -> str:
+    text = str(exc).lower()
+    if any(marker in text for marker in (
+        "arguments", "unexpected", "requires", "missing required", "must be", "must contain",
+    )):
+        return "argument_validation_error"
+    return "protocol_error"
+
+
+def state_digest(state: dict) -> str:
+    import hashlib
+    return hashlib.sha256(json.dumps(state, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def load_tasks_json(path: str) -> list[dict]:
+    """Load common DatasetTask JSON/JSONL records emitted by a dataset adapter."""
+    with open(path) as f:
+        if path.endswith(".jsonl"):
+            return [json.loads(line) for line in f if line.strip()]
+        data = json.load(f)
+    if not isinstance(data, list):
+        raise ValueError(f"--tasks-json must contain a JSON array or JSONL records: {path}")
+    return data
 
 
 def overview(h: Harness) -> dict:
@@ -141,6 +177,7 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
             return ref
         return None
     references = build_references(tool, args, resolve_step)
+    references.extend(build_grounding_references(tool, args, ctx["history"]))
 
     if tool == "plan":
         output = ctx["environment"].apply_plan_ops(args.get("ops"), step_id, ctx["history"])
@@ -150,7 +187,14 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
     if tool in ("describe_table", "inspect_column", "read_subtable"):   # read-only perception; no table
         out = getattr(h, tool)(**args)
         output = out if isinstance(out, dict) else {"rows": [list(r) for r in out], "row_count": len(out)}
-        ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
+        history_record = {"tool": tool, "arguments": args, "output": output, "references": references}
+        if tool == "read_subtable":
+            table = args.get("table")
+            requested_columns = args.get("columns")
+            history_record["observed_columns"] = (
+                list(requested_columns) if requested_columns else list(h._cols(table))
+            )
+        ctx["history"][step_id] = history_record
         ctx["environment"].apply_tool_result(tool, args, output, step_id)
         return output, None
 
@@ -351,6 +395,28 @@ def _safe_cols(h: Harness, table: str) -> list[str]:
         return []
 
 
+def _join_identifier_hint(h: Harness, args: dict | None) -> str | None:
+    if not isinstance(args, dict) or not isinstance(args.get("tables"), list):
+        return None
+    tables = [table for table in args["tables"] if isinstance(table, str)]
+    if len(tables) < 2:
+        return None
+    prefixes = args.get("prefixes")
+    if isinstance(prefixes, list) and prefixes and isinstance(prefixes[0], str) and prefixes[0]:
+        first_cols = _safe_cols(h, tables[0])
+        first_example = f"{prefixes[0]}__{first_cols[0]}" if first_cols else f"{prefixes[0]}__<column>"
+        return (
+            "join_tables.on uses model-facing column identifiers, never SQL aliases like L./R. "
+            "or table-qualified names. With prefixes, the first edge's left key may use the declared "
+            f"prefix form {first_example!r}; its right key remains a bare column of {tables[1]!r}. "
+            "Later left keys use the already-produced prefix__column names."
+        )
+    return (
+        "join_tables.on uses bare column names from the listed tables; never write SQL aliases "
+        "like L./R. or table-qualified names such as table.column."
+    )
+
+
 def format_tool_error(exc: Exception, h: Harness, tool: str | None, args: dict | None) -> str:
     """Attach compact, actionable environment hints to tool/protocol feedback."""
     base = f"{type(exc).__name__}: {exc}"
@@ -369,6 +435,10 @@ def format_tool_error(exc: Exception, h: Harness, tool: str | None, args: dict |
                 refs.append({"table": table, "columns": cols})
         if refs:
             hints.append(f"available columns for referenced tables: {refs}")
+        if tool == "join_tables":
+            join_hint = _join_identifier_hint(h, args)
+            if join_hint:
+                hints.append(join_hint)
     if "set_op" in base or "selects to the left and right" in text or "aligned columns" in text:
         refs = []
         for table in _arg_table_refs(tool, args):
@@ -413,6 +483,7 @@ def chat(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     retries: int = 2,
     min_context_retry_tokens: int = MIN_CONTEXT_RETRY_TOKENS,
+    retry_stats: dict | None = None,
 ) -> str:
     """Call the model with retry semantics that do not conflate infra failures with model quality.
 
@@ -423,10 +494,18 @@ def chat(
     """
     current_max_tokens = max_tokens
     transient_attempts = 0
+    context_retries = 0
     last_error: Exception | None = None
     while True:
         try:
-            return _chat_once(base_url, model, messages, current_max_tokens)
+            text = _chat_once(base_url, model, messages, current_max_tokens)
+            if retry_stats is not None:
+                retry_stats.update({
+                    "api_request_attempts": transient_attempts + context_retries + 1,
+                    "api_transport_retries": transient_attempts,
+                    "api_context_retries": context_retries,
+                })
+            return text
         except ChatAPIError as e:
             last_error = e
             if is_context_overflow(str(e)) or is_context_overflow(e.body):
@@ -435,6 +514,7 @@ def chat(
                         min_context_retry_tokens,
                         current_max_tokens // 2,
                     )
+                    context_retries += 1
                     continue
                 raise ContextOverflowError(str(e), status=e.status, body=e.body) from e
             if e.status is not None and e.status >= 500 and transient_attempts < retries:
@@ -496,18 +576,37 @@ def run_live(
     max_steps: int,
     max_tokens: int,
     api_retries: int,
-    max_consecutive_errors: int = MAX_CONSECUTIVE_ERRORS,
+    max_errors_per_type: int = MAX_ERRORS_PER_TYPE,
     table_output_rows: int = 0,
+    context_mode: str = "state-only",
+    history_turns: int = 4,
+    compact_history_observations: bool = True,
 ) -> dict:
-    h = Harness(db_path(ex["db_id"]))
+    task_path = task_db_path(ex)
+    gold_sql = task_gold_sql(ex)
+    if not gold_sql:
+        raise ValueError(f"task has no gold SQL for execution scoring: {ex.get('db_id')} / {ex.get('question')}")
+    h = Harness(task_path)
     ov = overview(h)
-    messages = [{"role": "system", "content": system},
-                {"role": "user", "content": first_user_message(ov, ex["question"])}]
-    initial_messages = deepcopy(messages)
     created: set[str] = set()
     ctx = new_ctx(ov)
     last_error: dict | None = None
-    steps = errors = consecutive = 0
+    legal_history: list[dict] = []
+    external_knowledge = ex.get("external_knowledge")
+    if context_mode == "rolling-legal-history":
+        initial_messages = rolling_legal_history_messages(
+            system, ov, ex["question"], ctx["environment"].snapshot(), None,
+            external_knowledge, legal_history, history_turns,
+            compact_observations=compact_history_observations,
+        )
+    else:
+        initial_messages = model_context_messages(
+            system, ov, ex["question"], ctx["environment"].snapshot(), None, external_knowledge,
+        )
+    messages = deepcopy(initial_messages)
+    action_count = errors = 0
+    error_counts: dict[str, int] = {}
+    error_events: list[dict] = []
     text = ""
     turns = []
     started = time.time()
@@ -515,7 +614,7 @@ def run_live(
         "example_index": example_index,
         "db_id": ex["db_id"],
         "question": ex["question"],
-        "gold_sql": ex["query"],
+        "gold_sql": gold_sql,
         "initial_model_input": initial_messages,
         "turns": turns,
         "correct": False,
@@ -524,17 +623,35 @@ def run_live(
         "errors": 0,
         "failure_type": None,
         "fail": None,
+        "outcome": None,
+        "error_events": error_events,
+        "api_transport_retries": 0,
+        "api_context_retries": 0,
     }
 
-    while steps < max_steps:
-        model_input = model_context_messages(system, ov, ex["question"], ctx["environment"].snapshot(), last_error)
+    while action_count < max_steps:
+        action_count += 1
+        state_before = ctx["environment"].snapshot()
+        if context_mode == "rolling-legal-history":
+            model_input = rolling_legal_history_messages(
+                system, ov, ex["question"], state_before, last_error,
+                external_knowledge, legal_history, history_turns,
+                compact_observations=compact_history_observations,
+            )
+        else:
+            model_input = model_context_messages(
+                system, ov, ex["question"], state_before, last_error, external_knowledge,
+            )
         turn = {"turn_index": len(turns), "model_input": deepcopy(model_input)}
         try:
-            text = chat(base_url, model, model_input, max_tokens=max_tokens, retries=api_retries)
+            retry_stats: dict = {}
+            text = chat(base_url, model, model_input, max_tokens=max_tokens, retries=api_retries,
+                        retry_stats=retry_stats)
+            turn["api_retry_stats"] = retry_stats
         except ContextOverflowError as e:
             rec["failure_type"] = "context_overflow"
             rec["fail"] = f"api: {type(e).__name__}: {e}"
-            rec["steps"] = steps
+            rec["steps"] = action_count - 1
             rec["errors"] = errors
             turn["api_error"] = rec["fail"]
             turn["api_error_type"] = "context_overflow"
@@ -545,7 +662,7 @@ def run_live(
         except Exception as e:
             rec["failure_type"] = "api_error"
             rec["fail"] = f"api: {type(e).__name__}: {e}"
-            rec["steps"] = steps
+            rec["steps"] = action_count - 1
             rec["errors"] = errors
             turn["api_error"] = rec["fail"]
             turn["api_error_type"] = "api_error"
@@ -554,44 +671,73 @@ def run_live(
             rec["elapsed_seconds"] = round(time.time() - started, 3)
             return rec
         turn["model_output"] = text
+        rec["api_transport_retries"] += turn["api_retry_stats"]["api_transport_retries"]
+        rec["api_context_retries"] += turn["api_retry_stats"]["api_context_retries"]
         messages.append({"role": "assistant", "content": text})
         try:
-            think, tool, args = parse_assistant(text)
+            think, tool, args = parse_assistant_strict(text)
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
+            turn["feedback_recovery"] = bool(last_error)
+            turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
             if tool == "answer_from_context":
                 rec["legal"] = True
-                rec["steps"] = steps + 1
+                rec["steps"] = action_count
                 rec["errors"] = errors
-                rec["correct"], rec["pred_sample"], rec["gold_sample"] = score(h, ex["query"], args, created)
+                rec["correct"], rec["pred_sample"], rec["gold_sample"] = score(h, gold_sql, args, created)
                 if not rec["correct"]:
                     rec["failure_type"] = "wrong_answer"
+                else:
+                    rec["outcome"] = "recovered_success" if error_events else "clean_success"
                 turns.append(turn)
                 rec["final_messages"] = messages
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
-            step_id = f"step_{steps + 1}"
+            step_id = f"step_{action_count}"
             out, tname = execute_tool(h, tool, args, ctx, step_id, table_output_rows=table_output_rows)
             turn["tool_output"] = out
         except (ProtocolError, Exception) as e:  # noqa: BLE001 — every failure becomes feedback
             errors += 1
-            consecutive += 1
             parsed = turn.get("parsed") or {}
             error = format_tool_error(e, h, parsed.get("tool"), parsed.get("arguments"))
+            state_after = ctx["environment"].snapshot()
+            error_type = protocol_failure_type(e) if isinstance(e, ProtocolError) else "execution_error"
+            if error_type == "execution_error" and state_digest(state_after) != state_digest(state_before):
+                error_type = "nonrecoverable_execution_error"
             turn["execution_error"] = error
-            turn["execution_error_type"] = (
-                "protocol_error" if isinstance(e, ProtocolError) else "execution_error"
-            )
+            turn["execution_error_type"] = error_type
+            event = {
+                "action_index": action_count,
+                "step_id": f"step_{action_count}",
+                "error_type": error_type,
+                "message": error,
+                "state_before_hash": state_digest(state_before),
+                "state_after_hash": state_digest(state_after),
+            }
+            if parsed.get("tool"):
+                event["attempted_tool"] = parsed["tool"]
+                event["attempted_arguments"] = parsed.get("arguments") or {}
+            turn["error_event"] = event
+            error_events.append(event)
             turns.append(turn)
-            if consecutive >= max_consecutive_errors:
-                rec["failure_type"] = turn["execution_error_type"]
-                rec["fail"] = f"aborted after {consecutive} consecutive errors: {error}"
+            if error_type == "nonrecoverable_execution_error":
+                rec["failure_type"] = error_type
+                rec["fail"] = error
                 rec["errors"] = errors
-                rec["steps"] = steps
+                rec["steps"] = action_count
+                rec["final_messages"] = messages
+                rec["elapsed_seconds"] = round(time.time() - started, 3)
+                return rec
+            error_counts[error_type] = error_counts.get(error_type, 0) + 1
+            if error_counts[error_type] >= max_errors_per_type:
+                rec["failure_type"] = error_type
+                rec["fail"] = f"aborted after {error_counts[error_type]} {error_type} events: {error}"
+                rec["errors"] = errors
+                rec["steps"] = action_count
                 rec["final_messages"] = messages
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
             last_error = {
-                "step_id": f"step_{steps + 1}",
+                "step_id": f"step_{action_count}",
                 "status": "error",
                 "error": {"type": turn["execution_error_type"], "message": error},
             }
@@ -602,19 +748,16 @@ def run_live(
             )})
             continue
         turns.append(turn)
-        consecutive = 0
         last_error = None
-        steps += 1
         if tname:
             created.add(tname)
-        messages.append({
-            "role": "user",
-            "content": tool_output_message(step_id, out),
-        })
+        observation = tool_output_message(step_id, out)
+        legal_history.append({"assistant": text, "observation": observation})
+        messages.append({"role": "user", "content": observation})
 
     rec["failure_type"] = "max_steps"
     rec["fail"] = "max_steps"
-    rec["steps"] = steps
+    rec["steps"] = action_count
     rec["errors"] = errors
     rec["final_messages"] = messages
     rec["elapsed_seconds"] = round(time.time() - started, 3)
@@ -709,14 +852,33 @@ def main() -> int:
                     help="per-turn generation budget; smaller values leave more room for tool context")
     ap.add_argument("--api-retries", type=int, default=2,
                     help="retry count for transient API errors; context overflow uses adaptive token shrink")
-    ap.add_argument("--max-consecutive-errors", type=int, default=MAX_CONSECUTIVE_ERRORS,
-                    help="abort after this many consecutive protocol/execution errors in one trajectory")
+    ap.add_argument("--max-errors-per-type", type=int, default=MAX_ERRORS_PER_TYPE,
+                    help="abort after this many recoverable errors of one class in one trajectory")
     ap.add_argument("--table-output-rows", type=int, default=0,
                     help="include up to N rows in each table-producing tool observation (0 = metadata only)")
+    ap.add_argument("--context-mode", choices=["state-only", "rolling-legal-history"],
+                    default="state-only")
+    ap.add_argument("--history-turns", type=int, default=4,
+                    help="successful assistant/tool pairs retained in rolling mode; 0 keeps all")
+    ap.add_argument("--rolling-prompt-variant", choices=["full", "compact"], default="full",
+                    help="rolling-only prompt ablation; full preserves existing runs")
+    ap.add_argument(
+        "--rolling-observation-style",
+        choices=["resident", "full"],
+        default="resident",
+        help="resident is current R2; full is evaluation-only compatibility for pre-R2 adapters",
+    )
+    ap.add_argument(
+        "--system-prompt-manifest",
+        default="",
+        help="evaluation-only: reuse the exact system_prompt stored in a historical run manifest",
+    )
     ap.add_argument("--workers", type=int, default=1,
                     help="concurrent questions (vLLM batches requests; each worker owns its Harness/sqlite)")
     ap.add_argument("--indices-file", default="",
                     help="optional JSON/text file of dev example indices to run instead of the first --n")
+    ap.add_argument("--tasks-json", default="",
+                    help="optional common DatasetTask JSON/JSONL file; enables BIRD/other SQLite adapters")
     ap.add_argument("--result-dir", default="")
     ap.add_argument("--resume", action="store_true")
     args = ap.parse_args()
@@ -725,20 +887,45 @@ def main() -> int:
         return run_replay(args.replay)
 
     selected_indices = load_indices_file(args.indices_file)
-    dev_examples = json.load(open(os.path.join(SPIDER, "dev.json")))
-    if selected_indices:
-        indexed_dev = [(i, dev_examples[i]) for i in sorted(selected_indices)
-                       if 0 <= i < len(dev_examples)]
+    if args.tasks_json:
+        task_examples = load_tasks_json(args.tasks_json)
+        if selected_indices:
+            indexed_dev = [(i, task_examples[i]) for i in sorted(selected_indices)
+                           if 0 <= i < len(task_examples)]
+        else:
+            indexed_dev = list(enumerate(task_examples[: args.n]))
     else:
-        indexed_dev = list(enumerate(dev_examples[: args.n]))
-    indexed_dev = [(i, ex) for i, ex in indexed_dev if os.path.exists(db_path(ex["db_id"]))]
+        dev_examples = json.load(open(os.path.join(SPIDER, "dev.json")))
+        if selected_indices:
+            indexed_dev = [(i, dev_examples[i]) for i in sorted(selected_indices)
+                           if 0 <= i < len(dev_examples)]
+        else:
+            indexed_dev = list(enumerate(dev_examples[: args.n]))
+    indexed_dev = [(i, ex) for i, ex in indexed_dev if os.path.exists(task_db_path(ex))]
+    if args.history_turns < 0:
+        ap.error("--history-turns must be non-negative")
+    if args.context_mode == "rolling-legal-history" and args.few_shot:
+        ap.error("few-shot examples are not supported with rolling history")
     fewshot_ids = args.few_shot_ids[:args.few_shot] if args.few_shot else []
     prompt_variant = os.environ.get("EVAL_SYSTEM_PROMPT_VARIANT") or "default"
-    system = get_system_prompt() + fewshot_text(fewshot_ids)
+    if args.system_prompt_manifest:
+        with open(args.system_prompt_manifest, encoding="utf-8") as handle:
+            system = json.load(handle).get("system_prompt")
+        if not isinstance(system, str) or not system.strip():
+            ap.error("--system-prompt-manifest does not contain a non-empty system_prompt")
+    else:
+        system = get_system_prompt()
+        if args.context_mode == "rolling-legal-history":
+            system = rolling_system_prompt(
+                system,
+                compact=args.rolling_prompt_variant == "compact",
+            )
+    system += fewshot_text(fewshot_ids)
     writer = None
     if args.result_dir:
         writer = ArtifactWriter(args.result_dir, {
             "runner": "tool_rollout",
+            "dataset": args.tasks_json or "data/spider_data/dev.json",
             "model": args.model,
             "base_url": args.base_url,
             "dev_size": args.n,
@@ -746,14 +933,22 @@ def main() -> int:
             "selected_indices": sorted(selected_indices) if selected_indices else None,
             "few_shot_ids": fewshot_ids,
             "max_steps": args.max_steps,
-            "max_consecutive_errors": args.max_consecutive_errors,
+            "max_errors_per_type": args.max_errors_per_type,
+            "parser": "strict_no_repair",
+            "api_transport_retries_per_request": args.api_retries,
             "temperature": 0,
             "max_tokens": args.max_tokens,
             "api_retries": args.api_retries,
             "table_output_rows": args.table_output_rows,
+            "context_mode": args.context_mode,
+            "history_turns": args.history_turns,
+            "rolling_prompt_variant": args.rolling_prompt_variant,
+            "rolling_observation_style": args.rolling_observation_style,
+            "system_prompt_manifest": args.system_prompt_manifest or None,
             "min_context_retry_tokens": MIN_CONTEXT_RETRY_TOKENS,
             "system_prompt_variant": prompt_variant,
             "system_prompt": system,
+            "protocol_hash": protocol_hash(system),
         }, args.resume)
         indexed_dev = [(i, ex) for i, ex in indexed_dev if i not in writer.completed]
     results = []
@@ -770,8 +965,11 @@ def main() -> int:
                 args.max_steps,
                 args.max_tokens,
                 args.api_retries,
-                args.max_consecutive_errors,
+                args.max_errors_per_type,
                 args.table_output_rows,
+                args.context_mode,
+                args.history_turns,
+                args.rolling_observation_style == "resident",
             )
                     for i, ex in indexed_dev]
             for fut in as_completed(futs):
@@ -792,8 +990,11 @@ def main() -> int:
                 args.max_steps,
                 args.max_tokens,
                 args.api_retries,
-                args.max_consecutive_errors,
+                args.max_errors_per_type,
                 args.table_output_rows,
+                args.context_mode,
+                args.history_turns,
+                args.rolling_observation_style == "resident",
             )
             results.append(r)
             if writer:

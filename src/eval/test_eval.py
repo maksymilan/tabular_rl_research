@@ -6,15 +6,20 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "sft"))
 
 from artifacts import ArtifactWriter  # noqa: E402
+from protocol import rows_equal  # noqa: E402
 from rollout import (  # noqa: E402
+    ChatAPIError,
     DEFAULT_FEWSHOT_IDS,
     _normalize_table_refs,
     answer_row_candidates,
+    chat,
     fewshot_text,
     projected_row_candidates,
     score,
@@ -36,6 +41,26 @@ class FakeHarness:
 
 
 class EvalTests(unittest.TestCase):
+    def test_rows_equal_normalizes_non_finite_numbers(self):
+        self.assertTrue(rows_equal([[float("nan"), float("inf"), float("-inf")]],
+                                   [["NaN", "+Infinity", "-Infinity"]]))
+        self.assertFalse(rows_equal([[float("nan")]], [[float("inf")]]))
+
+    def test_context_overflow_retry_can_shrink_to_128_tokens(self):
+        budgets = []
+
+        def fake_chat_once(_base_url, _model, _messages, max_tokens):
+            budgets.append(max_tokens)
+            if max_tokens > 128:
+                raise ChatAPIError("maximum context length exceeded", status=400)
+            return "ok"
+
+        with patch("rollout._chat_once", side_effect=fake_chat_once):
+            result = chat("http://example", "model", [], max_tokens=1024)
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(budgets, [1024, 512, 256, 128])
+
     def test_extract_sql(self):
         self.assertEqual(extract_sql("```sql\nSELECT * FROM t;\n```"), "SELECT * FROM t")
         self.assertEqual(

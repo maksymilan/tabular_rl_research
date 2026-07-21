@@ -37,6 +37,7 @@ class Sample:
     correct: bool
     failure_type: str | None
     turns: list[tuple[list[int], list[int]]]
+    audit_record: dict[str, Any]
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,6 +59,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--max-context-tokens", type=int, default=8192)
+    parser.add_argument("--context-mode", choices=("state-only", "rolling-legal-history"),
+                        default="rolling-legal-history")
+    parser.add_argument("--history-turns", type=int, default=4)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--seed", type=int, default=20260711)
@@ -116,36 +120,6 @@ def _trim_generated_response(ids: list[int], *, eos_token_id: int | None, pad_to
     return ids
 
 
-def _has_balanced_tool_call_json(text: str) -> bool:
-    tag = text.rfind("<tool_call>")
-    if tag < 0:
-        return False
-    begin = text.find("{", tag + len("<tool_call>"))
-    if begin < 0:
-        return False
-    depth = 0
-    in_string = False
-    escaped = False
-    for ch in text[begin:]:
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return True
-    return False
-
-
 class ForceEosAfterStop(LogitsProcessor):
     """Force per-row EOS after a protocol stop string appears in generated tokens."""
 
@@ -168,10 +142,6 @@ class ForceEosAfterStop(LogitsProcessor):
                 if generated[end - stop_len: end].tolist() == self.stop_ids:
                     should_stop = True
                     break
-            if not should_stop and _has_balanced_tool_call_json(
-                self.tokenizer.decode(generated.tolist(), skip_special_tokens=False)
-            ):
-                should_stop = True
             if should_stop:
                 scores[row_index, :] = -torch.inf
                 scores[row_index, self.eos_token_id] = 0
@@ -236,12 +206,31 @@ def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]]
     ]
 
 
+def episode_example(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Preserve dataset-adapter fields when constructing an interactive episode."""
+    return {
+        "db_id": metadata["db_id"],
+        "db_path": metadata.get("db_path"),
+        "question": metadata["question"],
+        "query": metadata["gold_sql"],
+        "gold_sql": metadata["gold_sql"],
+        "external_knowledge": metadata.get("external_knowledge"),
+    }
+
+
 @torch.inference_mode()
 def sample_group(model, tokenizer, metadata: dict[str, Any], args: argparse.Namespace) -> list[Sample]:
-    example = {"db_id": metadata["db_id"], "question": metadata["question"], "query": metadata["gold_sql"]}
+    example = episode_example(metadata)
     device = next(model.parameters()).device
     envs = [
-        ToolUseEnv(example, example_index=int(metadata["example_index"]), max_steps=args.max_steps)
+        ToolUseEnv(
+            example,
+            example_index=int(metadata["example_index"]),
+            max_steps=args.max_steps,
+            context_mode=args.context_mode,
+            history_turns=args.history_turns,
+            compact_observations=False,
+        )
         for _ in range(args.group_size)
     ]
     turns: list[list[tuple[list[int], list[int]]]] = [[] for _ in envs]
@@ -283,6 +272,7 @@ def sample_group(model, tokenizer, metadata: dict[str, Any], args: argparse.Name
             correct=bool(record["correct"]),
             failure_type=record["failure_type"],
             turns=sample_turns,
+            audit_record=record,
         ))
     return samples
 
@@ -449,6 +439,7 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     model, tokenizer, optimizer = load_model(args, accelerator)
     log_path = args.output_dir / "metrics.jsonl"
+    rollout_log_path = args.output_dir / "rollouts.jsonl"
     for step in range(1, args.steps + 1):
         step_started = time.time()
         record = records[(step - 1) % len(records)]
@@ -492,6 +483,13 @@ def main() -> int:
         }
         with log_path.open("a", encoding="utf-8") as sink:
             sink.write(json.dumps(event, ensure_ascii=False) + "\n")
+        with rollout_log_path.open("a", encoding="utf-8") as sink:
+            for sample_index, sample in enumerate(samples):
+                sink.write(json.dumps({
+                    "training_step": step,
+                    "sample_index": sample_index,
+                    **sample.audit_record,
+                }, ensure_ascii=False) + "\n")
         accelerator.print(json.dumps(event, ensure_ascii=False))
         if step % args.save_every == 0:
             save_adapter(model, args.output_dir, step)

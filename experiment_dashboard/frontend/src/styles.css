@@ -80,6 +80,8 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .model-switch-panel > div:first-child { display: grid; gap: 3px; min-width: 135px; }
 .model-switch-panel span { color: var(--muted); font-size: 11px; }
 .model-switch-panel strong { font-size: 15px; color: var(--ink); }
+.benchmark-switch-panel { border-color: #9ccab7; background: #f1f8f4; }
+.model-switch-panel small { color: var(--muted); font-size: 12px; font-weight: 500; }
 .segmented-control {
   display: inline-flex; align-items: center; gap: 4px; padding: 4px;
   border: 1px solid var(--line); border-radius: 7px; background: #f2f5f2;
@@ -626,6 +628,7 @@ details .json-block { max-height: 360px; }
 /* data-construction review: error-attempt (self-correction) step highlighting */
 .traj-step.error-attempt { border-left-color: var(--red); background: #fdf3f2; }
 .traj-tag.err { color: var(--red); background: #fbeceb; }
+.traj-tag.recovery { color: #176948; background: #e4f4ea; }
 .page-header select, .panel-heading select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 12px; }
 .construction-picker {
   width: min(440px, 100%);

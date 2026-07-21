@@ -1,0 +1,47 @@
+# End-to-end smoke: bounded rolling-history BIRD teacher trajectories.
+# Requires LLaMA-Factory `mask_history: true`: only the final action in each prefix is supervised.
+
+### model
+model_name_or_path: /home/dengyan/models/Qwen3.5-9B
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: bird_ds_flash_v4_rolling4_smoke_qwen35_4k
+dataset_dir: /home/dengyan/tabular_rl_outputs/sft
+template: qwen
+cutoff_len: 4096
+mask_history: true
+overwrite_cache: true
+preprocessing_num_workers: 1
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/checkpoints/qwen3.5-9b-bird-rolling4-smoke-qlora
+logging_steps: 1
+save_strategy: "no"
+report_to: none
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-4
+max_steps: 2
+optim: paged_adamw_8bit
+bf16: true
+gradient_checkpointing: true
+
+### eval
+val_size: 0
+eval_strategy: "no"

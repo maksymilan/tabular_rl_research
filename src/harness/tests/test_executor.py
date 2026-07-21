@@ -59,6 +59,28 @@ def run():
     t.check("join_tables accepts n-way 2-table flat on", norm(h.rows(j_flat["table_name"])) ==
             norm(h.gold("SELECT e.name,d.location FROM employees e JOIN depts d ON e.dept=d.dept")))
 
+    j_documented_prefix = h.join_tables(
+        tables=["employees", "depts"],
+        on=[[{"left": "e__dept", "right": "dept"}]],
+        join_types="inner",
+        prefixes=["e", "d"],
+        return_columns=["e__name", "d__location"],
+    )
+    t.check("join_tables accepts documented first-edge prefix", norm(h.rows(j_documented_prefix["table_name"])) ==
+            norm(h.gold("SELECT e.name,d.location FROM employees e JOIN depts d ON e.dept=d.dept")))
+
+    try:
+        h.join_tables(
+            tables=["employees", "depts"],
+            on=[[{"left": "L.e__dept", "right": "dept"}]],
+            join_types="inner",
+            prefixes=["e", "d"],
+        )
+        internal_alias_rejected = False
+    except Exception:  # The SQL alias must stay invalid rather than being silently stripped.
+        internal_alias_rejected = True
+    t.check("join_tables rejects internal SQL aliases", internal_alias_rejected)
+
     j_left = h.join_tables(
         tables=["employees", "depts"],
         on=[{"left": "dept", "right": "dept"}],

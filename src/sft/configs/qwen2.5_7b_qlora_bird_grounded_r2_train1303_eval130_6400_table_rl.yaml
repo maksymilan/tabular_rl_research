@@ -1,0 +1,51 @@
+# Qwen2.5-7B QLoRA on the deterministic-grounding-complete BIRD rolling SFT split.
+
+### model
+model_name_or_path: /home/dengyan/models/Qwen2.5-7B-Instruct
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: bird_grounded_rolling4_resident_r2_train1303_qwen25_6400
+eval_dataset: bird_grounded_rolling4_resident_r2_eval130_qwen25_6400
+dataset_dir: /home/dengyan/tabular_rl_outputs/sft
+template: qwen
+cutoff_len: 6400
+mask_history: true
+overwrite_cache: true
+preprocessing_num_workers: 4
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/checkpoints/qwen2.5-7b-bird-grounded-r2-train1303-eval130-6400-qlora
+logging_steps: 5
+save_strategy: epoch
+eval_strategy: epoch
+report_to: none
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-4
+num_train_epochs: 2.0
+optim: paged_adamw_8bit
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+
+### eval
+val_size: 0
+

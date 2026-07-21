@@ -6,9 +6,10 @@ to make the environment and reward auditable before spending GPU time.
 
 ## What is ready
 
-- `env.py` wraps one Spider question as a closed-loop tool environment.
-  The trainer generates an assistant message; the environment parses it, executes the tool,
-  appends the model-visible observation, and scores terminal answers.
+- `env.py` wraps one dataset-adapter task as a closed-loop tool environment. The trainer generates
+  one assistant action; the environment strictly parses it, executes it, rebuilds the next
+  model-visible context from resident state plus an optional `LAST TOOL ERROR`, and scores terminal
+  answers. It accepts adapter-provided `db_path`/`gold_sql`, so Spider and BIRD use the same loop.
 - `reward.py` defines a transparent pilot reward:
   final correctness dominates, legal final answers get a small bonus, repeated calls and
   tool/protocol errors are penalized, and reading evidence before answering gets a small bonus.
@@ -22,8 +23,49 @@ to make the environment and reward auditable before spending GPU time.
 - `frameworks/<backend>/` contains only backend glue.  The current `frameworks/verl/` adapter owns
   Verl's token loop, Parquet serialization, Hydra config, launcher, and machine-specific patch.
 
-This separation lets a TRL or OpenRLHF adapter reuse the same `ToolUseEnv`, task records, and
+This separation lets a compatible training adapter reuse the same `ToolUseEnv`, task records, and
 `terminal_result_reward` without copying harness behavior or changing the experimental definition.
+
+## Process reward audits
+
+`PROCESS_REWARD_V1_REPORT.md` records the original conservative implementation and why its
+model-declared evidence dependency was rejected. `PROCESS_REWARD_V2_REPORT.md` records the first
+harness-inferred design. `PROCESS_REWARD_V3_DISTRIBUTED_REPORT.md` is the current allocation design:
+outcome responsibility is distributed over harness dependency/state evidence and local errors stay
+on their event steps. `PROCESS_REWARD_V4_GROUNDING_REPORT.md` records the column-aware grounding,
+multi-handle final-answer support, deterministic completeness gate, and current 316-episode audit.
+`SCALE500B_REWARD_AUDIT.md` is the historical v2 positive/negative audit.
+`GROUNDING_EXTERNAL_AUDIT.md` records
+the independent Flash/Pro grounding review, audit-package corrections, confirmed false edges, and
+the current process-RL no-go decision.
+
+`process_reward.py` implements the framework-neutral step allocation
+`r_t = C c_t^+ - P c_t^-`. Its offline adapter replays normalized trajectories through the real
+harness to rebuild data/value/grounding references, semantic state changes, row counts, empty
+results, and error/recovery timing. Final dependency tables and perception edges are inferred from
+legal execution parameters and harness-owned outputs; model-authored `evidence` and reasoning text
+do not control reward. The fixed-root log row reduction is enabled only for comparable
+`condition_filter` and `extreme_value_select` steps.
+
+The current pilot weights live in `configs/process_reward_v3_distributed.json`; v1/v2 configs remain
+historical controls. `process_objective.py` implements the per-step weighted policy loss and
+requires callers to provide KL values from a genuinely frozen SFT-2 reference whenever `beta > 0`.
+
+Run a reward audit before wiring the scorer into an optimizer:
+
+```bash
+.venv/bin/python src/rl/build_process_reward_report.py \
+  --input data/trajectories/bird_ds_flash_v4_scale500_rolling4_full_train40.jsonl \
+  --output-dir data/rl/bird_scale500_train40_process_reward_v3_distributed \
+  --config-json src/rl/configs/process_reward_v3_distributed.json --quiet
+```
+
+The report separates structural coverage, deterministic completeness, and precision approval.
+`structural_grounding_gate_passed`
+requires at least 90% non-empty harness slices and zero ungrounded non-fallback episodes.
+`deterministic_grounding_gate_passed` additionally requires every episode's explicit final values
+and non-task action literals to have a harness-visible source. `process_reward_ready` also requires
+`--grounding-audit-approved`, which must only be set after a separate edge-precision audit.
 
 ## Result-only GRPO baseline
 
@@ -35,8 +77,10 @@ reward = 1.0  if the final answer's executed denotation equals Spider gold
 ```
 
 There is no tool bonus, no error penalty, no length term, and no process/evidence/plan reward.
-The harness still returns protocol and execution errors as ordinary observations so a rollout may
-recover before its terminal answer.  `build_result_only_candidates.py` exports verified **training**
+The harness records protocol, argument-validation, and state-preserving execution errors as
+structured `LAST TOOL ERROR` feedback so a rollout may recover before its terminal answer. Every
+rejected action spends one shared action-budget slot and remains audit-only.
+`build_result_only_candidates.py` exports verified **training**
 questions; `select_pilot_tasks.py` then chooses mixed-success examples from pass@4, which gives GRPO
 both positive and negative completions without using held-out dev labels for training.
 
@@ -119,7 +163,9 @@ If the reward report does not align with manual judgment, fix the reward before 
 
 ## Backend choice on the current server
 
-The failed Verl smoke was not caused by the result reward or the table harness.  Current Verl uses a
+The failed Verl smoke was not caused by the result reward or the table harness. Its historical
+token-concatenating adapter is not a supported v2i training entry point: state-only context is
+rebuilt per turn and requires a per-turn loss adapter. Current Verl uses a
 colocated FSDP actor plus tensor-parallel vLLM rollout engine and dynamically transfers LoRA weights.
 On this server, the two RTX 3090s do not support CUDA peer access.  FSDP's required all-gather and
 the current vLLM dynamic-LoRA path therefore conflict even though ordinary two-GPU all-reduce works.

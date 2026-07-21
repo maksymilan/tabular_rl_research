@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 
@@ -79,7 +80,7 @@ TOOL_SPECS: dict[str, str] = {
         'column. Use it to ground a filter literal (does "France" exist? what is the exact spelling?) '
         'before condition_filter.',
     "read_subtable":
-        'read_subtable(table, limit=20) -> the actual rows of a table (bounded). Tool results otherwise '
+        'read_subtable(table, limit=20) -> up to 20 actual rows of a table (limit must be 1..20). Tool results otherwise '
         'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
         'the evidence rows before answering.',
     "answer_from_context":
@@ -90,10 +91,16 @@ TOOL_SPECS: dict[str, str] = {
 }
 
 TOOLS = set(TOOL_SPECS)
+# ``aggregate`` and the parser repairs below exist only to read historical trajectory artifacts.
+# New model turns must use ``TOOLS`` through ``parse_assistant_strict``.  Keeping this distinction
+# explicit prevents old data compatibility from quietly widening the live agent interface.
 LEGACY_TOOLS = {"aggregate"}
-ACCEPTED_TOOLS = TOOLS | LEGACY_TOOLS
+REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
+ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "v2g-state-only"   # bump when specs, rendering, or the memory model change
+PROTOCOL_VERSION = "v2i-state-only-join-feedback-r2"   # bump when specs, rendering, or the memory model change
+ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
+ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 
 # Strict per-tool argument schema (required, optional). Unlisted keys are rejected so the SFT data
 # and the live rollout can never silently drift. V2b: a predicate's `value_ref` cites the producing
@@ -115,6 +122,12 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "answer_from_context": (set(), {"answer", "evidence", "reason"}),
 }
 
+# Kept only because old compiled trajectories predate the n-way public join shape. These fields
+# are valid for replay, never for a model action in a new episode.
+_MODEL_FORBIDDEN_ARGUMENTS: dict[str, set[str]] = {
+    "join_tables": {"left", "right", "join_type", "left_prefix", "right_prefix"},
+}
+
 
 def validate_arguments(tool: str, args: dict) -> None:
     """Strict per-tool argument schema; raises ProtocolError on any missing/unexpected key."""
@@ -133,17 +146,34 @@ def validate_arguments(tool: str, args: dict) -> None:
         raise ProtocolError('answer_from_context requires at least "evidence" or "answer"')
 
 
-def protocol_hash() -> str:
+def validate_model_arguments(tool: str, args: dict) -> None:
+    """Validate the current public action API, excluding replay-only compatibility forms."""
+    validate_arguments(tool, args)
+    forbidden = sorted(set(args) & _MODEL_FORBIDDEN_ARGUMENTS.get(tool, set()))
+    if forbidden:
+        raise ProtocolError(f"{tool}: legacy arguments are not valid in new episodes: {forbidden}")
+    if tool == "join_tables":
+        missing = sorted({"tables", "on"} - set(args))
+        if missing:
+            raise ProtocolError(f"join_tables: missing arguments {missing}")
+    if tool == "read_subtable":
+        limit = args.get("limit", 20)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+            raise ProtocolError("read_subtable: limit must be an integer from 1 to 20")
+
+
+def protocol_hash(system_prompt: str | None = None) -> str:
     """Stable hash of the model<->harness contract (version + system prompt + tool specs). SFT
     manifests and rollout runs record it so a train/eval protocol mismatch is detectable."""
-    payload = json.dumps({"version": PROTOCOL_VERSION, "system": SYSTEM_PROMPT, "tools": TOOL_SPECS},
+    payload = json.dumps({"version": PROTOCOL_VERSION, "system": system_prompt or SYSTEM_PROMPT, "tools": TOOL_SPECS},
                          sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 SYSTEM_PROMPT = (
     "You are a table-reasoning agent. You answer questions over a relational dataset by calling "
     "tools, one call per turn. The opening overview is a CATALOG: table names + row counts + "
-    "foreign-key relations only (no columns) — so it stays small on large databases. Read the "
+    "foreign-key relations only (no columns) — so it stays small on large databases. When the task "
+    "includes EXTERNAL KNOWLEDGE, treat it as part of the user-provided task context. Read the "
     "columns of the tables you need with describe_table before operating. After each tool call, "
     "the harness updates a CURRENT ENVIRONMENT STATE message. Treat that state as the authoritative "
     "workspace: it contains the resident plan, known schemas, inspected values, table handles, row "
@@ -193,6 +223,52 @@ SYSTEM_PROMPT_COMPACT = (
     "read_subtable(table,limit?,columns?), answer_from_context(answer,evidence,reason?).\n"
 )
 
+ROLLING_HISTORY_SYSTEM_SUFFIX = (
+    "\n\nROLLING LEGAL HISTORY\n"
+    "In this mode, the user may include a bounded transcript of earlier assistant actions that the "
+    "harness executed successfully, paired with their tool-result messages. Continue from that "
+    "legal history instead of restarting the task. The transcript is intentionally bounded, so do "
+    "not assume it contains every old observation. CURRENT ENVIRONMENT STATE remains the "
+    "authoritative factual workspace; LAST TOOL ERROR is the authoritative record of a rejected "
+    "action. Never treat a plan item or unexecuted text as factual evidence."
+)
+
+# This is a rolling-only ablation. It deliberately retains the public action contract and the
+# v2i join/value-reference rules that the generic compact prompt predates.
+ROLLING_SYSTEM_PROMPT_COMPACT = (
+    "You are a relational table-tool agent. Solve the user question with exactly one tool action "
+    "per turn.\n\n"
+    "FORMAT\n"
+    "Output only <think>specific reason for the next action</think> followed by one complete "
+    '<tool_call>{"tool":"name","arguments":{...}}</tool_call>. No prose outside the tags, no '
+    "second action, no shorthand JSON, and no legacy tool fields.\n\n"
+    "CONTEXT\n"
+    "The first user message is a catalog of table names, row counts, and relations, not schemas. "
+    "Call describe_table before using unresolved columns. CURRENT ENVIRONMENT STATE is the factual "
+    "workspace: use its handles, schemas, inspected values, reads, scalar-producing step ids, and "
+    "plan. A bounded transcript may contain only earlier harness-successful actions/results; it is "
+    "continuity context, not complete evidence. LAST TOOL ERROR describes a rejected action. Do not "
+    "repeat a read already present in state. Table handles expose metadata only until read_subtable "
+    "returns rows.\n\n"
+    "TOOLS\n"
+    "plan(ops); describe_table(tables); inspect_column(table,column,top_k?); "
+    "condition_filter(table,conditions); project(table,expressions); "
+    "join_tables(tables,on,join_types?,prefixes?); "
+    "group_aggregate(table,group_by,aggregations,passthrough?); "
+    "extreme_value_select(table,order_by,top_k?,return_columns?); set_op(left,right,op); "
+    "read_subtable(table,limit?,columns?); answer_from_context(answer?,evidence?,reason?).\n\n"
+    "RULES\n"
+    "plan is control only: goals/status/evidence may cite prior step ids, never results or answer "
+    "values. Inspect text domains before literal filters unless already inspected. conditions support "
+    "comparisons, like, in, between, null, and/or/not; cite a scalar as value_ref:step_id or a "
+    "computed table as in_table. Use existing handles rather than restarting from sources. For an "
+    "n-way join, tables are ordered and on has one edge list per newly attached table. With prefixes, "
+    "use materialized P__column names only for accumulated left keys and bare source columns for the "
+    "new right table; never emit L., R., or table.column aliases. For row answers, read the evidence "
+    "handle then call answer_from_context with that evidence and an empty/short answer; for scalar "
+    "answers cite evidence or give the scalar. The harness strictly validates and executes the action."
+)
+
 
 def get_system_prompt() -> str:
     """Return the default train/eval prompt, or a compact eval-only variant.
@@ -206,6 +282,15 @@ def get_system_prompt() -> str:
     return SYSTEM_PROMPT
 
 
+def rolling_system_prompt(system_prompt: str, *, compact: bool = False) -> str:
+    """Return the full or safe-compact bounded-history contract.
+
+    ``compact`` is intentionally rolling-only and opt-in. The state-only protocol and existing
+    full-prompt rolling artifacts remain byte-for-byte stable.
+    """
+    return ROLLING_SYSTEM_PROMPT_COMPACT if compact else system_prompt + ROLLING_HISTORY_SYSTEM_SUFFIX
+
+
 class ProtocolError(Exception):
     """Model output does not parse into a legal tool call."""
 
@@ -214,8 +299,15 @@ def _compact(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
-def first_user_message(overview: dict, question: str) -> str:
-    return f"DATASET OVERVIEW\n{_compact(overview)}\n\nQUESTION\n{question}"
+def first_user_message(
+    overview: dict,
+    question: str,
+    external_knowledge: str | None = None,
+) -> str:
+    message = f"DATASET OVERVIEW\n{_compact(overview)}\n\nQUESTION\n{question}"
+    if external_knowledge and external_knowledge.strip():
+        message += f"\n\nEXTERNAL KNOWLEDGE\n{external_knowledge.strip()}"
+    return message
 
 
 def assistant_message(think: str, tool: str, arguments: dict) -> str:
@@ -231,6 +323,63 @@ def tool_output_message(step_id: str, output: dict, status: str = "success",
     if state is not None:
         msg["state"] = state
     return _compact(msg)
+
+
+def compact_resident_observation(observation: str) -> str:
+    """Replace duplicated historical payloads with a structured resident-state pointer.
+
+    Rolling context still carries the successful action/result pair, but schemas, inspected
+    values, row samples, and scalar samples already live in CURRENT ENVIRONMENT STATE. Keeping
+    those large facts in both places caused avoidable context overflow. Harness-authored metadata
+    remains visible here; the complete factual payload remains visible once in resident state.
+    Non-standard legacy strings are left untouched rather than guessed at.
+    """
+    try:
+        envelope = json.loads(observation)
+    except (TypeError, json.JSONDecodeError):
+        return observation
+    if not isinstance(envelope, dict) or envelope.get("status") != "success":
+        return observation
+    output = envelope.get("output")
+    if not isinstance(output, dict):
+        return observation
+
+    summary: dict = {}
+    for key in ("table", "kind", "columns", "row_count", "column", "distinct_count", "has_null"):
+        if output.get(key) is not None:
+            summary[key] = output[key]
+
+    if isinstance(output.get("tables"), list):
+        summary["tables"] = [
+            {
+                key: table[key]
+                for key in ("table_name", "row_count")
+                if isinstance(table, dict) and table.get(key) is not None
+            }
+            | ({"column_count": len(table.get("columns", []))} if isinstance(table, dict) else {})
+            for table in output["tables"]
+        ]
+    if isinstance(output.get("rows"), list):
+        summary["returned_row_count"] = len(output["rows"])
+    if isinstance(output.get("result_sample"), list):
+        summary["result_sample_row_count"] = len(output["result_sample"])
+    if isinstance(output.get("frequent_values"), list):
+        summary["frequent_value_count"] = len(output["frequent_values"])
+    if isinstance(output.get("changes"), list):
+        summary["changes"] = output["changes"]
+
+    # Small outputs that contain no resident factual payload remain useful verbatim. Large factual
+    # fields are represented by metadata above and resolved from the appended current state.
+    resident_fields = {"tables", "rows", "result_sample", "frequent_values", "plan", "final_answer"}
+    if not (set(output) & resident_fields):
+        summary = output
+    envelope = {
+        "step_id": envelope.get("step_id"),
+        "status": "success",
+        "output_summary": summary,
+        "full_output": "resident_in_current_environment_state",
+    }
+    return _compact(envelope)
 
 
 def tool_error_message(step_id: str, error_type: str, message: str) -> str:
@@ -259,19 +408,79 @@ def _state_is_empty(state: dict | None) -> bool:
     return not state.get("plan") and not state.get("tables") and not state.get("values")
 
 
+def task_context_message(
+    overview: dict,
+    question: str,
+    state: dict | None,
+    last_error: dict | None = None,
+    external_knowledge: str | None = None,
+) -> str:
+    """One-turn user context shared by online rollout and step-level SFT samples."""
+    text = first_user_message(overview, question, external_knowledge)
+    if not _state_is_empty(state) or last_error:
+        text += "\n\n" + state_context_message(state, last_error)
+    return text
+
+
 def model_context_messages(system: str, overview: dict, question: str, state: dict | None,
-                           last_error: dict | None = None) -> list[dict]:
+                           last_error: dict | None = None,
+                           external_knowledge: str | None = None) -> list[dict]:
     """Build the complete model-visible context for one turn from resident state.
 
     This is the state-only path used by online eval/RL. It deliberately ignores any accumulated
     debug transcript so old observations cannot re-enter the prompt.
     """
-    messages = [
+    return [
         {"role": "system", "content": system},
-        {"role": "user", "content": first_user_message(overview, question)},
+        {"role": "user", "content": task_context_message(
+            overview, question, state, last_error, external_knowledge,
+        )},
     ]
-    if not _state_is_empty(state) or last_error:
-        messages.append({"role": "user", "content": state_context_message(state, last_error)})
+
+
+def rolling_legal_history_messages(
+    system: str,
+    overview: dict,
+    question: str,
+    state: dict | None,
+    last_error: dict | None,
+    external_knowledge: str | None,
+    legal_history: list[dict],
+    history_turns: int,
+    *,
+    compact_observations: bool = True,
+) -> list[dict]:
+    """Render a bounded transcript of harness-successful assistant/tool pairs.
+
+    Rejected assistant text never becomes context. Its structured error is carried only in the
+    current user message, so training and online inference cannot teach the model to imitate an
+    invalid call. ``history_turns=0`` retains every legal pair for experiments; production callers
+    should use an explicit positive bound.
+    """
+    if history_turns < 0:
+        raise ValueError("history_turns must be non-negative")
+    initial = first_user_message(overview, question, external_knowledge)
+    if not legal_history:
+        content = initial
+        if state or last_error:
+            content += "\n\n" + state_context_message(state, last_error)
+        return [{"role": "system", "content": system}, {"role": "user", "content": content}]
+
+    retained = legal_history if history_turns == 0 else legal_history[-history_turns:]
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": initial}]
+    for index, item in enumerate(retained):
+        assistant = item.get("assistant")
+        observation = item.get("observation")
+        if not isinstance(assistant, str) or not assistant.strip():
+            raise ValueError("rolling legal history has an empty assistant action")
+        if not isinstance(observation, str) or not observation.strip():
+            raise ValueError("rolling legal history has an empty tool observation")
+        messages.append({"role": "assistant", "content": assistant})
+        if compact_observations:
+            observation = compact_resident_observation(observation)
+        if index == len(retained) - 1:
+            observation += "\n\n" + state_context_message(state, last_error)
+        messages.append({"role": "user", "content": observation})
     return messages
 
 
@@ -418,6 +627,41 @@ def parse_assistant(text: str) -> tuple[str, str, dict]:
     return (tm.group(1).strip() if tm else ""), tool, args
 
 
+def parse_assistant_strict(text: str) -> tuple[str, str, dict]:
+    """Parse one fully-formed teacher action without repair or argument normalization.
+
+    External teacher generation may use this mode when protocol mistakes should become explicit
+    environment feedback. It intentionally rejects the legacy convenience repairs in
+    :func:`parse_assistant`: balanced JSON without a closing tag, shorthand tool-call objects,
+    truncated terminal answers, and omitted answer fields.
+    """
+    payloads = _TOOL_CALL_RE.findall(text)
+    if len(payloads) != 1:
+        raise ProtocolError(
+            "expected exactly one complete <tool_call>{...}</tool_call> block; "
+            f"received {len(payloads)}"
+        )
+    try:
+        call = json.loads(payloads[0])
+    except json.JSONDecodeError as exc:
+        raise ProtocolError(f"tool_call is not valid JSON: {exc}") from exc
+    if not isinstance(call, dict):
+        raise ProtocolError("tool_call JSON must be an object")
+    if set(call) != {"tool", "arguments"}:
+        raise ProtocolError('tool_call must contain exactly "tool" and "arguments" keys')
+    tool = call.get("tool")
+    args = call.get("arguments")
+    if tool not in TOOLS:
+        raise ProtocolError(f"unknown tool {tool!r}; legal tools: {sorted(TOOLS)}")
+    if not isinstance(args, dict):
+        raise ProtocolError('tool_call must have an "arguments" object')
+    think_blocks = _THINK_RE.findall(text)
+    if len(think_blocks) != 1 or not think_blocks[0].strip():
+        raise ProtocolError("expected exactly one non-empty <think>...</think> block")
+    validate_model_arguments(tool, args)
+    return think_blocks[0].strip(), tool, args
+
+
 # ---- answer comparison (execution-accuracy scoring) ----
 def _cell(x) -> str:
     """Canonical cell: numbers normalized ('2014'==2014, 56.999999->'57'), text stripped."""
@@ -430,6 +674,10 @@ def _cell(x) -> str:
         f = float(s)
     except ValueError:
         return s
+    if math.isnan(f):
+        return "nan"
+    if math.isinf(f):
+        return "inf" if f > 0 else "-inf"
     if abs(f - round(f)) < 1e-6:
         return str(int(round(f)))
     return f"{f:.4f}"

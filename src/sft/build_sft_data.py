@@ -44,8 +44,13 @@ MEMORY_TOOLS = {"add_to_memory", "refine_memory"}
 
 
 def convert(traj: dict) -> dict:
+    source = traj.get("source") if isinstance(traj.get("source"), dict) else {}
     conv = [{"from": "human",
-             "value": first_user_message(traj["initial_state"]["dataset_overview"], traj["question"])}]
+             "value": first_user_message(
+                 traj["initial_state"]["dataset_overview"],
+                 traj["question"],
+                 source.get("external_knowledge"),
+             )}]
     steps = traj["steps"]
     for i, s in enumerate(steps):
         if i > 0:
@@ -113,6 +118,8 @@ def validate_trajectory(
     if steps[-1].get("tool_call", {}).get("tool") != "answer_from_context":
         raise ValueError(f"{where}: final step is not answer_from_context")
     for i, step in enumerate(steps, 1):
+        if step.get("tool_status") == "error" or step.get("is_error_action"):
+            raise ValueError(f"{where}: step {i} is an error action and cannot be an SFT target")
         if not str(step.get("think", "")).strip():
             raise ValueError(f"{where}: step {i} has an empty think field")
         tool_call = step.get("tool_call")

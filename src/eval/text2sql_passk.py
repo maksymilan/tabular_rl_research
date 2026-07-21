@@ -21,8 +21,15 @@ from artifacts import ArtifactWriter  # noqa: E402
 from executor import Harness  # noqa: E402
 from passk import attach_passk_fields, parse_pass_k, write_passk_summary  # noqa: E402
 from protocol import rows_equal  # noqa: E402
-from rollout import ChatAPIError, ContextOverflowError, db_path, is_context_overflow, overview  # noqa: E402
-from text2sql import SYSTEM_PROMPT, extract_sql  # noqa: E402
+from rollout import (  # noqa: E402
+    ChatAPIError,
+    ContextOverflowError,
+    is_context_overflow,
+    load_tasks_json,
+    task_db_path,
+    task_gold_sql,
+)
+from text2sql import SYSTEM_PROMPT, execute_predicted_sql, extract_sql, schema_prompt  # noqa: E402
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 DEFAULT_PASS_K = (2, 4, 8, 16, 32)
@@ -80,7 +87,7 @@ def chat_n(
             raise ChatAPIError(f"{type(exc).__name__}: {exc}") from exc
 
 
-def score_sample(h: Harness, output: str, gold_rows: list) -> dict:
+def score_sample(h: Harness, output: str, gold_rows: list, execution_timeout_seconds: float) -> dict:
     sample = {
         "model_output": output,
         "predicted_sql": None,
@@ -93,7 +100,7 @@ def score_sample(h: Harness, output: str, gold_rows: list) -> dict:
         sample["failure_type"] = "no_sql"
         return sample
     try:
-        predicted_rows = h.gold(sql)
+        predicted_rows = execute_predicted_sql(h, sql, execution_timeout_seconds)
     except Exception as exc:  # noqa: BLE001
         sample["failure_type"] = "execution_error"
         sample["error"] = f"{type(exc).__name__}: {exc}"
@@ -118,26 +125,24 @@ def run_one(
     top_p: float,
     max_tokens: int,
     api_retries: int,
+    execution_timeout_seconds: float,
 ) -> dict:
     started = time.time()
-    h = Harness(db_path(ex["db_id"]))
+    gold_sql = task_gold_sql(ex)
+    h = Harness(task_db_path(ex))
     h.conn.execute("PRAGMA query_only = ON")
-    table_names = [table["table_name"] for table in overview(h)["tables"]]
-    user_prompt = (
-        "DATABASE SCHEMA\n"
-        + json.dumps(h.describe_table(table_names), ensure_ascii=False, separators=(",", ":"))
-        + "\n\nQUESTION\n"
-        + ex["question"]
-    )
+    user_prompt = schema_prompt(h, ex["question"], ex.get("external_knowledge"))
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
     ]
     record = {
         "example_index": example_index,
+        "dataset_index": ex.get("index"),
+        "instance_id": ex.get("instance_id"),
         "db_id": ex["db_id"],
         "question": ex["question"],
-        "gold_sql": ex["query"],
+        "gold_sql": gold_sql,
         "model_input": messages,
         "n_samples": n_samples,
         "pass_k": list(pass_k),
@@ -158,12 +163,31 @@ def run_one(
             max_tokens=max_tokens,
             retries=api_retries,
         )
-        gold_rows = h.gold(ex["query"])
     except ContextOverflowError as exc:
         record["failure_type"] = "context_overflow"
         record["error"] = f"{type(exc).__name__}: {exc}"
         record["elapsed_seconds"] = round(time.time() - started, 3)
         record["samples"] = []
+        return record
+    if len(outputs) != n_samples:
+        record["failure_type"] = "incomplete_api_response"
+        record["error"] = f"expected {n_samples} completions, received {len(outputs)}"
+        record["model_outputs"] = outputs
+        record["samples"] = []
+        record["elapsed_seconds"] = round(time.time() - started, 3)
+        return record
+    if not gold_sql:
+        record["failure_type"] = "missing_gold_sql"
+        record["samples"] = []
+        record["elapsed_seconds"] = round(time.time() - started, 3)
+        return record
+    try:
+        gold_rows = h.gold(gold_sql)
+    except Exception as exc:  # noqa: BLE001
+        record["failure_type"] = "gold_execution_error"
+        record["error"] = f"{type(exc).__name__}: {exc}"
+        record["samples"] = []
+        record["elapsed_seconds"] = round(time.time() - started, 3)
         return record
     except Exception as exc:  # noqa: BLE001
         record["failure_type"] = "api_error"
@@ -172,7 +196,7 @@ def run_one(
         record["samples"] = []
         return record
 
-    samples = [score_sample(h, output, gold_rows) for output in outputs]
+    samples = [score_sample(h, output, gold_rows, execution_timeout_seconds) for output in outputs]
     record["samples"] = samples
     record["gold_row_count"] = len(gold_rows)
     record["gold_sample"] = [list(row) for row in gold_rows[:10]]
@@ -186,6 +210,7 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
     parser.add_argument("--model", required=True)
     parser.add_argument("--n", type=int, default=1034)
+    parser.add_argument("--tasks-json", help="adapter-exported DatasetTask JSON or JSONL; defaults to Spider dev")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--result-dir", required=True)
     parser.add_argument("--resume", action="store_true")
@@ -195,6 +220,8 @@ def main() -> int:
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--api-retries", type=int, default=3)
+    parser.add_argument("--execution-timeout-seconds", type=float, default=5.0,
+                        help="per-query SQLite VM deadline for generated SQL; <=0 disables it")
     args = parser.parse_args()
 
     try:
@@ -202,8 +229,16 @@ def main() -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
+    if args.tasks_json:
+        indexed_dev = list(enumerate(load_tasks_json(args.tasks_json)[:args.n]))
+        dataset = os.path.basename(args.tasks_json)
+    else:
+        indexed_dev = list(enumerate(json.load(open(os.path.join(SPIDER, "dev.json")))[:args.n]))
+        dataset = "spider_dev"
+
     writer = ArtifactWriter(args.result_dir, {
         "runner": "direct_sql_passk",
+        "dataset": dataset,
         "model": args.model,
         "base_url": args.base_url,
         "dev_size": args.n,
@@ -212,11 +247,11 @@ def main() -> int:
         "temperature": args.temperature,
         "top_p": args.top_p,
         "max_tokens": args.max_tokens,
+        "predicted_sql_execution_timeout_seconds": args.execution_timeout_seconds,
         "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
         "execution_feedback": False,
         "system_prompt": SYSTEM_PROMPT,
     }, args.resume)
-    indexed_dev = list(enumerate(json.load(open(os.path.join(SPIDER, "dev.json")))[:args.n]))
     pending = [(i, ex) for i, ex in indexed_dev if i not in writer.completed]
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
@@ -233,6 +268,7 @@ def main() -> int:
                 top_p=args.top_p,
                 max_tokens=args.max_tokens,
                 api_retries=args.api_retries,
+                execution_timeout_seconds=args.execution_timeout_seconds,
             )
             for i, ex in pending
         ]

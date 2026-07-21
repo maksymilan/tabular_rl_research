@@ -90,6 +90,23 @@ const modelFamily = (model = "") => {
 const modelAbbrev = (model = "") => modelFamily(model).replace(/^Qwen/, "Q");
 const isDirectSqlBaseline = (item) =>
   item.kind === "baseline" && (item.tags || []).includes("direct-sql");
+const BENCHMARKS = {
+  spider: {
+    label: "Spider",
+    scope: "评测：Spider dev；数据构造：Spider train",
+    description: "Spider 上的 baseline、SFT 训练与工具调用评测。",
+  },
+  bird: {
+    label: "BIRD",
+    scope: "评测：BIRD public Dev；数据构造：BIRD train-compatible",
+    description: "BIRD 大型数据库上的 baseline 与数据构造实验。",
+  },
+};
+const benchmarkFor = (item) => {
+  if (BENCHMARKS[item.benchmark]) return item.benchmark;
+  const fingerprint = [item.id, item.dataset_version, ...(item.tags || [])].join(" ").toLowerCase();
+  return fingerprint.includes("bird") ? "bird" : "spider";
+};
 const combineRunSummaries = (runs = []) => {
   const summaries = runs.map((run) => run.summary).filter((summary) => summary?.available);
   if (!summaries.length) return { available: false };
@@ -117,7 +134,7 @@ const combineRunSummaries = (runs = []) => {
     legal: legalObserved ? legal : null,
     legal_rate: legalObserved ? legal / legalObserved : null,
     legal_observed: legalObserved,
-    complete_dev: total === 1034,
+    complete: null,
     pass_at: Object.keys(pass_at).length ? pass_at : undefined,
   };
 };
@@ -192,9 +209,32 @@ function Empty({ title, detail }) {
 }
 
 function Overview({ experiments, onOpen }) {
-  const families = useMemo(() => {
+  const boards = useMemo(() => {
     const groups = new Map();
     for (const item of experiments) {
+      const benchmark = benchmarkFor(item);
+      if (!groups.has(benchmark)) groups.set(benchmark, []);
+      groups.get(benchmark).push(item);
+    }
+    return [...groups.entries()].map(([id, items]) => ({
+      id,
+      ...(BENCHMARKS[id] || { label: id, scope: "", description: "" }),
+      items,
+    }));
+  }, [experiments]);
+  const [selectedBoard, setSelectedBoard] = useState("");
+  const preferredBoard = boards.find((board) => board.id === "spider")?.id || boards[0]?.id || "";
+  useEffect(() => {
+    if (!boards.length) return;
+    if (!selectedBoard || !boards.some((board) => board.id === selectedBoard)) {
+      setSelectedBoard(preferredBoard);
+    }
+  }, [boards, preferredBoard, selectedBoard]);
+  const activeBoard = boards.find((board) => board.id === (selectedBoard || preferredBoard));
+  const boardExperiments = useMemo(() => activeBoard?.items || [], [activeBoard]);
+  const families = useMemo(() => {
+    const groups = new Map();
+    for (const item of boardExperiments) {
       const family = modelFamily(item.model);
       if (!groups.has(family)) groups.set(family, []);
       groups.get(family).push(item);
@@ -206,7 +246,7 @@ function Overview({ experiments, onOpen }) {
         directSql: items.find(isDirectSqlBaseline),
       }))
       .sort((a, b) => a.family.localeCompare(b.family, "zh-CN", { numeric: true }));
-  }, [experiments]);
+  }, [boardExperiments]);
   const preferredFamily = useMemo(
     () => families.find((group) => group.family.startsWith("Qwen3.5"))?.family || families[0]?.family || "",
     [families],
@@ -270,14 +310,34 @@ function Overview({ experiments, onOpen }) {
       <header className="page-header">
         <div>
           <p className="eyebrow">Research workspace</p>
-          <h1>训练实验总览</h1>
-          <p>当前展示 {activeFamily || "模型"} 的 baseline、SFT 与工具评测</p>
+          <h1>{activeBoard?.label || "实验"} 看板</h1>
+          <p>{activeBoard?.description || "按数据集隔离的 baseline、SFT 与工具评测。"}</p>
         </div>
         <div className="header-date">
           <Clock3 size={16} />
           数据更新于本地实验产物
         </div>
       </header>
+
+      <section className="model-switch-panel benchmark-switch-panel">
+        <div>
+          <span>评测与构造数据集</span>
+          <strong>{activeBoard?.label || "未选择"}</strong>
+          <small>{activeBoard?.scope}</small>
+        </div>
+        <div className="segmented-control" aria-label="选择数据集看板">
+          {boards.map((board) => (
+            <button
+              key={board.id}
+              className={board.id === activeBoard?.id ? "active" : ""}
+              onClick={() => setSelectedBoard(board.id)}
+            >
+              {board.label}
+              <span>{board.items.length}</span>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <section className="model-switch-panel">
         <div>
@@ -326,7 +386,7 @@ function Overview({ experiments, onOpen }) {
           <div className="panel-heading">
             <div>
               <h2>评测表现</h2>
-              <p>执行准确率与合法回答率</p>
+              <p>{activeBoard?.scope}；执行准确率与合法回答率</p>
             </div>
             <span className="unit">%</span>
           </div>
@@ -364,7 +424,7 @@ function Overview({ experiments, onOpen }) {
           <div className="panel-heading">
             <div>
               <h2>实验记录</h2>
-              <p>按版本查看数据、训练与评测</p>
+              <p>{activeBoard?.label} 数据集下的版本、训练与评测</p>
             </div>
           </div>
           <div className="run-list">
@@ -411,7 +471,7 @@ function Overview({ experiments, onOpen }) {
           <div className="panel-heading">
             <div>
               <h2>Pass@ 采样对比</h2>
-              <p>同一模型家族内的采样评测；含 baseline pass@2/4/8/16/32 与 SFT pass@ 结果</p>
+              <p>{activeBoard?.label} 内同一模型家族的采样评测与 baseline 对比</p>
             </div>
             <span className="unit">%</span>
           </div>
@@ -439,7 +499,7 @@ function Overview({ experiments, onOpen }) {
         <div className="panel-heading">
           <div>
             <h2>Baseline 对齐</h2>
-            <p>每个模型家族只和自己的 Direct SQL baseline 对比，避免跨模型误读</p>
+              <p>{activeBoard?.label} 内每个模型家族只和自己的 Direct SQL baseline 对比</p>
           </div>
         </div>
         <div className="baseline-grid">
@@ -468,7 +528,7 @@ function Overview({ experiments, onOpen }) {
         <div className="panel-heading">
           <div>
             <h2>关键指标对比</h2>
-            <p>训练数据规模、loss 与推理表现</p>
+              <p>{activeBoard?.label} 看板中的训练数据规模、loss 与推理表现</p>
           </div>
         </div>
         <div className="table-scroll">
@@ -477,6 +537,7 @@ function Overview({ experiments, onOpen }) {
               <tr>
                 <th>实验</th>
                 <th>模型家族</th>
+                <th>评测数据集</th>
                 <th>类型</th>
                 <th>训练样本</th>
                 <th>Train loss</th>
@@ -496,6 +557,7 @@ function Overview({ experiments, onOpen }) {
                   <tr key={item.id} onClick={() => onOpen(item.id)}>
                     <td><strong>{item.short_name}</strong></td>
                     <td>{modelFamily(item.model)}</td>
+                    <td>{item.dataset_version || activeBoard?.label || "—"}</td>
                     <td><span className={`type-badge ${item.kind === "baseline" ? "baseline" : ""}`}>{item.kind === "baseline" ? "Baseline" : "SFT"}</span></td>
                     <td>{item.training_metrics?.available ? compact.format(item.dataset_summary?.train?.kept || 0) : "—"}</td>
                     <td>{fixed(item.training_metrics?.summary?.train_loss)}</td>
@@ -511,11 +573,11 @@ function Overview({ experiments, onOpen }) {
                     </td>
                     <td>{fixed(item.evaluation_summary?.average_steps, 2)}</td>
                     <td>
-                      {summary?.complete_dev ? (
-                        <span className="inline-ok"><Check size={14} /> 1034/1034</span>
+                      {summary?.complete ? (
+                        <span className="inline-ok"><Check size={14} /> {summary.expected_total}/{summary.expected_total}</span>
                       ) : (
                         <span className="inline-warn">
-                          <CircleAlert size={14} /> {summary?.total || 0}/1034
+                          <CircleAlert size={14} /> {summary?.expected_total ? `${summary.total || 0}/${summary.expected_total}` : `${summary?.total || 0}/—`}
                         </span>
                       )}
                     </td>
@@ -931,7 +993,7 @@ function ExperimentDetail({ experiment, onBack, onUpdated }) {
             <div className="panel-heading">
               <div>
                 <h2>评测概况</h2>
-                <p>{evaluation?.total || 0} 个 Spider dev 案例</p>
+                <p>{evaluation?.total || 0} 个 {experiment.dataset_version || "评测"} 案例</p>
               </div>
             </div>
             <div className="eval-score">
@@ -944,8 +1006,8 @@ function ExperimentDetail({ experiment, onBack, onUpdated }) {
               <div><dt>平均耗时</dt><dd>{fixed(evaluation?.average_elapsed_seconds, 2)}s</dd></div>
               <div>
                 <dt>完整性</dt>
-                <dd className={evaluation?.complete_dev ? "text-ok" : "text-warn"}>
-                  {evaluation?.complete_dev ? "完整" : `${evaluation?.total || 0}/1034`}
+                <dd className={evaluation?.complete ? "text-ok" : "text-warn"}>
+                  {evaluation?.complete ? "完整" : evaluation?.expected_total ? `${evaluation?.total || 0}/${evaluation.expected_total}` : "未声明"}
                 </dd>
               </div>
             </dl>

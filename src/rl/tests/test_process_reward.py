@@ -1,0 +1,465 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import sys
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+
+RL_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(RL_DIR))
+
+from process_reward import (  # noqa: E402
+    ProcessRewardConfig,
+    StepFeature,
+    _task_text_supports_literal,
+    allocate_process_rewards,
+    normalized_search_reduction,
+    replay_step_features,
+)
+from process_objective import process_policy_loss  # noqa: E402
+from provenance import build_grounding_references  # noqa: E402
+from review_grounding_edges_external import build_review_package  # noqa: E402
+
+
+def feature(index: int, **kwargs) -> StepFeature:
+    return StepFeature(
+        action_index=index,
+        step_id=f"step_{index}",
+        tool=kwargs.pop("tool", "condition_filter"),
+        legal_success=kwargs.pop("legal_success", True),
+        **kwargs,
+    )
+
+
+class ProcessRewardTests(unittest.TestCase):
+    def test_harness_infers_final_table_and_perception_chain_without_model_evidence(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite") as tmp:
+            conn = sqlite3.connect(tmp.name)
+            conn.executescript(
+                """
+                CREATE TABLE people(first_name TEXT, last_name TEXT, bioguide TEXT);
+                CREATE TABLE social(bioguide TEXT, instagram TEXT);
+                INSERT INTO people VALUES ('Bob', 'Corker', 'C001071');
+                INSERT INTO people VALUES ('Jane', 'Doe', 'D000001');
+                INSERT INTO social VALUES ('C001071', 'senbobcorker');
+                INSERT INTO social VALUES ('D000001', 'janedoe');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            def step(index, tool, arguments):
+                return {
+                    "step_id": f"step_{index}",
+                    "tool_call": {"tool": tool, "arguments": arguments},
+                }
+
+            trajectory = {
+                "trajectory_id": "automatic-grounding",
+                "source": {
+                    "db_path": tmp.name,
+                    "gold_sql": (
+                        "SELECT social.instagram FROM people JOIN social "
+                        "ON people.bioguide = social.bioguide "
+                        "WHERE people.first_name = 'Bob' AND people.last_name = 'Corker'"
+                    ),
+                },
+                "steps": [
+                    step(1, "describe_table", {"tables": ["people", "social"]}),
+                    step(2, "condition_filter", {
+                        "table": "people",
+                        "conditions": {"and": [
+                            {"column": "first_name", "op": "=", "value": "Bob"},
+                            {"column": "last_name", "op": "=", "value": "Corker"},
+                        ]},
+                    }),
+                    step(3, "read_subtable", {"table": "filter_001", "limit": 5}),
+                    step(4, "condition_filter", {
+                        "table": "social",
+                        "conditions": {"column": "bioguide", "op": "=", "value": "C001071"},
+                    }),
+                    step(5, "read_subtable", {"table": "filter_002", "limit": 5}),
+                    step(6, "answer_from_context", {
+                        "evidence": None,
+                        "answer": ["senbobcorker"],
+                    }),
+                ],
+            }
+            features, diagnostics = replay_step_features(trajectory)
+            review_package = build_review_package(trajectory)
+            result = allocate_process_rewards(
+                trajectory["trajectory_id"],
+                features,
+                correct=diagnostics["replay_correct"],
+                diagnostics=diagnostics,
+            )
+
+        self.assertEqual(diagnostics["grounding_method"], "automatic_last_table")
+        self.assertEqual(diagnostics["grounding_handle"], "filter_002")
+        self.assertEqual(
+            diagnostics["back_slice_step_ids"],
+            ["step_1", "step_2", "step_3", "step_4", "step_5"],
+        )
+        self.assertFalse(result.fallback_terminal_credit)
+        self.assertEqual(result.steps[-1].reward, 0.0)
+        self.assertGreater(result.steps[0].reward, 0.0)  # describe_table
+        self.assertGreater(result.steps[2].reward, 0.0)  # first read used as a later literal
+        self.assertGreater(result.steps[4].reward, 0.0)  # final row observation
+        dependency_roles = {edge["role"] for edge in review_package["dependency_edges"]}
+        self.assertIn("automatic_final_table", dependency_roles)
+        self.assertTrue(review_package["grounding_edges"])
+
+    def test_inspected_domain_value_builds_harness_grounding_edge(self):
+        history = {
+            "step_1": {
+                "tool": "inspect_column",
+                "arguments": {"table": "items", "column": "status"},
+                "output": {
+                    "column": "status",
+                    "distinct_count": 2,
+                    "frequent_values": ["active", "inactive"],
+                    "truncated": False,
+                },
+            }
+        }
+        refs = build_grounding_references(
+            "condition_filter",
+            {
+                "table": "items",
+                "conditions": {"column": "status", "op": "=", "value": "active"},
+            },
+            history,
+        )
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0]["step"], "step_1")
+        self.assertEqual(refs[0]["role"], "domain_observation")
+        self.assertEqual(refs[0]["target"]["values"], ["active"])
+
+    def test_schema_grounding_uses_only_latest_description(self):
+        described = {
+            "tool": "describe_table",
+            "arguments": {"tables": ["items"]},
+            "output": {"tables": [{
+                "table_name": "items",
+                "columns": [{"name": "status"}],
+            }]},
+        }
+        refs = build_grounding_references(
+            "condition_filter",
+            {
+                "table": "items",
+                "conditions": {"column": "status", "op": "=", "value": "active"},
+            },
+            {"step_1": described, "step_2": described},
+        )
+        self.assertEqual([ref["step"] for ref in refs], ["step_2"])
+
+    def test_row_grounding_is_column_aware_and_uses_foreign_keys(self):
+        history = {
+            "step_1": {
+                "tool": "describe_table",
+                "arguments": {"tables": ["Match", "Season", "Team"]},
+                "output": {"tables": [
+                    {
+                        "table_name": "Match",
+                        "columns": [{"name": "Match_Winner"}],
+                        "foreign_keys": [{"column": "Match_Winner", "references": "Team.Team_Id"}],
+                    },
+                    {"table_name": "Season", "columns": [{"name": "Season_Id"}], "foreign_keys": []},
+                    {"table_name": "Team", "columns": [{"name": "Team_Id"}], "foreign_keys": []},
+                ]},
+                "references": [],
+            },
+            "step_2": {
+                "tool": "condition_filter",
+                "arguments": {"table": "Team", "conditions": {"column": "Team_Name", "op": "=", "value": "Mumbai Indians"}},
+                "output": {"table": "filter_001", "columns": ["Team_Id", "Team_Name"], "row_count": 1},
+                "references": [{"type": "data", "source": "Team", "role": "table", "target": {"table": "Team"}}],
+            },
+            "step_3": {
+                "tool": "read_subtable",
+                "arguments": {"table": "filter_001", "limit": 5},
+                "output": {"table": "filter_001", "columns": ["Team_Id", "Team_Name"], "rows": [[7, "Mumbai Indians"]], "row_count": 1},
+                "references": [],
+            },
+            "step_4": {
+                "tool": "read_subtable",
+                "arguments": {"table": "Season", "limit": 10},
+                "output": {"table": "Season", "columns": ["Season_Id", "Orange_Cap"], "rows": [[7, 305]], "row_count": 1},
+                "references": [],
+            },
+        }
+        refs = build_grounding_references(
+            "condition_filter",
+            {"table": "Match", "conditions": {"column": "Match_Winner", "op": "=", "value": 7}},
+            history,
+        )
+        row_refs = [ref for ref in refs if ref["role"] == "row_observation"]
+        self.assertEqual([ref["step"] for ref in row_refs], ["step_3"])
+        match = row_refs[0]["target"]["column_matches"][0]
+        self.assertEqual(match["source_column"], "Team_Id")
+        self.assertEqual(match["target_column"], "Match_Winner")
+
+    def test_answer_value_equality_does_not_create_direct_row_edge(self):
+        history = {
+            "step_1": {
+                "tool": "read_subtable",
+                "arguments": {"table": "shipping_method", "limit": 10},
+                "output": {"table": "shipping_method", "columns": ["id"], "rows": [[2]], "row_count": 1},
+            },
+        }
+        refs = build_grounding_references(
+            "answer_from_context",
+            {"answer": [2], "evidence": None},
+            history,
+        )
+        self.assertEqual(refs, [])
+
+    def test_numeric_task_literal_uses_token_boundaries(self):
+        self.assertFalse(_task_text_supports_literal(2, "orders placed in 2021"))
+        self.assertTrue(_task_text_supports_literal(2021, "orders placed in 2021"))
+        self.assertTrue(_task_text_supports_literal(392194, "match ID 392194."))
+
+    def test_compound_filter_can_link_multiple_prior_row_observations(self):
+        history = {
+            "step_1": {
+                "tool": "read_subtable",
+                "arguments": {"table": "customer", "limit": 5},
+                "output": {"table": "customer", "columns": ["customer_id"], "rows": [[88]], "row_count": 1},
+            },
+            "step_2": {
+                "tool": "read_subtable",
+                "arguments": {"table": "shipping_method", "limit": 5},
+                "output": {"table": "shipping_method", "columns": ["shipping_method_id"], "rows": [[2]], "row_count": 1},
+            },
+        }
+        refs = build_grounding_references(
+            "condition_filter",
+            {
+                "table": "cust_order",
+                "conditions": {"and": [
+                    {"column": "customer_id", "op": "=", "value": 88},
+                    {"column": "shipping_method_id", "op": "=", "value": 2},
+                ]},
+            },
+            history,
+        )
+        row_refs = [ref for ref in refs if ref["role"] == "row_observation"]
+        self.assertEqual({ref["step"] for ref in row_refs}, {"step_1", "step_2"})
+
+    def test_missing_fk_target_column_resolves_to_unique_primary_key(self):
+        history = {
+            "step_1": {
+                "tool": "describe_table",
+                "arguments": {"tables": ["cust_order", "shipping_method"]},
+                "output": {"tables": [
+                    {
+                        "table_name": "cust_order",
+                        "columns": [{"name": "shipping_method_id", "pk": False}],
+                        "foreign_keys": [{"column": "shipping_method_id", "references": "shipping_method.None"}],
+                    },
+                    {
+                        "table_name": "shipping_method",
+                        "columns": [{"name": "method_id", "pk": True}],
+                        "foreign_keys": [],
+                    },
+                ]},
+            },
+            "step_2": {
+                "tool": "read_subtable",
+                "arguments": {"table": "shipping_method", "limit": 5},
+                "output": {"rows": [[2]], "row_count": 1},
+                "observed_columns": ["method_id"],
+            },
+        }
+        refs = build_grounding_references(
+            "condition_filter",
+            {
+                "table": "cust_order",
+                "conditions": {"column": "shipping_method_id", "op": "=", "value": 2},
+            },
+            history,
+        )
+        row_refs = [ref for ref in refs if ref["role"] == "row_observation"]
+        self.assertEqual([ref["step"] for ref in row_refs], ["step_2"])
+        self.assertEqual(row_refs[0]["target"]["column_matches"][0]["source_column"], "method_id")
+
+    def test_multi_value_answer_collects_multiple_read_handles(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite") as tmp:
+            conn = sqlite3.connect(tmp.name)
+            conn.executescript(
+                """
+                CREATE TABLE venue(id INTEGER, venue TEXT);
+                CREATE TABLE team(id INTEGER, team TEXT);
+                INSERT INTO venue VALUES (12, 'Kingsmead');
+                INSERT INTO team VALUES (6, 'Delhi Daredevils');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            def step(index, tool, arguments):
+                return {"step_id": f"step_{index}", "tool_call": {"tool": tool, "arguments": arguments}}
+
+            trajectory = {
+                "trajectory_id": "multi-final",
+                "source": {
+                    "db_path": tmp.name,
+                    "gold_sql": "SELECT venue.venue, team.team FROM venue CROSS JOIN team",
+                },
+                "steps": [
+                    step(1, "describe_table", {"tables": ["venue", "team"]}),
+                    step(2, "condition_filter", {"table": "venue", "conditions": {"column": "id", "op": "=", "value": 12}}),
+                    step(3, "read_subtable", {"table": "filter_001", "limit": 1}),
+                    step(4, "condition_filter", {"table": "team", "conditions": {"column": "id", "op": "=", "value": 6}}),
+                    step(5, "read_subtable", {"table": "filter_002", "limit": 1}),
+                    step(6, "answer_from_context", {"answer": [["Kingsmead", "Delhi Daredevils"]], "evidence": None}),
+                ],
+            }
+            _, diagnostics = replay_step_features(trajectory)
+
+        self.assertTrue(diagnostics["replay_correct"])
+        self.assertEqual(diagnostics["grounding_method"], "automatic_multi_table")
+        self.assertEqual(diagnostics["grounding_handles"], ["filter_002", "filter_001"])
+        self.assertTrue(diagnostics["final_value_grounding_complete"])
+        roles = {ref["role"] for ref in diagnostics["final_references"]}
+        self.assertIn("automatic_additional_final_table", roles)
+
+    def test_linear_positive_normalization_keeps_zero_credit_zero(self):
+        result = allocate_process_rewards(
+            "t1",
+            [feature(1, back_slice=1), feature(2), feature(3, is_terminal=True)],
+            correct=True,
+        )
+        self.assertEqual([step.c_positive for step in result.steps], [1.0, 0.0, 0.0])
+        self.assertAlmostEqual(result.total_reward, 1.0)
+
+    def test_fallback_distributes_credit_by_environment_effect(self):
+        result = allocate_process_rewards(
+            "t2",
+            [
+                feature(1, state_changed=True),
+                feature(2, tool="answer_from_context", is_terminal=True),
+            ],
+            correct=True,
+        )
+        self.assertTrue(result.fallback_terminal_credit)
+        self.assertEqual([step.c_positive for step in result.steps], [0.625, 0.375])
+
+    def test_penalty_cap_preserves_positive_correct_total(self):
+        config = ProcessRewardConfig(penalty_cap=0.8, lambda_tool_error=10.0)
+        result = allocate_process_rewards(
+            "t3",
+            [feature(1, legal_success=False, error_type="execution_error")],
+            correct=True,
+            config=config,
+        )
+        self.assertAlmostEqual(result.capped_penalty, 0.8)
+        self.assertAlmostEqual(result.total_reward, 0.2)
+
+    def test_failed_trajectory_is_negative_and_conserves_reward(self):
+        result = allocate_process_rewards(
+            "t4",
+            [
+                feature(1, attempted_back_slice=1, state_changed=True),
+                feature(
+                    2,
+                    tool="answer_from_context",
+                    is_terminal=True,
+                    attempted_back_slice=1,
+                ),
+            ],
+            correct=False,
+        )
+        self.assertLess(result.total_reward, 0)
+        self.assertAlmostEqual(result.total_reward, -0.3)
+        self.assertAlmostEqual(result.total_reward, -result.capped_penalty)
+        self.assertTrue(all(step.reward < 0 for step in result.steps))
+        self.assertNotEqual(result.steps[0].reward, result.steps[1].reward)
+
+    def test_failure_outcome_chain_and_local_error_have_distinct_penalties(self):
+        result = allocate_process_rewards(
+            "t4-distributed",
+            [
+                feature(1, attempted_back_slice=1, state_changed=True),
+                feature(2, legal_success=False, error_type="protocol_error"),
+                feature(
+                    3,
+                    tool="answer_from_context",
+                    is_terminal=True,
+                    attempted_back_slice=1,
+                ),
+            ],
+            correct=False,
+        )
+        self.assertAlmostEqual(result.total_reward, -0.38)
+        self.assertGreater(result.steps[0].p_outcome, 0)
+        self.assertEqual(result.steps[1].p_outcome, 0)
+        self.assertAlmostEqual(result.steps[1].p_local, 0.08)
+        self.assertGreater(result.steps[2].p_outcome, 0)
+        self.assertEqual(len({step.reward for step in result.steps}), 3)
+
+    def test_v2_config_remains_terminal_only_historical_control(self):
+        config_path = RL_DIR / "configs" / "process_reward_v2.json"
+        values = {
+            key: value
+            for key, value in json.loads(config_path.read_text(encoding="utf-8")).items()
+            if not key.startswith("_")
+        }
+        result = allocate_process_rewards(
+            "v2-control",
+            [
+                feature(1, attempted_back_slice=1, state_changed=True),
+                feature(2, tool="answer_from_context", is_terminal=True),
+            ],
+            correct=False,
+            config=ProcessRewardConfig(**values),
+        )
+        self.assertEqual([step.reward for step in result.steps], [0.0, -0.8])
+
+    def test_fixed_root_search_reduction_telescopes(self):
+        first = normalized_search_reduction(100, 100, 10)
+        second = normalized_search_reduction(100, 10, 2)
+        direct = normalized_search_reduction(100, 100, 2)
+        self.assertAlmostEqual(first + second, direct)
+
+    def test_search_reduction_rejects_empty_or_expanding_outputs(self):
+        self.assertEqual(normalized_search_reduction(100, 10, 0), 0.0)
+        self.assertEqual(normalized_search_reduction(100, 10, 11), 0.0)
+
+    def test_feedback_credit_is_separate_from_penalty(self):
+        result = allocate_process_rewards(
+            "t5",
+            [
+                feature(1, legal_success=False, error_type="protocol_error"),
+                feature(2, feedback_response=1),
+                feature(3, tool="answer_from_context", is_terminal=True),
+            ],
+            correct=True,
+        )
+        self.assertGreater(result.steps[1].c_positive, 0)
+        self.assertGreater(result.steps[0].c_negative, 0)
+        self.assertAlmostEqual(result.total_reward, 0.92)
+
+    def test_process_objective_uses_step_rewards_and_fixed_reference_kl(self):
+        class Scalar(float):
+            pass
+
+        loss = process_policy_loss(
+            [[Scalar(-2.0), Scalar(-1.0)]],
+            [[0.75, 0.25]],
+            episode_step_kls=[[Scalar(0.1), Scalar(0.2)]],
+            beta=0.5,
+        )
+        self.assertAlmostEqual(loss, 1.9)
+
+    def test_positive_beta_requires_frozen_reference_kl(self):
+        with self.assertRaisesRegex(ValueError, "frozen SFT-2 reference"):
+            process_policy_loss([[-1.0]], [[1.0]], beta=0.1)
+
+
+if __name__ == "__main__":
+    unittest.main()

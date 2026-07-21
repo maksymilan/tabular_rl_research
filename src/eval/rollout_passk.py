@@ -34,7 +34,9 @@ from protocol import (  # noqa: E402
     first_user_message,
     get_system_prompt,
     model_context_messages,
-    parse_assistant,
+    parse_assistant_strict,
+    rolling_legal_history_messages,
+    rolling_system_prompt,
     state_context_message,
     tool_error_message,
     tool_output_message,
@@ -43,14 +45,18 @@ from rollout import (  # noqa: E402
     ChatAPIError,
     ContextOverflowError,
     DEFAULT_MAX_TOKENS,
-    MAX_CONSECUTIVE_ERRORS,
+    MAX_ERRORS_PER_TYPE,
     MIN_CONTEXT_RETRY_TOKENS,
-    db_path,
     execute_tool,
+    format_tool_error,
     is_context_overflow,
     new_ctx,
     overview,
     score,
+    protocol_failure_type,
+    state_digest,
+    task_db_path,
+    task_gold_sql,
 )
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
@@ -65,7 +71,10 @@ def load_indexed_examples(path: str | None, n: int | None) -> tuple[list[tuple[i
     """
     if path:
         with open(path, encoding="utf-8") as source:
-            payload = json.load(source)
+            if path.endswith(".jsonl"):
+                payload = [json.loads(line) for line in source if line.strip()]
+            else:
+                payload = json.load(source)
         examples = payload.get("examples", payload) if isinstance(payload, dict) else payload
         if not isinstance(examples, list):
             raise ValueError("--examples-json must be a JSON list or {'examples': [...]}")
@@ -93,6 +102,7 @@ def chat_sample(
     top_p: float,
     retries: int,
     min_context_retry_tokens: int = MIN_CONTEXT_RETRY_TOKENS,
+    retry_stats: dict | None = None,
 ) -> str:
     payload = {
         "model": model,
@@ -106,6 +116,7 @@ def chat_sample(
 
     current_max_tokens = max_tokens
     transient_attempts = 0
+    context_retries = 0
     while True:
         payload["max_tokens"] = current_max_tokens
         body = json.dumps(payload).encode()
@@ -117,6 +128,12 @@ def chat_sample(
         try:
             with urllib.request.urlopen(req, timeout=600) as response:
                 data = json.loads(response.read())
+            if retry_stats is not None:
+                retry_stats.update({
+                    "api_request_attempts": transient_attempts + context_retries + 1,
+                    "api_transport_retries": transient_attempts,
+                    "api_context_retries": context_retries,
+                })
             return data["choices"][0]["message"]["content"]
         except urllib.error.HTTPError as exc:
             body_text = exc.read().decode("utf-8", errors="replace")
@@ -126,6 +143,7 @@ def chat_sample(
                         min_context_retry_tokens,
                         current_max_tokens // 2,
                     )
+                    context_retries += 1
                     continue
                 raise ContextOverflowError(
                     f"HTTP {exc.code}: {body_text}", status=exc.code, body=body_text
@@ -156,17 +174,23 @@ def run_sample(
     temperature: float,
     top_p: float,
     api_retries: int,
+    context_mode: str,
+    history_turns: int,
+    compact_history_observations: bool,
 ) -> dict:
-    h = Harness(db_path(ex["db_id"]))
+    gold_sql = task_gold_sql(ex)
+    if not gold_sql:
+        raise ValueError(f"task has no gold SQL: {ex.get('db_id')} / {ex.get('question')}")
+    h = Harness(task_db_path(ex))
     ov = overview(h)
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": first_user_message(ov, ex["question"])},
-    ]
+    external_knowledge = ex.get("external_knowledge")
+    legal_history: list[dict] = []
     created: set[str] = set()
     ctx = new_ctx(ov)
     last_error: dict | None = None
-    steps = errors = consecutive = 0
+    action_count = errors = 0
+    error_counts: dict[str, int] = {}
+    error_events: list[dict] = []
     turns = []
     started = time.time()
     rec = {
@@ -177,11 +201,33 @@ def run_sample(
         "errors": 0,
         "failure_type": None,
         "turns": turns,
+        "error_events": error_events,
+        "outcome": None,
+        "api_transport_retries": 0,
+        "api_context_retries": 0,
     }
-    while steps < max_steps:
-        model_input = model_context_messages(system, ov, ex["question"], ctx["environment"].snapshot(), last_error)
+    while action_count < max_steps:
+        action_count += 1
+        state_before = ctx["environment"].snapshot()
+        if context_mode == "rolling-legal-history":
+            model_input = rolling_legal_history_messages(
+                system,
+                ov,
+                ex["question"],
+                state_before,
+                last_error,
+                external_knowledge,
+                legal_history,
+                history_turns,
+                compact_observations=compact_history_observations,
+            )
+        else:
+            model_input = model_context_messages(
+                system, ov, ex["question"], state_before, last_error, external_knowledge,
+            )
         turn = {"turn_index": len(turns), "model_input": deepcopy(model_input)}
         try:
+            retry_stats: dict = {}
             if request_semaphore is None:
                 text = chat_sample(
                     base_url,
@@ -191,6 +237,7 @@ def run_sample(
                     temperature=temperature,
                     top_p=top_p,
                     retries=api_retries,
+                    retry_stats=retry_stats,
                 )
             else:
                 with request_semaphore:
@@ -202,6 +249,7 @@ def run_sample(
                         temperature=temperature,
                         top_p=top_p,
                         retries=api_retries,
+                        retry_stats=retry_stats,
                     )
         except ContextOverflowError as exc:
             rec["failure_type"] = "context_overflow"
@@ -213,66 +261,90 @@ def run_sample(
             break
 
         turn["model_output"] = text
-        messages.append({"role": "assistant", "content": text})
+        turn["api_retry_stats"] = retry_stats
+        rec["api_transport_retries"] += retry_stats["api_transport_retries"]
+        rec["api_context_retries"] += retry_stats["api_context_retries"]
         try:
-            think, tool, args = parse_assistant(text)
+            think, tool, args = parse_assistant_strict(text)
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
+            turn["feedback_recovery"] = bool(last_error)
+            turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
             if tool == "answer_from_context":
                 rec["legal"] = True
-                rec["steps"] = steps + 1
+                rec["steps"] = action_count
                 rec["errors"] = errors
                 rec["correct"], rec["pred_sample"], rec["gold_sample"] = score(
-                    h, ex["query"], args, created
+                    h, gold_sql, args, created
                 )
                 if not rec["correct"]:
                     rec["failure_type"] = "wrong_answer"
+                else:
+                    rec["outcome"] = "recovered_success" if error_events else "clean_success"
                 turns.append(turn)
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
 
-            step_id = f"step_{steps + 1}"
+            step_id = f"step_{action_count}"
             out, table_name = execute_tool(h, tool, args, ctx, step_id)
             turn["tool_output"] = out
         except (ProtocolError, Exception) as exc:  # noqa: BLE001
             errors += 1
-            consecutive += 1
-            error = f"{type(exc).__name__}: {exc}"
-            error_type = "protocol_error" if isinstance(exc, ProtocolError) else "execution_error"
+            parsed = turn.get("parsed") or {}
+            error = format_tool_error(exc, h, parsed.get("tool"), parsed.get("arguments"))
+            state_after = ctx["environment"].snapshot()
+            error_type = protocol_failure_type(exc) if isinstance(exc, ProtocolError) else "execution_error"
+            if error_type == "execution_error" and state_digest(state_after) != state_digest(state_before):
+                error_type = "nonrecoverable_execution_error"
             turn["execution_error"] = error
             turn["execution_error_type"] = error_type
+            event = {
+                "action_index": action_count,
+                "step_id": f"step_{action_count}",
+                "error_type": error_type,
+                "message": error,
+                "state_before_hash": state_digest(state_before),
+                "state_after_hash": state_digest(state_after),
+            }
+            if parsed.get("tool"):
+                event["attempted_tool"] = parsed["tool"]
+                event["attempted_arguments"] = parsed.get("arguments") or {}
+            turn["error_event"] = event
+            error_events.append(event)
             turns.append(turn)
-            if consecutive >= MAX_CONSECUTIVE_ERRORS:
+            if error_type == "nonrecoverable_execution_error":
                 rec["failure_type"] = error_type
-                rec["error"] = f"aborted after {consecutive} consecutive errors: {error}"
+                rec["error"] = error
                 rec["errors"] = errors
-                rec["steps"] = steps
+                rec["steps"] = action_count
+                rec["elapsed_seconds"] = round(time.time() - started, 3)
+                return rec
+            error_counts[error_type] = error_counts.get(error_type, 0) + 1
+            if error_counts[error_type] >= MAX_ERRORS_PER_TYPE:
+                rec["failure_type"] = error_type
+                rec["error"] = f"aborted after {error_counts[error_type]} {error_type} events: {error}"
+                rec["errors"] = errors
+                rec["steps"] = action_count
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
             last_error = {
-                "step_id": f"step_{steps + 1}",
+                "step_id": f"step_{action_count}",
                 "status": "error",
                 "error": {"type": error_type, "message": error},
             }
-            messages.append({
-                "role": "user",
-                "content": tool_error_message(last_error["step_id"], error_type, error),
-            })
             continue
 
         turns.append(turn)
-        consecutive = 0
         last_error = None
-        steps += 1
         if table_name:
             created.add(table_name)
-        messages.append({
-            "role": "user",
-            "content": tool_output_message(step_id, out),
+        legal_history.append({
+            "assistant": assistant_message(think, tool, args),
+            "observation": tool_output_message(step_id, out),
         })
 
     if rec["failure_type"] is None:
         rec["failure_type"] = "max_steps"
-    rec["steps"] = steps
+    rec["steps"] = action_count
     rec["errors"] = errors
     rec["elapsed_seconds"] = round(time.time() - started, 3)
     return rec
@@ -316,21 +388,35 @@ def run_one(
     temperature: float,
     top_p: float,
     api_retries: int,
+    context_mode: str,
+    history_turns: int,
+    compact_history_observations: bool,
 ) -> dict:
-    initial_harness = Harness(db_path(ex["db_id"]))
+    gold_sql = task_gold_sql(ex)
+    if not gold_sql:
+        raise ValueError(f"task has no gold SQL: {ex.get('db_id')} / {ex.get('question')}")
+    initial_harness = Harness(task_db_path(ex))
     initial_overview = overview(initial_harness)
-    initial_input = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": first_user_message(initial_overview, ex["question"])},
-    ]
+    initial_state = new_ctx(initial_overview)["environment"].snapshot()
+    if context_mode == "rolling-legal-history":
+        initial_input = rolling_legal_history_messages(
+            system, initial_overview, ex["question"], initial_state, None,
+            ex.get("external_knowledge"), [], history_turns,
+            compact_observations=compact_history_observations,
+        )
+    else:
+        initial_input = model_context_messages(
+            system, initial_overview, ex["question"], initial_state, None,
+            ex.get("external_knowledge"),
+        )
     started = time.time()
     record = {
         "example_index": example_index,
         "trajectory_id": ex.get("trajectory_id"),
-        "dataset_split": ex.get("dataset_split"),
+        "dataset_split": ex.get("dataset_split") or ex.get("split"),
         "db_id": ex["db_id"],
         "question": ex["question"],
-        "gold_sql": ex["query"],
+        "gold_sql": gold_sql,
         "initial_model_input": initial_input,
         "n_samples": n_samples,
         "sample_workers": sample_workers,
@@ -351,6 +437,9 @@ def run_one(
         "temperature": temperature,
         "top_p": top_p,
         "api_retries": api_retries,
+        "context_mode": context_mode,
+        "history_turns": history_turns,
+        "compact_history_observations": compact_history_observations,
     }
     if stop_on_success:
         samples = []
@@ -432,6 +521,8 @@ def main() -> int:
     parser.add_argument("--examples-json", default=None,
                         help=("explicit JSON examples to run instead of Spider dev; use this for "
                               "training-subset recovery rollouts"))
+    parser.add_argument("--allow-eval-tasks", action="store_true",
+                        help="explicitly allow dev/eval DatasetTask inputs; outputs are evaluation-only")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--result-dir", required=True)
     parser.add_argument("--resume", action="store_true")
@@ -456,6 +547,16 @@ def main() -> int:
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--api-retries", type=int, default=3)
     parser.add_argument("--few-shot", type=int, default=0)
+    parser.add_argument(
+        "--context-mode", choices=["state-only", "rolling-legal-history"], default="state-only",
+    )
+    parser.add_argument("--history-turns", type=int, default=4)
+    parser.add_argument(
+        "--rolling-prompt-variant", choices=["full", "compact"], default="full",
+    )
+    parser.add_argument(
+        "--rolling-observation-style", choices=["resident", "full"], default="resident",
+    )
     args = parser.parse_args()
 
     try:
@@ -472,15 +573,27 @@ def main() -> int:
         parser.error("--max-inflight-requests must be non-negative")
     if args.summary_every < 0:
         parser.error("--summary-every must be non-negative")
+    if args.history_turns < 0:
+        parser.error("--history-turns must be non-negative")
+    if args.context_mode == "rolling-legal-history" and args.few_shot:
+        parser.error("few-shot examples are not supported with rolling history")
+    is_eval_tasks = bool(args.examples_json and "dev" in args.examples_json.lower())
+    if is_eval_tasks and not args.allow_eval_tasks:
+        parser.error("--examples-json appears to be a dev/eval file; pass --allow-eval-tasks explicitly")
 
     prompt_variant = os.environ.get("EVAL_SYSTEM_PROMPT_VARIANT") or "default"
     system = get_system_prompt()
+    if args.context_mode == "rolling-legal-history":
+        system = rolling_system_prompt(
+            system,
+            compact=args.rolling_prompt_variant == "compact",
+        )
     if args.few_shot:
         from rollout import DEFAULT_FEWSHOT_IDS
 
         system += fewshot_text(DEFAULT_FEWSHOT_IDS[:args.few_shot])
 
-    writer = ArtifactWriter(args.result_dir, {
+    manifest = {
         "runner": "tool_rollout_passk",
         "model": args.model,
         "base_url": args.base_url,
@@ -503,12 +616,17 @@ def main() -> int:
         "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
         "system_prompt_variant": prompt_variant,
         "system_prompt": system,
-    }, args.resume)
+        "context_mode": args.context_mode,
+        "history_turns": args.history_turns,
+        "rolling_prompt_variant": args.rolling_prompt_variant,
+        "rolling_observation_style": args.rolling_observation_style,
+    }
+    if is_eval_tasks:
+        manifest.update({"dataset_purpose": "evaluation", "sft_export_eligible": False})
+    writer = ArtifactWriter(args.result_dir, manifest, args.resume)
 
     indexed_examples, source_name = load_indexed_examples(args.examples_json, args.n)
     pending = [(index, example) for index, example in indexed_examples if index not in writer.completed]
-    if args.examples_json and "dev" in args.examples_json.lower():
-        raise ValueError("--examples-json appears to be a dev/eval file; do not use it for recovery SFT")
     print(f"loaded {len(indexed_examples)} examples from {source_name}; pending {len(pending)}")
 
     request_semaphore = (
@@ -532,6 +650,9 @@ def main() -> int:
                 pass_k=pass_k,
                 request_semaphore=request_semaphore,
                 sample_detail=args.sample_detail,
+                context_mode=args.context_mode,
+                history_turns=args.history_turns,
+                compact_history_observations=args.rolling_observation_style == "resident",
                 max_steps=args.max_steps,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,

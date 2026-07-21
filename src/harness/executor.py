@@ -126,6 +126,34 @@ class Harness:
         resolved = self._resolve_col(cols, requested)
         return _qid(resolved) if resolved in cols else str(requested)
 
+    def _first_prefixed_join_col_sql(self, cols: list[str], requested: str, prefix: str | None) -> str:
+        """Resolve the documented ``P__column`` form on a prefixed join's first edge.
+
+        Prefixes are materialized *after* the first join predicate is evaluated, so this is the
+        one point where the model-facing name and the source query's physical column name differ.
+        Accept only the declared first-table prefix; arbitrary aliases remain invalid and surface
+        as normal execution errors.
+        """
+        if isinstance(requested, str) and "." in requested:
+            return requested
+        resolved = self._resolve_col(cols, requested)
+        if resolved in cols:
+            return _qid(resolved)
+        if isinstance(prefix, str) and prefix:
+            base = requested.split(".")[-1] if isinstance(requested, str) else requested
+            marker = f"{prefix}__"
+            if isinstance(base, str) and base.lower().startswith(marker.lower()):
+                source_col = self._resolve_col(cols, base[len(marker):])
+                if source_col in cols:
+                    return _qid(source_col)
+        return str(requested)
+
+    def _join_col_sql(self, cols: list[str], requested: str) -> str:
+        """Resolve a join argument without accepting SQL implementation aliases."""
+        if isinstance(requested, str) and "." in requested:
+            return requested
+        return self._col_sql(cols, requested)
+
     def _single_col_select(self, table: str, target_column: str) -> str:
         cols = self._cols(table)
         if len(cols) == 1:
@@ -344,8 +372,10 @@ class Harness:
             rc = self._cols(rt)
             jt = jt_map.get(join_types[k - 1] if k - 1 < len(join_types) else "inner", "JOIN")
             edges = on[k - 1] if k - 1 < len(on) else []
+            first_prefix = prefixes[0] if prefixes is not None and k == 1 and not cur_prefixed else None
             cond = " AND ".join(
-                f"L.{self._col_sql(cur_cols, e['left'])} = R.{self._col_sql(rc, e['right'])}" for e in edges
+                f"L.{self._first_prefixed_join_col_sql(cur_cols, e['left'], first_prefix)} = "
+                f"R.{self._join_col_sql(rc, e['right'])}" for e in edges
             )
             oncl = f" ON {cond}" if edges and jt != "CROSS JOIN" else ""
             if prefixes is not None:

@@ -8,7 +8,7 @@ from pathlib import Path
 SFT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SFT_DIR))
 
-from protocol import ProtocolError, parse_assistant  # noqa: E402
+from protocol import ProtocolError, parse_assistant, parse_assistant_strict  # noqa: E402
 
 
 class ProtocolParseTests(unittest.TestCase):
@@ -80,6 +80,31 @@ class ProtocolParseTests(unittest.TestCase):
             parse_assistant(
                 '<tool_call>{"tool":"answer_from_context","arguments":{"answer":[[1]],'
             )
+
+    def test_strict_parser_rejects_replay_only_forms(self):
+        with self.assertRaises(ProtocolError):
+            parse_assistant_strict(
+                '<think>Count.</think><tool_call>{"tool":"aggregate",'
+                '"arguments":{"table":"items","column":"*","op":"count"}}</tool_call>'
+            )
+        with self.assertRaises(ProtocolError):
+            parse_assistant_strict(
+                '<think>Join.</think><tool_call>{"tool":"join_tables",'
+                '"arguments":{"left":"a","right":"b","on":[{"left":"id","right":"id"}]}}</tool_call>'
+            )
+
+    def test_strict_parser_rejects_unbounded_read_limit(self):
+        with self.assertRaisesRegex(ProtocolError, "integer from 1 to 20"):
+            parse_assistant_strict(
+                '<think>Read everything.</think><tool_call>{"tool":"read_subtable",'
+                '"arguments":{"table":"items","limit":68}}</tool_call>'
+            )
+        _, tool, args = parse_assistant_strict(
+            '<think>Read a bounded sample.</think><tool_call>{"tool":"read_subtable",'
+            '"arguments":{"table":"items","limit":20}}</tool_call>'
+        )
+        self.assertEqual(tool, "read_subtable")
+        self.assertEqual(args["limit"], 20)
 
 
 if __name__ == "__main__":
