@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import sys
 
-# make sibling modules (executor, compiler, plan, verify) importable
+# Make active sibling harness modules importable.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from executor import Harness  # noqa: E402

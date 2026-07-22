@@ -13,7 +13,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "sft"))
 
 from artifacts import ArtifactWriter  # noqa: E402
-from protocol import rows_equal  # noqa: E402
+from protocol import bird_rows_equal, compare_denotations, rows_equal  # noqa: E402
 from rollout import (  # noqa: E402
     ChatAPIError,
     DEFAULT_FEWSHOT_IDS,
@@ -45,6 +45,18 @@ class EvalTests(unittest.TestCase):
         self.assertTrue(rows_equal([[float("nan"), float("inf"), float("-inf")]],
                                    [["NaN", "+Infinity", "-Infinity"]]))
         self.assertFalse(rows_equal([[float("nan")]], [[float("inf")]]))
+
+    def test_bird_rows_equal_ignores_duplicate_multiplicity(self):
+        self.assertTrue(bird_rows_equal([["x"], ["x"]], [["x"]]))
+        self.assertFalse(rows_equal([["x"], ["x"]], [["x"]]))
+
+    def test_denotation_comparison_is_explicit(self):
+        predicted = [["x"], ["x"]]
+        gold = [["x"]]
+        self.assertTrue(compare_denotations(predicted, gold, "bird-set"))
+        self.assertFalse(compare_denotations(predicted, gold, "strict-multiset"))
+        with self.assertRaises(ValueError):
+            compare_denotations(predicted, gold, "unknown")
 
     def test_context_overflow_retry_can_shrink_to_128_tokens(self):
         budgets = []
@@ -126,6 +138,16 @@ class EvalTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(pred, [["Village"]])
         self.assertEqual(gold, [["Village"]])
+
+    def test_score_can_use_bird_set_semantics_without_changing_default(self):
+        harness = FakeHarness([["Village"]], {"project_001": [["Village"], ["Village"]]})
+        args = {"evidence": {"table": "project_001"}, "answer": []}
+        self.assertFalse(score(harness, "SELECT 'Village'", args, {"project_001"})[0])
+        self.assertTrue(
+            score(
+                harness, "SELECT 'Village'", args, {"project_001"}, "bird-set"
+            )[0]
+        )
 
     def test_score_rejects_broader_evidence_without_explicit_answer(self):
         harness = FakeHarness([["Aroostook"]], {"join_001": [[5, "Aroostook", "Village", 2]]})

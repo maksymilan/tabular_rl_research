@@ -27,8 +27,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 ROOT = Path(__file__).resolve().parents[4]
 sys.path[:0] = [str(ROOT / "src" / "rl"), str(ROOT / "src" / "eval"), str(ROOT / "src" / "harness"), str(ROOT / "src" / "sft")]
 
-from env import ToolUseEnv  # noqa: E402
-from task_data import load_result_only_task_records  # noqa: E402
+from tool_environment import ToolUseEnv  # noqa: E402
+from task_loader import load_result_only_task_records  # noqa: E402
 
 
 @dataclass

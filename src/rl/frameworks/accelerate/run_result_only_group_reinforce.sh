@@ -27,7 +27,7 @@ elif [ -n "$SELECTION" ]; then
   data_args+=(--selection "$SELECTION")
 fi
 
-# With neither selector, task_data.load_result_only_task_records uses all Spider train examples.
+# With neither selector, task_loader.load_result_only_task_records uses all Spider train examples.
 "$PYTHON" src/rl/frameworks/accelerate/group_reinforce.py \
   --model-path "$MODEL_PATH" \
   --adapter-path "$ADAPTER_PATH" \

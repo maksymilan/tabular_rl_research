@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Model<->harness interaction protocol — the single source of truth shared by
-build_sft_data.py (renders training messages) and src/eval/rollout.py (renders live
+export_sft_dataset.py (renders training messages) and src/eval/rollout.py (renders live
 messages and parses model output). One module for both guarantees the SFT data format and
 the rollout format can never drift apart.
 
@@ -689,3 +689,22 @@ def normalize_rows(rows) -> list[tuple]:
 
 def rows_equal(a, b) -> bool:
     return normalize_rows(a) == normalize_rows(b)
+
+
+DENOTATION_COMPARISONS = ("strict-multiset", "bird-set")
+
+
+def bird_rows_equal(a, b) -> bool:
+    """Mirror the official BIRD EX comparison: ignore row order and duplicate multiplicity."""
+    return {tuple(row) for row in a} == {tuple(row) for row in b}
+
+
+def compare_denotations(a, b, comparison: str = "strict-multiset") -> bool:
+    """Compare query results under an explicit, manifestable evaluation contract."""
+    if comparison == "strict-multiset":
+        return rows_equal(a, b)
+    if comparison == "bird-set":
+        return bird_rows_equal(a, b)
+    raise ValueError(
+        f"unknown denotation comparison {comparison!r}; expected one of {DENOTATION_COMPARISONS}"
+    )

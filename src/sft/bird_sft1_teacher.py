@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path[:0] = [str(ROOT / "src" / "eval"), str(ROOT / "src" / "harness"), str(HERE)]
 
-from fill_think import load_api  # noqa: E402
+from provider_client import load_api_config  # noqa: E402
 from rollout import execute_tool, format_tool_error, new_ctx, overview, score  # noqa: E402
 from executor import Harness  # noqa: E402
 from protocol import (  # noqa: E402
@@ -34,7 +34,7 @@ from protocol import (  # noqa: E402
     parse_assistant_strict,
     protocol_hash,
 )
-from rollout_external_data import add_usage, chat_with_retries  # noqa: E402
+from generate_teacher_rollouts import add_usage, chat_with_retries  # noqa: E402
 
 DEFAULT_SELECTION = ROOT / "data" / "eval_inputs" / "bird_train_sft1_pilot30.jsonl"
 DEFAULT_ALL = ROOT / "data" / "trajectories" / "bird_sft1_teacher_pilot30_all.jsonl"
@@ -491,7 +491,7 @@ def main() -> int:
     tasks = all_tasks[args.start:stop]
     if not tasks:
         parser.error("--start/--limit select no tasks")
-    api_key, base_url = load_api()
+    api_key, base_url = load_api_config()
     if not api_key or not base_url:
         parser.error("api.md must define API_KEY and BASE_URL")
     for path in (args.all_out, args.success_out, args.failures_out, args.summary_out):

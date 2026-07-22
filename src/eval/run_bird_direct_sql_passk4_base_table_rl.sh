@@ -13,6 +13,13 @@ VLLM_PY=/home/dengyan/miniconda3/envs/vllm-qwen35/bin/python
 REMOTE_PID_FILE=$REMOTE_OUTPUT/logs/bird_direct_sql_passk4.vllm.pid
 LOG=${LOG:-/tmp/bird_direct_sql_passk4.log}
 TASKS=data/eval_inputs/bird_dev_20240627.jsonl
+N_SAMPLES=${N_SAMPLES:-4}
+PASS_K=${PASS_K:-1,2,4}
+TEMPERATURE=${TEMPERATURE:-0.7}
+TOP_P=${TOP_P:-0.95}
+RESULT_VARIANT=${RESULT_VARIANT:-passk4}
+SMOKE_RESULT_DIR=data/results/qwen2.5_7b_bird_direct_sql_base_${RESULT_VARIANT}_smoke10_bird_ex
+FULL_RESULT_DIR=data/results/qwen2.5_7b_bird_direct_sql_base_${RESULT_VARIANT}_dev1534_bird_ex
 
 exec >>"$LOG" 2>&1
 cd "$PROJECT_DIR"
@@ -79,18 +86,19 @@ run_guarded() {
 
 COMMON=(.venv/bin/python -u src/eval/text2sql_passk.py
   --base-url "http://127.0.0.1:${LOCAL_PORT}/v1" --model "$SERVED_MODEL"
-  --tasks-json "$TASKS" --n-samples 4 --pass-k 1,2,4
-  --workers 4 --max-tokens 1024 --temperature 0.7 --top-p 0.95
-  --api-retries 3 --execution-timeout-seconds 5)
+  --tasks-json "$TASKS" --n-samples "$N_SAMPLES" --pass-k "$PASS_K"
+  --workers 4 --max-tokens 1024 --temperature "$TEMPERATURE" --top-p "$TOP_P"
+  --api-retries 3 --execution-timeout-seconds 20 \
+  --denotation-comparison bird-set)
 
 echo "$(timestamp) starting smoke-10"
 run_guarded "${COMMON[@]}" --n 10 \
   --resume \
-  --result-dir data/results/qwen2.5_7b_bird_direct_sql_base_passk4_smoke10
-.venv/bin/python -c 'import json; from pathlib import Path; rows=[json.loads(x) for x in Path("data/results/qwen2.5_7b_bird_direct_sql_base_passk4_smoke10/all.jsonl").read_text().splitlines() if x.strip()]; assert len(rows)==10 and all(len(r.get("samples",[]))==4 for r in rows)'
+  --result-dir "$SMOKE_RESULT_DIR"
+.venv/bin/python -c 'import json,sys; from pathlib import Path; rows=[json.loads(x) for x in Path(sys.argv[1]).read_text().splitlines() if x.strip()]; expected=int(sys.argv[2]); assert len(rows)==10 and all(len(r.get("samples",[]))==expected for r in rows)' "$SMOKE_RESULT_DIR/all.jsonl" "$N_SAMPLES"
 
 echo "$(timestamp) smoke passed; starting full BIRD dev-1534"
 run_guarded "${COMMON[@]}" --n 1534 \
   --resume \
-  --result-dir data/results/qwen2.5_7b_bird_direct_sql_base_passk4_dev1534
+  --result-dir "$FULL_RESULT_DIR"
 echo "$(timestamp) BIRD-dev direct-SQL pass@1/2/4 baseline complete"

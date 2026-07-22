@@ -17,8 +17,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path[:0] = [str(HERE), str(ROOT / "src" / "sft")]
 
-from fill_think import load_api  # noqa: E402
-from process_reward import replay_step_features  # noqa: E402
+from provider_client import load_api_config  # noqa: E402
+from process_credit import replay_step_features  # noqa: E402
 
 
 LABELS = frozenset({"valid", "invalid", "ambiguous"})
@@ -352,7 +352,7 @@ def main() -> int:
             for row in (json.loads(line) for line in args.reviews_output.read_text(encoding="utf-8").splitlines() if line.strip())
             if row.get("review")
         }
-    api_key, base_url = load_api()
+    api_key, base_url = load_api_config()
     if not api_key or not base_url:
         parser.error("api.md must define API_KEY and BASE_URL")
 

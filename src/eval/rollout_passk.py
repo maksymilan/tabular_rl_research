@@ -29,6 +29,7 @@ from artifacts import ArtifactWriter  # noqa: E402
 from executor import Harness  # noqa: E402
 from passk import attach_passk_fields, parse_pass_k, write_passk_summary  # noqa: E402
 from protocol import (  # noqa: E402
+    DENOTATION_COMPARISONS,
     ProtocolError,
     assistant_message,
     first_user_message,
@@ -177,6 +178,7 @@ def run_sample(
     context_mode: str,
     history_turns: int,
     compact_history_observations: bool,
+    denotation_comparison: str,
 ) -> dict:
     gold_sql = task_gold_sql(ex)
     if not gold_sql:
@@ -195,6 +197,7 @@ def run_sample(
     started = time.time()
     rec = {
         "sample_index": sample_index,
+        "denotation_comparison": denotation_comparison,
         "correct": False,
         "legal": False,
         "steps": 0,
@@ -274,7 +277,7 @@ def run_sample(
                 rec["steps"] = action_count
                 rec["errors"] = errors
                 rec["correct"], rec["pred_sample"], rec["gold_sample"] = score(
-                    h, gold_sql, args, created
+                    h, gold_sql, args, created, denotation_comparison
                 )
                 if not rec["correct"]:
                     rec["failure_type"] = "wrong_answer"
@@ -391,6 +394,7 @@ def run_one(
     context_mode: str,
     history_turns: int,
     compact_history_observations: bool,
+    denotation_comparison: str,
 ) -> dict:
     gold_sql = task_gold_sql(ex)
     if not gold_sql:
@@ -426,6 +430,7 @@ def run_one(
         "top_p": top_p,
         "max_steps": max_steps,
         "max_tokens": max_tokens,
+        "denotation_comparison": denotation_comparison,
         "samples": [],
         "correct": False,
         "failure_type": None,
@@ -440,6 +445,7 @@ def run_one(
         "context_mode": context_mode,
         "history_turns": history_turns,
         "compact_history_observations": compact_history_observations,
+        "denotation_comparison": denotation_comparison,
     }
     if stop_on_success:
         samples = []
@@ -557,6 +563,11 @@ def main() -> int:
     parser.add_argument(
         "--rolling-observation-style", choices=["resident", "full"], default="resident",
     )
+    parser.add_argument(
+        "--denotation-comparison", choices=DENOTATION_COMPARISONS,
+        default="strict-multiset",
+        help="result comparison contract; use bird-set for literature-comparable BIRD EX",
+    )
     args = parser.parse_args()
 
     try:
@@ -620,6 +631,7 @@ def main() -> int:
         "history_turns": args.history_turns,
         "rolling_prompt_variant": args.rolling_prompt_variant,
         "rolling_observation_style": args.rolling_observation_style,
+        "denotation_comparison": args.denotation_comparison,
     }
     if is_eval_tasks:
         manifest.update({"dataset_purpose": "evaluation", "sft_export_eligible": False})
@@ -658,6 +670,7 @@ def main() -> int:
                 temperature=args.temperature,
                 top_p=args.top_p,
                 api_retries=args.api_retries,
+                denotation_comparison=args.denotation_comparison,
             )
             for index, example in pending
         ]

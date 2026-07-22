@@ -41,11 +41,11 @@ from environment_state import EnvironmentState                  # noqa: E402
 from plan import resolve_cond, _value_ref_ids                  # noqa: E402
 from scalar_grounding import extract_scalar                    # noqa: E402
 from provenance import build_grounding_references, build_references  # noqa: E402
-from emitter import _catalog                                   # noqa: E402
+from catalog import build_catalog                             # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
-from protocol import (ACCEPTED_TOOLS, ProtocolError, get_system_prompt,  # noqa: E402
+from protocol import (ACCEPTED_TOOLS, DENOTATION_COMPARISONS, ProtocolError, get_system_prompt,  # noqa: E402
                       assistant_message, first_user_message, parse_assistant_strict,
-                      model_context_messages, protocol_hash, rows_equal, tool_error_message,
+                      compare_denotations, model_context_messages, protocol_hash, tool_error_message,
                       rolling_legal_history_messages, rolling_system_prompt,
                       state_context_message, tool_output_message)
 
@@ -121,7 +121,7 @@ def load_tasks_json(path: str) -> list[dict]:
 def overview(h: Harness) -> dict:
     # V2-ctx: the opening overview is the lazy catalog (names + row_counts + FK relations, no columns)
     # — the SAME renderer the emitter uses, so eval matches training. describe_table acquires schema.
-    return _catalog(h)
+    return build_catalog(h)
 
 
 def new_ctx(catalog: dict | None = None) -> dict:
@@ -296,9 +296,9 @@ def answer_row_candidates(answer, gold: list | None = None) -> list[list]:
     return _dedupe_row_candidates(candidates)
 
 
-def _rows_equal_safe(pred, gold) -> bool:
+def _rows_equal_safe(pred, gold, denotation_comparison: str) -> bool:
     try:
-        return rows_equal(pred, gold)
+        return compare_denotations(pred, gold, denotation_comparison)
     except Exception:
         return False
 
@@ -331,7 +331,13 @@ def projected_row_candidates(rows, gold: list | None = None, max_combinations: i
     return _dedupe_row_candidates(candidates)
 
 
-def score(h: Harness, gold_sql: str, answer_args: dict, created: set) -> tuple[bool, list, list]:
+def score(
+    h: Harness,
+    gold_sql: str,
+    answer_args: dict,
+    created: set,
+    denotation_comparison: str = "strict-multiset",
+) -> tuple[bool, list, list]:
     gold = h.gold(gold_sql)
     ev = _evidence_table(answer_args.get("evidence"))
     evidence_rows = None
@@ -340,17 +346,19 @@ def score(h: Harness, gold_sql: str, answer_args: dict, created: set) -> tuple[b
             evidence_rows = h.rows(ev)
         except Exception:
             evidence_rows = None
-    if evidence_rows is not None and _rows_equal_safe(evidence_rows, gold):
+    if evidence_rows is not None and _rows_equal_safe(
+        evidence_rows, gold, denotation_comparison
+    ):
         return True, evidence_rows[:5], gold[:5]
 
     answer_candidates = answer_row_candidates(answer_args.get("answer"), gold)
     for candidate in answer_candidates:
-        if _rows_equal_safe(candidate, gold):
+        if _rows_equal_safe(candidate, gold, denotation_comparison):
             return True, candidate[:5], gold[:5]
 
     if evidence_rows is not None:
         for candidate in projected_row_candidates(evidence_rows, gold):
-            if _rows_equal_safe(candidate, gold):
+            if _rows_equal_safe(candidate, gold, denotation_comparison):
                 return True, candidate[:5], gold[:5]
 
     pred = evidence_rows if evidence_rows is not None else (answer_candidates[0] if answer_candidates else [])
@@ -582,6 +590,7 @@ def run_live(
     context_mode: str = "state-only",
     history_turns: int = 4,
     compact_history_observations: bool = True,
+    denotation_comparison: str = "strict-multiset",
 ) -> dict:
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
@@ -616,6 +625,7 @@ def run_live(
         "db_id": ex["db_id"],
         "question": ex["question"],
         "gold_sql": gold_sql,
+        "denotation_comparison": denotation_comparison,
         "initial_model_input": initial_messages,
         "turns": turns,
         "correct": False,
@@ -684,7 +694,9 @@ def run_live(
                 rec["legal"] = True
                 rec["steps"] = action_count
                 rec["errors"] = errors
-                rec["correct"], rec["pred_sample"], rec["gold_sample"] = score(h, gold_sql, args, created)
+                rec["correct"], rec["pred_sample"], rec["gold_sample"] = score(
+                    h, gold_sql, args, created, denotation_comparison
+                )
                 if not rec["correct"]:
                     rec["failure_type"] = "wrong_answer"
                 else:
@@ -882,6 +894,11 @@ def main() -> int:
                     help="optional common DatasetTask JSON/JSONL file; enables BIRD/other SQLite adapters")
     ap.add_argument("--result-dir", default="")
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument(
+        "--denotation-comparison", choices=DENOTATION_COMPARISONS,
+        default="strict-multiset",
+        help="result comparison contract; use bird-set for literature-comparable BIRD EX",
+    )
     args = ap.parse_args()
 
     if args.replay:
@@ -950,6 +967,7 @@ def main() -> int:
             "system_prompt_variant": prompt_variant,
             "system_prompt": system,
             "protocol_hash": protocol_hash(system),
+            "denotation_comparison": args.denotation_comparison,
         }, args.resume)
         indexed_dev = [(i, ex) for i, ex in indexed_dev if i not in writer.completed]
     results = []
@@ -971,6 +989,7 @@ def main() -> int:
                 args.context_mode,
                 args.history_turns,
                 args.rolling_observation_style == "resident",
+                args.denotation_comparison,
             )
                     for i, ex in indexed_dev]
             for fut in as_completed(futs):
@@ -996,6 +1015,7 @@ def main() -> int:
                 args.context_mode,
                 args.history_turns,
                 args.rolling_observation_style == "resident",
+                args.denotation_comparison,
             )
             results.append(r)
             if writer:

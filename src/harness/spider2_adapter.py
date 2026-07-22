@@ -8,7 +8,6 @@ visible for accounting.
 Examples:
   .venv/bin/python src/harness/spider2_adapter.py --summary
   .venv/bin/python src/harness/spider2_adapter.py --run-local-gold 20
-  .venv/bin/python src/harness/spider2_adapter.py --round-trip-local 20
   .venv/bin/python src/harness/spider2_adapter.py --export-local data/eval_inputs/spider2_lite_local.jsonl
 """
 from __future__ import annotations
@@ -28,7 +27,6 @@ sys.path.insert(0, str(HERE))
 
 from dataset_ir import DatasetTask  # noqa: E402
 from executor import Harness  # noqa: E402
-from verify import round_trip  # noqa: E402
 
 DEFAULT_ROOT = ROOT / "data" / "spider2" / "Spider2"
 
@@ -227,39 +225,6 @@ def smoke_local_tools(root: Path, limit: int) -> dict[str, Any]:
     return {"checked": checked, "counts": dict(counts), "errors": errors[:20]}
 
 
-def round_trip_local(root: Path, limit: int) -> dict[str, Any]:
-    examples = [ex for ex in load_examples(root) if ex.backend == "sqlite"]
-    local_map = load_local_map(root)
-    counts = collections.Counter()
-    reasons = collections.Counter()
-    samples: dict[str, dict[str, Any]] = {}
-    checked = 0
-    for ex in examples:
-        if limit and checked >= limit:
-            break
-        sql = read_gold_sql(root, ex.instance_id)
-        path = sqlite_path(root, ex, local_map)
-        if sql is None:
-            counts["missing_gold_sql"] += 1
-            continue
-        if path is None:
-            counts["missing_sqlite"] += 1
-            continue
-        checked += 1
-        status, info = round_trip(Harness(str(path)), sql)
-        counts[status] += 1
-        if status != "ok":
-            key = str(info).split(":")[0][:80]
-            reasons[key] += 1
-            samples.setdefault(key, {"instance_id": ex.instance_id, "db": ex.db, "sql": sql, "info": info})
-    return {
-        "checked": checked,
-        "counts": dict(counts),
-        "reasons": reasons.most_common(20),
-        "samples": list(samples.values())[:10],
-    }
-
-
 def export_local(root: Path, path: Path) -> dict[str, Any]:
     local_map = load_local_map(root)
     examples = [ex for ex in load_examples(root) if ex.backend == "sqlite"]
@@ -279,7 +244,6 @@ def main() -> int:
     ap.add_argument("--summary", action="store_true")
     ap.add_argument("--smoke-local-tools", type=int, metavar="N", help="run describe/read smoke on N local SQLite DB files; 0 means all")
     ap.add_argument("--run-local-gold", type=int, metavar="N", help="execute N local SQLite gold SQL files; 0 means all")
-    ap.add_argument("--round-trip-local", type=int, metavar="N", help="compile+tool round-trip N local gold SQL files; 0 means all")
     ap.add_argument("--export-local", type=Path, help="write normalized local SQLite examples as JSONL")
     args = ap.parse_args()
 
@@ -287,7 +251,6 @@ def main() -> int:
     if args.summary or not any([
         args.smoke_local_tools is not None,
         args.run_local_gold is not None,
-        args.round_trip_local is not None,
         args.export_local,
     ]):
         outputs.append({"summary": summarize(args.root)})
@@ -295,8 +258,6 @@ def main() -> int:
         outputs.append({"smoke_local_tools": smoke_local_tools(args.root, args.smoke_local_tools)})
     if args.run_local_gold is not None:
         outputs.append({"run_local_gold": run_local_gold(args.root, args.run_local_gold)})
-    if args.round_trip_local is not None:
-        outputs.append({"round_trip_local": round_trip_local(args.root, args.round_trip_local)})
     if args.export_local:
         outputs.append({"export_local": export_local(args.root, args.export_local)})
 

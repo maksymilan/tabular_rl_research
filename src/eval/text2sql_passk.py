@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 from artifacts import ArtifactWriter  # noqa: E402
 from executor import Harness  # noqa: E402
 from passk import attach_passk_fields, parse_pass_k, write_passk_summary  # noqa: E402
-from protocol import rows_equal  # noqa: E402
+from protocol import DENOTATION_COMPARISONS, compare_denotations  # noqa: E402
 from rollout import (  # noqa: E402
     ChatAPIError,
     ContextOverflowError,
@@ -87,7 +87,13 @@ def chat_n(
             raise ChatAPIError(f"{type(exc).__name__}: {exc}") from exc
 
 
-def score_sample(h: Harness, output: str, gold_rows: list, execution_timeout_seconds: float) -> dict:
+def score_sample(
+    h: Harness,
+    output: str,
+    gold_rows: list,
+    execution_timeout_seconds: float,
+    denotation_comparison: str,
+) -> dict:
     sample = {
         "model_output": output,
         "predicted_sql": None,
@@ -107,7 +113,9 @@ def score_sample(h: Harness, output: str, gold_rows: list, execution_timeout_sec
         return sample
     sample["predicted_row_count"] = len(predicted_rows)
     sample["predicted_sample"] = [list(row) for row in predicted_rows[:10]]
-    sample["correct"] = rows_equal(predicted_rows, gold_rows)
+    sample["correct"] = compare_denotations(
+        predicted_rows, gold_rows, denotation_comparison
+    )
     if not sample["correct"]:
         sample["failure_type"] = "wrong_result"
     return sample
@@ -126,6 +134,7 @@ def run_one(
     max_tokens: int,
     api_retries: int,
     execution_timeout_seconds: float,
+    denotation_comparison: str,
 ) -> dict:
     started = time.time()
     gold_sql = task_gold_sql(ex)
@@ -149,6 +158,7 @@ def run_one(
         "temperature": temperature,
         "top_p": top_p,
         "max_tokens": max_tokens,
+        "denotation_comparison": denotation_comparison,
         "correct": False,
         "failure_type": None,
     }
@@ -196,7 +206,10 @@ def run_one(
         record["samples"] = []
         return record
 
-    samples = [score_sample(h, output, gold_rows, execution_timeout_seconds) for output in outputs]
+    samples = [
+        score_sample(h, output, gold_rows, execution_timeout_seconds, denotation_comparison)
+        for output in outputs
+    ]
     record["samples"] = samples
     record["gold_row_count"] = len(gold_rows)
     record["gold_sample"] = [list(row) for row in gold_rows[:10]]
@@ -222,6 +235,11 @@ def main() -> int:
     parser.add_argument("--api-retries", type=int, default=3)
     parser.add_argument("--execution-timeout-seconds", type=float, default=5.0,
                         help="per-query SQLite VM deadline for generated SQL; <=0 disables it")
+    parser.add_argument(
+        "--denotation-comparison", choices=DENOTATION_COMPARISONS,
+        default="strict-multiset",
+        help="result comparison contract; use bird-set for literature-comparable BIRD EX",
+    )
     args = parser.parse_args()
 
     try:
@@ -248,6 +266,7 @@ def main() -> int:
         "top_p": args.top_p,
         "max_tokens": args.max_tokens,
         "predicted_sql_execution_timeout_seconds": args.execution_timeout_seconds,
+        "denotation_comparison": args.denotation_comparison,
         "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
         "execution_feedback": False,
         "system_prompt": SYSTEM_PROMPT,
@@ -269,6 +288,7 @@ def main() -> int:
                 max_tokens=args.max_tokens,
                 api_retries=args.api_retries,
                 execution_timeout_seconds=args.execution_timeout_seconds,
+                denotation_comparison=args.denotation_comparison,
             )
             for i, ex in pending
         ]

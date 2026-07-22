@@ -13,7 +13,7 @@ ADAPTER=$REMOTE_OUTPUT/checkpoints/qwen2.5-7b-bird-sft1-grounded-v4d-all651-6400
 VLLM_PY=/home/dengyan/miniconda3/envs/vllm-qwen35/bin/python
 REMOTE_PID_FILE=$REMOTE_OUTPUT/logs/bird_sft1_passk4_dev1534.vllm.pid
 LOG=${LOG:-/tmp/bird_sft1_passk4_dev1534.log}
-RESULT_DIR=data/results/qwen2.5_7b_bird_sft1_grounded_651_epoch1_passk4_dev1534
+RESULT_DIR=data/results/qwen2.5_7b_bird_sft1_grounded_651_epoch1_passk4_dev1534_bird_ex
 
 exec >>"$LOG" 2>&1
 cd "$PROJECT_DIR"
@@ -63,6 +63,7 @@ EVAL_ENABLE_THINKING=0 NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
   --sample-detail full --summary-every 10 \
   --context-mode rolling-legal-history --history-turns 4 \
   --rolling-prompt-variant full --rolling-observation-style resident \
+  --denotation-comparison bird-set \
   --result-dir "$RESULT_DIR" --resume &
 eval_pid=$!
 failures=0

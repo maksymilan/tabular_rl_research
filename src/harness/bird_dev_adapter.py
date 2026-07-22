@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Adapter for the public BIRD 2024-06-27 development benchmark.
 
-This module deliberately stays separate from ``bird_adapter.py``: BIRD train is used for
+This module deliberately stays separate from ``bird_train_adapter.py``: BIRD train is used for
 trajectory construction, while this released dev split is evaluation-only.
 """
 from __future__ import annotations

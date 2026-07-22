@@ -15,7 +15,7 @@ sys.path[:0] = [str(HERE), str(ROOT / "src" / "eval"), str(ROOT / "src" / "harne
 
 from bird_sft1_teacher import replay_success_trajectory  # noqa: E402
 from build_rolling_sft_data import convert_step, digest  # noqa: E402
-from prepare_bird_sft2_onpolicy import (  # noqa: E402
+from build_bird_sft2_dataset import (  # noqa: E402
     read_jsonl,
     replay_sample,
     tasks_by_index,

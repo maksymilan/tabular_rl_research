@@ -12,7 +12,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from reward import iter_episode_records, score_episode  # noqa: E402
+from terminal_reward import iter_episode_records, score_episode  # noqa: E402
 
 
 def load_jsonl(path: Path):

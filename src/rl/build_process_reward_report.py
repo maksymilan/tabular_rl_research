@@ -12,7 +12,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from process_reward import ProcessRewardConfig, score_verified_trajectory  # noqa: E402
+from process_credit import ProcessRewardConfig, score_verified_trajectory  # noqa: E402
 
 
 def percentile(values: list[float], q: float) -> float:

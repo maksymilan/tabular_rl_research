@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 
 from artifacts import ArtifactWriter                          # noqa: E402
 from executor import Harness                                  # noqa: E402
-from protocol import rows_equal                               # noqa: E402
+from protocol import DENOTATION_COMPARISONS, compare_denotations  # noqa: E402
 from rollout import (  # noqa: E402
     ContextOverflowError,
     chat,
@@ -91,6 +91,7 @@ def run_one(
     model: str,
     max_tokens: int = 512,
     execution_timeout_seconds: float = 5.0,
+    denotation_comparison: str = "strict-multiset",
 ) -> dict:
     gold_sql = task_gold_sql(ex)
     h = Harness(task_db_path(ex))
@@ -110,6 +111,7 @@ def run_one(
         "db_id": ex["db_id"],
         "question": ex["question"],
         "gold_sql": gold_sql,
+        "denotation_comparison": denotation_comparison,
         "model_input": messages,
         "correct": False,
         "failure_type": None,
@@ -149,7 +151,9 @@ def run_one(
     record["gold_row_count"] = len(gold_rows)
     record["predicted_sample"] = [list(row) for row in predicted_rows[:10]]
     record["gold_sample"] = [list(row) for row in gold_rows[:10]]
-    record["correct"] = rows_equal(predicted_rows, gold_rows)
+    record["correct"] = compare_denotations(
+        predicted_rows, gold_rows, denotation_comparison
+    )
     if not record["correct"]:
         record["failure_type"] = "wrong_result"
     record["elapsed_seconds"] = round(time.time() - started, 3)
@@ -218,6 +222,11 @@ def main() -> int:
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--execution-timeout-seconds", type=float, default=5.0,
                         help="per-query SQLite VM deadline for model-generated SQL; <=0 disables it")
+    parser.add_argument(
+        "--denotation-comparison", choices=DENOTATION_COMPARISONS,
+        default="strict-multiset",
+        help="result comparison contract; use bird-set for literature-comparable BIRD EX",
+    )
     parser.add_argument("--task-timeout-seconds", type=float, default=0.0,
                         help="hard per-example deadline; records task_timeout and continues when positive")
     args = parser.parse_args()
@@ -248,6 +257,7 @@ def main() -> int:
         "temperature": 0,
         "max_tokens": args.max_tokens,
         "predicted_sql_execution_timeout_seconds": args.execution_timeout_seconds,
+        "denotation_comparison": args.denotation_comparison,
         "task_timeout_seconds": args.task_timeout_seconds,
         "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
         "execution_feedback": False,
@@ -265,6 +275,7 @@ def main() -> int:
                     "model": args.model,
                     "max_tokens": args.max_tokens,
                     "execution_timeout_seconds": args.execution_timeout_seconds,
+                    "denotation_comparison": args.denotation_comparison,
                 }, args.task_timeout_seconds)
                 for i, ex in pending
             ]
@@ -285,6 +296,7 @@ def main() -> int:
                     args.model,
                     args.max_tokens,
                     args.execution_timeout_seconds,
+                    args.denotation_comparison,
                 )
                 for i, ex in pending
             ]
