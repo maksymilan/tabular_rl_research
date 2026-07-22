@@ -12,6 +12,10 @@ api_usage.md
 api.md
 *.log
 
+# Local workspace artifacts
+.DS_Store
+draw/
+
 # Experiment dashboard frontend dependencies/build output
 experiment_dashboard/frontend/node_modules/
 experiment_dashboard/frontend/dist/
