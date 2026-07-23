@@ -1,6 +1,6 @@
 """Tests for resident plan + table-context state."""
 from common import T, employees_db
-from environment_state import EnvironmentState
+from environment_state import EnvironmentState, EnvironmentStateError
 
 
 def run():
@@ -77,16 +77,23 @@ def run():
     f = h.condition_filter("employees", {"column": "dept", "op": "=", "value": "eng"})
     output = {"table": f["table_name"], "kind": f["kind"],
               "columns": f["columns"], "row_count": f["row_count"],
-              "structural_feedback": {
-                  "type": "aggregate_shape",
-                  "row_grain": ["dept"],
-                  "layout": "one_row_per_group",
+              "derivation": {
+                  "schema": "relation-derivation-v1",
+                  "operator": "condition_filter",
+                  "inputs": [{"kind": "table", "role": "input", "ref": "employees"}],
+                  "semantics": {
+                      "row_operation": "filter",
+                      "predicate": {"column": "dept", "op": "=", "value": "eng"},
+                      "predicate_columns": ["dept"],
+                      "column_operation": "preserve",
+                      "projected_columns": f["columns"],
+                  },
               }}
     state.apply_tool_result("condition_filter", {"table": "employees", "conditions": {}}, output, "step_4")
     snap = state.snapshot()
-    t.check("latest structural feedback is resident",
-            snap["latest_structural_feedback"]["from_step"] == "step_4" and
-            snap["latest_structural_feedback"]["feedback"]["row_grain"] == ["dept"],
+    t.check("relation derivation is bound to its output table",
+            snap["tables"][f["table_name"]]["derivation"]["operator"] == "condition_filter" and
+            snap["tables"][f["table_name"]]["derivation"]["semantics"]["row_operation"] == "filter",
             str(snap))
     rows = h.read_subtable(f["table_name"], limit=2)
     state.apply_tool_result(
@@ -100,8 +107,9 @@ def run():
             snap["tables"][f["table_name"]]["created_by"] == "step_4", str(snap))
     t.check("read rows grouped under handle",
             snap["tables"][f["table_name"]]["reads"][0]["from_step"] == "step_5", str(snap))
-    t.check("perception preserves latest structural feedback",
-            snap["latest_structural_feedback"]["from_step"] == "step_4", str(snap))
+    t.check("perception preserves table-bound derivation",
+            snap["tables"][f["table_name"]]["derivation"]["operator"] == "condition_filter",
+            str(snap))
     state.apply_tool_result(
         "read_subtable",
         {"table": f["table_name"], "limit": 2},
@@ -116,12 +124,60 @@ def run():
     state.apply_tool_result(
         "project",
         {"table": f["table_name"], "expressions": ["dept"]},
-        {"table": "project_999", "kind": "project", "columns": ["dept"], "row_count": 2},
+        {
+            "table": "project_999",
+            "kind": "project",
+            "columns": ["dept"],
+            "row_count": 2,
+            "derivation": {
+                "schema": "relation-derivation-v1",
+                "operator": "project",
+                "inputs": [{"kind": "table", "role": "input", "ref": f["table_name"]}],
+                "semantics": {
+                    "row_operation": "preserve",
+                    "column_operation": "project",
+                    "column_lineage": [
+                        {
+                            "output": "dept",
+                            "sources": ["dept"],
+                            "kind": "column",
+                            "expression": "dept",
+                        },
+                    ],
+                },
+            },
+        },
         "step_5_clear",
     )
-    t.check("next derived action clears stale structural feedback",
+    t.check("new derivation does not erase prior table metadata",
+            state.snapshot()["tables"][f["table_name"]]["derivation"]["operator"]
+            == "condition_filter" and
+            state.snapshot()["tables"]["project_999"]["derivation"]["operator"] == "project" and
             "latest_structural_feedback" not in state.snapshot(),
             str(state.snapshot()))
+
+    try:
+        state.apply_tool_result(
+            "project",
+            {"table": f["table_name"], "expressions": ["dept"]},
+            {
+                "table": "project_without_derivation",
+                "kind": "project",
+                "columns": ["dept"],
+                "row_count": 2,
+            },
+            "step_missing_derivation",
+        )
+    except EnvironmentStateError:
+        missing_derivation_rejected = True
+    else:
+        missing_derivation_rejected = False
+    t.check(
+        "table operators cannot bypass relation derivation",
+        missing_derivation_rejected
+        and "project_without_derivation" not in state.snapshot()["tables"],
+        str(state.snapshot()),
+    )
 
     state.apply_tool_result(
         "aggregate",

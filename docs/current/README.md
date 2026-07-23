@@ -7,6 +7,7 @@ sources of truth.
 - `overview.md`: research objective and non-negotiable method boundary.
 - `architecture.md`: active code layout and ownership.
 - `tool_protocol.md`: model-visible action and context protocol.
+- `relation_derivation.md`: fact-only semantics attached to every derived table handle.
 - `execution_contract.md`: harness semantics and error handling.
 - `data_generation.md`: causal SFT-1/SFT-2 data construction.
 - `sft_pipeline.md`: accepted data and export path.

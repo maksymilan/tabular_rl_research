@@ -1,4 +1,4 @@
-# Current Trajectory Protocol (version23)
+# Current Trajectory Protocol (version24)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -124,14 +124,20 @@ Public version mapping:
   rows for a single-edge left join. Only the latest such feedback is resident, so it cannot
   accumulate across a trajectory. Its frozen 16-task pilot was non-destructive but recovered only
   2/7 unambiguous targets, below the 3/7 expansion gate;
-- `version23`: current implementation; keeps every version22 tool, argument, execution, and state
+- `version23`: advice-heavy feedback experiment; keeps every version22 tool, argument, execution, and state
   boundary unchanged while making those three existing feedback payloads operationally explicit:
   named component fields remain separate unless formatting is requested, row counts preserve join
   multiplicity and global totals are not per-entity totals, and unmatched left-join rows lack the
-  right-side attribute;
-- future changes increment only the integer (`version24`, `version25`, ...).
+  right-side attribute. It remains an advice-heavy experiment and was not authorized for a
+  fixed-200 run;
+- `version24`: current implementation; removes the advice-heavy feedback and global latest-feedback
+  sidecar. Every table-producing operator now emits one validated, fact-only
+  `relation-derivation-v1` record bound to its output handle. Derivation construction lives in the
+  harness, is complete over the active table action space, and is separate from SQL execution,
+  provenance, state storage, protocol rendering, and model policy;
+- future changes increment only the integer (`version25`, `version26`, ...).
 
-The current version23 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
+The current version24 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
 - `plan`
@@ -145,6 +151,9 @@ The current version23 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 - `inspect_column`
 - `read_subtable`
 - `answer_from_context`
+
+The model-visible relation derivation schema is indexed separately in
+`docs/current/relation_derivation.md`.
 
 The full system prompt includes one concise canonical JSON call for each complex operation family:
 filter, projection/computed column, join, grouped/scalar aggregation, set operation, table answer,

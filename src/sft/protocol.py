@@ -135,7 +135,7 @@ LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version23"  # actionable wording over version22 harness-derived feedback
+PROTOCOL_VERSION = "version24"  # table-bound fact-only relation derivation metadata
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 POLICY_PROMPT_CANONICAL = "canonical"
@@ -506,6 +506,9 @@ SYSTEM_PROMPT = (
     "the harness updates a CURRENT ENVIRONMENT STATE message. Treat that state as the authoritative "
     "workspace: it contains the resident plan, known schemas, inspected values, table handles, row "
     "reads, scalar values, and the step ids you may cite later (e.g. as a predicate's value_ref). "
+    "Each derived table handle also records a fact-only derivation object: the executed operator, "
+    "its inputs, and its formal row/column semantics. Derivation metadata describes the relation; "
+    "it is not a recommendation or an additional source of answer values. "
     "You will not receive a full transcript of old tool observations; use the state instead of "
     "repeating previous reads. A table-producing tool's state entry is only a HANDLE (table name, "
     "columns, row_count) until you call read_subtable to see rows.\n\n"
@@ -736,8 +739,8 @@ def compact_resident_observation(observation: str) -> str:
 
     Rolling context still carries the successful action/result pair, but schemas, inspected
     values, row samples, and scalar samples already live in CURRENT ENVIRONMENT STATE. Keeping
-    those large facts in both places caused avoidable context overflow. Harness-authored metadata
-    remains visible here; the complete factual payload remains visible once in resident state.
+    those large facts in both places caused avoidable context overflow. The complete factual
+    payload, including table-bound derivation metadata, remains visible once in resident state.
     Non-standard legacy strings are left untouched rather than guessed at.
     """
     try:
@@ -754,7 +757,7 @@ def compact_resident_observation(observation: str) -> str:
     summary: dict = {}
     for key in (
         "table", "kind", "columns", "column_namespaces", "row_count",
-        "column", "distinct_count", "has_null", "structural_feedback",
+        "column", "distinct_count", "has_null",
     ):
         if output.get(key) is not None:
             summary[key] = output[key]
@@ -780,7 +783,9 @@ def compact_resident_observation(observation: str) -> str:
 
     # Small outputs that contain no resident factual payload remain useful verbatim. Large factual
     # fields are represented by metadata above and resolved from the appended current state.
-    resident_fields = {"tables", "rows", "result_sample", "frequent_values", "plan", "final_answer"}
+    resident_fields = {
+        "table", "tables", "rows", "result_sample", "frequent_values", "plan", "final_answer",
+    }
     if not (set(output) & resident_fields):
         summary = output
     envelope = {

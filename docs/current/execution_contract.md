@@ -1,7 +1,7 @@
 # Canonical Execution Contract
 
 Status: active contract for **new** SFT generation, evaluation, and RL episodes under
-`version20`. `src/sft/protocol.py` is executable authority; this document makes
+`version24`. `src/sft/protocol.py` is executable authority; this document makes
 the ownership boundaries explicit. Old trajectory artifacts remain replay inputs, not examples of
 the public action interface.
 
@@ -59,7 +59,7 @@ failure.
 | Layer | May author | Must not author |
 | --- | --- | --- |
 | Model | `think`, `tool`, `arguments`, plan goals/statuses | SQL aliases, step ids, provenance, handles, result rows claimed as facts |
-| Harness | execution SQL, handles, `step_id`, state, scalar grounding, references, audit events | semantic guesses that change an invalid model action |
+| Harness | execution SQL, handles, `step_id`, state, scalar grounding, references, fact-only relation derivation, audit events | question interpretation, next-action recommendations, semantic guesses that change an invalid model action |
 | Dataset adapter | question, DB path, dialect, optional gold SQL | model-facing execution state |
 | SFT exporter | state-before-action and legal assistant action | rejected actions as targets |
 
@@ -89,7 +89,12 @@ way to view row values; handles alone expose schema and row-count metadata. Its 
 be an integer from 1 through 20. Larger or non-integer values are explicit argument-validation
 errors and are never silently clamped.
 
-## Current version20 Conditional Aggregation and Wide Output
+Each derived handle also carries one validated `relation-derivation-v1` record describing the
+executed operator, ordered inputs, and formal row/column semantics. This record is bound to that
+handle in resident state. It is not a value source, reward, plan item, or policy recommendation.
+The active schema and module boundary are specified in `docs/current/relation_derivation.md`.
+
+## Current Conditional Aggregation and Wide Output
 
 `group_aggregate` keeps one input table and one `group_by` grain. Each aggregation may add an
 optional `where` predicate:
@@ -169,7 +174,7 @@ percent, difference, ratio, or percent-change arithmetic without redundant branc
 Without `column`, the existing rule remains strict: the producing result must be 1x1. Named-column
 references do not apply to predicates, which continue to require a scalar-producing step.
 
-## Current version20 Join and Column Naming
+## Current Join and Column Naming
 
 For source tables and unambiguous derived handles, arguments use the schema column name shown by
 `describe_table` or the state handle. The model never emits SQLite aliases (`L.`, `R.`) or SQL
@@ -264,16 +269,18 @@ whose resident state hash is unchanged.
 
 Whole episode restarts, when used for pass@k, are separate attempts and retain separate logs.
 
-The active shared implementation is `src/eval/rollout.py`, `src/eval/rollout_passk.py`,
-`src/sft/generate_teacher_rollouts.py`, and `src/rl/tool_environment.py` (used by the Accelerate backend). The
-historical Verl token-concatenating adapter is not a version20 training entry point, because state-only
-rebuilding needs per-turn loss accounting rather than one appended transcript.
+The shared relational semantics live in `src/harness/executor.py`,
+`src/harness/relation_derivation/`, `src/harness/provenance.py`, and
+`src/harness/environment_state.py`. `src/eval/rollout.py`,
+`src/sft/generate_teacher_rollouts.py`, and `src/rl/tool_environment.py` invoke that same layer.
+The historical Verl token-concatenating adapter is not a current training entry point, because
+state rebuilding needs per-turn loss accounting rather than one appended transcript.
 
 ## Migration Rule
 
-Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use version20,
-but new SFT construction remains gated on the frozen 200-task accuracy requirement. Historical
-version1-version18 artifacts retain their original model-visible contracts and may only enter
-replay-compatible paths. Every version20 teacher/eval result directory and manifest must record its
-version20 protocol hash and provider request controls; historical data is not relabeled or mutated
+Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use
+`version24`, but new SFT construction remains gated on the frozen 200-task accuracy requirement.
+Historical artifacts retain their original model-visible contracts and may only enter
+replay-compatible paths. Every teacher/eval result directory and manifest must record its exact
+protocol version/hash and provider request controls; historical data is not relabeled or mutated
 in place.

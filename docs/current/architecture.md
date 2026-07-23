@@ -3,7 +3,7 @@
 ## Runtime layers
 
 - `src/harness/`: SQLite tool execution, resident environment state, catalog construction,
-  provenance, scalar grounding, and dataset adapters.
+  relation derivation, provenance, scalar grounding, and dataset adapters.
 - `src/sft/`: protocol rendering/parsing, causal teacher rollouts, replay and quality gates, SFT
   dataset export, and current BIRD SFT-2 assembly.
 - `src/eval/`: closed-loop tool evaluation, direct-SQL controls, pass@k aggregation, and artifact
@@ -17,9 +17,11 @@
 ## Shared ownership
 
 `src/sft/protocol.py` owns the model-visible tool contract and context renderer.
-`src/harness/executor.py` owns tool execution. `src/harness/environment_state.py` owns resident
-state. `src/eval/rollout.py` provides shared execution and scoring helpers used by evaluation,
-teacher rollout, and RL. `src/harness/catalog.py` owns the bounded opening catalog.
+`src/harness/executor.py` owns tool execution. `src/harness/relation_derivation/` owns validated,
+fact-only formal semantics attached to derived relation handles. `src/harness/provenance.py` owns
+data/value/grounding edges. `src/harness/environment_state.py` owns resident state.
+`src/eval/rollout.py` orchestrates those harness services and provides shared scoring helpers used
+by evaluation, teacher rollout, and RL. `src/harness/catalog.py` owns the bounded opening catalog.
 
 ## Archived code
 

@@ -35,7 +35,7 @@ Start at `docs/current/README.md`.
 ### Model-visible protocol
 
 - Source of truth: `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current experimental implementation: `version23`; its fixed-200 run is not authorized. The former
+- Current experimental implementation: `version24`; its fixed-200 run is not authorized. The former
   `v2i-state-only-join-feedback-r2` contract is `version1`;
   `version2` added canonical calls/final shape, `version3` added precise provider feedback and
   stable projected join columns, and `version4` counted provider-carrier failures precisely.
@@ -84,6 +84,11 @@ Start at `docs/current/README.md`.
   versus the paired original 30/50: 6/20 capability recoveries, 29/30 controls retained, 50/50
   legal termination, unchanged 6.96 mean actions, and six recoverable errors. It missed the
   predeclared 7/20 recovery and +7 net-gain thresholds, so do not launch a version23 fixed-200 run.
+  `version24` is an engineering-semantic cleanup, not an accuracy promotion: it removes
+  advice-heavy feedback and the global latest-feedback sidecar, then records one validated,
+  fact-only `relation-derivation-v1` object on every derived table. The schema covers every active
+  table-producing tool and is implemented in `src/harness/relation_derivation/`, separate from
+  SQL execution, provenance, resident storage, protocol rendering, and model policy.
   Future versions increment numerically.
 - The canonical model action contains exactly one `<think>` block and one strict `<tool_call>` JSON
   object. A provider-native reasoning adapter may carry the same authored reason in a separate API
@@ -96,7 +101,7 @@ Start at `docs/current/README.md`.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id
   `value_ref`.
-- Do not construct new version12-version23 SFT data until the frozen 200-task tool-usability gate
+- Do not construct new version12-version24 SFT data until the frozen 200-task tool-usability gate
   is explicitly passed. Small pilots are diagnostic only and are not SFT sources.
 
 ### Recovery and provenance
@@ -170,6 +175,7 @@ Detailed experiment chronology, artifact paths, and scorer audits are in
 ## Active layout
 
 - `src/harness/`: executor, catalog, environment state, provenance, grounding, dataset adapters.
+  Fact-only table derivation metadata is owned by `src/harness/relation_derivation/`.
 - `src/sft/`: protocol, causal teacher rollout, replay/quality filters, SFT export and assembly.
 - `src/eval/`: closed-loop tool evaluation and direct-SQL controls.
 - `src/rl/`: tool environment, task loader, terminal reward, process credit, objective, backend.

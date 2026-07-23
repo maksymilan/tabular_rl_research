@@ -17,10 +17,16 @@ sys.path[:0] = [str(HERE), str(HERE / "tests")]
 from test_environment_state import run as run_environment_state  # noqa: E402
 from test_executor import run as run_executor  # noqa: E402
 from test_plan import run as run_plan  # noqa: E402
+from test_relation_derivation import run as run_relation_derivation  # noqa: E402
 
 
 def main() -> int:
-    results = [run_executor(), run_plan(), run_environment_state()]
+    results = [
+        run_executor(),
+        run_plan(),
+        run_environment_state(),
+        run_relation_derivation(),
+    ]
     passed = sum(module_passed for module_passed, _, _ in results)
     failed = sum(module_failed for _, module_failed, _ in results)
     for _, _, failures in results:

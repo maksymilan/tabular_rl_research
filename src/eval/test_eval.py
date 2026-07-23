@@ -41,6 +41,7 @@ from rollout import (  # noqa: E402
     score,
 )
 from executor import Harness  # noqa: E402
+from relation_derivation import SUPPORTED_TABLE_OPERATORS  # noqa: E402
 from text2sql import extract_sql  # noqa: E402
 from text2sql_passk import chat_n, run_one as run_direct_sql_passk, score_sample  # noqa: E402
 
@@ -59,6 +60,21 @@ class FakeHarness:
 
 
 class EvalTests(unittest.TestCase):
+    def test_derivation_schema_covers_complete_live_table_action_space(self):
+        from protocol import TOOLS
+
+        non_table_tools = {
+            "plan",
+            "describe_table",
+            "inspect_column",
+            "read_subtable",
+            "answer_from_context",
+        }
+        self.assertEqual(
+            SUPPORTED_TABLE_OPERATORS - {"pivot"},
+            TOOLS - non_table_tools,
+        )
+
     def test_direct_sql_sampling_can_pin_repetition_penalty(self):
         response = unittest.mock.MagicMock()
         response.read.return_value = json.dumps(
@@ -413,7 +429,7 @@ class EvalTests(unittest.TestCase):
             ],
         )
 
-    def test_structural_feedback_is_derived_without_changing_tool_arguments(self):
+    def test_fact_only_derivation_covers_every_live_table_operator(self):
         harness = Harness(":memory:")
         self.addCleanup(harness.conn.close)
         harness.conn.executescript(
@@ -445,11 +461,34 @@ class EvalTests(unittest.TestCase):
             "expressions": ["first_name || ' ' || last_name AS full_name"],
         })
         self.assertEqual(
-            projected["structural_feedback"]["collapsed_outputs"],
+            projected["derivation"]["semantics"]["column_lineage"],
             [{
-                "output_column": "full_name",
-                "source_columns": ["first_name", "last_name"],
+                "output": "full_name",
+                "sources": ["first_name", "last_name"],
+                "kind": "expression",
+                "expression": "first_name || ' ' || last_name AS full_name",
             }],
+        )
+
+        filtered, _ = execute_tool(
+            harness,
+            "condition_filter",
+            {
+                "table": "people",
+                "conditions": {"column": "team", "op": "=", "value": "math"},
+            },
+            ctx,
+            "step_filter",
+        )
+        self.assertEqual(
+            filtered["derivation"]["semantics"],
+            {
+                "row_operation": "filter",
+                "predicate": {"column": "team", "op": "=", "value": "math"},
+                "predicate_columns": ["team"],
+                "column_operation": "preserve",
+                "projected_columns": ["id", "first_name", "last_name", "team"],
+            },
         )
 
         grouped, _ = execute_tool(
@@ -466,16 +505,18 @@ class EvalTests(unittest.TestCase):
             "step_2",
         )
         self.assertEqual(grouped["row_count"], 2)
-        group_feedback = grouped["structural_feedback"]
-        self.assertEqual(group_feedback["type"], "aggregate_shape")
-        self.assertEqual(group_feedback["row_grain"], ["team"])
-        self.assertEqual(group_feedback["layout"], "one_row_per_group")
+        group_semantics = grouped["derivation"]["semantics"]
+        self.assertEqual(group_semantics["row_operation"], "aggregate")
+        self.assertEqual(group_semantics["row_grain"], ["team"])
+        self.assertEqual(group_semantics["layout"], "rows")
         self.assertEqual(
-            group_feedback["count_semantics"],
-            {"people_count": "input_rows"},
+            group_semantics["aggregations"],
+            [{
+                "output": "people_count",
+                "op": "count",
+                "source": "*",
+            }],
         )
-        self.assertIn("multiplicity introduced by earlier joins", group_feedback["advice"])
-        self.assertIn("one result row per group", group_feedback["advice"])
 
         joined, _ = execute_tool(
             harness,
@@ -493,17 +534,119 @@ class EvalTests(unittest.TestCase):
         )
         self.assertEqual(joined["row_count"], 2)
         self.assertEqual(
-            joined["structural_feedback"]["unmatched_left_rows"],
+            joined["derivation"]["semantics"]["edges"][0]["null_extended_output_rows"],
             1,
         )
         self.assertEqual(
-            joined["structural_feedback"]["joined_relation"],
+            joined["derivation"]["semantics"]["edges"][0]["namespace"],
             "badges",
         )
-        self.assertIn(
-            "preserved 1 base rows with no matching badges row",
-            joined["structural_feedback"]["advice"],
+
+        scalar, _ = execute_tool(
+            harness,
+            "scalar_compute",
+            {
+                "operation": "add",
+                "operands": [{"value": 2}, {"value": 3}],
+                "result_name": "total",
+            },
+            ctx,
+            "step_scalar",
         )
+        self.assertEqual(
+            scalar["derivation"]["semantics"],
+            {
+                "row_operation": "scalar",
+                "column_operation": "create",
+                "operation": "add",
+                "result_column": "total",
+            },
+        )
+        grounded_filter, _ = execute_tool(
+            harness,
+            "condition_filter",
+            {
+                "table": "people",
+                "conditions": {"column": "id", "op": ">=", "value_ref": "step_scalar"},
+            },
+            ctx,
+            "step_grounded_filter",
+        )
+        self.assertEqual(
+            grounded_filter["derivation"]["inputs"],
+            [
+                {"kind": "table", "role": "input", "ref": "people"},
+                {"kind": "value", "role": "predicate_value", "ref": "step_scalar"},
+            ],
+        )
+        self.assertTrue(
+            any(
+                reference.get("type") == "value"
+                and reference.get("step") == "step_scalar"
+                and reference.get("role") == "value_ref"
+                for reference in ctx["history"]["step_grounded_filter"]["references"]
+            )
+        )
+
+        top, _ = execute_tool(
+            harness,
+            "extreme_value_select",
+            {
+                "table": "people",
+                "order_by": ["id DESC"],
+                "top_k": 1,
+                "return_columns": ["first_name"],
+            },
+            ctx,
+            "step_top",
+        )
+        self.assertEqual(
+            top["derivation"]["semantics"],
+            {
+                "row_operation": "ordered_prefix",
+                "order_by": ["id DESC"],
+                "top_k": 1,
+                "column_operation": "project",
+                "projected_columns": ["first_name"],
+            },
+        )
+
+        people_names, _ = execute_tool(
+            harness,
+            "project",
+            {"table": "people", "expressions": ["first_name AS value"]},
+            ctx,
+            "step_people_names",
+        )
+        badge_names, _ = execute_tool(
+            harness,
+            "project",
+            {"table": "badges", "expressions": ["badge AS value"]},
+            ctx,
+            "step_badge_names",
+        )
+        combined, _ = execute_tool(
+            harness,
+            "set_op",
+            {
+                "left": people_names["table"],
+                "right": badge_names["table"],
+                "op": "union_all",
+            },
+            ctx,
+            "step_set",
+        )
+        self.assertEqual(
+            combined["derivation"]["semantics"],
+            {
+                "row_operation": "set",
+                "column_operation": "align_by_position",
+                "operation": "union_all",
+                "duplicate_semantics": "preserve",
+            },
+        )
+        self.assertNotIn("advice", json.dumps(ctx["environment"].snapshot()))
+        self.assertNotIn("latest_structural_feedback", ctx["environment"].snapshot())
 
 
 if __name__ == "__main__":

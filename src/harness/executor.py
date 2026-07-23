@@ -93,6 +93,22 @@ class Harness:
     def rows(self, table: str) -> list[tuple]:
         return self.conn.execute(self._sql(table)).fetchall()
 
+    def table_columns(self, table: str) -> list[str]:
+        """Return exact logical columns for a source or derived relation handle."""
+        return self._cols(table)
+
+    def count_null_rows(self, table: str, column: str) -> int:
+        """Count output rows where one exact/uniquely resolvable logical column is NULL."""
+        columns = self._cols(table)
+        resolved = self._resolve_col(columns, column)
+        if resolved not in columns:
+            raise ValueError(
+                f"unknown column {column!r} for {table!r}; available columns: {columns}"
+            )
+        return self.conn.execute(
+            f"SELECT COUNT(*) FROM {self._src(table)} WHERE {_qid(resolved)} IS NULL"
+        ).fetchone()[0]
+
     def available_tables(self) -> list[str]:
         return sorted(self.views)
 

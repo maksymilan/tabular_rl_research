@@ -111,18 +111,20 @@ class RollingLegalHistoryTests(unittest.TestCase):
         )
         self.assertNotIn('"orders.id"', compact)
 
-    def test_structural_feedback_survives_compact_rolling_observation(self):
+    def test_table_derivation_is_not_duplicated_in_compact_rolling_observation(self):
         observation = (
             '{"step_id":"step_2","status":"success","output":'
             '{"table":"group_001","kind":"group","columns":["team","n"],'
-            '"row_count":2,"structural_feedback":{"type":"aggregate_shape",'
-            '"row_grain":["team"],"layout":"one_row_per_group",'
-            '"count_semantics":{"n":"input_rows"}}}}'
+            '"row_count":2,"derivation":{"schema":"relation-derivation-v1",'
+            '"operator":"group_aggregate","inputs":[{"kind":"table","role":"input",'
+            '"ref":"items"}],"semantics":{"row_operation":"aggregate",'
+            '"column_operation":"group_and_compute","row_grain":["team"],'
+            '"layout":"rows","aggregations":[]}}}}'
         )
         compact = compact_resident_observation(observation)
-        self.assertIn('"structural_feedback"', compact)
-        self.assertIn('"row_grain":["team"]', compact)
-        self.assertIn('"count_semantics":{"n":"input_rows"}', compact)
+        self.assertNotIn('"derivation"', compact)
+        self.assertIn('"table":"group_001"', compact)
+        self.assertIn("resident_in_current_environment_state", compact)
 
     def test_current_state_compacts_join_columns_without_changing_handle(self):
         state = {
@@ -135,6 +137,25 @@ class RollingLegalHistoryTests(unittest.TestCase):
                         "orders.id", "orders.customer_id", "customers.id", "customers.name",
                     ],
                     "row_count": 2,
+                    "derivation": {
+                        "schema": "relation-derivation-v1",
+                        "operator": "join_tables",
+                        "inputs": [
+                            {"kind": "table", "role": "base", "ref": "orders"},
+                            {"kind": "table", "role": "joined", "ref": "customers"},
+                        ],
+                        "semantics": {
+                            "row_operation": "join",
+                            "column_operation": "concatenate_namespaced",
+                            "edges": [{
+                                "index": 0,
+                                "input": "customers",
+                                "namespace": "customers",
+                                "join_type": "inner",
+                                "on": [{"left": "orders.customer_id", "right": "id"}],
+                            }],
+                        },
+                    },
                 },
             },
             "values": {},
@@ -157,6 +178,8 @@ class RollingLegalHistoryTests(unittest.TestCase):
             rendered,
         )
         self.assertNotIn('"orders.id"', rendered)
+        self.assertIn('"schema":"relation-derivation-v1"', rendered)
+        self.assertIn('"operator":"join_tables"', rendered)
         self.assertIn("columns", state["tables"]["join_001"])
 
     def test_plan_evidence_keeps_grounded_identity_without_duplicating_output(self):

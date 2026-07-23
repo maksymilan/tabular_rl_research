@@ -9,6 +9,7 @@ facts; this layer only organizes what has already been exposed to the model:
 - schemas observed through describe_table;
 - column domains observed through inspect_column;
 - bounded row reads observed through read_subtable.
+- fact-only relation derivation metadata bound to each derived table handle.
 
 The same updater is used by offline trajectory emission and online rollout so the
 SFT text and the RL/eval context do not drift.
@@ -17,6 +18,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
+
+from relation_derivation import (
+    SUPPORTED_TABLE_OPERATORS,
+    validate_relation_derivation,
+)
 
 
 class EnvironmentStateError(ValueError):
@@ -115,7 +121,6 @@ class EnvironmentState:
         self.plan_order: list[str] = []
         self.tables: dict[str, dict] = {}
         self.values: dict[str, dict] = {}
-        self.latest_structural_feedback: dict | None = None
         for table in self.catalog.get("tables", []):
             name = table.get("table_name")
             if not name:
@@ -128,6 +133,7 @@ class EnvironmentState:
                 "reads": [],
                 "created_by": None,
                 "columns": None,
+                "derivation": None,
             }
 
     def snapshot(self) -> dict:
@@ -159,12 +165,7 @@ class EnvironmentState:
             out = {k: deepcopy(v) for k, v in table.items()
                    if v not in (None, {}, [])}
             tables[name] = out
-        snapshot = {"plan": plan, "tables": tables, "values": deepcopy(self.values)}
-        if self.latest_structural_feedback is not None:
-            snapshot["latest_structural_feedback"] = deepcopy(
-                self.latest_structural_feedback
-            )
-        return snapshot
+        return {"plan": plan, "tables": tables, "values": deepcopy(self.values)}
 
     # ---- plan tool ----
     def apply_plan_ops(self, ops: list[dict], step_id: str,
@@ -301,22 +302,24 @@ class EnvironmentState:
 
         table_name = output.get("table")
         if table_name:
-            feedback = output.get("structural_feedback")
-            self.latest_structural_feedback = (
-                {
-                    "from_step": step_id,
-                    "tool": tool,
-                    "table": table_name,
-                    "feedback": deepcopy(feedback),
-                }
-                if isinstance(feedback, dict)
-                else None
-            )
+            derivation = output.get("derivation")
+            if tool in SUPPORTED_TABLE_OPERATORS and not isinstance(derivation, dict):
+                raise EnvironmentStateError(
+                    f"{tool} table output requires validated relation derivation metadata"
+                )
+            if isinstance(derivation, dict):
+                validate_relation_derivation(
+                    derivation,
+                    output_columns=output.get("columns"),
+                )
             entry = self._ensure_table(table_name)
             entry["kind"] = output.get("kind", entry.get("kind", "derived"))
             entry["created_by"] = step_id
             entry["columns"] = deepcopy(output.get("columns"))
             entry["row_count"] = output.get("row_count", entry.get("row_count"))
+            entry["derivation"] = (
+                deepcopy(derivation) if isinstance(derivation, dict) else None
+            )
             if output.get("rows"):
                 self._upsert_read(entry, {
                     "from_step": step_id,
@@ -347,6 +350,7 @@ class EnvironmentState:
                 "reads": [],
                 "created_by": None,
                 "columns": None,
+                "derivation": None,
             }
         return self.tables[key]
 
