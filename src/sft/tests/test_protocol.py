@@ -8,10 +8,62 @@ from pathlib import Path
 SFT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SFT_DIR))
 
-from protocol import ProtocolError, parse_assistant, parse_assistant_strict  # noqa: E402
+from protocol import (  # noqa: E402
+    PROTOCOL_VERSION,
+    SYSTEM_PROMPT,
+    ProtocolError,
+    parse_assistant,
+    parse_assistant_strict,
+    tool_output_message,
+)
 
 
 class ProtocolParseTests(unittest.TestCase):
+    def test_current_prompt_has_canonical_calls_and_exact_final_shape(self):
+        self.assertEqual(PROTOCOL_VERSION, "version11")
+        for tool in (
+            "condition_filter", "project", "join_tables", "group_aggregate",
+            "set_op", "answer_from_context",
+        ):
+            self.assertIn(f'"tool":"{tool}"', SYSTEM_PROMPT)
+        self.assertIn("all cited rows and columns are scored", SYSTEM_PROMPT)
+        self.assertIn("project first", SYSTEM_PROMPT)
+        self.assertIn('"base":"orders"', SYSTEM_PROMPT)
+        self.assertIn('"left":"orders.customer_id"', SYSTEM_PROMPT)
+        self.assertIn("column_namespaces", SYSTEM_PROMPT)
+        self.assertNotIn("Call this first", SYSTEM_PROMPT)
+        self.assertIn("A simple direct task may omit it", SYSTEM_PROMPT)
+
+    def test_tool_output_compacts_contiguous_logical_namespaces(self):
+        message = tool_output_message(
+            "step_2",
+            {
+                "table": "join_001",
+                "kind": "join",
+                "columns": ["orders.id", "orders.customer_id", "customers.id", "customers.name"],
+                "row_count": 4,
+            },
+        )
+        self.assertNotIn('"columns":["orders.id"', message)
+        self.assertIn(
+            '"column_namespaces":{"orders":["id","customer_id"],'
+            '"customers":["id","name"]}',
+            message,
+        )
+
+    def test_tool_output_keeps_mixed_projection_order_flat(self):
+        message = tool_output_message(
+            "step_3",
+            {
+                "table": "project_002",
+                "kind": "project",
+                "columns": ["orders.id", "count"],
+                "row_count": 1,
+            },
+        )
+        self.assertIn('"columns":["orders.id","count"]', message)
+        self.assertNotIn("column_namespaces", message)
+
     def test_parse_standard_tool_call(self):
         think, tool, args = parse_assistant(
             '<think>Count rows.</think>\n'
@@ -92,6 +144,57 @@ class ProtocolParseTests(unittest.TestCase):
                 '<think>Join.</think><tool_call>{"tool":"join_tables",'
                 '"arguments":{"left":"a","right":"b","on":[{"left":"id","right":"id"}]}}</tool_call>'
             )
+        with self.assertRaisesRegex(ProtocolError, "legacy arguments"):
+            parse_assistant_strict(
+                '<think>Join.</think><tool_call>{"tool":"join_tables","arguments":'
+                '{"tables":["a","b"],"on":[[{"left":"id","right":"id"}]]}}</tool_call>'
+            )
+
+    def test_version5_join_shape_and_replay_compatibility(self):
+        _, tool, args = parse_assistant_strict(
+            '<think>Join the connected component.</think><tool_call>{"tool":"join_tables",'
+            '"arguments":{"base":"orders","joins":[{"table":"customers","on":'
+            '[{"left":"orders.customer_id","right":"id"}]},{"table":"regions","on":'
+            '[{"left":"customers.region_id","right":"id"}]}]}}</tool_call>'
+        )
+        self.assertEqual(tool, "join_tables")
+        self.assertEqual(args["joins"][1]["table"], "regions")
+
+        _, replay_tool, replay_args = parse_assistant(
+            '<tool_call>{"tool":"join_tables","arguments":{"tables":["a","b"],'
+            '"on":[[{"left":"id","right":"id"}]],"prefixes":["A","B"]}}</tool_call>'
+        )
+        self.assertEqual(replay_tool, "join_tables")
+        self.assertEqual(replay_args["prefixes"], ["A", "B"])
+
+    def test_version5_join_requires_unambiguous_namespaces(self):
+        with self.assertRaisesRegex(ProtocolError, "semantic base_role/role"):
+            parse_assistant_strict(
+                '<think>Self join.</think><tool_call>{"tool":"join_tables","arguments":'
+                '{"base":"employees","joins":[{"table":"employees","on":'
+                '[{"left":"employees.manager_id","right":"id"}]}]}}</tool_call>'
+            )
+        _, _, args = parse_assistant_strict(
+            '<think>Self join with semantic roles.</think><tool_call>{"tool":"join_tables",'
+            '"arguments":{"base":"employees","base_role":"employee","joins":'
+            '[{"table":"employees","role":"manager","on":'
+            '[{"left":"employee.manager_id","right":"id"}]}]}}</tool_call>'
+        )
+        self.assertEqual(args["base_role"], "employee")
+
+    def test_version5_join_rejects_noncanonical_edge_identifiers(self):
+        with self.assertRaisesRegex(ProtocolError, "known_relation.column"):
+            parse_assistant_strict(
+                '<think>Join.</think><tool_call>{"tool":"join_tables","arguments":'
+                '{"base":"a","joins":[{"table":"b","on":[{"left":"id","right":"id"}]}]}}'
+                '</tool_call>'
+            )
+        with self.assertRaisesRegex(ProtocolError, "bare column"):
+            parse_assistant_strict(
+                '<think>Join.</think><tool_call>{"tool":"join_tables","arguments":'
+                '{"base":"a","joins":[{"table":"b","on":'
+                '[{"left":"a.id","right":"b.id"}]}]}}</tool_call>'
+            )
 
     def test_strict_parser_rejects_unbounded_read_limit(self):
         with self.assertRaisesRegex(ProtocolError, "integer from 1 to 20"):
@@ -105,6 +208,14 @@ class ProtocolParseTests(unittest.TestCase):
         )
         self.assertEqual(tool, "read_subtable")
         self.assertEqual(args["limit"], 20)
+
+    def test_strict_parser_rejects_retired_filter_preview_argument(self):
+        with self.assertRaisesRegex(ProtocolError, "not valid in new episodes"):
+            parse_assistant_strict(
+                '<think>Filter.</think><tool_call>{"tool":"condition_filter",'
+                '"arguments":{"table":"items","conditions":{"column":"id","op":">",'
+                '"value":1},"preview_k":5}}</tool_call>'
+            )
 
 
 if __name__ == "__main__":

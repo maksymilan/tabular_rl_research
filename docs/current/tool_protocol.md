@@ -1,4 +1,4 @@
-# Current Trajectory Protocol (v2i-state-only-join-feedback-r2 / v3)
+# Current Trajectory Protocol (version11)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -67,7 +67,32 @@ fields.
 
 ## Current Tool Set
 
-The current v2i tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
+Public version mapping:
+
+- `version1`: the former `v2i-state-only-join-feedback-r2` contract;
+- `version2`: canonical calls and exact final-answer shape;
+- `version3`: precise DeepSeek transport feedback, stable projected join-column names, and a
+  canonical multi-table join call;
+- `version4`: provider carrier failures are explicitly counted against the
+  protocol-error budget rather than argument-validation errors;
+- `version5`: joins use `base + joins[]`, flat `relation.column` output names,
+  and semantic roles only for repeated relations;
+- `version6`: keeps the version5 action shape and groups wide dotted columns as
+  `column_namespaces` in model-visible context without changing canonical harness snapshots;
+- `version7`: makes filters, projection expressions, grouping, and ordering consume those logical
+  columns consistently, with safe unique-bare resolution;
+- `version8`: gives a provider exactly one API-facing response envelope and
+  renders bounded assistant history in that same carrier, while retaining the canonical stored
+  `<think>` + `<tool_call>` action;
+- `version9`: explicitly enables DeepSeek thinking mode, fixes reasoning effort,
+  and audits the request controls plus returned provider identity metadata;
+- `version10`: constrains provider-visible actions with JSON Output and wraps the unchanged returned
+  JSON in the internal canonical `<tool_call>` envelope;
+- `version11`: current contract; removes the remaining generic visible-`<tool_call>` wording from
+  DeepSeek-facing generation and retry instructions, leaving one raw-JSON visible contract;
+- future changes increment only the integer (`version12`, `version13`, ...).
+
+The current version11 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
 - `plan`
@@ -81,23 +106,42 @@ The current v2i tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 - `read_subtable`
 - `answer_from_context`
 
+The full system prompt includes one concise canonical JSON call for each complex operation family:
+filter, projection/computed column, join, grouped/scalar aggregation, set operation, table answer,
+and scalar answer. These examples use only the current public fields.
+
+For a row-valued terminal answer, the cited evidence table is scored as the answer. Its rows,
+columns, and column order must match the requested output exactly. `read_subtable(columns=...)` only
+limits observation and does not change table shape. If helper columns remain, the model must call
+`project` before `answer_from_context(evidence={"table": ...}, answer=[])`. For scalar answers, use
+`evidence=null` and `answer=[value]`; think/reason text cannot repair answer data.
+
 `read_subtable.limit` is an integer in `1..20`. An out-of-range value is an explicit
 `argument_validation_error`; the harness never clamps it. In bounded rolling mode, prior successful
 actions retain compact result summaries while full factual payloads remain in resident state.
 
 No `add_to_memory` tool exists in v2c-plan. No reflection or invalidate tool exists.
 
-### Join Identifier Rule (v2i Compatibility)
+### Join Identifier Rule (version11; unchanged from version8)
 
-`join_tables.on` uses model-facing column identifiers, not SQL implementation aliases. Never emit
-`L.` / `R.` or `table.column` inside `on` edges. With `prefixes=[P1,P2,...]`, the first edge may use
-`P1__column` on its left side even though the source SQL column is physically bare at that instant;
-the harness maps this documented first-edge form exactly. The edge's right key is the bare column of
-the next table. On later folds, left keys use the actual accumulated `prefix__column` names.
+`join_tables(base, joins, base_role?)` joins a connected component in one model action. Every
+`joins[]` item attaches exactly one new table. Its `on.left` values are exact already-introduced
+logical columns (`relation.column`); its `on.right` values are bare columns of the new table.
+The default namespace is the visible source table or handle name. `base_role` and item `role` are
+used only to disambiguate repeated relations such as employee/manager.
 
 Join failures report both the referenced table schemas and this model-facing identifier rule. The
-harness does not strip arbitrary aliases or invent prefixes to rescue an invalid model action.
-The proposed v2j dotted-name migration in `canonical_execution_contract.md` is not active in v2i.
+harness does not strip arbitrary SQL aliases or invent roles to rescue an invalid model action.
+Output columns stay flat across the full component (`orders.id`, not `join_003.orders.id`), and
+projection remains a separate tool action.
+
+For context efficiency, a derived handle may render these flat names as
+`column_namespaces={"orders":["id",...], ...}`. This is lossless model-visible compression:
+`orders` remains the logical namespace for subsequent column arguments even when the table argument
+is a handle such as `join_003`. The canonical resident state and replay record retain full names.
+Downstream tools quote exact dotted names even inside scalar expressions. A bare suffix is accepted
+only when it maps to one available logical column; joins themselves still require the exact
+namespace-qualified left key.
 
 ## Plan Status
 

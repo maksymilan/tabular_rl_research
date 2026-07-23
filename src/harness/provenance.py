@@ -28,8 +28,14 @@ PERCEPTION_TOOLS = frozenset({"describe_table", "inspect_column", "read_subtable
 
 
 def _base_col(col):
-    """Strip a join prefix: 'T2__Time_of_day' -> 'Time_of_day' (full lineage回溯 is a V2c concern)."""
-    return col.split("__", 1)[-1] if isinstance(col, str) and "__" in col else col
+    """Reduce a model-facing join column to its source-column name for grounding comparisons."""
+    if not isinstance(col, str):
+        return col
+    if "__" in col:
+        return col.split("__", 1)[-1]
+    if "." in col:
+        return col.rsplit(".", 1)[-1]
+    return col
 
 
 def _cond_value_refs(cond):
@@ -64,8 +70,20 @@ def build_references(tool: str, args: dict, resolve_step) -> list[dict]:
         v = args.get(key)
         if v is None:
             continue
-        # An N-way join carries its inputs as a list under `tables`; a data edge per input.
+        # Historical N-way joins carry inputs as a list under `tables`; emit one edge per input.
         for item in (v if isinstance(v, list) else [v]):
+            sid = resolve_step(item)
+            if sid:
+                refs.append({"type": "data", "step": sid, "role": "table", "target": {"handle": item}})
+            else:
+                refs.append({"type": "data", "source": item, "role": "table", "target": {"table": item}})
+    if tool == "join_tables":
+        for join in args.get("joins") or []:
+            if not isinstance(join, dict):
+                continue
+            item = join.get("table")
+            if not isinstance(item, str):
+                continue
             sid = resolve_step(item)
             if sid:
                 refs.append({"type": "data", "step": sid, "role": "table", "target": {"handle": item}})
@@ -97,6 +115,10 @@ def _table_refs(tool: str, args: dict) -> set[str]:
         for item in value if isinstance(value, list) else [value]:
             if isinstance(item, str):
                 refs.add(item)
+    if tool == "join_tables":
+        for join in args.get("joins") or []:
+            if isinstance(join, dict) and isinstance(join.get("table"), str):
+                refs.add(join["table"])
     return refs
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -208,6 +209,33 @@ def action_signature(tool: str, arguments: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()[:16]
 
 
+def _remap_replay_handles(value: Any, handle_map: dict[str, str]) -> Any:
+    """Translate recorded online handles to handles allocated during legal-only replay.
+
+    Recoverable execution failures are retained as audit events but omitted from the legal SFT
+    step list. Some executor failures consume an internal handle number before raising, so a later
+    online handle can be ``project_006`` while legal-only replay allocates ``project_005``. Keep
+    model-authored calls unchanged in the stored trajectory, but translate exact table references
+    and logical ``handle.column`` namespaces at replay time.
+    """
+    if isinstance(value, list):
+        return [_remap_replay_handles(item, handle_map) for item in value]
+    if isinstance(value, dict):
+        return {key: _remap_replay_handles(item, handle_map) for key, item in value.items()}
+    if not isinstance(value, str) or not handle_map:
+        return value
+    if value in handle_map:
+        return handle_map[value]
+    rendered = value
+    for recorded, replayed in sorted(handle_map.items(), key=lambda item: -len(item[0])):
+        rendered = re.sub(
+            rf"(?<![A-Za-z0-9_]){re.escape(recorded)}(?=\.)",
+            replayed,
+            rendered,
+        )
+    return rendered
+
+
 def _table_ref(arguments: dict[str, Any], ctx: dict[str, Any]) -> str | None:
     ref = arguments.get("table")
     if not isinstance(ref, str):
@@ -357,6 +385,7 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
         final_arguments: dict[str, Any] | None = None
         final_step_id: str | None = None
         replay_correct = False
+        replay_handle_map: dict[str, str] = {}
         unsupported_action_literals: list[dict[str, Any]] = []
         task_text = "\n".join(filter(None, [
             trajectory.get("question"),
@@ -390,9 +419,10 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
             step_id = step["step_id"]
             call = step["tool_call"]
             tool = call["tool"]
-            arguments = call.get("arguments") or {}
+            authored_arguments = call.get("arguments") or {}
+            arguments = _remap_replay_handles(authored_arguments, replay_handle_map)
             before = ctx["environment"].snapshot()
-            signature = action_signature(tool, arguments)
+            signature = action_signature(tool, authored_arguments)
             repeated = signature in seen_signatures
             seen_signatures.add(signature)
             input_table = _table_ref(arguments, ctx)
@@ -429,6 +459,10 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
                         })
                 after = ctx["environment"].snapshot()
                 if output_table:
+                    recorded_output = step.get("tool_output") or {}
+                    recorded_handle = recorded_output.get("table")
+                    if isinstance(recorded_handle, str):
+                        replay_handle_map[recorded_handle] = output_table
                     created.add(output_table)
                     table_history.append((step_id, output_table, "produced_table"))
                     _lineage_for_output(tool, input_table, output_table, lineages)
@@ -675,6 +709,7 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
 
         return features, {
             "replay_correct": replay_correct,
+            "replay_handle_map": replay_handle_map,
             "grounding_method": grounding_method,
             "grounding_handle": grounding_handle,
             "grounding_handles": grounding_handles,

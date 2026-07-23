@@ -22,14 +22,16 @@ import json
 import math
 import os
 import re
+from copy import deepcopy
 
 # v0 action space = exactly the tools present in the compiled Spider data. Perception / fuzzy tools
 # (inspect_column, semantic_match, ...) enter with the v1 data; exposing unlearned tools at eval
 # time only invites illegal calls.
 TOOL_SPECS: dict[str, str] = {
     "plan":
-        'plan(ops) -> update the task plan managed by the harness. Call this first to split the '
-        'question into subgoals, and later to add/update/delete subgoals as observations change. '
+        'plan(ops) -> update the task plan managed by the harness. For a multi-step task, call it '
+        'early to split the question into subgoals, and later add/update/delete subgoals as '
+        'observations change. A simple direct task may omit it. '
         'ops: [{"op": create|add|update|delete, "id": "...", "goal": "...", '
         '"status": pending|in_progress|done|blocked, "evidence": "step_k"}]. '
         'A plan item has only goal/status/evidence: goal is the intended subtask, status is progress, '
@@ -37,7 +39,8 @@ TOOL_SPECS: dict[str, str] = {
         'plan state. Do NOT write result/conclusion/notes/value fields or final answer values in the '
         'plan. The plan is control state only: it cannot be used as value_ref or final-answer support.',
     "condition_filter":
-        'condition_filter(table, conditions) -> new table with the rows that satisfy `conditions`.\n'
+        'condition_filter(table, conditions, return_columns=None) -> new table with the rows that '
+        'satisfy `conditions`; return_columns optionally keeps only named output columns.\n'
         '  conditions: a predicate {"column": c, "op": o, "value": v} with op in '
         '=,!=,>,>=,<,<= | {"op":"in","values":[..]} | {"op":"between","low":x,"high":y} | '
         '{"op":"like","value":pat} | {"op":"contains","value":s} | {"op":"is_null"} | '
@@ -47,17 +50,21 @@ TOOL_SPECS: dict[str, str] = {
         'combine with {"and":[..]}, {"or":[..]}, {"not": ..}.',
     "project":
         'project(table, expressions) -> new table with the given columns. `expressions` is a list '
-        'of column names or SQL scalar expressions, optionally with "expr AS alias".',
+        'of column names or SQL scalar expressions, optionally with "expr AS alias". Exact '
+        'namespace.column identifiers remain valid inside expressions; a bare downstream column '
+        'name is accepted only when it identifies exactly one available column.',
     "join_tables":
-        'join_tables(tables, on, join_types="inner", prefixes=None) -> ONE new table joining several '
-        'tables along a path in a single step. tables: ordered list [T1, T2, .., TN] of source names '
-        'or earlier step handles. on: a list of length N-1 where on[k] joins tables[k+1] to the tables '
-        'already joined, each entry a list [{"left": key_in_accumulated, "right": key_in_next}, ..]. '
-        'prefixes: optional COLUMN prefixes [P1, .., PN], not table names; when set, each table i\'s columns are renamed to '
-        '"Pi__<col>" so shared / self-join names stay distinct, and `on[k].left` refers to an '
-        'accumulated column by its "Pi__<col>" name. join_types: inner|left|cross for all folds, or a '
-        'list per fold. Put a whole consecutive join chain in ONE call; joins in different subqueries '
-        'stay separate calls.',
+        'join_tables(base, joins, base_role=None) -> ONE new table for a connected join component. '
+        '`base` is a source table or earlier handle. `joins` is an ordered list of '
+        '{"table": T, "on": [{"left": "known_relation.column", "right": "new_column"}], '
+        '"type": "inner|left|cross"?, "role": "semantic_role"?}. `left` must be an exact logical '
+        'column already introduced; `right` is a bare column of the newly attached table. `type` '
+        'defaults to inner; cross uses on=[]. Output columns use a flat relation.column namespace, '
+        'never recursively nest a join handle. Derived-handle state may group exact names as '
+        'column_namespaces={relation:[column,..]}; reconstruct each as relation.column and never '
+        'prefix it with the derived handle. Omit roles normally; use `base_role`/`role` only when '
+        'the same relation occurs more than once (self-join). Put a whole consecutive join chain in '
+        'ONE call; use project separately if the result must be narrowed.',
     "group_aggregate":
         'group_aggregate(table, group_by, aggregations, passthrough=None) -> new table grouped by '
         '`group_by` (list of columns; [] = whole table as one group, used for scalar count/sum/'
@@ -80,14 +87,16 @@ TOOL_SPECS: dict[str, str] = {
         'column. Use it to ground a filter literal (does "France" exist? what is the exact spelling?) '
         'before condition_filter.',
     "read_subtable":
-        'read_subtable(table, limit=20) -> up to 20 actual rows of a table (limit must be 1..20). Tool results otherwise '
+        'read_subtable(table, limit=20, columns=None) -> up to 20 actual rows of a table '
+        '(limit must be 1..20); columns optionally limits which columns are observed. Tool results otherwise '
         'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
-        'the evidence rows before answering.',
+        'the evidence rows before answering. Reading columns does not project or change the table.',
     "answer_from_context":
         'answer_from_context(evidence, answer=[], reason="") -> TERMINAL. evidence: {"table": name} '
-        'for a table holding the answer rows, or null for a scalar. For table answers, cite the table '
-        'and keep answer empty or as a short preview; do NOT handwrite long row lists because the '
-        'harness reads the cited evidence table. For scalar answers, put the scalar in answer.',
+        'for a table holding the exact answer rows and columns, or null for a scalar. For table '
+        'answers, cite an exact-shape table and set answer=[]; all cited rows and columns are scored. '
+        'Use project first when helper columns remain or column order is wrong. For scalar answers, '
+        'use evidence=null and answer=[value]. think/reason text cannot repair answer data.',
 }
 
 TOOLS = set(TOOL_SPECS)
@@ -98,7 +107,7 @@ LEGACY_TOOLS = {"aggregate"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "v2i-state-only-join-feedback-r2"   # bump when specs, rendering, or the memory model change
+PROTOCOL_VERSION = "version11"  # public tool versions now increment numerically: version1, version2, ...
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 
@@ -109,23 +118,54 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "plan": ({"ops"}, set()),
     "condition_filter": ({"table", "conditions"}, {"return_columns", "preview_k"}),
     "project": ({"table", "expressions"}, set()),
-    "join_tables": (set(), {"tables", "on", "join_types", "prefixes",
-                            "left", "right", "join_type", "left_prefix", "right_prefix", "return_columns"}),
+    "join_tables": (set(), {"base", "joins", "base_role",
+                            "tables", "on", "join_types", "prefixes",
+                            "left", "right", "join_type", "left_prefix", "right_prefix",
+                            "return_columns"}),
     "group_aggregate": ({"table", "group_by", "aggregations"}, {"passthrough"}),
     "aggregate": ({"table", "column", "op"}, set()),
     "extreme_value_select": ({"table", "order_by"}, {"top_k", "return_columns"}),
     "set_op": ({"left", "right", "op"}, set()),
-    "derive_column": ({"table", "new_column", "expression"}, set()),
     "describe_table": ({"tables"}, set()),
     "inspect_column": ({"table", "column"}, {"top_k"}),
     "read_subtable": ({"table"}, {"limit", "columns"}),
     "answer_from_context": (set(), {"answer", "evidence", "reason"}),
 }
 
-# Kept only because old compiled trajectories predate the n-way public join shape. These fields
-# are valid for replay, never for a model action in a new episode.
+CANONICAL_CALL_COOKBOOK = (
+    "CANONICAL CALLS (copy these argument shapes; replace names and values only)\n"
+    'Filter: {"tool":"condition_filter","arguments":{"table":"people","conditions":'
+    '{"and":[{"column":"city","op":"=","value":"Paris"},{"column":"age","op":">=","value":18}]}}}\n'
+    'Project exact final columns: {"tool":"project","arguments":{"table":"filter_001",'
+    '"expressions":["name","email"]}}\n'
+    'Compute a column with project: {"tool":"project","arguments":{"table":"sales",'
+    '"expressions":["product","price * quantity AS revenue"]}}\n'
+    'Join a three-table path: {"tool":"join_tables","arguments":'
+    '{"base":"orders","joins":['
+    '{"table":"customers","on":[{"left":"orders.customer_id","right":"id"}]},'
+    '{"table":"regions","on":[{"left":"customers.region_id","right":"id"}]}]}}\n'
+    'Self-join with roles: {"tool":"join_tables","arguments":{"base":"employees",'
+    '"base_role":"employee","joins":[{"table":"employees","role":"manager",'
+    '"on":[{"left":"employee.manager_id","right":"id"}]}]}}\n'
+    'Aggregate: {"tool":"group_aggregate","arguments":{"table":"filter_001","group_by":["department"],'
+    '"aggregations":[{"op":"sum","column":"salary","as":"total_salary"}]}}\n'
+    'Scalar aggregate: {"tool":"group_aggregate","arguments":{"table":"filter_001","group_by":[],'
+    '"aggregations":[{"op":"count","column":"*","as":"count"}]}}\n'
+    'Set operation after aligning both inputs with project: {"tool":"set_op","arguments":'
+    '{"left":"project_001","right":"project_002","op":"union"}}\n'
+    'Table answer: {"tool":"answer_from_context","arguments":{"evidence":{"table":"project_003"},'
+    '"answer":[],"reason":"The evidence table has exactly the requested rows and columns."}}\n'
+    'Scalar answer: {"tool":"answer_from_context","arguments":{"evidence":null,"answer":[42],'
+    '"reason":"The grounded scalar result is 42."}}\n'
+)
+
+# Historical version1-version4 join fields remain valid only when replaying old artifacts.
 _MODEL_FORBIDDEN_ARGUMENTS: dict[str, set[str]] = {
-    "join_tables": {"left", "right", "join_type", "left_prefix", "right_prefix"},
+    "condition_filter": {"preview_k"},
+    "join_tables": {
+        "tables", "on", "join_types", "prefixes", "return_columns",
+        "left", "right", "join_type", "left_prefix", "right_prefix",
+    },
 }
 
 
@@ -144,6 +184,87 @@ def validate_arguments(tool: str, args: dict) -> None:
         raise ProtocolError(f"{tool}: unexpected arguments {sorted(extra)}")
     if tool == "answer_from_context" and "answer" not in keys and "evidence" not in keys:
         raise ProtocolError('answer_from_context requires at least "evidence" or "answer"')
+    if tool == "join_tables":
+        new_form = "base" in keys or "joins" in keys or "base_role" in keys
+        nway_v4 = "tables" in keys
+        binary_legacy = "left" in keys or "right" in keys
+        if sum((new_form, nway_v4, binary_legacy)) != 1:
+            raise ProtocolError(
+                "join_tables requires exactly one compatible shape: base+joins, tables+on, "
+                "or left+right+on"
+            )
+        required_shape = (
+            {"base", "joins"} if new_form
+            else {"tables", "on"} if nway_v4
+            else {"left", "right", "on"}
+        )
+        missing_shape = sorted(required_shape - keys)
+        if missing_shape:
+            raise ProtocolError(f"join_tables: missing arguments {missing_shape}")
+
+
+def _validate_model_join(args: dict) -> None:
+    base = args.get("base")
+    joins = args.get("joins")
+    if not isinstance(base, str) or not base.strip():
+        raise ProtocolError("join_tables.base must be a non-empty table or handle")
+    if not isinstance(joins, list) or not joins:
+        raise ProtocolError("join_tables.joins must be a non-empty list")
+
+    role_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+    def namespace(table: str, role, where: str) -> str:
+        if role is not None:
+            if not isinstance(role, str) or not role_pattern.fullmatch(role):
+                raise ProtocolError(
+                    f"{where} must be an identifier containing only letters, digits, and underscores"
+                )
+            return role
+        return table
+
+    namespaces = [namespace(base, args.get("base_role"), "join_tables.base_role")]
+    for index, item in enumerate(joins):
+        where = f"join_tables.joins[{index}]"
+        if not isinstance(item, dict):
+            raise ProtocolError(f"{where} must be an object")
+        extra = sorted(set(item) - {"table", "on", "type", "role"})
+        missing = sorted({"table", "on"} - set(item))
+        if missing:
+            raise ProtocolError(f"{where}: missing fields {missing}")
+        if extra:
+            raise ProtocolError(f"{where}: unexpected fields {extra}")
+        table = item.get("table")
+        if not isinstance(table, str) or not table.strip():
+            raise ProtocolError(f"{where}.table must be a non-empty table or handle")
+        join_type = item.get("type", "inner")
+        if join_type not in {"inner", "left", "cross"}:
+            raise ProtocolError(f"{where}.type must be inner, left, or cross")
+        edges = item.get("on")
+        if not isinstance(edges, list):
+            raise ProtocolError(f"{where}.on must be a list")
+        if join_type != "cross" and not edges:
+            raise ProtocolError(f"{where}.on must contain at least one equality edge")
+        if join_type == "cross" and edges:
+            raise ProtocolError(f"{where}.on must be [] for a cross join")
+        for edge_index, edge in enumerate(edges):
+            edge_where = f"{where}.on[{edge_index}]"
+            if not isinstance(edge, dict) or set(edge) != {"left", "right"}:
+                raise ProtocolError(f"{edge_where} must contain exactly left and right")
+            left, right = edge.get("left"), edge.get("right")
+            if not isinstance(left, str) or "." not in left:
+                raise ProtocolError(
+                    f"{edge_where}.left must be an exact known_relation.column reference"
+                )
+            if not isinstance(right, str) or not right or "." in right:
+                raise ProtocolError(f"{edge_where}.right must be a bare column of the new table")
+        namespaces.append(namespace(table, item.get("role"), f"{where}.role"))
+    folded = [item.casefold() for item in namespaces]
+    duplicates = sorted({name for name in folded if folded.count(name) > 1})
+    if duplicates:
+        raise ProtocolError(
+            "join_tables relation namespaces must be unique; add semantic base_role/role for "
+            f"repeated relations: {duplicates}"
+        )
 
 
 def validate_model_arguments(tool: str, args: dict) -> None:
@@ -153,9 +274,7 @@ def validate_model_arguments(tool: str, args: dict) -> None:
     if forbidden:
         raise ProtocolError(f"{tool}: legacy arguments are not valid in new episodes: {forbidden}")
     if tool == "join_tables":
-        missing = sorted({"tables", "on"} - set(args))
-        if missing:
-            raise ProtocolError(f"join_tables: missing arguments {missing}")
+        _validate_model_join(args)
     if tool == "read_subtable":
         limit = args.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
@@ -181,7 +300,7 @@ SYSTEM_PROMPT = (
     "You will not receive a full transcript of old tool observations; use the state instead of "
     "repeating previous reads. A table-producing tool's state entry is only a HANDLE (table name, "
     "columns, row_count) until you call read_subtable to see rows.\n\n"
-    "TOOLS\n" + "\n".join(TOOL_SPECS.values()) + "\n\n"
+    "TOOLS\n" + "\n".join(TOOL_SPECS.values()) + "\n\n" + CANONICAL_CALL_COOKBOOK + "\n"
     "RULES\n"
     "1. Each turn, output exactly: <think>brief reasoning</think> then "
     '<tool_call>{"tool": "<name>", "arguments": {...}}</tool_call>. Nothing else.\n'
@@ -190,10 +309,13 @@ SYSTEM_PROMPT = (
     "3. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
     "4. To use a computed scalar as a threshold, set the predicate's "
     '{"value_ref": step_id} to the step that produced that scalar.\n'
-    "5. read_subtable the evidence table when row values are needed, then finish with "
-    "answer_from_context citing that table. "
-    "For row-valued answers, you may leave answer empty because the harness reads the evidence table; "
-    "do not handwrite long row lists.\n"
+    "5. For a row-valued answer, make the evidence table's rows, columns, and column order exactly "
+    "match the requested output. read_subtable only observes rows; it does not change table shape. "
+    "If extra/helper columns remain, project first, then answer_from_context with answer=[].\n"
+    "6. If a derived handle exposes column_namespaces, form exact references as namespace.column. "
+    "The handle is the table argument, never a replacement column namespace.\n"
+    "7. In downstream filters, projections, grouping, and ordering, prefer namespace.column; a "
+    "bare column is valid only when exactly one available logical column has that suffix.\n"
 )
 
 SYSTEM_PROMPT_COMPACT = (
@@ -213,11 +335,12 @@ SYSTEM_PROMPT_COMPACT = (
     "POLICY\n"
     "Inspect a text column before filtering by a literal unless that column was already inspected. "
     "Avoid repeating the same observation. Use read_subtable only when row values are needed; for "
-    "scalar aggregate answers, answer directly with evidence=null. Before a row-valued final answer, "
-    "read the evidence table and cite it; keep answer empty or short for large tables.\n\n"
+    "scalar aggregate answers, answer with evidence=null and answer=[value]. Before a row-valued "
+    "final answer, read the evidence table and cite it with answer=[]. The cited table must contain "
+    "exactly the requested rows and columns; project first if it does not.\n\n"
     "TOOLS\n"
-    "plan(ops), describe_table(tables), inspect_column(table,column,top_k?), condition_filter(table,conditions), "
-    "project(table,expressions), join_tables(tables,on,join_types?,prefixes?), "
+    "plan(ops), describe_table(tables), inspect_column(table,column,top_k?), condition_filter(table,conditions,return_columns?), "
+    "project(table,expressions), join_tables(base,joins,base_role?), "
     "group_aggregate(table,group_by,aggregations,passthrough?), "
     "extreme_value_select(table,order_by,top_k?,return_columns?), set_op(left,right,op), "
     "read_subtable(table,limit?,columns?), answer_from_context(answer,evidence,reason?).\n"
@@ -234,7 +357,7 @@ ROLLING_HISTORY_SYSTEM_SUFFIX = (
 )
 
 # This is a rolling-only ablation. It deliberately retains the public action contract and the
-# v2i join/value-reference rules that the generic compact prompt predates.
+# current join/value-reference rules that the generic compact prompt predates.
 ROLLING_SYSTEM_PROMPT_COMPACT = (
     "You are a relational table-tool agent. Solve the user question with exactly one tool action "
     "per turn.\n\n"
@@ -252,8 +375,8 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
     "returns rows.\n\n"
     "TOOLS\n"
     "plan(ops); describe_table(tables); inspect_column(table,column,top_k?); "
-    "condition_filter(table,conditions); project(table,expressions); "
-    "join_tables(tables,on,join_types?,prefixes?); "
+    "condition_filter(table,conditions,return_columns?); project(table,expressions); "
+    "join_tables(base,joins,base_role?); "
     "group_aggregate(table,group_by,aggregations,passthrough?); "
     "extreme_value_select(table,order_by,top_k?,return_columns?); set_op(left,right,op); "
     "read_subtable(table,limit?,columns?); answer_from_context(answer?,evidence?,reason?).\n\n"
@@ -262,11 +385,17 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
     "values. Inspect text domains before literal filters unless already inspected. conditions support "
     "comparisons, like, in, between, null, and/or/not; cite a scalar as value_ref:step_id or a "
     "computed table as in_table. Use existing handles rather than restarting from sources. For an "
-    "n-way join, tables are ordered and on has one edge list per newly attached table. With prefixes, "
-    "use materialized P__column names only for accumulated left keys and bare source columns for the "
-    "new right table; never emit L., R., or table.column aliases. For row answers, read the evidence "
-    "handle then call answer_from_context with that evidence and an empty/short answer; for scalar "
-    "answers cite evidence or give the scalar. The harness strictly validates and executes the action."
+    "n-way join, base starts the component and each joins item attaches one new table. Each on.left "
+    "is an exact already-visible relation.column and on.right is a bare column of the new table. "
+    "When base is a derived handle, copy on.left from its column_namespaces as namespace.column; "
+    "never invent handle.column. Use semantic roles only for repeated relations; never emit SQL "
+    "aliases such as L. or R. Downstream scalar expressions may use these exact logical columns; "
+    "the harness quotes them as single identifiers. "
+    "For row answers, read the evidence "
+    "handle then call answer_from_context with that evidence and answer=[]; for scalar "
+    "answers use evidence=null and answer=[value]. A row-answer evidence table is scored exactly: "
+    "project away helper columns and fix column order before citing it with answer=[]. think/reason "
+    "cannot repair incorrect answer data. The harness strictly validates and executes the action."
 )
 
 
@@ -315,11 +444,39 @@ def assistant_message(think: str, tool: str, arguments: dict) -> str:
             f"<tool_call>{_compact({'tool': tool, 'arguments': arguments})}</tool_call>")
 
 
+def _compact_output_columns(output: dict) -> dict:
+    """Model-visible compact form for contiguous flat logical namespaces."""
+    visible = dict(output)
+    columns = visible.get("columns")
+    if not isinstance(columns, list) or not columns:
+        return visible
+    groups: dict[str, list[str]] = {}
+    closed: set[str] = set()
+    current: str | None = None
+    for column in columns:
+        if not isinstance(column, str) or "." not in column:
+            return visible
+        namespace, name = column.split(".", 1)
+        if not namespace or not name:
+            return visible
+        if namespace != current:
+            if namespace in closed:
+                return visible
+            if current is not None:
+                closed.add(current)
+            current = namespace
+            groups[namespace] = []
+        groups[namespace].append(name)
+    visible.pop("columns", None)
+    visible["column_namespaces"] = groups
+    return visible
+
+
 def tool_output_message(step_id: str, output: dict, status: str = "success",
                         state: dict | None = None) -> str:
     """Observation envelope: a stable `step_id` (so the model can cite it as `source_step_id`),
     a status, and the tool output. Identical offline (SFT) and online (rollout)."""
-    msg = {"step_id": step_id, "status": status, "output": output}
+    msg = {"step_id": step_id, "status": status, "output": _compact_output_columns(output)}
     if state is not None:
         msg["state"] = state
     return _compact(msg)
@@ -343,9 +500,13 @@ def compact_resident_observation(observation: str) -> str:
     output = envelope.get("output")
     if not isinstance(output, dict):
         return observation
+    output = _compact_output_columns(output)
 
     summary: dict = {}
-    for key in ("table", "kind", "columns", "row_count", "column", "distinct_count", "has_null"):
+    for key in (
+        "table", "kind", "columns", "column_namespaces", "row_count",
+        "column", "distinct_count", "has_null",
+    ):
         if output.get(key) is not None:
             summary[key] = output[key]
 
@@ -390,8 +551,26 @@ def tool_error_message(step_id: str, error_type: str, message: str) -> str:
     })
 
 
+def _compact_state_columns(state: dict | None) -> dict:
+    """Compact only the model-visible rendering; canonical harness snapshots stay unchanged."""
+    visible = deepcopy(state or {"plan": [], "tables": {}, "values": {}})
+    tables = visible.get("tables")
+    if isinstance(tables, dict):
+        for name, entry in list(tables.items()):
+            if isinstance(entry, dict):
+                tables[name] = _compact_output_columns(entry)
+    for item in visible.get("plan") or []:
+        if not isinstance(item, dict):
+            continue
+        evidence = item.get("evidence")
+        if not isinstance(evidence, dict) or not isinstance(evidence.get("output"), dict):
+            continue
+        evidence["output"] = _compact_output_columns(evidence["output"])
+    return visible
+
+
 def environment_state_message(state: dict | None, last_error: dict | None = None) -> str:
-    text = "CURRENT ENVIRONMENT STATE\n" + _compact(state or {"plan": [], "tables": {}, "values": {}})
+    text = "CURRENT ENVIRONMENT STATE\n" + _compact(_compact_state_columns(state))
     if last_error:
         text += "\n\nLAST TOOL ERROR\n" + _compact(last_error)
     return text

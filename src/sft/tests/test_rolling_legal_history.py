@@ -57,7 +57,9 @@ class RollingLegalHistoryTests(unittest.TestCase):
         full = rolling_system_prompt(SYSTEM_PROMPT)
         compact = rolling_system_prompt(SYSTEM_PROMPT, compact=True)
         self.assertLess(len(compact), len(full))
-        for required in ("value_ref", "P__column", "LAST TOOL ERROR", "answer_from_context"):
+        for required in (
+            "value_ref", "relation.column", "base_role", "LAST TOOL ERROR", "answer_from_context",
+        ):
             self.assertIn(required, compact)
 
     def test_historical_rows_are_replaced_by_resident_state_pointer(self):
@@ -93,6 +95,56 @@ class RollingLegalHistoryTests(unittest.TestCase):
         self.assertIn('"returned_row_count":1', observation)
         self.assertIn("resident_in_current_environment_state", observation)
         self.assertIn("large fact", current_state)
+
+    def test_join_columns_are_compact_in_rolling_observation(self):
+        observation = (
+            '{"step_id":"step_2","status":"success","output":'
+            '{"table":"join_001","kind":"join","columns":'
+            '["orders.id","orders.customer_id","customers.id","customers.name"],'
+            '"row_count":2}}'
+        )
+        compact = compact_resident_observation(observation)
+        self.assertIn(
+            '"column_namespaces":{"orders":["id","customer_id"],'
+            '"customers":["id","name"]}',
+            compact,
+        )
+        self.assertNotIn('"orders.id"', compact)
+
+    def test_current_state_compacts_join_columns_without_changing_handle(self):
+        state = {
+            "plan": [],
+            "tables": {
+                "join_001": {
+                    "kind": "join",
+                    "created_by": "step_2",
+                    "columns": [
+                        "orders.id", "orders.customer_id", "customers.id", "customers.name",
+                    ],
+                    "row_count": 2,
+                },
+            },
+            "values": {},
+        }
+        messages = rolling_legal_history_messages(
+            "system",
+            {"tables": [], "relations": []},
+            "question",
+            state,
+            None,
+            None,
+            [],
+            4,
+        )
+        rendered = messages[-1]["content"]
+        self.assertIn('"join_001"', rendered)
+        self.assertIn(
+            '"column_namespaces":{"orders":["id","customer_id"],'
+            '"customers":["id","name"]}',
+            rendered,
+        )
+        self.assertNotIn('"orders.id"', rendered)
+        self.assertIn("columns", state["tables"]["join_001"])
 
     def test_full_observation_style_reproduces_pre_r2_history(self):
         observation = (

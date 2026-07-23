@@ -21,6 +21,12 @@ def run():
     t.check("condition_filter not_like wildcard", norm(h.rows(not_like["table_name"])) ==
             norm(h.gold("SELECT * FROM employees WHERE name NOT LIKE '%A%'")))
 
+    is_null = h.condition_filter("employees", {"column": "age", "op": "is_null"})
+    is_not_null = h.condition_filter("employees", {"column": "age", "op": "is_not_null"})
+    t.check("condition_filter normalizes null operators",
+            is_null["row_count"] == 0 and is_not_null["row_count"] == 6,
+            f"is_null={is_null} is_not_null={is_not_null}")
+
     shorthand = h.condition_filter(
         "employees",
         {"or": [{"contains": {"column": "dept", "value": "eng"}},
@@ -45,6 +51,132 @@ def run():
     t.check("group_aggregate", norm(h.rows(g["table_name"])) ==
             norm(h.gold("SELECT dept,AVG(salary) FROM employees WHERE salary>1000 GROUP BY dept")))
 
+    component = h.join_tables(
+        base="employees",
+        joins=[
+            {"table": "depts", "on": [{"left": "employees.dept", "right": "dept"}]},
+            {"table": "sales", "on": [{"left": "depts.dept", "right": "dept"}]},
+        ],
+    )
+    t.check(
+        "version5 join component uses flat stable namespaces",
+        component["columns"] == [
+            "employees.id", "employees.name", "employees.dept", "employees.salary", "employees.age",
+            "depts.dept", "depts.location", "depts.budget",
+            "sales.item", "sales.price", "sales.qty", "sales.dept",
+        ] and norm(h.rows(component["table_name"])) == norm(h.gold(
+            "SELECT e.*,d.*,s.* FROM employees e "
+            "JOIN depts d ON e.dept=d.dept JOIN sales s ON d.dept=s.dept"
+        )),
+        str(component),
+    )
+    dotted_project = h.project(component["table_name"], ["employees.name", "depts.location"])
+    t.check(
+        "project resolves exact dotted logical columns",
+        dotted_project["columns"] == ["employees.name", "depts.location"] and
+        norm(h.rows(dotted_project["table_name"])) == norm(h.gold(
+            "SELECT e.name,d.location FROM employees e "
+            "JOIN depts d ON e.dept=d.dept JOIN sales s ON d.dept=s.dept"
+        )),
+        str(dotted_project),
+    )
+    dotted_expression = h.project(
+        component["table_name"],
+        [
+            "employees.name",
+            "sales.price * sales.qty AS revenue",
+            "employees.name || ':' || sales.item AS label",
+        ],
+    )
+    t.check(
+        "project quotes dotted logical columns inside scalar expressions",
+        dotted_expression["columns"] == ["employees.name", "revenue", "label"] and
+        norm(h.rows(dotted_expression["table_name"])) == norm(h.gold(
+            "SELECT e.name,s.price*s.qty,e.name||':'||s.item FROM employees e "
+            "JOIN depts d ON e.dept=d.dept JOIN sales s ON d.dept=s.dept"
+        )),
+        str(dotted_expression),
+    )
+    unique_bare_aggregate = h.group_aggregate(
+        component["table_name"],
+        [],
+        [{"op": "sum", "column": "budget", "as": "total_budget"}],
+    )
+    t.check(
+        "downstream tools resolve a unique bare suffix from dotted logical columns",
+        h.rows(unique_bare_aggregate["table_name"]) == h.gold(
+            "SELECT SUM(d.budget) FROM employees e "
+            "JOIN depts d ON e.dept=d.dept JOIN sales s ON d.dept=s.dept"
+        ),
+        str(unique_bare_aggregate),
+    )
+    dotted_filter = h.condition_filter(
+        component["table_name"],
+        {"column": "depts.location", "op": "=", "value": "SF"},
+        return_columns=["employees.name", "sales.item"],
+    )
+    t.check(
+        "filter resolves exact dotted logical columns",
+        dotted_filter["columns"] == ["employees.name", "sales.item"] and
+        norm(h.rows(dotted_filter["table_name"])) == norm(h.gold(
+            "SELECT e.name,s.item FROM employees e "
+            "JOIN depts d ON e.dept=d.dept JOIN sales s ON d.dept=s.dept "
+            "WHERE d.location='SF'"
+        )),
+        str(dotted_filter),
+    )
+    first_component = h.join_tables(
+        base="employees",
+        joins=[{"table": "depts", "on": [{"left": "employees.dept", "right": "dept"}]}],
+    )
+    filtered_component = h.condition_filter(
+        first_component["table_name"],
+        {"column": "depts.location", "op": "=", "value": "SF"},
+    )
+    continued_component = h.join_tables(
+        base=filtered_component["table_name"],
+        joins=[{"table": "sales", "on": [{"left": "depts.dept", "right": "dept"}]}],
+    )
+    t.check(
+        "continued join preserves prior namespaces instead of nesting the base handle",
+        "employees.id" in continued_component["columns"] and
+        "depts.location" in continued_component["columns"] and
+        "sales.item" in continued_component["columns"] and
+        not any(
+            column.startswith(f"{filtered_component['table_name']}.")
+            or column.startswith(f"{first_component['table_name']}.")
+            for column in continued_component["columns"]
+        ),
+        str(continued_component),
+    )
+    self_join = h.join_tables(
+        base="employees",
+        base_role="employee",
+        joins=[{
+            "table": "employees",
+            "role": "peer",
+            "on": [{"left": "employee.dept", "right": "dept"}],
+        }],
+    )
+    t.check(
+        "version5 self join requires semantic roles and stays flat",
+        "employee.id" in self_join["columns"] and "peer.id" in self_join["columns"] and
+        not any(column.startswith("join_") for column in self_join["columns"]),
+        str(self_join),
+    )
+    try:
+        h.join_tables(
+            base="employees",
+            joins=[{
+                "table": "employees",
+                "on": [{"left": "employees.dept", "right": "dept"}],
+            }],
+        )
+        duplicate_role_rejected = False
+    except ValueError as exc:
+        duplicate_role_rejected = "semantic role" in str(exc)
+    t.check("version5 repeated relation rejects missing role", duplicate_role_rejected)
+
     j = h.join_tables("employees", "depts", [{"left": "dept", "right": "dept"}], "inner", ["name", "location"])
     t.check("join_tables", norm(h.rows(j["table_name"])) ==
             norm(h.gold("SELECT e.name,d.location FROM employees e JOIN depts d ON e.dept=d.dept")))
@@ -57,7 +189,20 @@ def run():
         return_columns=["e__name", "d__location"],
     )
     t.check("join_tables accepts n-way 2-table flat on", norm(h.rows(j_flat["table_name"])) ==
-            norm(h.gold("SELECT e.name,d.location FROM employees e JOIN depts d ON e.dept=d.dept")))
+            norm(h.gold("SELECT e.name,d.location FROM employees e JOIN depts d ON e.dept=d.dept")) and
+            j_flat["columns"] == ["e__name", "d__location"], str(j_flat))
+
+    try:
+        h.join_tables(
+            tables=["employees", "depts"],
+            on=[[{"left": "e__dept", "right": "dept"}]],
+            prefixes=["e", "d"],
+            return_columns=["e.name", "d.location"],
+        )
+        dotted_return_rejected = False
+    except ValueError as exc:
+        dotted_return_rejected = "never table.column" in str(exc)
+    t.check("join_tables rejects unresolved dotted return columns", dotted_return_rejected)
 
     j_documented_prefix = h.join_tables(
         tables=["employees", "depts"],
@@ -122,6 +267,13 @@ def run():
 
     p = h.project("employees", ["name", "salary"])
     t.check("project", norm(h.rows(p["table_name"])) == norm(h.gold("SELECT name,salary FROM employees")))
+
+    duplicate_names = h._new("dup", "SELECT name AS Name, dept AS Name FROM employees")
+    renamed = h.project(duplicate_names["table_name"], ["Name", "Name:1 AS department"])
+    t.check("project quotes exact SQLite duplicate-column names",
+            renamed["columns"] == ["Name", "department"] and
+            norm(h.rows(renamed["table_name"])) == norm(h.gold("SELECT name,dept FROM employees")),
+            str(renamed))
 
     casted = h.project("employees", ["age::integer AS age_int"])
     t.check("project accepts postgres cast syntax",

@@ -31,7 +31,10 @@ from provider_client import load_api_config  # noqa: E402
 from provider_adapter import (  # noqa: E402
     adapt_provider_response,
     provider_default_max_tokens,
-    provider_instruction,
+    provider_request_messages,
+    provider_request_options,
+    provider_rejection_message,
+    provider_system_prompt,
 )
 from rollout import (  # noqa: E402
     ChatAPIError,
@@ -88,6 +91,11 @@ def compact_json(obj) -> str:
 
 def protocol_failure_type(exc: ProtocolError) -> str:
     text = str(exc).lower()
+    # Provider carrier violations are response-format failures.  Their actionable retry message
+    # includes a canonical JSON example containing the word ``arguments``; keyword classification
+    # must not turn that incidental text into an argument-validation error.
+    if "split-response transport error" in text:
+        return "protocol_error"
     if any(marker in text for marker in (
         "arguments", "unexpected", "requires", "missing required", "must be", "must contain",
     )):
@@ -142,6 +150,8 @@ def request_chat(
         "temperature": 0,
         "max_tokens": max_tokens,
     }
+    request_options = provider_request_options(model)
+    payload.update(request_options)
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         base_url.rstrip("/") + "/chat/completions",
@@ -165,6 +175,12 @@ def request_chat(
     usage = dict(data.get("usage") or {})
     # A successful HTTP response can still be length-truncated. This is audit metadata, not a retry.
     usage["api_finish_reason"] = choice.get("finish_reason")
+    usage["provider_request_options"] = request_options
+    usage["provider_response_metadata"] = {
+        key: data.get(key)
+        for key in ("id", "model", "system_fingerprint", "object")
+        if data.get(key) is not None
+    }
     return message.get("content") or "", usage, message.get("reasoning_content") or ""
 
 
@@ -437,7 +453,12 @@ def run_rollout(
                 last_error,
                 external_knowledge,
             )
-        turn = {"turn_index": len(turns), "model_input": deepcopy(model_input)}
+        model_input = provider_request_messages(model, model_input)
+        turn = {
+            "turn_index": len(turns),
+            "model_input": deepcopy(model_input),
+            "provider_request_options": provider_request_options(model),
+        }
         try:
             text, call_usage, reasoning_content = chat_with_retries(
                 base_url=base_url,
@@ -450,6 +471,10 @@ def run_rollout(
             )
             add_usage(usage, call_usage)
             turn["api_finish_reason"] = call_usage.get("api_finish_reason")
+            if call_usage.get("provider_response_metadata"):
+                turn["provider_response_metadata"] = deepcopy(
+                    call_usage["provider_response_metadata"]
+                )
         except ContextOverflowError as exc:
             rec.update({
                 "failure_type": "context_overflow",
@@ -482,6 +507,9 @@ def run_rollout(
             turn["provider_reasoning_content"] = reasoning_content
         messages.append({"role": "assistant", "content": text})
         try:
+            rejection = provider_rejection_message(adapter_record)
+            if rejection:
+                raise ProtocolError(rejection)
             think, tool, args = parse_assistant_strict(text)
             think_source = "model"
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
@@ -776,7 +804,10 @@ def main() -> int:
             base_system_prompt,
             compact=args.rolling_prompt_variant == "compact",
         )
-    system_prompt = base_system_prompt + DATA_GENERATION_SUFFIX + provider_instruction(args.model)
+    system_prompt = provider_system_prompt(
+        args.model,
+        base_system_prompt + DATA_GENERATION_SUFFIX,
+    )
     started = time.time()
     counts = collections.Counter()
     tool_hist = collections.Counter()
@@ -884,6 +915,7 @@ def main() -> int:
         "teacher_parser": "strict_no_repair",
         "error_actions_are_sft_targets": False,
         "api_transport_retries_per_request": args.api_retries,
+        "provider_request_options": provider_request_options(args.model),
         "counts": persisted["counts"],
         "raw_attempt_records": persisted["raw_attempt_records"],
         "unique_examples": persisted["unique_examples"],

@@ -115,12 +115,19 @@ class Harness:
     def _resolve_col(cols: list[str], requested: str) -> str:
         if not isinstance(requested, str):
             return requested
-        base = requested.split(".")[-1]
         lowered = {c.lower(): c for c in cols}
+        # version5 joins materialize flat logical names such as ``orders.id``. Prefer an exact
+        # logical-column match before the historical table/SQL-qualifier fallback strips the dot.
+        if requested.lower() in lowered:
+            return lowered[requested.lower()]
+        base = requested.split(".")[-1]
         if base.lower() in lowered:
             return lowered[base.lower()]
         suffix_matches = [c for c in cols if c.lower().endswith("__" + base.lower())]
-        return suffix_matches[0] if len(suffix_matches) == 1 else base
+        if len(suffix_matches) == 1:
+            return suffix_matches[0]
+        dotted_matches = [c for c in cols if c.lower().endswith("." + base.lower())]
+        return dotted_matches[0] if len(dotted_matches) == 1 else base
 
     def _col_sql(self, cols: list[str], requested: str) -> str:
         resolved = self._resolve_col(cols, requested)
@@ -237,7 +244,7 @@ class Harness:
             return f"{qcol} {neg}IN ({', '.join(_lit(v) for v in values)})"
         if op == "between":
             return f"{qcol} BETWEEN {_lit(c['low'])} AND {_lit(c['high'])}"
-        if op == "is_null":
+        if op == "is null":
             return f"{qcol} IS NULL"
         if op == "is not null":
             return f"{qcol} IS NOT NULL"
@@ -267,7 +274,7 @@ class Harness:
         if return_columns:
             cols = self._cols_of_sql(sql)
             sel = ", ".join(
-                f"{_qid(self._resolve_col(cols, col))} AS {_qid(col.split('.')[-1])}"
+                f"{_qid(self._resolve_col(cols, col))} AS {_qid(self._resolve_col(cols, col))}"
                 for col in return_columns
             )
             sql = f"SELECT {sel} FROM ({sql})"
@@ -315,10 +322,110 @@ class Harness:
         tail = f" GROUP BY {gb}" if gb else ""
         return self._new("group", f"SELECT {sel} FROM {self._src(table)}{tail}")
 
+    def _join_component(self, base, joins, base_role=None) -> dict:
+        """Execute the version5 public join shape with a flat, stable logical namespace."""
+        if not isinstance(base, str) or not base:
+            raise ValueError("join_tables.base must be a non-empty table or handle")
+        if not isinstance(joins, list) or not joins:
+            raise ValueError("join_tables.joins must be a non-empty list")
+
+        def logical_pairs(table: str, role: str | None) -> tuple[str, list[tuple[str, str]]]:
+            source_cols = self._cols(table)
+            namespace = role or table
+            pairs = [
+                (column if "." in column else f"{namespace}.{column}", column)
+                for column in source_cols
+            ]
+            lowered = [logical.casefold() for logical, _ in pairs]
+            if len(lowered) != len(set(lowered)):
+                raise ValueError(
+                    f"join_tables namespace {namespace!r} creates duplicate logical columns; "
+                    "use a distinct semantic role"
+                )
+            return namespace, pairs
+
+        _, cur_pairs = logical_pairs(base, base_role)
+        cur_src = self._src(base)
+        last_sql = None
+        join_sql = {"inner": "JOIN", "left": "LEFT JOIN", "cross": "CROSS JOIN"}
+
+        for index, item in enumerate(joins):
+            where = f"join_tables.joins[{index}]"
+            if not isinstance(item, dict):
+                raise ValueError(f"{where} must be an object")
+            table = item.get("table")
+            edges = item.get("on")
+            join_type = item.get("type", "inner")
+            if not isinstance(table, str) or not table:
+                raise ValueError(f"{where}.table must be a non-empty table or handle")
+            if join_type not in join_sql:
+                raise ValueError(f"{where}.type must be inner, left, or cross")
+            if not isinstance(edges, list):
+                raise ValueError(f"{where}.on must be a list")
+            if join_type != "cross" and not edges:
+                raise ValueError(f"{where}.on must contain at least one equality edge")
+            if join_type == "cross" and edges:
+                raise ValueError(f"{where}.on must be [] for a cross join")
+
+            namespace, right_pairs = logical_pairs(table, item.get("role"))
+            current = {logical.casefold(): (logical, physical) for logical, physical in cur_pairs}
+            right_source = {physical.casefold(): physical for _, physical in right_pairs}
+            predicates = []
+            for edge_index, edge in enumerate(edges):
+                edge_where = f"{where}.on[{edge_index}]"
+                if not isinstance(edge, dict) or set(edge) != {"left", "right"}:
+                    raise ValueError(f"{edge_where} must contain exactly left and right")
+                left_ref, right_ref = edge.get("left"), edge.get("right")
+                left_match = current.get(left_ref.casefold()) if isinstance(left_ref, str) else None
+                right_match = right_source.get(right_ref.casefold()) if isinstance(right_ref, str) else None
+                if left_match is None:
+                    raise ValueError(
+                        f"{edge_where}.left {left_ref!r} is not an introduced logical column; "
+                        f"available columns: {[logical for logical, _ in cur_pairs]}"
+                    )
+                if right_match is None:
+                    raise ValueError(
+                        f"{edge_where}.right {right_ref!r} is not a column of {table!r}; "
+                        f"available columns: {list(right_source.values())}"
+                    )
+                predicates.append(f"L.{_qid(left_match[1])} = R.{_qid(right_match)}")
+
+            existing = {logical.casefold() for logical, _ in cur_pairs}
+            collisions = [
+                logical for logical, _ in right_pairs if logical.casefold() in existing
+            ]
+            if collisions:
+                raise ValueError(
+                    f"join_tables relation namespace {namespace!r} collides with existing columns "
+                    f"{collisions}; add a distinct semantic role for the repeated relation"
+                )
+
+            left_select = [
+                f"L.{_qid(physical)} AS {_qid(logical)}"
+                for logical, physical in cur_pairs
+            ]
+            right_select = [
+                f"R.{_qid(physical)} AS {_qid(logical)}"
+                for logical, physical in right_pairs
+            ]
+            on_clause = f" ON {' AND '.join(predicates)}" if predicates else ""
+            last_sql = (
+                f"SELECT {', '.join(left_select + right_select)} "
+                f"FROM {cur_src} AS L {join_sql[join_type]} {self._src(table)} AS R{on_clause}"
+            )
+            cur_pairs = [(logical, logical) for logical, _ in cur_pairs + right_pairs]
+            cur_src = f"({last_sql})"
+
+        return self._new("join", last_sql)
+
     def join_tables(self, left=None, right=None, on=None, join_type="inner",
                     return_columns=None, left_prefix=None, right_prefix=None,
-                    tables=None, join_types=None, prefixes=None) -> dict:
+                    tables=None, join_types=None, prefixes=None,
+                    base=None, joins=None, base_role=None) -> dict:
         """N-way join folded left-to-right in ONE step (one result handle).
+
+        The version5 public form is ``base`` + ordered ``joins``. Historical version1-version4
+        forms remain available here for deterministic replay, but are rejected by the live parser.
 
         - `tables`: ordered source names / step handles, len >= 2.
         - `on[k]`: the join conditions (list of {left,right}) attaching `tables[k+1]` to the
@@ -331,6 +438,14 @@ class Harness:
 
         The legacy 2-table call — `join_tables(left, right, on=[{...}], left_prefix, right_prefix)`
         with a FLAT `on` list — is still accepted and mapped onto the N=2 fold."""
+        if base is not None or joins is not None or base_role is not None:
+            if any(value is not None for value in (
+                left, right, tables, join_types, prefixes, return_columns, left_prefix, right_prefix
+            )) or on is not None or join_type != "inner":
+                raise ValueError(
+                    "join_tables version5 base+joins cannot be mixed with historical join arguments"
+                )
+            return self._join_component(base, joins, base_role)
         if tables is None:                       # legacy 2-table form -> N=2 fold
             tables = [left, right]
             on = [on or []]
@@ -397,8 +512,20 @@ class Harness:
             cur_prefixed = True
         if return_columns:                       # optional explicit projection over the final result
             def qual(name: str) -> str:
-                return self._resolve_col(cur_cols, name)
-            sel = ", ".join(f"{_qid(qual(c))} AS {_qid(c.split('.')[-1])}" for c in return_columns)
+                if not isinstance(name, str) or "." in name:
+                    raise ValueError(
+                        f"join_tables.return_columns uses exact model-facing output columns, never "
+                        f"table.column; got {name!r}; available columns: {cur_cols}"
+                    )
+                resolved = self._resolve_col(cur_cols, name)
+                if resolved not in cur_cols:
+                    raise ValueError(
+                        f"join_tables.return_columns requires an exact output column; got {name!r}; "
+                        f"available columns: {cur_cols}"
+                    )
+                return resolved
+            resolved_columns = [qual(c) for c in return_columns]
+            sel = ", ".join(f"{_qid(c)} AS {_qid(c)}" for c in resolved_columns)
             last_sql = f"SELECT {sel} FROM ({last_sql})"
         return self._new("join", last_sql)
 
@@ -482,7 +609,44 @@ class Harness:
         `expressions` are SQL column/expression strings, optionally `expr AS alias`."""
         cols = self._cols(table)
 
+        def quote_expression_columns(expression: str) -> str:
+            """Quote exact/unique logical columns inside a SQL scalar expression.
+
+            SQLite parses ``relation.column`` as a table qualifier, but version6 join outputs use
+            that whole string as one physical column name. Rewrite only harness-known identifiers,
+            outside single-quoted literals; ambiguous bare suffixes remain unresolved errors.
+            """
+            aliases: dict[str, str] = {column.casefold(): column for column in cols}
+            by_base: dict[str, list[str]] = {}
+            for column in cols:
+                base = column.rsplit(".", 1)[-1].rsplit("__", 1)[-1]
+                by_base.setdefault(base.casefold(), []).append(column)
+            for base, matches in by_base.items():
+                if len(matches) == 1:
+                    aliases.setdefault(base, matches[0])
+            ordered = sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True)
+            segments = re.split(r"('(?:''|[^'])*')", expression)
+            for index in range(0, len(segments), 2):
+                segment = segments[index]
+                for identifier, canonical in ordered:
+                    segment = re.sub(
+                        rf'(?<![A-Za-z0-9_."]){re.escape(identifier)}(?![A-Za-z0-9_."])',
+                        _qid(canonical),
+                        segment,
+                        flags=re.I,
+                    )
+                segments[index] = segment
+            return "".join(segments)
+
         def render(expr: str) -> str:
+            raw = str(expr).strip()
+            resolved_raw = self._resolve_col(cols, raw)
+            if resolved_raw in cols:
+                return self._col_sql(cols, resolved_raw)
+            alias = re.match(r"^(.+?)\s+AS\s+([A-Za-z_][\w]*)$", raw, re.I)
+            if alias and alias.group(1).strip() in cols:
+                source = alias.group(1).strip()
+                return f"{self._col_sql(cols, source)} AS {_qid(alias.group(2))}"
             cast = re.match(
                 r"^\s*([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)\s*::\s*([A-Za-z_][\w]*)"
                 r"(?:\s+AS\s+([A-Za-z_][\w]*))?\s*$",
@@ -498,7 +662,12 @@ class Harness:
                 return f"{self._col_sql(cols, m.group(1))} AS {_qid(m.group(2))}"
             if re.match(r"^\s*[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?\s*$", expr):
                 return self._col_sql(cols, expr)
-            return expr
+            if alias:
+                return (
+                    f"{quote_expression_columns(alias.group(1).strip())} "
+                    f"AS {_qid(alias.group(2))}"
+                )
+            return quote_expression_columns(raw)
 
         sel = ", ".join(render(expr) for expr in expressions) if expressions else "*"
         return self._new("project", f"SELECT {sel} FROM {self._src(table)}")

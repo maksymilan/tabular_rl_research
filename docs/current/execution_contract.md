@@ -1,7 +1,7 @@
 # Canonical Execution Contract
 
 Status: active contract for **new** SFT generation, evaluation, and RL episodes under
-`v2i-state-only-join-feedback-r2`. `src/sft/protocol.py` is executable authority; this document makes
+`version11`. `src/sft/protocol.py` is executable authority; this document makes
 the ownership boundaries explicit. Old trajectory artifacts remain replay inputs, not examples of
 the public action interface.
 
@@ -12,7 +12,9 @@ harness-managed resident state.
 
 1. In state-only mode, the harness sends `system + user` only. The user message contains the catalog, question,
    optional external knowledge, current environment state, and, only after an error, `LAST TOOL ERROR`.
-2. The model emits exactly one non-empty `<think>` block and one complete `<tool_call>` JSON object.
+2. The canonical action has exactly one non-empty `<think>` block and one complete `<tool_call>`
+   JSON object. An API with native reasoning transport receives one provider-specific prompt and
+   emits the same reason/tool action across its two fields.
 3. The harness strictly parses, validates, executes, records the action, and updates resident state.
 4. The next model input is rebuilt from resident state. In bounded rolling mode, up to four prior
    successful assistant actions plus structured result summaries are also retained; full schemas,
@@ -36,6 +38,12 @@ raw fields in the audit record, and carries that existing reasoning into the can
 field. It never invents reasoning, edits JSON/arguments, balances tags, or accepts partial tags.
 All other shapes still go to the strict parser unchanged and fail normally. Adapter use is recorded
 in the audit turn and successful trajectory metadata.
+
+The API-facing prompt must contain only the selected provider envelope. For DS Flash, positive
+instructions to emit a visible `<think>` block are removed before the split-field contract and its
+interface-specific example are appended. Bounded rolling history likewise sends prior assistant
+content as a visible tool-call block only; canonical `<think>` text remains in the stored trajectory
+but is not replayed as a contradictory visible example.
 
 ## Ownership Boundary
 
@@ -67,37 +75,83 @@ way to view row values; handles alone expose schema and row-count metadata. Its 
 be an integer from 1 through 20. Larger or non-integer values are explicit argument-validation
 errors and are never silently clamped.
 
-## Current v2i Column Naming
+## Current version11 Join and Column Naming
 
 For source tables and unambiguous derived handles, arguments use the schema column name shown by
 `describe_table` or the state handle. The model never emits SQLite aliases (`L.`, `R.`) or SQL
 fragments.
 
-`join_tables` has one public n-way form:
+`join_tables` has one public connected-component form:
 
 ```json
 {
-  "tables": ["game", "publisher", "platform"],
-  "on": [
-    [{"left":"G__id", "right":"game_id"}],
-    [{"left":"P__id", "right":"publisher_id"}]
-  ],
-  "join_types": "inner",
-  "prefixes": ["G", "P", "PL"]
+  "base": "game",
+  "joins": [
+    {
+      "table": "publisher",
+      "on": [{"left": "game.publisher_id", "right": "id"}]
+    },
+    {
+      "table": "platform",
+      "on": [{"left": "game.platform_id", "right": "id"}],
+      "type": "left"
+    }
+  ]
 }
 ```
 
-`prefixes` declares stable *column* labels, not SQL aliases and not table handles. With prefixes:
+The harness assigns each ordinary relation its visible table/handle name as its namespace:
 
-- First edge: the left key may be `P1__column`; the next-table key is its bare source column.
-- Later edges: the accumulated left key is a materialized `Pi__column`; the right key is the bare
-  source column of the newly attached table.
-- Output columns are `Pi__column`; later tools must use exactly the names in the returned handle state.
-- Dotted aliases such as `L.G__id`, `R.id`, or `game.id` are invalid.
+- `on.left` is an exact logical column already introduced, such as `game.publisher_id`.
+- `on.right` is the bare source column of the new `joins[]` table, such as `id`.
+- `type` is optional and defaults to `inner`; allowed values are `inner`, `left`, and `cross`.
+- Output columns are one flat list such as `game.id`, `publisher.name`, and `platform.name`.
+  A later join never rewrites these as `join_003.game.id`.
+- The public call has no `return_columns`; use the separate `project` atom when narrowing is
+  semantically required.
 
-The first-edge exception exists because v2i prefixes are materialized after that predicate executes.
-The harness accepts exactly that documented spelling and never strips arbitrary aliases. It is a
-compatibility rule, not an ideal long-term public API.
+For a repeated relation, and only then, the model supplies semantic instance names:
+
+```json
+{
+  "base": "employees",
+  "base_role": "employee",
+  "joins": [{
+    "table": "employees",
+    "role": "manager",
+    "on": [{"left": "employee.manager_id", "right": "id"}]
+  }]
+}
+```
+
+SQL implementation aliases such as `L.` and `R.` are never model-visible. Historical
+`tables/on/prefixes/return_columns` and binary join forms remain replay-only.
+
+Version6 keeps the version5 relational call unchanged but compacts wide dotted columns in
+model-visible observations and resident state:
+
+```json
+{
+  "table": "join_003",
+  "column_namespaces": {
+    "game": ["id", "publisher_id", "platform_id"],
+    "publisher": ["id", "name"],
+    "platform": ["id", "name"]
+  },
+  "row_count": 42
+}
+```
+
+The exact column spelling is reconstructed as `namespace.column`. When continuing a join from
+`join_003`, the handle remains the `base` table argument, but `on.left` must use one of these
+logical namespaces, never `join_003.column`. This is a rendering-only compression: canonical
+harness snapshots and replay artifacts retain their full flat column lists.
+
+Version7 completes downstream consumption of the same logical names. Exact dotted identifiers are
+quoted as one physical column when they appear inside `project` scalar expressions. Filters,
+projection, grouping, and ordering may also use a bare suffix only when it resolves to exactly one
+available logical column; ambiguous bare names remain explicit errors. `join_tables.on.left`
+continues to require the exact namespace-qualified form because it selects a relation instance.
 
 ## Errors and Recovery
 
@@ -118,17 +172,13 @@ Whole episode restarts, when used for pass@k, are separate attempts and retain s
 
 The active shared implementation is `src/eval/rollout.py`, `src/eval/rollout_passk.py`,
 `src/sft/generate_teacher_rollouts.py`, and `src/rl/tool_environment.py` (used by the Accelerate backend). The
-historical Verl token-concatenating adapter is not a v2i training entry point, because state-only
+historical Verl token-concatenating adapter is not a version11 training entry point, because state-only
 rebuilding needs per-turn loss accounting rather than one appended transcript.
 
-## Migration Rule: v2i Now, v2j Next
+## Migration Rule
 
-Do not mix two naming contracts inside one dataset or evaluation. New v2i data uses the explicit
-`prefixes`/`__` rule above. Historical v2h and earlier artifacts are frozen and replay-only.
-
-The proposed v2j migration will replace `prefixes` with harness-derived source-instance names and
-use one dotted identifier spelling (`source_instance.column`) everywhere. It requires an atomic
-protocol bump and regeneration of environment-state schemas, causal rollout data, tests, and
-evaluation artifacts. Until that migration passes replay and tool-smoke gates, dots are not accepted
-v2i join identifiers. This avoids the harmful middle state where documentation says one thing and
-the executor accepts another.
+Do not mix naming contracts inside one dataset or evaluation. New episodes use version11. Historical
+version1-version9 artifacts retain their original model-visible contracts and may only enter
+replay-compatible paths. Every version11 teacher/eval result directory and manifest must record its
+version11 protocol hash and provider request controls; historical data is not relabeled or mutated
+in place.

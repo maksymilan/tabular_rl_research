@@ -94,6 +94,8 @@ def task_gold_sql(ex: dict) -> str | None:
 
 def protocol_failure_type(exc: ProtocolError) -> str:
     text = str(exc).lower()
+    if "split-response transport error" in text:
+        return "protocol_error"
     if any(marker in text for marker in (
         "arguments", "unexpected", "requires", "missing required", "must be", "must contain",
     )):
@@ -148,7 +150,7 @@ def _table_from_step(ctx: dict, ref):
 
 
 def _normalize_table_refs(args, ctx: dict, parent_key: str | None = None):
-    table_keys = {"table", "left", "right", "in_table"}
+    table_keys = {"table", "left", "right", "in_table", "base"}
     if isinstance(args, list):
         return [_normalize_table_refs(item, ctx, parent_key) for item in args]
     if isinstance(args, dict):
@@ -388,11 +390,16 @@ def _arg_table_refs(tool: str | None, args: dict | None) -> list[str]:
     if not isinstance(args, dict):
         return []
     refs = []
-    for key in ("table", "left", "right"):
+    for key in ("table", "left", "right", "base"):
         if isinstance(args.get(key), str):
             refs.append(args[key])
     if isinstance(args.get("tables"), list):
         refs.extend(item for item in args["tables"] if isinstance(item, str))
+    if tool == "join_tables":
+        refs.extend(
+            item["table"] for item in args.get("joins") or []
+            if isinstance(item, dict) and isinstance(item.get("table"), str)
+        )
     refs.extend(_condition_table_refs(args.get("conditions")))
     return refs
 
@@ -405,6 +412,12 @@ def _safe_cols(h: Harness, table: str) -> list[str]:
 
 
 def _join_identifier_hint(h: Harness, args: dict | None) -> str | None:
+    if isinstance(args, dict) and isinstance(args.get("joins"), list):
+        return (
+            "join_tables uses flat logical column names: on.left must exactly match an already "
+            "introduced relation.column from the current component; on.right is a bare column of "
+            "that joins item’s new table. Add base_role/role only for repeated relations."
+        )
     if not isinstance(args, dict) or not isinstance(args.get("tables"), list):
         return None
     tables = [table for table in args["tables"] if isinstance(table, str)]

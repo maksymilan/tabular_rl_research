@@ -177,15 +177,15 @@ format bottleneck.
 This 53.33% is the current closed-loop baseline, not a final large-scale yield estimate. Difficulty
 skew is severe: hard tasks require targeted failure analysis before scale-up.
 
-This run used the v2h protocol. The subsequent first-edge join-name repair bumped the active
-protocol to `v2i-state-only-join-feedback`; v2h artifacts are historical controls and must not be
-mixed into final v2i training data. In particular, 16/30 cannot serve as the sole control for a v2i
+This run used the v2h protocol. The subsequent first-edge join-name repair produced the contract now
+called `version1`; older v2h artifacts are historical controls and must not be mixed into final
+version1 training data. In particular, 16/30 cannot serve as the sole control for a version1
 teacher adapter because both the tool contract and teacher delivery would differ.
 
 ## 6. Immediate controlled experiment
 
-Use the exact same 30 tasks throughout. First establish a fresh **v2i strict-parser baseline** with
-the current join contract. Then run a second v2i arm with no changes to model, temperature, task
+Use the exact same 30 tasks throughout. First establish a fresh **version1 strict-parser baseline** with
+the current join contract. Then run a second version1 arm with no changes to model, temperature, task
 order, max steps, tool budget, verifier, or student/runtime parser, changing only the teacher
 action-delivery mechanism.
 
@@ -213,18 +213,18 @@ Report separately:
 - total accepted episodes and single-step targets;
 - API/token/time cost.
 
-Compare the two v2i arms directly. Keep the v2h 16/30 result as historical context, not as the sole
+Compare the two version1 arms directly. Keep the v2h 16/30 result as historical context, not as the sole
 causal control. Do not extrapolate to the 5,915-task pool until this paired experiment is complete.
 
 ## 7. Next execution plan
 
 ### P0: close the 30-task pilot
 
-1. Preserve the v2h canonical 16 successes as a historical result; do not mix them into final v2i
+1. Preserve the v2h canonical 16 successes as a historical result; do not mix them into final version1
    training data.
-2. Run a strict v2i baseline on the same 30, then run the teacher-only structured/first-action arm
-   from the same v2i code and configuration.
-3. Export the selected v2i arm's successes to single-step SFT and run replay/no-leak/LLaMA-Factory
+2. Run a strict version1 baseline on the same 30, then run the teacher-only structured/first-action arm
+   from the same version1 code and configuration.
+3. Export the selected version1 arm's successes to single-step SFT and run replay/no-leak/LLaMA-Factory
    preprocessing checks.
 4. Manually audit the v2h four execution failures and a stratified sample of nine wrong answers,
    especially the eight failed hard tasks.

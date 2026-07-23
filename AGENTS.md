@@ -35,8 +35,27 @@ Start at `docs/current/README.md`.
 ### Model-visible protocol
 
 - Source of truth: `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current version: `v2i-state-only-join-feedback-r2`.
-- The model emits exactly one `<think>` block and one strict `<tool_call>` JSON object per turn.
+- Current version: `version11`. The former `v2i-state-only-join-feedback-r2` contract is `version1`;
+  `version2` added canonical calls/final shape, `version3` added precise provider feedback and
+  stable projected join columns, and `version4` counted provider-carrier failures precisely.
+  `version5` replaced prefix-heavy joins with `base + joins[]`, a flat `relation.column` namespace,
+  and semantic roles only for repeated relations. `version6` keeps that call shape and renders
+  wide dotted columns as compact `column_namespaces` only in model-visible context; canonical
+  harness state remains unchanged for replay. `version7` makes downstream relational tools consume
+  those logical columns consistently, including dotted identifiers inside project expressions and
+  safe unique-bare-column resolution. `version8` removes competing canonical/split response
+  instructions from DeepSeek-facing prompts and renders rolling assistant history in the same
+  provider carrier; canonical stored trajectories are unchanged. `version9` explicitly enables
+  DeepSeek thinking mode, fixes reasoning effort, and records request/response provider identity
+  metadata so split-carrier behavior no longer depends on unaudited API defaults. `version10`
+  additionally uses the provider's JSON Output constraint for visible action content, then wraps
+  that unmodified JSON in the internal canonical tool-call envelope. `version11` removes the last
+  generic visible-`<tool_call>` wording from the DeepSeek-facing generation and retry clauses, so
+  the API-facing prompt names only the native-reasoning + raw-JSON carrier. Future versions
+  increment numerically.
+- The canonical model action contains exactly one `<think>` block and one strict `<tool_call>` JSON
+  object. A provider-native reasoning adapter may carry the same authored reason in a separate API
+  field, but its API-facing prompt and history must describe only that one carrier.
 - Context is rebuilt from catalog + question + optional external knowledge + current resident state
   + optional `LAST TOOL ERROR`; it is not an appended observation transcript.
 - Current tools: `plan`, `describe_table`, `inspect_column`, `read_subtable`,

@@ -13,7 +13,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "sft"))
 
 from artifacts import ArtifactWriter  # noqa: E402
-from protocol import bird_rows_equal, compare_denotations, rows_equal  # noqa: E402
+from protocol import ProtocolError, bird_rows_equal, compare_denotations, rows_equal  # noqa: E402
 from rollout import (  # noqa: E402
     ChatAPIError,
     DEFAULT_FEWSHOT_IDS,
@@ -22,6 +22,7 @@ from rollout import (  # noqa: E402
     chat,
     fewshot_text,
     projected_row_candidates,
+    protocol_failure_type,
     score,
 )
 from text2sql import extract_sql  # noqa: E402
@@ -41,6 +42,13 @@ class FakeHarness:
 
 
 class EvalTests(unittest.TestCase):
+    def test_provider_transport_error_is_not_argument_validation(self):
+        error = ProtocolError(
+            'DeepSeek split-response transport error: visible content must contain only '
+            '<tool_call>{"tool":"...","arguments":{...}}</tool_call>'
+        )
+        self.assertEqual(protocol_failure_type(error), "protocol_error")
+
     def test_rows_equal_normalizes_non_finite_numbers(self):
         self.assertTrue(rows_equal([[float("nan"), float("inf"), float("-inf")]],
                                    [["NaN", "+Infinity", "-Infinity"]]))

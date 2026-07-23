@@ -20,7 +20,7 @@ from process_credit import (  # noqa: E402
     replay_step_features,
 )
 from process_objective import process_policy_loss  # noqa: E402
-from provenance import build_grounding_references  # noqa: E402
+from provenance import build_grounding_references, build_references  # noqa: E402
 from review_grounding_edges_external import build_review_package  # noqa: E402
 
 
@@ -35,6 +35,37 @@ def feature(index: int, **kwargs) -> StepFeature:
 
 
 class ProcessRewardTests(unittest.TestCase):
+    def test_version5_join_emits_one_data_edge_per_relation_input(self):
+        args = {
+            "base": "orders",
+            "joins": [
+                {
+                    "table": "filter_001",
+                    "on": [{"left": "orders.customer_id", "right": "id"}],
+                },
+                {
+                    "table": "regions",
+                    "on": [{"left": "filter_001.region_id", "right": "id"}],
+                },
+            ],
+        }
+        refs = build_references(
+            "join_tables",
+            args,
+            lambda ref: "step_2" if ref == "filter_001" else None,
+        )
+        self.assertEqual(
+            refs,
+            [
+                {"type": "data", "source": "orders", "role": "table",
+                 "target": {"table": "orders"}},
+                {"type": "data", "step": "step_2", "role": "table",
+                 "target": {"handle": "filter_001"}},
+                {"type": "data", "source": "regions", "role": "table",
+                 "target": {"table": "regions"}},
+            ],
+        )
+
     def test_harness_infers_final_table_and_perception_chain_without_model_evidence(self):
         with tempfile.NamedTemporaryFile(suffix=".sqlite") as tmp:
             conn = sqlite3.connect(tmp.name)
@@ -327,6 +358,84 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertTrue(diagnostics["final_value_grounding_complete"])
         roles = {ref["role"] for ref in diagnostics["final_references"]}
         self.assertIn("automatic_additional_final_table", roles)
+
+    def test_replay_remaps_handles_after_recoverable_error_consumed_online_suffix(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite") as tmp:
+            conn = sqlite3.connect(tmp.name)
+            conn.executescript(
+                """
+                CREATE TABLE items(id INTEGER, name TEXT);
+                INSERT INTO items VALUES (1, 'one'), (2, 'two');
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            trajectory = {
+                "trajectory_id": "gapped-handle-replay",
+                "question": "List names for positive item ids.",
+                "source": {
+                    "db_path": tmp.name,
+                    "gold_sql": "SELECT name FROM items WHERE id > 0",
+                },
+                "steps": [
+                    {
+                        "step_id": "step_1",
+                        "tool_call": {
+                            "tool": "condition_filter",
+                            "arguments": {
+                                "table": "items",
+                                "conditions": {"column": "id", "op": ">", "value": 0},
+                            },
+                        },
+                        "tool_output": {"table": "filter_001"},
+                    },
+                    {
+                        "step_id": "step_3",
+                        "tool_call": {
+                            "tool": "project",
+                            "arguments": {
+                                "table": "filter_001",
+                                "expressions": ["name"],
+                            },
+                        },
+                        "tool_output": {"table": "project_003"},
+                    },
+                    {
+                        "step_id": "step_4",
+                        "tool_call": {
+                            "tool": "answer_from_context",
+                            "arguments": {
+                                "evidence": {"table": "project_003"},
+                                "answer": [],
+                            },
+                        },
+                    },
+                ],
+                "rollout_generation": {
+                    "error_events": [{
+                        "action_index": 2,
+                        "step_id": "step_2",
+                        "error_type": "execution_error",
+                        "attempted_tool": "project",
+                        "attempted_arguments": {
+                            "table": "filter_001",
+                            "expressions": ["invalid syntax"],
+                        },
+                        "state_before_hash": "same",
+                        "state_after_hash": "same",
+                    }],
+                },
+            }
+            _, diagnostics = replay_step_features(trajectory)
+
+        self.assertTrue(diagnostics["replay_correct"])
+        self.assertEqual(
+            diagnostics["replay_handle_map"],
+            {"filter_001": "filter_001", "project_003": "project_002"},
+        )
+        self.assertEqual(diagnostics["grounding_handle"], "project_002")
+        self.assertEqual(diagnostics["back_slice_step_ids"], ["step_1", "step_3"])
 
     def test_linear_positive_normalization_keeps_zero_credit_zero(self):
         result = allocate_process_rewards(
