@@ -42,7 +42,7 @@ from rollout import (  # noqa: E402
 )
 from executor import Harness  # noqa: E402
 from text2sql import extract_sql  # noqa: E402
-from text2sql_passk import run_one as run_direct_sql_passk, score_sample  # noqa: E402
+from text2sql_passk import chat_n, run_one as run_direct_sql_passk, score_sample  # noqa: E402
 
 
 class FakeHarness:
@@ -59,6 +59,29 @@ class FakeHarness:
 
 
 class EvalTests(unittest.TestCase):
+    def test_direct_sql_sampling_can_pin_repetition_penalty(self):
+        response = unittest.mock.MagicMock()
+        response.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": "<answer>SELECT 1</answer>"}}]}
+        ).encode()
+        response.__enter__.return_value = response
+        with patch("text2sql_passk.urllib.request.urlopen", return_value=response) as urlopen:
+            outputs = chat_n(
+                "http://example",
+                "test-model",
+                [{"role": "user", "content": "query"}],
+                n=1,
+                temperature=0,
+                top_p=1,
+                max_tokens=32,
+                retries=0,
+                repetition_penalty=1.05,
+            )
+
+        payload = json.loads(urlopen.call_args.args[0].data)
+        self.assertEqual(outputs, ["<answer>SELECT 1</answer>"])
+        self.assertEqual(payload["repetition_penalty"], 1.05)
+
     def test_provider_transport_error_is_not_argument_validation(self):
         error = ProtocolError(
             'DeepSeek split-response transport error: visible content must contain only '

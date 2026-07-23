@@ -28,6 +28,14 @@ pass@k aggregation belongs to `src/eval/passk.py`, and Arctic's execution-result
 to `src/eval/candidate_selection.py`. Adding a denotation metric therefore does not require changing
 decoding or aggregation code.
 
+Cross-model comparisons must also audit model-level `generation_config.json` defaults. vLLM applies
+defaults such as `repetition_penalty` and `top_k` when the request omits them, even when temperature
+and top-p are explicit. `src/eval/text2sql_passk.py` therefore exposes
+`--repetition-penalty` and records it in manifests and result records; the table_rl launcher accepts
+the matching `REPETITION_PENALTY` environment variable. Pin the value when compared checkpoints
+ship different defaults, or the run is a model-plus-decoding comparison rather than a controlled
+checkpoint comparison.
+
 The Arctic-compatible direct-SQL settings are:
 
 ```bash

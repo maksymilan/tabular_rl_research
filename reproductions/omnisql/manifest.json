@@ -1,0 +1,89 @@
+{
+  "status": "completed",
+  "completed_at": "2026-07-23T22:36:58+08:00",
+  "host": "table_rl",
+  "paper": {
+    "title": "OmniSQL: Synthesizing High-quality Text-to-SQL Data at Scale",
+    "bird_dev_greedy_percent": 63.9,
+    "bird_dev_majority_n8_percent": 66.1
+  },
+  "source": {
+    "repo": "https://github.com/RUCKBReasoning/OmniSQL",
+    "commit": "a66d732010c89fac4353488d1c59e0b06f92b742"
+  },
+  "model": {
+    "repo": "seeklhy/OmniSQL-7B",
+    "revision": "af4eed67f561bbeea555c017dae4b38b93bac2eb",
+    "original_release_revision_with_identical_weights": "9917e42a7a3173c91585cfa5962990325321be33",
+    "model_safetensors_bytes": 15231272152,
+    "model_safetensors_sha256": "dbdd444b3233a3decb600547c8d3cda0e0118c7cfe8085b68a05c519b0e80b01",
+    "remote_path": "/home/dengyan/models/text2sql_reproduction/OmniSQL-7B-af4eed67"
+  },
+  "data": {
+    "dataset_revision": "e1db8bb10ef11f92eacd8d87801d716ba0e9e9be",
+    "examples": 1534,
+    "prompt_sha256": "65186bb8046e20f30c0fe0c560d7cabef6baa0741a2602dd4f6936d55ddf5b50",
+    "gold_sha256": "630272f2b1c44d8cef2c3b246f623355cf0bbc1e832c81061df895530dfc2f06",
+    "tables_sha256": "35e7f73f2bc3a3bc4def9466215f7617ff8b37e9b2837f03539a42c9e9c69d97",
+    "max_chat_prompt_tokens": 5092
+  },
+  "generation": {
+    "dtype": "bfloat16",
+    "tensor_parallel_size": 2,
+    "max_model_len": 8192,
+    "max_output_tokens": 2048,
+    "greedy_temperature": 0.0,
+    "majority_temperature": 0.8,
+    "majority_candidates": 8,
+    "majority_selection": "hard equality of executed result sets; first maximum wins"
+  },
+  "evaluation": {
+    "metric": "bird-set",
+    "row_order_sensitive": false,
+    "duplicate_multiplicity_sensitive": false,
+    "greedy": {
+      "correct": 983,
+      "total": 1534,
+      "accuracy": 0.6408083441981747,
+      "paper_delta_percentage_points": 0.18083441981746,
+      "empty_sql_count": 0
+    },
+    "majority_n8": {
+      "correct": 1010,
+      "total": 1534,
+      "accuracy": 0.6584093872229465,
+      "paper_delta_percentage_points": -0.25906127770535,
+      "candidate_count": 12272,
+      "candidate_valid_count": 11902,
+      "candidate_invalid_count": 370,
+      "candidate_empty_sql_count": 1,
+      "selected_empty_sql_count": 1
+    }
+  },
+  "environment": {
+    "gpus": [
+      "NVIDIA GeForce RTX 3090 24576 MiB",
+      "NVIDIA GeForce RTX 3090 24576 MiB"
+    ],
+    "driver": "560.35.03",
+    "python": "3.11.15",
+    "torch": "2.10.0+cu126",
+    "transformers": "5.12.0",
+    "vllm": "0.19.1",
+    "paper_vllm": "0.6.3"
+  },
+  "artifacts": {
+    "root": "/home/dengyan/tabular_rl_outputs/reproductions/omnisql/results/bird_dev1534",
+    "greedy_predictions_sha256": "57395ce7c41b57f8611c0b5a80ea5e52a290045bc6a46ee6a212d03d81950fc7",
+    "sampling_predictions_sha256": "c35ebd420e709053b10b781b78160f14716d27f43585c67ff22879f2e6bcef49",
+    "greedy_selected_sql_sha256": "66af893c49776ed15b400dc3f482c379bd27a026c704369e2560720893a016c4",
+    "majority_selected_sql_sha256": "91c78e13427d841714565e01305a0d4127cce1b8360bd1d3e490ad52cebe3bf3"
+  },
+  "transport": {
+    "inference_api_failures": 0,
+    "direct_hugging_face": "timed out",
+    "hf_mirror_cli": "TLS handshake timed out after partial transfer",
+    "hf_mirror_resumable_curl": "completed",
+    "local_relay_used": false
+  }
+}

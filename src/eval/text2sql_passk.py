@@ -58,6 +58,7 @@ def chat_n(
     top_p: float,
     max_tokens: int,
     retries: int,
+    repetition_penalty: float | None = None,
 ) -> list[str]:
     payload = {
         "model": model,
@@ -67,6 +68,8 @@ def chat_n(
         "top_p": top_p,
         "max_tokens": max_tokens,
     }
+    if repetition_penalty is not None:
+        payload["repetition_penalty"] = repetition_penalty
     think = os.environ.get("EVAL_ENABLE_THINKING")
     if think is not None:
         payload["chat_template_kwargs"] = {"enable_thinking": think == "1"}
@@ -151,6 +154,7 @@ def run_one(
     execution_timeout_seconds: float,
     denotation_comparison: str,
     candidate_aggregation: str = PASS_K_AGGREGATION,
+    repetition_penalty: float | None = None,
 ) -> dict:
     if candidate_aggregation not in CANDIDATE_AGGREGATIONS:
         raise ValueError(f"unknown candidate aggregation: {candidate_aggregation}")
@@ -175,6 +179,7 @@ def run_one(
         "pass_k": list(pass_k),
         "temperature": temperature,
         "top_p": top_p,
+        "repetition_penalty": repetition_penalty,
         "max_tokens": max_tokens,
         "denotation_comparison": denotation_comparison,
         "candidate_aggregation": candidate_aggregation,
@@ -197,6 +202,7 @@ def run_one(
             top_p=top_p,
             max_tokens=max_tokens,
             retries=api_retries,
+            repetition_penalty=repetition_penalty,
         )
     except ContextOverflowError as exc:
         record["failure_type"] = "context_overflow"
@@ -271,6 +277,11 @@ def main() -> int:
     parser.add_argument("--pass-k", default="2,4,8,16,32")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        help="explicit request-level repetition penalty; omit to use the served model default",
+    )
     parser.add_argument("--api-retries", type=int, default=3)
     parser.add_argument("--execution-timeout-seconds", type=float, default=5.0,
                         help="per-query SQLite VM deadline for generated SQL; <=0 disables it")
@@ -300,6 +311,7 @@ def main() -> int:
         "pass_k": list(pass_k),
         "temperature": args.temperature,
         "top_p": args.top_p,
+        "repetition_penalty": args.repetition_penalty,
         "max_tokens": args.max_tokens,
         "predicted_sql_execution_timeout_seconds": args.execution_timeout_seconds,
         "denotation_comparison": args.denotation_comparison,
@@ -327,6 +339,7 @@ def main() -> int:
                 execution_timeout_seconds=args.execution_timeout_seconds,
                 denotation_comparison=args.denotation_comparison,
                 candidate_aggregation=args.candidate_aggregation,
+                repetition_penalty=args.repetition_penalty,
             )
             for i, ex in pending
         ]

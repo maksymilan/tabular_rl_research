@@ -6,20 +6,22 @@ REMOTE=${REMOTE:-table_rl}
 GPU_ID=${GPU_ID:-0}
 REMOTE_PORT=${REMOTE_PORT:-8018}
 LOCAL_PORT=${LOCAL_PORT:-18021}
-SERVED_MODEL=qwen25_7b_bird_direct_sql_base_passk4
+SERVED_MODEL=${SERVED_MODEL:-qwen25_7b_bird_direct_sql_base_passk4}
 REMOTE_OUTPUT=/home/dengyan/tabular_rl_outputs
-BASE_MODEL=/home/dengyan/models/Qwen2.5-7B-Instruct
+BASE_MODEL=${BASE_MODEL:-/home/dengyan/models/Qwen2.5-7B-Instruct}
 VLLM_PY=/home/dengyan/miniconda3/envs/vllm-qwen35/bin/python
-REMOTE_PID_FILE=$REMOTE_OUTPUT/logs/bird_direct_sql_passk4.vllm.pid
+REMOTE_PID_FILE=${REMOTE_PID_FILE:-$REMOTE_OUTPUT/logs/bird_direct_sql_passk4.vllm.pid}
 LOG=${LOG:-/tmp/bird_direct_sql_passk4.log}
 TASKS=data/eval_inputs/bird_dev_20240627.jsonl
 N_SAMPLES=${N_SAMPLES:-4}
 PASS_K=${PASS_K:-1,2,4}
 TEMPERATURE=${TEMPERATURE:-0.7}
 TOP_P=${TOP_P:-0.95}
+REPETITION_PENALTY=${REPETITION_PENALTY:-}
 RESULT_VARIANT=${RESULT_VARIANT:-passk4}
-SMOKE_RESULT_DIR=data/results/qwen2.5_7b_bird_direct_sql_base_${RESULT_VARIANT}_smoke10_bird_ex
-FULL_RESULT_DIR=data/results/qwen2.5_7b_bird_direct_sql_base_${RESULT_VARIANT}_dev1534_bird_ex
+RESULT_STEM=${RESULT_STEM:-qwen2.5_7b_bird_direct_sql_base}
+SMOKE_RESULT_DIR=${SMOKE_RESULT_DIR:-data/results/${RESULT_STEM}_${RESULT_VARIANT}_smoke10_bird_ex}
+FULL_RESULT_DIR=${FULL_RESULT_DIR:-data/results/${RESULT_STEM}_${RESULT_VARIANT}_dev1534_bird_ex}
 
 exec >>"$LOG" 2>&1
 cd "$PROJECT_DIR"
@@ -90,6 +92,9 @@ COMMON=(.venv/bin/python -u src/eval/text2sql_passk.py
   --workers 4 --max-tokens 1024 --temperature "$TEMPERATURE" --top-p "$TOP_P"
   --api-retries 3 --execution-timeout-seconds 20 \
   --denotation-comparison bird-set)
+if [[ -n "$REPETITION_PENALTY" ]]; then
+  COMMON+=(--repetition-penalty "$REPETITION_PENALTY")
+fi
 
 echo "$(timestamp) starting smoke-10"
 run_guarded "${COMMON[@]}" --n 10 \
