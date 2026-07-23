@@ -66,4 +66,42 @@ def run():
         str(run_plan(h, plan4)),
     )
 
+    # A one-row multi-metric aggregate can feed scalar arithmetic without repeated aggregation.
+    plan5 = [
+        Step(
+            "s1",
+            "group_aggregate",
+            {
+                "table": "employees",
+                "group_by": [],
+                "aggregations": [
+                    {"op": "count", "column": "*", "as": "total_employees"},
+                    {
+                        "op": "count",
+                        "column": "*",
+                        "as": "engineering_employees",
+                        "where": {"column": "dept", "op": "=", "value": "eng"},
+                    },
+                ],
+            },
+        ),
+        Step(
+            "s2",
+            "scalar_compute",
+            {
+                "operation": "percent",
+                "operands": [
+                    {"value_ref": "s1", "column": "engineering_employees"},
+                    {"value_ref": "s1", "column": "total_employees"},
+                ],
+                "result_name": "engineering_percentage",
+            },
+        ),
+    ]
+    t.check(
+        "scalar arithmetic resolves named columns from one aggregate row",
+        run_plan(h, plan5) == [(50.0,)],
+        str(run_plan(h, plan5)),
+    )
+
     return t.result()

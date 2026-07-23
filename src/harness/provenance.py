@@ -134,11 +134,14 @@ def build_references(tool: str, args: dict, resolve_step) -> list[dict]:
                 continue
             sid = resolve_step(operand["value_ref"])
             if sid:
+                target = {"operand_index": index}
+                if isinstance(operand.get("column"), str):
+                    target["column"] = operand["column"]
                 refs.append({
                     "type": "value",
                     "step": sid,
                     "role": "operand",
-                    "target": {"operand_index": index},
+                    "target": target,
                 })
     return refs
 

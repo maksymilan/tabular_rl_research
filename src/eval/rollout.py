@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 from executor import Harness                                    # noqa: E402
 from environment_state import EnvironmentState                  # noqa: E402
 from plan import resolve_cond, _value_ref_ids                  # noqa: E402
-from scalar_grounding import extract_scalar                    # noqa: E402
+from scalar_grounding import ScalarGroundingError, extract_scalar  # noqa: E402
 from provenance import build_grounding_references, build_references  # noqa: E402
 from catalog import build_catalog                             # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
@@ -222,10 +222,29 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
             resolved_aggregations.append(resolved)
         exec_args["aggregations"] = resolved_aggregations
     elif tool == "scalar_compute":
+        def read_table_cell(table: str, column: str):
+            columns = h._cols(table)
+            matches = [
+                index
+                for index, candidate in enumerate(columns)
+                if candidate.casefold() == column.casefold()
+            ]
+            rows = h.rows(table)
+            if len(matches) != 1 or len(rows) != 1:
+                raise ScalarGroundingError(
+                    f"named scalar source {table}.{column} is not an unambiguous one-row cell"
+                )
+            return rows[0][matches[0]]
+
         resolved_operands = []
         for operand in exec_args.get("operands") or []:
             if "value_ref" in operand:
-                resolved_operands.append(extract_scalar(ctx["history"], operand["value_ref"]))
+                resolved_operands.append(extract_scalar(
+                    ctx["history"],
+                    operand["value_ref"],
+                    column=operand.get("column"),
+                    table_cell_reader=read_table_cell,
+                ))
             else:
                 resolved_operands.append(operand["value"])
         exec_args["operands"] = resolved_operands

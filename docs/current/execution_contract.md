@@ -1,7 +1,7 @@
 # Canonical Execution Contract
 
 Status: active contract for **new** SFT generation, evaluation, and RL episodes under
-`version18`. `src/sft/protocol.py` is executable authority; this document makes
+`version19`. `src/sft/protocol.py` is executable authority; this document makes
 the ownership boundaries explicit. Old trajectory artifacts remain replay inputs, not examples of
 the public action interface.
 
@@ -58,6 +58,8 @@ stored trajectory but is not replayed as a contradictory visible example.
 
 `plan` is control state only. It cannot supply a factual answer or a `value_ref`. A scalar
 `value_ref` names an earlier producing `step_id`; the harness extracts and validates that scalar.
+For `scalar_compute`, an optional `column` selects one unambiguous non-NULL cell from a prior
+one-row table; model-authored values are still outside the trust boundary.
 Canonical plan evidence retains the grounded step output for replay and audit. Its model-visible
 resident rendering exposes only the evidence `step_id` and tool identity; the authoritative table
 or scalar payload already appears under resident tables/values and is not duplicated inside plan.
@@ -80,7 +82,7 @@ way to view row values; handles alone expose schema and row-count metadata. Its 
 be an integer from 1 through 20. Larger or non-integer values are explicit argument-validation
 errors and are never silently clamped.
 
-## Current version18 Conditional Aggregation and Wide Output
+## Current version19 Conditional Aggregation and Wide Output
 
 `group_aggregate` keeps one input table and one `group_by` grain. Each aggregation may add an
 optional `where` predicate:
@@ -135,7 +137,32 @@ grouped table and no second model action. `project` remains an orthogonal select
 it preserves row orientation and cannot replace wide aggregation. The version16/17 standalone
 `pivot` call remains replay-only.
 
-## Current version18 Join and Column Naming
+### Named Scalar Cells
+
+A one-row multi-metric aggregate can feed arithmetic directly:
+
+```json
+{
+  "operation": "percent",
+  "operands": [
+    {"value_ref": "step_7", "column": "usa_nominees"},
+    {"value_ref": "step_7", "column": "total_nominees"}
+  ],
+  "result_name": "percentage"
+}
+```
+
+The canonical trajectory retains these authored references. During execution, the harness verifies
+that `step_7` produced a resident table with exactly one row, resolves each case-insensitive column
+name uniquely against that table's canonical output columns, reads the real cell, and rejects NULL.
+It records two value-provenance edges, each carrying its operand index and selected column. The
+model therefore cannot forge the values, while a single conditional aggregate can support later
+percent, difference, ratio, or percent-change arithmetic without redundant branches.
+
+Without `column`, the existing rule remains strict: the producing result must be 1x1. Named-column
+references do not apply to predicates, which continue to require a scalar-producing step.
+
+## Current version19 Join and Column Naming
 
 For source tables and unambiguous derived handles, arguments use the schema column name shown by
 `describe_table` or the state handle. The model never emits SQLite aliases (`L.`, `R.`) or SQL
@@ -232,14 +259,14 @@ Whole episode restarts, when used for pass@k, are separate attempts and retain s
 
 The active shared implementation is `src/eval/rollout.py`, `src/eval/rollout_passk.py`,
 `src/sft/generate_teacher_rollouts.py`, and `src/rl/tool_environment.py` (used by the Accelerate backend). The
-historical Verl token-concatenating adapter is not a version18 training entry point, because state-only
+historical Verl token-concatenating adapter is not a version19 training entry point, because state-only
 rebuilding needs per-turn loss accounting rather than one appended transcript.
 
 ## Migration Rule
 
-Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use version18,
+Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use version19,
 but new SFT construction remains gated on the frozen 200-task accuracy requirement. Historical
-version1-version17 artifacts retain their original model-visible contracts and may only enter
-replay-compatible paths. Every version18 teacher/eval result directory and manifest must record its
-version18 protocol hash and provider request controls; historical data is not relabeled or mutated
+version1-version18 artifacts retain their original model-visible contracts and may only enter
+replay-compatible paths. Every version19 teacher/eval result directory and manifest must record its
+version19 protocol hash and provider request controls; historical data is not relabeled or mutated
 in place.

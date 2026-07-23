@@ -58,7 +58,8 @@ TOOL_SPECS: dict[str, str] = {
     "scalar_compute":
         'scalar_compute(operation, operands, result_name="value") -> a grounded one-row, one-column '
         'table. operation: add|subtract|multiply|divide|percent|percent_change|date_diff_days. '
-        'Each operand is exactly {"value_ref":"step_k"} for a prior scalar-producing step or '
+        'Each operand is exactly {"value_ref":"step_k"} for a prior 1x1 step, '
+        '{"value_ref":"step_k","column":"metric"} for one named column of a prior one-row table, or '
         '{"value":constant} for a constant stated by the task. Operand order matters for subtract, '
         'divide, percent (part/whole*100), percent_change ((new-old)/old*100), and date_diff_days '
         '(start,end). Cite the resulting table directly or reuse its producing step as value_ref.',
@@ -123,7 +124,7 @@ LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version18"  # public tool versions now increment numerically: version1, version2, ...
+PROTOCOL_VERSION = "version19"  # public tool versions now increment numerically: version1, version2, ...
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 
@@ -186,6 +187,10 @@ CANONICAL_CALL_COOKBOOK = (
     '"output_layout":"columns","category_values":["M","F"]}}\n'
     'Compute a grounded percentage: {"tool":"scalar_compute","arguments":{"operation":"percent",'
     '"operands":[{"value_ref":"step_5"},{"value_ref":"step_3"}],"result_name":"percentage"}}\n'
+    'Compute from two named metrics in one prior row: {"tool":"scalar_compute","arguments":'
+    '{"operation":"percent","operands":['
+    '{"value_ref":"step_7","column":"usa_nominees"},'
+    '{"value_ref":"step_7","column":"total_nominees"}],"result_name":"percentage"}}\n'
     'Top 3 with exact output: {"tool":"extreme_value_select","arguments":{"table":"employees",'
     '"order_by":["sick_leave_hours DESC"],"top_k":3,"return_columns":["job_title"]}}\n'
     'Set operation after aligning both inputs with project: {"tool":"set_op","arguments":'
@@ -425,19 +430,23 @@ def validate_model_arguments(tool: str, args: dict) -> None:
         if operation in {"divide", "percent", "percent_change", "date_diff_days"} and len(operands) != 2:
             raise ProtocolError(f"scalar_compute: {operation} requires exactly two operands")
         for index, operand in enumerate(operands):
-            if not isinstance(operand, dict) or len(operand) != 1:
+            keys = set(operand) if isinstance(operand, dict) else set()
+            if keys not in ({"value"}, {"value_ref"}, {"value_ref", "column"}):
                 raise ProtocolError(
-                    f"scalar_compute: operands[{index}] must contain exactly value_ref or value"
+                    f"scalar_compute: operands[{index}] must be exactly value, value_ref, "
+                    "or value_ref+column"
                 )
-            if set(operand) == {"value_ref"}:
+            if "value_ref" in keys:
                 if not isinstance(operand["value_ref"], str) or not operand["value_ref"].strip():
                     raise ProtocolError(
                         f"scalar_compute: operands[{index}].value_ref must be a step id"
                     )
-            elif set(operand) != {"value"}:
-                raise ProtocolError(
-                    f"scalar_compute: operands[{index}] must contain exactly value_ref or value"
-                )
+                if "column" in keys and (
+                    not isinstance(operand["column"], str) or not operand["column"].strip()
+                ):
+                    raise ProtocolError(
+                        f"scalar_compute: operands[{index}].column must be a non-empty column name"
+                    )
     if tool == "answer_from_context":
         evidence = args.get("evidence")
         if (
@@ -480,7 +489,9 @@ SYSTEM_PROMPT = (
     "3. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
     "4. To use a computed scalar as a threshold, set the predicate's "
     '{"value_ref": step_id} to the step that produced that scalar. To answer with a scalar, cite '
-    "that producing 1x1 table as terminal evidence; never copy its value into the final call.\n"
+    "that producing 1x1 table as terminal evidence; never copy its value into the final call. "
+    "For arithmetic over a one-row table containing several named metrics, reuse the same producing "
+    'step with {"value_ref":step_id,"column":"metric"} for each operand.\n'
     "5. For every answer, make the evidence table's rows, columns, and column order exactly match "
     "the requested output. read_subtable only observes rows; it does not change table shape. If "
     "extra/helper columns remain, project first, then cite that table. Never write answer data "
@@ -525,7 +536,8 @@ SYSTEM_PROMPT_COMPACT = (
     "rows and columns; project first if it does not. Compute several conditional metrics that share "
     "one population in one group_aggregate call using per-aggregation where predicates. Use "
     "group_aggregate output_layout=columns, not project, to turn grouped category rows into one row "
-    "of separate metric columns.\n\n"
+    "of separate metric columns. scalar_compute may cite a named metric from a one-row table with "
+    "a value_ref+column operand.\n\n"
     "TOOLS\n"
     "plan(ops), describe_table(tables), inspect_column(table,column,top_k?), condition_filter(table,conditions,return_columns?), "
     "project(table,expressions,distinct?), scalar_compute(operation,operands,result_name?), "
@@ -588,7 +600,8 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
     "database fields separate; do not replace "
     "IDs/codes with labels, normalize stored text, or round computed values unless explicitly "
     "requested. Use project distinct=true for unique rows and scalar_compute for arithmetic over "
-    "grounded scalar steps. Use aggregation-level where predicates when several conditional metrics "
+    "grounded scalar steps; when one prior row contains several metrics, cite each as "
+    "value_ref+column without recomputing it. Use aggregation-level where predicates when several conditional metrics "
     "must retain one input population and grain. Use group_aggregate output_layout=columns rather "
     "than project when grouped categories must become separate columns in one row. The harness "
     "strictly validates and executes the action."

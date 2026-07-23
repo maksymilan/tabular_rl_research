@@ -1,4 +1,4 @@
-# Current Trajectory Protocol (version18)
+# Current Trajectory Protocol (version19)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -104,12 +104,15 @@ Public version mapping:
   category into one row with ordered category columns;
 - `version17`: the `project` contract explicitly states that it preserves
   row orientation and directs category-row-to-column reshaping to `pivot`;
-- `version18`: current implementation; the separate public `pivot` action is folded into
+- `version18`: the separate public `pivot` action is folded into
   `group_aggregate(output_layout="columns", category_values=[...], output_columns=[...])`.
   Historical pivot calls remain replay-compatible only;
-- future changes increment only the integer (`version19`, `version20`, ...).
+- `version19`: current implementation; `scalar_compute` can cite a named column from a prior
+  one-row multi-metric result using `{"value_ref":"step_k","column":"metric"}`. The harness
+  resolves the exact non-NULL cell and records the output column on each value edge;
+- future changes increment only the integer (`version20`, `version21`, ...).
 
-The current version18 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
+The current version19 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
 - `plan`
@@ -151,9 +154,28 @@ become one output slot each; optional `output_columns` renames those slots one-f
 changing their order. Default `output_layout="rows"` retains ordinary SQL GROUP BY row output.
 `project` cannot change row orientation.
 
+When such an aggregate returns exactly one row with several named metrics, `scalar_compute` can
+reuse its cells without splitting the aggregation:
+
+```json
+{
+  "operation": "percent",
+  "operands": [
+    {"value_ref": "step_7", "column": "usa_nominees"},
+    {"value_ref": "step_7", "column": "total_nominees"}
+  ],
+  "result_name": "percentage"
+}
+```
+
+The step must identify a table with exactly one row, each column name must match exactly one output
+column case-insensitively, and each cell must be non-NULL. The harness reads the cell from its
+resident table rather than trusting a model-authored value. Omitting `column` retains the original
+1x1-only behavior.
+
 No `add_to_memory` tool exists in v2c-plan. No reflection or invalidate tool exists.
 
-### Join Identifier Rule (version18; unchanged from version8)
+### Join Identifier Rule (version19; unchanged from version8)
 
 `join_tables(base, joins, base_role?)` joins a connected component in one model action. Every
 `joins[]` item attaches exactly one new table. Its `on.left` values are exact already-introduced
@@ -202,9 +224,10 @@ Memory is not part of the current model-visible protocol:
 - no `mem_` references;
 - no `supporting_memory_ids`.
 
-Computed scalars are reused through `condition_filter.conditions[*].value_ref`, and `value_ref`
-points directly to the step id that produced the scalar. The harness performs scalar extraction and
-validation.
+Computed scalars are reused through direct producing-step `value_ref`. Predicates require a
+scalar-shaped producing step. `scalar_compute` additionally accepts `value_ref+column` for one
+named cell of a one-row multi-metric table. The harness performs scalar/cell extraction and
+validation in both cases.
 
 ## Harness-Owned Fields
 

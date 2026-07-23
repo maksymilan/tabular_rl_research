@@ -144,6 +144,36 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertEqual(refs[0]["role"], "domain_observation")
         self.assertEqual(refs[0]["target"]["values"], ["M", "F"])
 
+    def test_named_scalar_operands_keep_distinct_column_provenance(self):
+        refs = build_references(
+            "scalar_compute",
+            {
+                "operation": "percent",
+                "operands": [
+                    {"value_ref": "step_7", "column": "usa_nominees"},
+                    {"value_ref": "step_7", "column": "total_nominees"},
+                ],
+            },
+            lambda ref: ref if ref == "step_7" else None,
+        )
+        self.assertEqual(
+            refs,
+            [
+                {
+                    "type": "value",
+                    "step": "step_7",
+                    "role": "operand",
+                    "target": {"operand_index": 0, "column": "usa_nominees"},
+                },
+                {
+                    "type": "value",
+                    "step": "step_7",
+                    "role": "operand",
+                    "target": {"operand_index": 1, "column": "total_nominees"},
+                },
+            ],
+        )
+
     def test_harness_infers_final_table_and_perception_chain_without_model_evidence(self):
         with tempfile.NamedTemporaryFile(suffix=".sqlite") as tmp:
             conn = sqlite3.connect(tmp.name)

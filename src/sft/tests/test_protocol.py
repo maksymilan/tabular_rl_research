@@ -20,7 +20,7 @@ from protocol import (  # noqa: E402
 
 class ProtocolParseTests(unittest.TestCase):
     def test_current_prompt_has_canonical_calls_and_exact_final_shape(self):
-        self.assertEqual(PROTOCOL_VERSION, "version18")
+        self.assertEqual(PROTOCOL_VERSION, "version19")
         for tool in (
             "condition_filter", "project", "join_tables", "group_aggregate",
             "scalar_compute", "set_op", "answer_from_context",
@@ -35,6 +35,7 @@ class ProtocolParseTests(unittest.TestCase):
         self.assertIn("A simple direct task may omit it", SYSTEM_PROMPT)
         self.assertIn("do not concatenate names", SYSTEM_PROMPT)
         self.assertIn('"operation":"percent"', SYSTEM_PROMPT)
+        self.assertIn('"column":"usa_nominees"', SYSTEM_PROMPT)
         self.assertIn('"as":"female_count","where"', SYSTEM_PROMPT)
         self.assertIn("same population", SYSTEM_PROMPT)
         self.assertIn('"output_layout":"columns"', SYSTEM_PROMPT)
@@ -241,11 +242,33 @@ class ProtocolParseTests(unittest.TestCase):
         self.assertEqual(tool, "scalar_compute")
         self.assertEqual(args["operands"][0], {"value_ref": "step_3"})
 
-        with self.assertRaisesRegex(ProtocolError, "exactly value_ref or value"):
+        _, tool, args = parse_assistant_strict(
+            '<think>Reuse two named metrics from one aggregate row.</think><tool_call>'
+            '{"tool":"scalar_compute","arguments":{"operation":"percent",'
+            '"operands":[{"value_ref":"step_7","column":"usa_nominees"},'
+            '{"value_ref":"step_7","column":"total_nominees"}],'
+            '"result_name":"percentage"}}</tool_call>'
+        )
+        self.assertEqual(tool, "scalar_compute")
+        self.assertEqual(
+            args["operands"],
+            [
+                {"value_ref": "step_7", "column": "usa_nominees"},
+                {"value_ref": "step_7", "column": "total_nominees"},
+            ],
+        )
+
+        with self.assertRaisesRegex(ProtocolError, "exactly value, value_ref, or value_ref\\+column"):
             parse_assistant_strict(
                 '<think>Bad operand.</think><tool_call>{"tool":"scalar_compute",'
                 '"arguments":{"operation":"subtract","operands":'
                 '[{"value_ref":"step_2","value":2},{"value":1}]}}</tool_call>'
+            )
+        with self.assertRaisesRegex(ProtocolError, "column must be a non-empty column name"):
+            parse_assistant_strict(
+                '<think>Bad named metric.</think><tool_call>{"tool":"scalar_compute",'
+                '"arguments":{"operation":"subtract","operands":'
+                '[{"value_ref":"step_2","column":""},{"value":1}]}}</tool_call>'
             )
 
     def test_version15_conditional_aggregate_shape(self):

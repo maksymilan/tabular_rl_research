@@ -35,7 +35,7 @@ Start at `docs/current/README.md`.
 ### Model-visible protocol
 
 - Source of truth: `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current implementation: `version18`; `version11` remains the last contract with a completed
+- Current implementation: `version19`; `version11` remains the last contract with a completed
   fixed-200 validation. The former `v2i-state-only-join-feedback-r2` contract is `version1`;
   `version2` added canonical calls/final shape, `version3` added precise provider feedback and
   stable projected join columns, and `version4` counted provider-carrier failures precisely.
@@ -63,6 +63,9 @@ Start at `docs/current/README.md`.
   separate `pivot` reshape atom and `version17` clarified its boundary with `project`. `version18`
   folds that reshape into `group_aggregate(output_layout="columns", category_values=[...])`;
   `pivot` is replay-only, so the model chooses one aggregate tool rather than two competing tools.
+  `version19` lets `scalar_compute` cite a named column from a prior one-row multi-metric table as
+  `{"value_ref":"step_k","column":"metric"}`, avoiding duplicate aggregation while preserving
+  harness-owned cell grounding and per-column provenance.
   Future versions increment numerically.
 - The canonical model action contains exactly one `<think>` block and one strict `<tool_call>` JSON
   object. A provider-native reasoning adapter may carry the same authored reason in a separate API
@@ -75,7 +78,7 @@ Start at `docs/current/README.md`.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id
   `value_ref`.
-- Do not construct new version12-version18 SFT data until the frozen 200-task tool-usability gate
+- Do not construct new version12-version19 SFT data until the frozen 200-task tool-usability gate
   is explicitly passed. Small pilots are diagnostic only and are not SFT sources.
 
 ### Recovery and provenance

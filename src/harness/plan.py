@@ -150,14 +150,36 @@ def run_plan(harness, plan: Plan) -> list[tuple]:
                     continue
                 ref = operand["value_ref"]
                 if ref in values:
+                    if operand.get("column") is not None:
+                        raise ValueError(
+                            f"scalar_compute value_ref {ref!r} is a scalar and has no named columns"
+                        )
                     resolved_operands.append(values[ref])
                 elif ref in id_to_table:
                     rows = harness.rows(id_to_table[ref])
-                    if len(rows) != 1 or len(rows[0]) != 1 or rows[0][0] is None:
+                    columns = harness._cols(id_to_table[ref])
+                    requested_column = operand.get("column")
+                    if requested_column is not None:
+                        matches = [
+                            index
+                            for index, candidate in enumerate(columns)
+                            if candidate.casefold() == requested_column.casefold()
+                        ]
+                        if len(rows) != 1 or len(matches) != 1:
+                            raise ValueError(
+                                f"scalar_compute value_ref {ref!r} does not resolve named column "
+                                f"{requested_column!r} from exactly one row"
+                            )
+                        value = rows[0][matches[0]]
+                    elif len(rows) == 1 and len(rows[0]) == 1:
+                        value = rows[0][0]
+                    else:
                         raise ValueError(
                             f"scalar_compute value_ref {ref!r} is not a non-NULL 1x1 result"
                         )
-                    resolved_operands.append(rows[0][0])
+                    if value is None:
+                        raise ValueError(f"scalar_compute value_ref {ref!r} resolved to NULL")
+                    resolved_operands.append(value)
                 else:
                     raise ValueError(f"scalar_compute value_ref {ref!r} is unresolved")
             args["operands"] = resolved_operands

@@ -71,6 +71,78 @@ class ConditionalAggregateExecutionTests(unittest.TestCase):
             context["history"]["step_2"]["references"],
         )
 
+    def test_scalar_compute_reuses_named_cells_from_one_multi_metric_row(self):
+        harness = Harness(":memory:")
+        harness.conn.executescript(
+            """
+            CREATE TABLE nominees(country TEXT);
+            INSERT INTO nominees VALUES
+              ('USA'), ('USA'), ('USA'), ('CANADA'), ('FRANCE');
+            """
+        )
+        harness.register_sources()
+        context = new_ctx()
+
+        aggregate_output, aggregate_table = execute_tool(
+            harness,
+            "group_aggregate",
+            {
+                "table": "nominees",
+                "group_by": [],
+                "aggregations": [
+                    {"op": "count", "column": "*", "as": "total_nominees"},
+                    {
+                        "op": "count",
+                        "column": "*",
+                        "as": "usa_nominees",
+                        "where": {"column": "country", "op": "=", "value": "USA"},
+                    },
+                ],
+            },
+            context,
+            "step_1",
+        )
+        self.assertEqual(aggregate_output["columns"], ["total_nominees", "usa_nominees"])
+        self.assertEqual(aggregate_output["row_count"], 1)
+        self.assertNotIn("rows", aggregate_output)
+        self.assertEqual(harness.rows(aggregate_table), [(5, 3)])
+
+        scalar_args = {
+            "operation": "percent",
+            "operands": [
+                {"value_ref": "step_1", "column": "usa_nominees"},
+                {"value_ref": "step_1", "column": "total_nominees"},
+            ],
+            "result_name": "percentage",
+        }
+        scalar_output, _ = execute_tool(
+            harness,
+            "scalar_compute",
+            scalar_args,
+            context,
+            "step_2",
+        )
+
+        self.assertEqual(scalar_output["rows"], [[60.0]])
+        self.assertEqual(context["history"]["step_2"]["arguments"], scalar_args)
+        self.assertEqual(
+            context["history"]["step_2"]["references"],
+            [
+                {
+                    "type": "value",
+                    "step": "step_1",
+                    "role": "operand",
+                    "target": {"operand_index": 0, "column": "usa_nominees"},
+                },
+                {
+                    "type": "value",
+                    "step": "step_1",
+                    "role": "operand",
+                    "target": {"operand_index": 1, "column": "total_nominees"},
+                },
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

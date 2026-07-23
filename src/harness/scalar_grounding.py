@@ -13,9 +13,10 @@ successful steps (the emitter's running step list / the rollout tool history). `
 step's tool_output dict (legacy `aggregate -> {"result_sample": [[v]], ...}`; a table -> a
 metadata handle that carries `rows`/`columns` only when it is a 1x1 scalar-shaped result).
 
-Only an unambiguous scalar source is accepted: a scalar tool result, or a one-row one-column table,
-non-NULL. Everything else is rejected (never guessed), so a `value_ref` can never resolve to an
-ambiguous or fabricated value.
+Only an unambiguous scalar source is accepted: a scalar tool result, a one-row one-column table, or
+a named column from a one-row table, non-NULL. For metadata-only multi-column tables, the online
+harness supplies the authoritative cell reader. Everything else is rejected (never guessed), so a
+`value_ref` can never resolve to an ambiguous or fabricated value.
 """
 from __future__ import annotations
 
@@ -27,15 +28,58 @@ class ScalarGroundingError(Exception):
         self.code = code            # machine-readable bucket for the manifest / RL reject accounting
 
 
-def extract_scalar(history: dict, source_step_id: str):
+def extract_scalar(
+    history: dict,
+    source_step_id: str,
+    column: str | None = None,
+    table_cell_reader=None,
+):
     """Return the real scalar produced at `source_step_id`, or raise ScalarGroundingError. Strict: a
-    scalar tool result or a 1x1 table, non-NULL. Rejects missing / 0-row / multi-row / multi-column /
-    NULL so a `value_ref` can never resolve to a guessed or ambiguous value."""
+    scalar tool result, a 1x1 table, or one named column from a one-row table, non-NULL. Rejects
+    missing / 0-row / multi-row / ambiguous-column / NULL sources so a `value_ref` can never resolve
+    to a guessed or ambiguous value. A named column whose row is not resident in the output requires
+    a harness-owned ``table_cell_reader(table_handle, canonical_column)`` callback."""
     step = history.get(source_step_id)
     if step is None:
         raise ScalarGroundingError(f"source step {source_step_id!r} not in history", "missing_source")
     out = step.get("output", {})
-    if "result_sample" in out:                       # scalar tool (aggregate)
+    if column is not None:
+        if not isinstance(column, str) or not column.strip():
+            raise ScalarGroundingError("named scalar column is empty", "missing_column")
+        table = out.get("table")
+        cols = out.get("columns")
+        if not isinstance(table, str) or not isinstance(cols, list):
+            raise ScalarGroundingError(
+                "named scalar source is not a table-producing step",
+                "non_table_source",
+            )
+        if out.get("row_count") != 1:
+            raise ScalarGroundingError(
+                f"table source has {out.get('row_count')} rows, not 1",
+                "multi_row_source",
+            )
+        matches = [
+            (index, candidate)
+            for index, candidate in enumerate(cols)
+            if isinstance(candidate, str) and candidate.casefold() == column.casefold()
+        ]
+        if len(matches) != 1:
+            raise ScalarGroundingError(
+                f"column {column!r} does not identify exactly one source column; available: {cols}",
+                "missing_column" if not matches else "ambiguous_column",
+            )
+        index, canonical_column = matches[0]
+        rows = out.get("rows")
+        if isinstance(rows, list) and len(rows) == 1 and len(rows[0]) == len(cols):
+            value = rows[0][index]
+        elif table_cell_reader is not None:
+            value = table_cell_reader(table, canonical_column)
+        else:
+            raise ScalarGroundingError(
+                "named scalar source row is not resident and no table reader was supplied",
+                "unreadable_table_source",
+            )
+    elif "result_sample" in out:                    # scalar tool (aggregate)
         rs = out["result_sample"]
         if out.get("row_count", len(rs)) != 1 or len(rs) != 1 or len(rs[0]) != 1:
             raise ScalarGroundingError("scalar tool did not yield exactly one value", "non_scalar_source")
@@ -56,11 +100,21 @@ def extract_scalar(history: dict, source_step_id: str):
     return value
 
 
-def ground_scalar_reference(history: dict, source_step_id: str):
+def ground_scalar_reference(
+    history: dict,
+    source_step_id: str,
+    column: str | None = None,
+    table_cell_reader=None,
+):
     """Neutral public API: the validated scalar that a `value_ref` resolves to. Raises
     ScalarGroundingError on any non-scalar / NULL / missing source. This is the single place a
     `value_ref`'s value is produced (offline emitter + online rollout both call it)."""
-    return extract_scalar(history, source_step_id)
+    return extract_scalar(
+        history,
+        source_step_id,
+        column=column,
+        table_cell_reader=table_cell_reader,
+    )
 
 
 if __name__ == "__main__":   # unit demo: ground an aggregate scalar; reject a multi-row table source
