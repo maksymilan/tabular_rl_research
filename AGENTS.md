@@ -35,7 +35,8 @@ Start at `docs/current/README.md`.
 ### Model-visible protocol
 
 - Source of truth: `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current version: `version11`. The former `v2i-state-only-join-feedback-r2` contract is `version1`;
+- Current implementation: `version13`; `version11` remains the last contract with a completed
+  fixed-200 validation. The former `v2i-state-only-join-feedback-r2` contract is `version1`;
   `version2` added canonical calls/final shape, `version3` added precise provider feedback and
   stable projected join columns, and `version4` counted provider-carrier failures precisely.
   `version5` replaced prefix-heavy joins with `base + joins[]`, a flat `relation.column` namespace,
@@ -51,19 +52,23 @@ Start at `docs/current/README.md`.
   additionally uses the provider's JSON Output constraint for visible action content, then wraps
   that unmodified JSON in the internal canonical tool-call envelope. `version11` removes the last
   generic visible-`<tool_call>` wording from the DeepSeek-facing generation and retry clauses, so
-  the API-facing prompt names only the native-reasoning + raw-JSON carrier. Future versions
-  increment numerically.
+  the API-facing prompt names only the native-reasoning + raw-JSON carrier. `version12` adds
+  `project(distinct=...)` and grounded `scalar_compute`; `version13` makes terminal answers cite
+  one exact result table, including 1x1 scalar tables, instead of carrying model-authored answer
+  values. Future versions increment numerically.
 - The canonical model action contains exactly one `<think>` block and one strict `<tool_call>` JSON
   object. A provider-native reasoning adapter may carry the same authored reason in a separate API
   field, but its API-facing prompt and history must describe only that one carrier.
 - Context is rebuilt from catalog + question + optional external knowledge + current resident state
   + optional `LAST TOOL ERROR`; it is not an appended observation transcript.
 - Current tools: `plan`, `describe_table`, `inspect_column`, `read_subtable`,
-  `condition_filter`, `project`, `join_tables`, `group_aggregate`,
+  `condition_filter`, `project`, `scalar_compute`, `join_tables`, `group_aggregate`,
   `extreme_value_select`, `set_op`, and `answer_from_context`.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id
   `value_ref`.
+- Do not construct new version12/version13 SFT data until the frozen 200-task tool-usability gate
+  is explicitly passed. Small pilots are diagnostic only and are not SFT sources.
 
 ### Recovery and provenance
 

@@ -1,4 +1,4 @@
-# Current Trajectory Protocol (version11)
+# Current Trajectory Protocol (version13)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -88,15 +88,19 @@ Public version mapping:
   and audits the request controls plus returned provider identity metadata;
 - `version10`: constrains provider-visible actions with JSON Output and wraps the unchanged returned
   JSON in the internal canonical `<tool_call>` envelope;
-- `version11`: current contract; removes the remaining generic visible-`<tool_call>` wording from
+- `version11`: removes the remaining generic visible-`<tool_call>` wording from
   DeepSeek-facing generation and retry instructions, leaving one raw-JSON visible contract;
-- future changes increment only the integer (`version12`, `version13`, ...).
+- `version12`: adds `project(distinct=...)` and a grounded `scalar_compute` atom;
+- `version13`: current implementation; terminal actions cite one exact result table, including a
+  1x1 table for scalar answers, and cannot carry model-authored answer values;
+- future changes increment only the integer (`version14`, `version15`, ...).
 
-The current version11 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
+The current version13 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
 - `plan`
 - `project`
+- `scalar_compute`
 - `join_tables`
 - `group_aggregate`
 - `extreme_value_select`
@@ -110,11 +114,12 @@ The full system prompt includes one concise canonical JSON call for each complex
 filter, projection/computed column, join, grouped/scalar aggregation, set operation, table answer,
 and scalar answer. These examples use only the current public fields.
 
-For a row-valued terminal answer, the cited evidence table is scored as the answer. Its rows,
-columns, and column order must match the requested output exactly. `read_subtable(columns=...)` only
-limits observation and does not change table shape. If helper columns remain, the model must call
-`project` before `answer_from_context(evidence={"table": ...}, answer=[])`. For scalar answers, use
-`evidence=null` and `answer=[value]`; think/reason text cannot repair answer data.
+For every terminal answer, the cited evidence table is scored as the answer. Its rows, columns, and
+column order must match the requested output exactly. `read_subtable(columns=...)` only limits
+observation and does not change table shape. If helper columns remain, the model must call `project`
+before `answer_from_context(evidence={"table": ...})`. Scalar aggregates and `scalar_compute`
+produce 1x1 evidence tables and use the same terminal shape. The terminal call contains no
+model-authored answer data; think/reason text cannot repair answer data.
 
 `read_subtable.limit` is an integer in `1..20`. An out-of-range value is an explicit
 `argument_validation_error`; the harness never clamps it. In bounded rolling mode, prior successful
@@ -122,7 +127,7 @@ actions retain compact result summaries while full factual payloads remain in re
 
 No `add_to_memory` tool exists in v2c-plan. No reflection or invalidate tool exists.
 
-### Join Identifier Rule (version11; unchanged from version8)
+### Join Identifier Rule (version13; unchanged from version8)
 
 `join_tables(base, joins, base_role?)` joins a connected component in one model action. Every
 `joins[]` item attaches exactly one new table. Its `on.left` values are exact already-introduced

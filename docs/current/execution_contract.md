@@ -1,7 +1,7 @@
 # Canonical Execution Contract
 
 Status: active contract for **new** SFT generation, evaluation, and RL episodes under
-`version11`. `src/sft/protocol.py` is executable authority; this document makes
+`version13`. `src/sft/protocol.py` is executable authority; this document makes
 the ownership boundaries explicit. Old trajectory artifacts remain replay inputs, not examples of
 the public action interface.
 
@@ -61,7 +61,7 @@ but is not replayed as a contradictory visible example.
 
 New actions may use only:
 
-`plan`, `describe_table`, `inspect_column`, `condition_filter`, `project`, `join_tables`,
+`plan`, `describe_table`, `inspect_column`, `condition_filter`, `project`, `scalar_compute`, `join_tables`,
 `group_aggregate`, `extreme_value_select`, `set_op`, `read_subtable`, and `answer_from_context`.
 
 `aggregate`, `derive_column`, old two-table join fields (`left`, `right`, `join_type`,
@@ -75,7 +75,7 @@ way to view row values; handles alone expose schema and row-count metadata. Its 
 be an integer from 1 through 20. Larger or non-integer values are explicit argument-validation
 errors and are never silently clamped.
 
-## Current version11 Join and Column Naming
+## Current version13 Join and Column Naming
 
 For source tables and unambiguous derived handles, arguments use the schema column name shown by
 `describe_table` or the state handle. The model never emits SQLite aliases (`L.`, `R.`) or SQL
@@ -172,13 +172,14 @@ Whole episode restarts, when used for pass@k, are separate attempts and retain s
 
 The active shared implementation is `src/eval/rollout.py`, `src/eval/rollout_passk.py`,
 `src/sft/generate_teacher_rollouts.py`, and `src/rl/tool_environment.py` (used by the Accelerate backend). The
-historical Verl token-concatenating adapter is not a version11 training entry point, because state-only
+historical Verl token-concatenating adapter is not a version13 training entry point, because state-only
 rebuilding needs per-turn loss accounting rather than one appended transcript.
 
 ## Migration Rule
 
-Do not mix naming contracts inside one dataset or evaluation. New episodes use version11. Historical
-version1-version9 artifacts retain their original model-visible contracts and may only enter
-replay-compatible paths. Every version11 teacher/eval result directory and manifest must record its
-version11 protocol hash and provider request controls; historical data is not relabeled or mutated
+Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use version13,
+but new SFT construction remains gated on the frozen 200-task accuracy requirement. Historical
+version1-version12 artifacts retain their original model-visible contracts and may only enter
+replay-compatible paths. Every version13 teacher/eval result directory and manifest must record its
+version13 protocol hash and provider request controls; historical data is not relabeled or mutated
 in place.
