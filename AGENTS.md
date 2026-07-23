@@ -125,6 +125,10 @@ Start at `docs/current/README.md`.
   carrier protocol errors, but still misses the 150/200 gate; 53 of its 62 failures are error-free
   legal trajectories. See
   `docs/reports/evaluation/BIRD_VERSION20_CARRIER_SCHEMA_FIXED200_20260723.md`.
+- A deterministic-resolution version21 ablation reached 139/200 but reduced legal termination to
+  197/200, raised process errors from 24 to 38, and used 8.0% more tokens. Its 9 paired gains versus
+  8 regressions were not significant, so it was not promoted and the active code remains version20.
+  See `docs/reports/evaluation/BIRD_VERSION21_RESOLUTION_ABLATION_FIXED200_20260723.md`.
 - A paired six-hard-task diagnostic found no gain from forced resident planning:
   optional and required were both 0/6, while required planning increased mean actions by 16.4%
   and tokens by 18.5%. Keep `required-resident` experimental; do not expand it or make it default
