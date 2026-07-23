@@ -26,10 +26,10 @@ sys.path.insert(0, os.path.join(ROOT, "src", "harness"))
 sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 
 from artifacts import ArtifactWriter  # noqa: E402
+from denotation import add_denotation_comparison_argument  # noqa: E402
 from executor import Harness  # noqa: E402
 from passk import attach_passk_fields, parse_pass_k, write_passk_summary  # noqa: E402
 from protocol import (  # noqa: E402
-    DENOTATION_COMPARISONS,
     ProtocolError,
     assistant_message,
     first_user_message,
@@ -563,11 +563,7 @@ def main() -> int:
     parser.add_argument(
         "--rolling-observation-style", choices=["resident", "full"], default="resident",
     )
-    parser.add_argument(
-        "--denotation-comparison", choices=DENOTATION_COMPARISONS,
-        default="strict-multiset",
-        help="result comparison contract; use bird-set for literature-comparable BIRD EX",
-    )
+    add_denotation_comparison_argument(parser)
     args = parser.parse_args()
 
     try:

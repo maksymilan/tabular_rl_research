@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import re
 from copy import deepcopy
@@ -49,10 +48,18 @@ TOOL_SPECS: dict[str, str] = {
         'set membership against a computed table via {"column":a,"op":"in","in_table":table}; '
         'combine with {"and":[..]}, {"or":[..]}, {"not": ..}.',
     "project":
-        'project(table, expressions) -> new table with the given columns. `expressions` is a list '
-        'of column names or SQL scalar expressions, optionally with "expr AS alias". Exact '
+        'project(table, expressions, distinct=false) -> new table with exactly the given columns. '
+        '`expressions` is a list of column names or SQL scalar expressions, optionally with '
+        '"expr AS alias"; distinct=true removes duplicate projected rows. Exact '
         'namespace.column identifiers remain valid inside expressions; a bare downstream column '
         'name is accepted only when it identifies exactly one available column.',
+    "scalar_compute":
+        'scalar_compute(operation, operands, result_name="value") -> a grounded one-row, one-column '
+        'table. operation: add|subtract|multiply|divide|percent|percent_change|date_diff_days. '
+        'Each operand is exactly {"value_ref":"step_k"} for a prior scalar-producing step or '
+        '{"value":constant} for a constant stated by the task. Operand order matters for subtract, '
+        'divide, percent (part/whole*100), percent_change ((new-old)/old*100), and date_diff_days '
+        '(start,end). Cite the resulting table directly or reuse its producing step as value_ref.',
     "join_tables":
         'join_tables(base, joins, base_role=None) -> ONE new table for a connected join component. '
         '`base` is a source table or earlier handle. `joins` is an ordered list of '
@@ -92,11 +99,11 @@ TOOL_SPECS: dict[str, str] = {
         'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
         'the evidence rows before answering. Reading columns does not project or change the table.',
     "answer_from_context":
-        'answer_from_context(evidence, answer=[], reason="") -> TERMINAL. evidence: {"table": name} '
-        'for a table holding the exact answer rows and columns, or null for a scalar. For table '
-        'answers, cite an exact-shape table and set answer=[]; all cited rows and columns are scored. '
-        'Use project first when helper columns remain or column order is wrong. For scalar answers, '
-        'use evidence=null and answer=[value]. think/reason text cannot repair answer data.',
+        'answer_from_context(evidence, reason="") -> TERMINAL. evidence must be {"table": name} '
+        'for a grounded table holding the exact answer rows, columns, and column order. This same '
+        'rule covers scalar answers: cite the 1x1 table produced by group_aggregate or '
+        'scalar_compute. The model never writes answer data in the terminal call. Use project first '
+        'when helper columns remain or column order is wrong; think/reason text cannot repair data.',
 }
 
 TOOLS = set(TOOL_SPECS)
@@ -107,7 +114,7 @@ LEGACY_TOOLS = {"aggregate"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version11"  # public tool versions now increment numerically: version1, version2, ...
+PROTOCOL_VERSION = "version13"  # public tool versions now increment numerically: version1, version2, ...
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 
@@ -117,7 +124,8 @@ ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "plan": ({"ops"}, set()),
     "condition_filter": ({"table", "conditions"}, {"return_columns", "preview_k"}),
-    "project": ({"table", "expressions"}, set()),
+    "project": ({"table", "expressions"}, {"distinct"}),
+    "scalar_compute": ({"operation", "operands"}, {"result_name"}),
     "join_tables": (set(), {"base", "joins", "base_role",
                             "tables", "on", "join_types", "prefixes",
                             "left", "right", "join_type", "left_prefix", "right_prefix",
@@ -138,6 +146,8 @@ CANONICAL_CALL_COOKBOOK = (
     '{"and":[{"column":"city","op":"=","value":"Paris"},{"column":"age","op":">=","value":18}]}}}\n'
     'Project exact final columns: {"tool":"project","arguments":{"table":"filter_001",'
     '"expressions":["name","email"]}}\n'
+    'Project unique exact columns: {"tool":"project","arguments":{"table":"filter_001",'
+    '"expressions":["first_name","middle_name","last_name"],"distinct":true}}\n'
     'Compute a column with project: {"tool":"project","arguments":{"table":"sales",'
     '"expressions":["product","price * quantity AS revenue"]}}\n'
     'Join a three-table path: {"tool":"join_tables","arguments":'
@@ -151,17 +161,21 @@ CANONICAL_CALL_COOKBOOK = (
     '"aggregations":[{"op":"sum","column":"salary","as":"total_salary"}]}}\n'
     'Scalar aggregate: {"tool":"group_aggregate","arguments":{"table":"filter_001","group_by":[],'
     '"aggregations":[{"op":"count","column":"*","as":"count"}]}}\n'
+    'Compute a grounded percentage: {"tool":"scalar_compute","arguments":{"operation":"percent",'
+    '"operands":[{"value_ref":"step_5"},{"value_ref":"step_3"}],"result_name":"percentage"}}\n'
+    'Top 3 with exact output: {"tool":"extreme_value_select","arguments":{"table":"employees",'
+    '"order_by":["sick_leave_hours DESC"],"top_k":3,"return_columns":["job_title"]}}\n'
     'Set operation after aligning both inputs with project: {"tool":"set_op","arguments":'
     '{"left":"project_001","right":"project_002","op":"union"}}\n'
-    'Table answer: {"tool":"answer_from_context","arguments":{"evidence":{"table":"project_003"},'
-    '"answer":[],"reason":"The evidence table has exactly the requested rows and columns."}}\n'
-    'Scalar answer: {"tool":"answer_from_context","arguments":{"evidence":null,"answer":[42],'
-    '"reason":"The grounded scalar result is 42."}}\n'
+    'Any final answer, including a scalar: {"tool":"answer_from_context","arguments":'
+    '{"evidence":{"table":"project_003"},'
+    '"reason":"The evidence table has exactly the requested rows and columns."}}\n'
 )
 
 # Historical version1-version4 join fields remain valid only when replaying old artifacts.
 _MODEL_FORBIDDEN_ARGUMENTS: dict[str, set[str]] = {
     "condition_filter": {"preview_k"},
+    "answer_from_context": {"answer"},
     "join_tables": {
         "tables", "on", "join_types", "prefixes", "return_columns",
         "left", "right", "join_type", "left_prefix", "right_prefix",
@@ -279,6 +293,49 @@ def validate_model_arguments(tool: str, args: dict) -> None:
         limit = args.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
             raise ProtocolError("read_subtable: limit must be an integer from 1 to 20")
+    if tool == "project" and not isinstance(args.get("distinct", False), bool):
+        raise ProtocolError("project: distinct must be true or false")
+    if tool == "scalar_compute":
+        operation = args.get("operation")
+        allowed = {
+            "add", "subtract", "multiply", "divide", "percent",
+            "percent_change", "date_diff_days",
+        }
+        if operation not in allowed:
+            raise ProtocolError(
+                f"scalar_compute: operation must be one of {sorted(allowed)}"
+            )
+        operands = args.get("operands")
+        if not isinstance(operands, list) or len(operands) < 2:
+            raise ProtocolError("scalar_compute: operands must contain at least two items")
+        if operation in {"divide", "percent", "percent_change", "date_diff_days"} and len(operands) != 2:
+            raise ProtocolError(f"scalar_compute: {operation} requires exactly two operands")
+        for index, operand in enumerate(operands):
+            if not isinstance(operand, dict) or len(operand) != 1:
+                raise ProtocolError(
+                    f"scalar_compute: operands[{index}] must contain exactly value_ref or value"
+                )
+            if set(operand) == {"value_ref"}:
+                if not isinstance(operand["value_ref"], str) or not operand["value_ref"].strip():
+                    raise ProtocolError(
+                        f"scalar_compute: operands[{index}].value_ref must be a step id"
+                    )
+            elif set(operand) != {"value"}:
+                raise ProtocolError(
+                    f"scalar_compute: operands[{index}] must contain exactly value_ref or value"
+                )
+    if tool == "answer_from_context":
+        evidence = args.get("evidence")
+        if (
+            not isinstance(evidence, dict)
+            or set(evidence) != {"table"}
+            or not isinstance(evidence.get("table"), str)
+            or not evidence["table"].strip()
+        ):
+            raise ProtocolError(
+                'answer_from_context: evidence must be exactly {"table":"result_handle"}; '
+                "scalar answers also cite a grounded 1x1 table"
+            )
 
 
 def protocol_hash(system_prompt: str | None = None) -> str:
@@ -308,14 +365,23 @@ SYSTEM_PROMPT = (
     "starts, completes, or changes. Simple direct tasks may proceed without plan.\n"
     "3. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
     "4. To use a computed scalar as a threshold, set the predicate's "
-    '{"value_ref": step_id} to the step that produced that scalar.\n'
-    "5. For a row-valued answer, make the evidence table's rows, columns, and column order exactly "
-    "match the requested output. read_subtable only observes rows; it does not change table shape. "
-    "If extra/helper columns remain, project first, then answer_from_context with answer=[].\n"
+    '{"value_ref": step_id} to the step that produced that scalar. To answer with a scalar, cite '
+    "that producing 1x1 table as terminal evidence; never copy its value into the final call.\n"
+    "5. For every answer, make the evidence table's rows, columns, and column order exactly match "
+    "the requested output. read_subtable only observes rows; it does not change table shape. If "
+    "extra/helper columns remain, project first, then cite that table. Never write answer data "
+    "inside answer_from_context.\n"
     "6. If a derived handle exposes column_namespaces, form exact references as namespace.column. "
     "The handle is the table argument, never a replacement column namespace.\n"
     "7. In downstream filters, projections, grouping, and ordering, prefer namespace.column; a "
     "bare column is valid only when exactly one available logical column has that suffix.\n"
+    "8. Preserve the database output slots exactly. Keep separate fields in separate columns; do "
+    "not concatenate names, replace an ID/code with a label, translate/case-normalize stored text, "
+    "or round a numeric result unless the question explicitly requests that transformation. Apply "
+    "distinct=true only when unique/distinct rows are requested or required by the task wording.\n"
+    "9. For top-k, order and limit before answering and use return_columns (or project) so helper "
+    "ranking columns are absent. For arithmetic over aggregate results, call scalar_compute and "
+    "cite its 1x1 result table instead of manually writing a terminal number.\n"
 )
 
 SYSTEM_PROMPT_COMPACT = (
@@ -334,16 +400,17 @@ SYSTEM_PROMPT_COMPACT = (
     "handles before your turn.\n\n"
     "POLICY\n"
     "Inspect a text column before filtering by a literal unless that column was already inspected. "
-    "Avoid repeating the same observation. Use read_subtable only when row values are needed; for "
-    "scalar aggregate answers, answer with evidence=null and answer=[value]. Before a row-valued "
-    "final answer, read the evidence table and cite it with answer=[]. The cited table must contain "
-    "exactly the requested rows and columns; project first if it does not.\n\n"
+    "Avoid repeating the same observation. Use read_subtable only when row values are needed. Every "
+    "final answer, including a scalar aggregate, cites its exact result table as evidence; never "
+    "write answer values in the terminal call. The cited table must contain exactly the requested "
+    "rows and columns; project first if it does not.\n\n"
     "TOOLS\n"
     "plan(ops), describe_table(tables), inspect_column(table,column,top_k?), condition_filter(table,conditions,return_columns?), "
-    "project(table,expressions), join_tables(base,joins,base_role?), "
+    "project(table,expressions,distinct?), scalar_compute(operation,operands,result_name?), "
+    "join_tables(base,joins,base_role?), "
     "group_aggregate(table,group_by,aggregations,passthrough?), "
     "extreme_value_select(table,order_by,top_k?,return_columns?), set_op(left,right,op), "
-    "read_subtable(table,limit?,columns?), answer_from_context(answer,evidence,reason?).\n"
+    "read_subtable(table,limit?,columns?), answer_from_context(evidence,reason?).\n"
 )
 
 ROLLING_HISTORY_SYSTEM_SUFFIX = (
@@ -375,11 +442,12 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
     "returns rows.\n\n"
     "TOOLS\n"
     "plan(ops); describe_table(tables); inspect_column(table,column,top_k?); "
-    "condition_filter(table,conditions,return_columns?); project(table,expressions); "
+    "condition_filter(table,conditions,return_columns?); project(table,expressions,distinct?); "
+    "scalar_compute(operation,operands,result_name?); "
     "join_tables(base,joins,base_role?); "
     "group_aggregate(table,group_by,aggregations,passthrough?); "
     "extreme_value_select(table,order_by,top_k?,return_columns?); set_op(left,right,op); "
-    "read_subtable(table,limit?,columns?); answer_from_context(answer?,evidence?,reason?).\n\n"
+    "read_subtable(table,limit?,columns?); answer_from_context(evidence,reason?).\n\n"
     "RULES\n"
     "plan is control only: goals/status/evidence may cite prior step ids, never results or answer "
     "values. Inspect text domains before literal filters unless already inspected. conditions support "
@@ -391,11 +459,14 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
     "never invent handle.column. Use semantic roles only for repeated relations; never emit SQL "
     "aliases such as L. or R. Downstream scalar expressions may use these exact logical columns; "
     "the harness quotes them as single identifiers. "
-    "For row answers, read the evidence "
-    "handle then call answer_from_context with that evidence and answer=[]; for scalar "
-    "answers use evidence=null and answer=[value]. A row-answer evidence table is scored exactly: "
-    "project away helper columns and fix column order before citing it with answer=[]. think/reason "
-    "cannot repair incorrect answer data. The harness strictly validates and executes the action."
+    "For every answer, read the evidence handle then call answer_from_context with that evidence. "
+    "Scalar answers also cite their grounded 1x1 result table. Every evidence table is scored "
+    "exactly: project away helper columns and fix column order before citing it. Never put answer "
+    "values in the terminal call; think/reason cannot repair incorrect answer data. Keep separate "
+    "database fields separate; do not replace "
+    "IDs/codes with labels, normalize stored text, or round computed values unless explicitly "
+    "requested. Use project distinct=true for unique rows and scalar_compute for arithmetic over "
+    "grounded scalar steps. The harness strictly validates and executes the action."
 )
 
 
@@ -839,51 +910,3 @@ def parse_assistant_strict(text: str) -> tuple[str, str, dict]:
         raise ProtocolError("expected exactly one non-empty <think>...</think> block")
     validate_model_arguments(tool, args)
     return think_blocks[0].strip(), tool, args
-
-
-# ---- answer comparison (execution-accuracy scoring) ----
-def _cell(x) -> str:
-    """Canonical cell: numbers normalized ('2014'==2014, 56.999999->'57'), text stripped."""
-    if x is None:
-        return ""
-    if isinstance(x, bool):
-        return str(int(x))
-    s = str(x).strip()
-    try:
-        f = float(s)
-    except ValueError:
-        return s
-    if math.isnan(f):
-        return "nan"
-    if math.isinf(f):
-        return "inf" if f > 0 else "-inf"
-    if abs(f - round(f)) < 1e-6:
-        return str(int(round(f)))
-    return f"{f:.4f}"
-
-
-def normalize_rows(rows) -> list[tuple]:
-    return sorted(tuple(_cell(c) for c in row) for row in rows)
-
-
-def rows_equal(a, b) -> bool:
-    return normalize_rows(a) == normalize_rows(b)
-
-
-DENOTATION_COMPARISONS = ("strict-multiset", "bird-set")
-
-
-def bird_rows_equal(a, b) -> bool:
-    """Mirror the official BIRD EX comparison: ignore row order and duplicate multiplicity."""
-    return {tuple(row) for row in a} == {tuple(row) for row in b}
-
-
-def compare_denotations(a, b, comparison: str = "strict-multiset") -> bool:
-    """Compare query results under an explicit, manifestable evaluation contract."""
-    if comparison == "strict-multiset":
-        return rows_equal(a, b)
-    if comparison == "bird-set":
-        return bird_rows_equal(a, b)
-    raise ValueError(
-        f"unknown denotation comparison {comparison!r}; expected one of {DENOTATION_COMPARISONS}"
-    )

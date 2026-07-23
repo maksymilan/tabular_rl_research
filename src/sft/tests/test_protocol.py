@@ -20,19 +20,21 @@ from protocol import (  # noqa: E402
 
 class ProtocolParseTests(unittest.TestCase):
     def test_current_prompt_has_canonical_calls_and_exact_final_shape(self):
-        self.assertEqual(PROTOCOL_VERSION, "version11")
+        self.assertEqual(PROTOCOL_VERSION, "version13")
         for tool in (
             "condition_filter", "project", "join_tables", "group_aggregate",
-            "set_op", "answer_from_context",
+            "scalar_compute", "set_op", "answer_from_context",
         ):
             self.assertIn(f'"tool":"{tool}"', SYSTEM_PROMPT)
-        self.assertIn("all cited rows and columns are scored", SYSTEM_PROMPT)
+        self.assertIn("evidence table's rows, columns, and column order exactly", SYSTEM_PROMPT)
         self.assertIn("project first", SYSTEM_PROMPT)
         self.assertIn('"base":"orders"', SYSTEM_PROMPT)
         self.assertIn('"left":"orders.customer_id"', SYSTEM_PROMPT)
         self.assertIn("column_namespaces", SYSTEM_PROMPT)
         self.assertNotIn("Call this first", SYSTEM_PROMPT)
         self.assertIn("A simple direct task may omit it", SYSTEM_PROMPT)
+        self.assertIn("do not concatenate names", SYSTEM_PROMPT)
+        self.assertIn('"operation":"percent"', SYSTEM_PROMPT)
 
     def test_tool_output_compacts_contiguous_logical_namespaces(self):
         message = tool_output_message(
@@ -215,6 +217,52 @@ class ProtocolParseTests(unittest.TestCase):
                 '<think>Filter.</think><tool_call>{"tool":"condition_filter",'
                 '"arguments":{"table":"items","conditions":{"column":"id","op":">",'
                 '"value":1},"preview_k":5}}</tool_call>'
+            )
+
+    def test_version13_project_distinct_and_scalar_compute_shapes(self):
+        _, tool, args = parse_assistant_strict(
+            '<think>Keep unique names.</think><tool_call>{"tool":"project",'
+            '"arguments":{"table":"people","expressions":["first","last"],'
+            '"distinct":true}}</tool_call>'
+        )
+        self.assertEqual(tool, "project")
+        self.assertTrue(args["distinct"])
+
+        _, tool, args = parse_assistant_strict(
+            '<think>Compute the exact percentage.</think><tool_call>'
+            '{"tool":"scalar_compute","arguments":{"operation":"percent",'
+            '"operands":[{"value_ref":"step_3"},{"value_ref":"step_2"}],'
+            '"result_name":"percentage"}}</tool_call>'
+        )
+        self.assertEqual(tool, "scalar_compute")
+        self.assertEqual(args["operands"][0], {"value_ref": "step_3"})
+
+        with self.assertRaisesRegex(ProtocolError, "exactly value_ref or value"):
+            parse_assistant_strict(
+                '<think>Bad operand.</think><tool_call>{"tool":"scalar_compute",'
+                '"arguments":{"operation":"subtract","operands":'
+                '[{"value_ref":"step_2","value":2},{"value":1}]}}</tool_call>'
+            )
+
+    def test_version13_terminal_requires_grounded_table_only(self):
+        _, tool, args = parse_assistant_strict(
+            '<think>Cite the exact result table.</think><tool_call>'
+            '{"tool":"answer_from_context","arguments":'
+            '{"evidence":{"table":"project_003"},"reason":"Exact result."}}</tool_call>'
+        )
+        self.assertEqual(tool, "answer_from_context")
+        self.assertEqual(args["evidence"], {"table": "project_003"})
+
+        with self.assertRaisesRegex(ProtocolError, "legacy arguments"):
+            parse_assistant_strict(
+                '<think>Do not hand-write data.</think><tool_call>'
+                '{"tool":"answer_from_context","arguments":'
+                '{"evidence":null,"answer":[42]}}</tool_call>'
+            )
+        with self.assertRaisesRegex(ProtocolError, "grounded 1x1 table"):
+            parse_assistant_strict(
+                '<think>A scalar still needs evidence.</think><tool_call>'
+                '{"tool":"answer_from_context","arguments":{"evidence":null}}</tool_call>'
             )
 
 

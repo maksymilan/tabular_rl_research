@@ -25,9 +25,10 @@ sys.path.insert(0, str(ROOT / "src" / "harness"))
 sys.path.insert(0, str(ROOT / "src" / "sft"))
 
 from artifacts import ArtifactWriter  # noqa: E402
+from denotation import add_denotation_comparison_argument, compare_denotations  # noqa: E402
 from executor import Harness  # noqa: E402
 from generate_teacher_rollouts import add_usage, chat_with_retries  # noqa: E402
-from protocol import DENOTATION_COMPARISONS, ProtocolError, compare_denotations  # noqa: E402
+from protocol import ProtocolError  # noqa: E402
 from provider_adapter import (  # noqa: E402
     adapt_provider_response,
     is_deepseek_split_model,
@@ -413,8 +414,7 @@ def main() -> int:
     parser.add_argument("--execution-timeout-seconds", type=float, default=20.0)
     parser.add_argument("--preview-rows", type=int, default=20)
     parser.add_argument("--history-turns", type=int, default=4)
-    parser.add_argument("--denotation-comparison", choices=DENOTATION_COMPARISONS,
-                        default="strict-multiset")
+    add_denotation_comparison_argument(parser)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if args.max_tokens is None:

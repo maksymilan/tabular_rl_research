@@ -13,19 +13,36 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "sft"))
 
 from artifacts import ArtifactWriter  # noqa: E402
-from protocol import ProtocolError, bird_rows_equal, compare_denotations, rows_equal  # noqa: E402
+from candidate_selection import (  # noqa: E402
+    ARCTIC_MAJORITY_AGGREGATION,
+    QueryResult,
+    arctic_soft_result_similarity,
+    select_arctic_majority,
+)
+from denotation import (  # noqa: E402
+    DENOTATION_COMPARISONS,
+    bird_rows_equal,
+    compare_denotations,
+    get_denotation_metric,
+    rows_equal,
+)
+from protocol import ProtocolError  # noqa: E402
 from rollout import (  # noqa: E402
     ChatAPIError,
     DEFAULT_FEWSHOT_IDS,
     _normalize_table_refs,
     answer_row_candidates,
     chat,
+    execute_tool,
     fewshot_text,
+    new_ctx,
     projected_row_candidates,
     protocol_failure_type,
     score,
 )
+from executor import Harness  # noqa: E402
 from text2sql import extract_sql  # noqa: E402
+from text2sql_passk import run_one as run_direct_sql_passk, score_sample  # noqa: E402
 
 
 class FakeHarness:
@@ -58,6 +75,11 @@ class EvalTests(unittest.TestCase):
         self.assertTrue(bird_rows_equal([["x"], ["x"]], [["x"]]))
         self.assertFalse(rows_equal([["x"], ["x"]], [["x"]]))
 
+    def test_denotation_registry_keeps_metrics_independent(self):
+        self.assertEqual(DENOTATION_COMPARISONS, ("strict-multiset", "bird-set"))
+        self.assertIs(get_denotation_metric("strict-multiset").compare, rows_equal)
+        self.assertIs(get_denotation_metric("bird-set").compare, bird_rows_equal)
+
     def test_denotation_comparison_is_explicit(self):
         predicted = [["x"], ["x"]]
         gold = [["x"]]
@@ -65,6 +87,105 @@ class EvalTests(unittest.TestCase):
         self.assertFalse(compare_denotations(predicted, gold, "strict-multiset"))
         with self.assertRaises(ValueError):
             compare_denotations(predicted, gold, "unknown")
+
+    def test_bird_set_ignores_row_order_but_not_column_order(self):
+        predicted = [[1, "a"], [2, "b"]]
+        self.assertTrue(compare_denotations(list(reversed(predicted)), predicted, "bird-set"))
+        self.assertFalse(
+            compare_denotations([["a", 1], ["b", 2]], predicted, "bird-set")
+        )
+
+    def test_arctic_soft_similarity_uses_values_within_named_columns(self):
+        first = QueryResult(columns=("city",), rows=(("A",), ("B",)))
+        same = QueryResult(columns=("city",), rows=(("B",), ("A",)))
+        different_name = QueryResult(columns=("town",), rows=(("A",), ("B",)))
+        duplicate_names = QueryResult(columns=("city", "city"), rows=(("A", "B"),))
+        numeric_nulls = QueryResult(columns=("city",), rows=((None,), (1,)))
+        text_nulls = QueryResult(columns=("city",), rows=((None,), ("A",)))
+        self.assertEqual(arctic_soft_result_similarity(first, same), 1.0)
+        self.assertEqual(arctic_soft_result_similarity(first, different_name), 0.0)
+        self.assertEqual(arctic_soft_result_similarity(first, None), 0.0)
+        self.assertEqual(
+            arctic_soft_result_similarity(duplicate_names, duplicate_names), 0.0
+        )
+        self.assertAlmostEqual(
+            arctic_soft_result_similarity(numeric_nulls, numeric_nulls), 1 / 3
+        )
+        self.assertEqual(arctic_soft_result_similarity(text_nulls, text_nulls), 1.0)
+
+    def test_arctic_majority_selects_soft_denotation_medoid_and_first_tie(self):
+        first = QueryResult(columns=("value",), rows=((1,), (2,)))
+        equivalent = QueryResult(columns=("value",), rows=((2,), (1,)))
+        outlier = QueryResult(columns=("value",), rows=((9,),))
+        selection = select_arctic_majority([first, equivalent, outlier])
+        self.assertEqual(selection.selected_index, 0)
+        self.assertGreater(selection.scores[0], selection.scores[2])
+        self.assertEqual(select_arctic_majority([None, None]).selected_index, 0)
+
+    def test_direct_sql_sample_keeps_full_named_result_for_arctic_selection(self):
+        from executor import Harness
+
+        harness = Harness(":memory:")
+        self.addCleanup(harness.conn.close)
+        harness.conn.executescript(
+            "CREATE TABLE values_table(value INTEGER);"
+            "INSERT INTO values_table VALUES (1), (2);"
+        )
+        sample = score_sample(
+            harness,
+            "<answer>SELECT value AS selected_value FROM values_table</answer>",
+            [(1,), (2,)],
+            0,
+            "bird-set",
+        )
+        self.assertTrue(sample["correct"])
+        self.assertEqual(
+            sample["_query_result"],
+            QueryResult(columns=("selected_value",), rows=((1,), (2,))),
+        )
+
+    def test_direct_sql_arctic_majority_is_selected_before_artifact_serialization(self):
+        from executor import Harness
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp, "test.sqlite")
+            seed = Harness(str(db_path))
+            seed.conn.executescript(
+                "CREATE TABLE values_table(value INTEGER);"
+                "INSERT INTO values_table VALUES (1), (2);"
+            )
+            seed.conn.close()
+            outputs = [
+                "<answer>SELECT value FROM values_table</answer>",
+                "<answer>SELECT value FROM values_table ORDER BY value DESC</answer>",
+                "<answer>SELECT 9 AS value</answer>",
+            ]
+            with patch("text2sql_passk.chat_n", return_value=outputs):
+                record = run_direct_sql_passk(
+                    {
+                        "index": 0,
+                        "db_id": "test",
+                        "db_path": str(db_path),
+                        "question": "Return the values.",
+                        "gold_sql": "SELECT value FROM values_table",
+                    },
+                    0,
+                    "http://unused",
+                    "test-model",
+                    n_samples=3,
+                    pass_k=(1, 3),
+                    temperature=0.8,
+                    top_p=1.0,
+                    max_tokens=32,
+                    api_retries=0,
+                    execution_timeout_seconds=10,
+                    denotation_comparison="bird-set",
+                    candidate_aggregation=ARCTIC_MAJORITY_AGGREGATION,
+                )
+        self.assertEqual(record["selected_sample_index"], 0)
+        self.assertTrue(record["correct"])
+        self.assertEqual(record["selected_predicted_sql"], "SELECT value FROM values_table")
+        self.assertTrue(all("_query_result" not in sample for sample in record["samples"]))
 
     def test_context_overflow_retry_can_shrink_to_128_tokens(self):
         budgets = []
@@ -203,6 +324,70 @@ class EvalTests(unittest.TestCase):
                 "conditions": {"column": "id", "op": "in", "in_table": "filter_003"},
                 "value_ref": "step_3",
             },
+        )
+
+    def test_scalar_compute_resolves_grounded_value_refs_and_records_edges(self):
+        harness = Harness(":memory:")
+        self.addCleanup(harness.conn.close)
+        ctx = new_ctx({"tables": [], "relations": []})
+        ctx["history"] = {
+            "step_1": {
+                "tool": "group_aggregate",
+                "arguments": {},
+                "output": {
+                    "table": "group_001",
+                    "kind": "group",
+                    "columns": ["part"],
+                    "row_count": 1,
+                    "rows": [[25]],
+                },
+                "references": [],
+            },
+            "step_2": {
+                "tool": "group_aggregate",
+                "arguments": {},
+                "output": {
+                    "table": "group_002",
+                    "kind": "group",
+                    "columns": ["whole"],
+                    "row_count": 1,
+                    "rows": [[100]],
+                },
+                "references": [],
+            },
+        }
+        output, created = execute_tool(
+            harness,
+            "scalar_compute",
+            {
+                "operation": "percent",
+                "operands": [
+                    {"value_ref": "step_1"},
+                    {"value_ref": "step_2"},
+                ],
+                "result_name": "percentage",
+            },
+            ctx,
+            "step_3",
+        )
+        self.assertEqual(output["rows"], [[25.0]])
+        self.assertEqual(created, output["table"])
+        self.assertEqual(
+            ctx["history"]["step_3"]["references"],
+            [
+                {
+                    "type": "value",
+                    "step": "step_1",
+                    "role": "operand",
+                    "target": {"operand_index": 0},
+                },
+                {
+                    "type": "value",
+                    "step": "step_2",
+                    "role": "operand",
+                    "target": {"operand_index": 1},
+                },
+            ],
         )
 
 

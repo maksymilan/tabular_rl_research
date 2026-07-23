@@ -18,9 +18,17 @@ sys.path.insert(0, os.path.join(ROOT, "src", "harness"))
 sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 
 from artifacts import ArtifactWriter  # noqa: E402
+from candidate_selection import (  # noqa: E402
+    ARCTIC_MAJORITY_AGGREGATION,
+    CANDIDATE_AGGREGATIONS,
+    PASS_K_AGGREGATION,
+    QueryResult,
+    add_candidate_aggregation_argument,
+    select_arctic_majority,
+)
+from denotation import add_denotation_comparison_argument, compare_denotations  # noqa: E402
 from executor import Harness  # noqa: E402
 from passk import attach_passk_fields, parse_pass_k, write_passk_summary  # noqa: E402
-from protocol import DENOTATION_COMPARISONS, compare_denotations  # noqa: E402
 from rollout import (  # noqa: E402
     ChatAPIError,
     ContextOverflowError,
@@ -29,7 +37,12 @@ from rollout import (  # noqa: E402
     task_db_path,
     task_gold_sql,
 )
-from text2sql import SYSTEM_PROMPT, execute_predicted_sql, extract_sql, schema_prompt  # noqa: E402
+from text2sql import (  # noqa: E402
+    SYSTEM_PROMPT,
+    execute_predicted_sql_result,
+    extract_sql,
+    schema_prompt,
+)
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 DEFAULT_PASS_K = (2, 4, 8, 16, 32)
@@ -106,11 +119,13 @@ def score_sample(
         sample["failure_type"] = "no_sql"
         return sample
     try:
-        predicted_rows = execute_predicted_sql(h, sql, execution_timeout_seconds)
+        query_result = execute_predicted_sql_result(h, sql, execution_timeout_seconds)
     except Exception as exc:  # noqa: BLE001
         sample["failure_type"] = "execution_error"
         sample["error"] = f"{type(exc).__name__}: {exc}"
         return sample
+    predicted_rows = query_result.rows
+    sample["_query_result"] = query_result
     sample["predicted_row_count"] = len(predicted_rows)
     sample["predicted_sample"] = [list(row) for row in predicted_rows[:10]]
     sample["correct"] = compare_denotations(
@@ -135,7 +150,10 @@ def run_one(
     api_retries: int,
     execution_timeout_seconds: float,
     denotation_comparison: str,
+    candidate_aggregation: str = PASS_K_AGGREGATION,
 ) -> dict:
+    if candidate_aggregation not in CANDIDATE_AGGREGATIONS:
+        raise ValueError(f"unknown candidate aggregation: {candidate_aggregation}")
     started = time.time()
     gold_sql = task_gold_sql(ex)
     h = Harness(task_db_path(ex))
@@ -159,9 +177,16 @@ def run_one(
         "top_p": top_p,
         "max_tokens": max_tokens,
         "denotation_comparison": denotation_comparison,
+        "candidate_aggregation": candidate_aggregation,
         "correct": False,
         "failure_type": None,
     }
+
+    def finish() -> dict:
+        record["elapsed_seconds"] = round(time.time() - started, 3)
+        h.conn.close()
+        return record
+
     try:
         outputs = chat_n(
             base_url,
@@ -176,46 +201,60 @@ def run_one(
     except ContextOverflowError as exc:
         record["failure_type"] = "context_overflow"
         record["error"] = f"{type(exc).__name__}: {exc}"
-        record["elapsed_seconds"] = round(time.time() - started, 3)
         record["samples"] = []
-        return record
+        return finish()
+    except Exception as exc:  # noqa: BLE001
+        record["failure_type"] = "api_error"
+        record["error"] = f"{type(exc).__name__}: {exc}"
+        record["samples"] = []
+        return finish()
     if len(outputs) != n_samples:
         record["failure_type"] = "incomplete_api_response"
         record["error"] = f"expected {n_samples} completions, received {len(outputs)}"
         record["model_outputs"] = outputs
         record["samples"] = []
-        record["elapsed_seconds"] = round(time.time() - started, 3)
-        return record
+        return finish()
     if not gold_sql:
         record["failure_type"] = "missing_gold_sql"
         record["samples"] = []
-        record["elapsed_seconds"] = round(time.time() - started, 3)
-        return record
+        return finish()
     try:
         gold_rows = h.gold(gold_sql)
     except Exception as exc:  # noqa: BLE001
         record["failure_type"] = "gold_execution_error"
         record["error"] = f"{type(exc).__name__}: {exc}"
         record["samples"] = []
-        record["elapsed_seconds"] = round(time.time() - started, 3)
-        return record
-    except Exception as exc:  # noqa: BLE001
-        record["failure_type"] = "api_error"
-        record["error"] = f"{type(exc).__name__}: {exc}"
-        record["elapsed_seconds"] = round(time.time() - started, 3)
-        record["samples"] = []
-        return record
+        return finish()
 
     samples = [
         score_sample(h, output, gold_rows, execution_timeout_seconds, denotation_comparison)
         for output in outputs
     ]
-    record["samples"] = samples
+    if candidate_aggregation == ARCTIC_MAJORITY_AGGREGATION:
+        selection = select_arctic_majority(
+            [
+                sample.get("_query_result")
+                if isinstance(sample.get("_query_result"), QueryResult)
+                else None
+                for sample in samples
+            ]
+        )
+        record["selected_sample_index"] = selection.selected_index
+        record["candidate_selection_scores"] = list(selection.scores)
+
+    for sample in samples:
+        sample.pop("_query_result", None)
     record["gold_row_count"] = len(gold_rows)
     record["gold_sample"] = [list(row) for row in gold_rows[:10]]
     attach_passk_fields(record, samples, pass_k)
-    record["elapsed_seconds"] = round(time.time() - started, 3)
-    return record
+    if candidate_aggregation == ARCTIC_MAJORITY_AGGREGATION:
+        selected_sample = samples[record["selected_sample_index"]]
+        record["correct"] = bool(selected_sample["correct"])
+        record["failure_type"] = (
+            None if record["correct"] else selected_sample.get("failure_type") or "wrong_result"
+        )
+        record["selected_predicted_sql"] = selected_sample.get("predicted_sql")
+    return finish()
 
 
 def main() -> int:
@@ -235,11 +274,8 @@ def main() -> int:
     parser.add_argument("--api-retries", type=int, default=3)
     parser.add_argument("--execution-timeout-seconds", type=float, default=5.0,
                         help="per-query SQLite VM deadline for generated SQL; <=0 disables it")
-    parser.add_argument(
-        "--denotation-comparison", choices=DENOTATION_COMPARISONS,
-        default="strict-multiset",
-        help="result comparison contract; use bird-set for literature-comparable BIRD EX",
-    )
+    add_denotation_comparison_argument(parser)
+    add_candidate_aggregation_argument(parser)
     args = parser.parse_args()
 
     try:
@@ -267,6 +303,7 @@ def main() -> int:
         "max_tokens": args.max_tokens,
         "predicted_sql_execution_timeout_seconds": args.execution_timeout_seconds,
         "denotation_comparison": args.denotation_comparison,
+        "candidate_aggregation": args.candidate_aggregation,
         "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
         "execution_feedback": False,
         "system_prompt": SYSTEM_PROMPT,
@@ -289,6 +326,7 @@ def main() -> int:
                 api_retries=args.api_retries,
                 execution_timeout_seconds=args.execution_timeout_seconds,
                 denotation_comparison=args.denotation_comparison,
+                candidate_aggregation=args.candidate_aggregation,
             )
             for i, ex in pending
         ]
@@ -305,6 +343,11 @@ def main() -> int:
             write_passk_summary(writer, pass_k)
 
     summary = write_passk_summary(writer, pass_k)
+    print(
+        f"{args.candidate_aggregation} EXEC-ACC "
+        f"{summary['correct']}/{summary['total']} "
+        f"({100 * summary['accuracy']:.1f}%)"
+    )
     print(json.dumps(summary["pass_at"], ensure_ascii=False, indent=2))
     print(f"-> {writer.path}")
     return 0

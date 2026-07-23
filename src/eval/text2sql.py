@@ -18,8 +18,9 @@ sys.path.insert(0, os.path.join(ROOT, "src", "harness"))
 sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 
 from artifacts import ArtifactWriter                          # noqa: E402
+from candidate_selection import QueryResult  # noqa: E402
+from denotation import add_denotation_comparison_argument, compare_denotations  # noqa: E402
 from executor import Harness                                  # noqa: E402
-from protocol import DENOTATION_COMPARISONS, compare_denotations  # noqa: E402
 from rollout import (  # noqa: E402
     ContextOverflowError,
     chat,
@@ -68,20 +69,32 @@ def schema_prompt(h: Harness, question: str, external_knowledge=None) -> str:
     return user_prompt
 
 
-def execute_predicted_sql(h: Harness, sql: str, timeout_seconds: float) -> list:
+def execute_predicted_sql_result(
+    h: Harness,
+    sql: str,
+    timeout_seconds: float,
+) -> QueryResult:
     """Execute one model SQL with an explicit SQLite VM deadline.
 
     Generated Cartesian products can otherwise occupy a BIRD large database indefinitely. Gold SQL
     is evaluated separately without this generated-query guard.
     """
-    if timeout_seconds <= 0:
-        return h.gold(sql)
     deadline = time.monotonic() + timeout_seconds
-    h.conn.set_progress_handler(lambda: 1 if time.monotonic() >= deadline else 0, 10_000)
+    if timeout_seconds > 0:
+        h.conn.set_progress_handler(lambda: 1 if time.monotonic() >= deadline else 0, 10_000)
     try:
-        return h.gold(sql)
+        cursor = h.conn.execute(sql)
+        columns = tuple(description[0] for description in cursor.description or ())
+        rows = tuple(cursor.fetchall())
+        return QueryResult(columns=columns, rows=rows)
     finally:
-        h.conn.set_progress_handler(None, 0)
+        if timeout_seconds > 0:
+            h.conn.set_progress_handler(None, 0)
+
+
+def execute_predicted_sql(h: Harness, sql: str, timeout_seconds: float) -> list:
+    """Backward-compatible rows-only view used by single-candidate evaluators."""
+    return list(execute_predicted_sql_result(h, sql, timeout_seconds).rows)
 
 
 def run_one(
@@ -222,11 +235,7 @@ def main() -> int:
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--execution-timeout-seconds", type=float, default=5.0,
                         help="per-query SQLite VM deadline for model-generated SQL; <=0 disables it")
-    parser.add_argument(
-        "--denotation-comparison", choices=DENOTATION_COMPARISONS,
-        default="strict-multiset",
-        help="result comparison contract; use bird-set for literature-comparable BIRD EX",
-    )
+    add_denotation_comparison_argument(parser)
     parser.add_argument("--task-timeout-seconds", type=float, default=0.0,
                         help="hard per-example deadline; records task_timeout and continues when positive")
     args = parser.parse_args()

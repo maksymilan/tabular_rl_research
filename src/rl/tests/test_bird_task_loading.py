@@ -72,7 +72,7 @@ class BirdTaskAdapterTests(unittest.TestCase):
         output = (
             '<think>Use the result.</think>'
             '<tool_call>{"tool":"answer_from_context","arguments":'
-            '{"evidence":{"table":"missing"},"answer":[]}}</tool_call>'
+            '{"evidence":{"table":"missing"}}}</tool_call>'
         )
         with patch("tool_environment.Harness", FakeHarness), patch("tool_environment.overview", return_value={"tables": []}), patch(
             "tool_environment.new_ctx", return_value={"environment": FakeState()}

@@ -1,0 +1,98 @@
+{
+  "created_on": "2026-07-23",
+  "server": {
+    "ssh_alias": "table_rl",
+    "hostname": "dell-PowerEdge-T640",
+    "gpus": [
+      "NVIDIA GeForce RTX 3090 24GB",
+      "NVIDIA GeForce RTX 3090 24GB"
+    ]
+  },
+  "dataset": {
+    "name": "BIRD dev",
+    "examples": 1534,
+    "databases": 11,
+    "denotation_metric": "bird-set"
+  },
+  "models": {
+    "arctic": {
+      "repo_id": "Snowflake/Arctic-Text2SQL-R1-7B",
+      "revision": "2d73facaf7e15831d0b918d219e0d565f113f592",
+      "weight_bytes": 15231233024,
+      "paper_target": {
+        "selection": "greedy",
+        "temperature": 0.0,
+        "bird_dev_ex_percent": 68.9
+      }
+    },
+    "sql_r1": {
+      "repo_id": "MPX0222forHF/SQL-R1-7B",
+      "revision": "db409e8372ca5e463126b07e905b5245caf14ea6",
+      "weight_bytes": 30462466048,
+      "paper_target": {
+        "selection": "execution self-consistency over 8 candidates",
+        "temperature": 0.8,
+        "bird_dev_ex_percent": 66.6
+      }
+    }
+  },
+  "code": {
+    "arctic_training_commit": "b28638e6c577ece34cc147ab3d45d27a7f66b33b",
+    "sql_r1_commit": "ccfb511e81fdb3a8e87bd3da7f3d71882cedd532"
+  },
+  "runtime": {
+    "inference_python": "/home/dengyan/miniconda3/envs/vllm-qwen35/bin/python",
+    "torch": "2.10.0+cu126",
+    "transformers": "5.12.0",
+    "vllm": "0.19.1",
+    "tensor_parallel_size": 2,
+    "dtype": "bfloat16"
+  },
+  "download": {
+    "official_huggingface": "Timed out from table_rl.",
+    "arctic_source": "ModelScope mirror AI-ModelScope/Arctic-Text2SQL-R1-7B",
+    "sql_r1_source": "https://hf-mirror.com",
+    "large_file_transport": "Portable aria2c with ranged, resumable downloads",
+    "verification": "Every safetensors shard and tokenizer.json matched the official Hugging Face size and SHA-256 metadata.",
+    "local_relay_used": false,
+    "local_relay_note": "Not needed after the mirrors succeeded."
+  },
+  "observed_results": {
+    "released_checkpoint_smoke8": {
+      "warning": "Pipeline validation only; not comparable to paper results.",
+      "arctic_greedy_bird_set": "7/8 = 87.5%",
+      "sql_r1_greedy_bird_set": "6/8 = 75.0%"
+    },
+    "full_bird_dev_queue": {
+      "started_at": "2026-07-23T14:44:54+08:00",
+      "order": [
+        "Arctic greedy n=1 temperature=0.0",
+        "SQL-R1 majority vote n=8 temperature=0.8"
+      ],
+      "remote_status_file": "/home/dengyan/tabular_rl_outputs/text2sql_reproduction/logs/full_bird_queue.status"
+    }
+  },
+  "sql_r1_training_smoke": {
+    "environment": "/home/dengyan/tabular_rl_outputs/text2sql_reproduction/envs/sqlr1_train_py311",
+    "versions": {
+      "python": "3.11.15",
+      "torch": "2.4.0+cu121",
+      "transformers": "4.47.1",
+      "vllm": "0.6.3",
+      "flash_attn": "2.6.3",
+      "nccl": "2.20.5"
+    },
+    "verified": [
+      "Official 4000-train/1000-test parquet files load.",
+      "All 5000 SynSQL rows resolve to extracted SQLite databases.",
+      "The released reward code executes.",
+      "Two-GPU NCCL all-reduce succeeds with NCCL_P2P_DISABLE=1.",
+      "FSDP actor and TP=2 vLLM rollout both initialize."
+    ],
+    "blocking_boundary": "The pinned hybrid FSDP+vLLM stack OOMs while materializing a 130 MiB DTensor shard before the first rollout. With a 640+128 short-prompt smoke configuration, only 77 MiB was free on each 24 GB GPU."
+  },
+  "limitations": {
+    "arctic_training": "Upstream releases evaluation only; training code and data-generation pipeline are not released.",
+    "sql_r1_training": "Paper training used 8x80GB GPUs. The pinned upstream full-parameter hybrid trainer does not complete even a reduced one-step run on 2x24GB; reproducing training requires larger GPUs or a materially different memory strategy."
+  }
+}

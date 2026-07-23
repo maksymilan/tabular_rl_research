@@ -22,8 +22,8 @@ sys.path.insert(0, str(ROOT / "src" / "harness"))
 sys.path.insert(0, str(ROOT / "src" / "sft"))
 
 from artifacts import ArtifactWriter  # noqa: E402
+from denotation import add_denotation_comparison_argument, compare_denotations  # noqa: E402
 from executor import Harness  # noqa: E402
-from protocol import rows_equal  # noqa: E402
 from rollout import ContextOverflowError, chat, overview  # noqa: E402
 from spider2_adapter import DEFAULT_ROOT, load_examples, load_local_map, to_task  # noqa: E402
 from text2sql import SYSTEM_PROMPT, extract_sql  # noqa: E402
@@ -55,7 +55,14 @@ def schema_prompt(h: Harness, question: str, external_knowledge=None) -> str:
     return prompt
 
 
-def run_one(task: dict, position: int, base_url: str, model: str, max_tokens: int) -> dict:
+def run_one(
+    task: dict,
+    position: int,
+    base_url: str,
+    model: str,
+    max_tokens: int,
+    denotation_comparison: str = "strict-multiset",
+) -> dict:
     started = time.time()
     h = Harness(task["db_path"])
     h.conn.execute("PRAGMA query_only = ON")
@@ -73,6 +80,7 @@ def run_one(task: dict, position: int, base_url: str, model: str, max_tokens: in
         "gold_sql": task.get("query"),
         "gold_sql_path": task.get("gold_sql_path"),
         "gold_exec_results": task.get("gold_exec_results", []),
+        "denotation_comparison": denotation_comparison,
         "model_input": messages,
         "correct": False,
         "failure_type": None,
@@ -113,7 +121,9 @@ def run_one(task: dict, position: int, base_url: str, model: str, max_tokens: in
     record["gold_row_count"] = len(gold_rows)
     record["predicted_sample"] = [list(row) for row in predicted_rows[:10]]
     record["gold_sample"] = [list(row) for row in gold_rows[:10]]
-    record["correct"] = rows_equal(predicted_rows, gold_rows)
+    record["correct"] = compare_denotations(
+        predicted_rows, gold_rows, denotation_comparison
+    )
     if not record["correct"]:
         record["failure_type"] = "wrong_result"
     record["elapsed_seconds"] = round(time.time() - started, 3)
@@ -130,6 +140,7 @@ def main() -> int:
     parser.add_argument("--result-dir", required=True)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--max-tokens", type=int, default=1024)
+    add_denotation_comparison_argument(parser)
     args = parser.parse_args()
 
     tasks = load_tasks(args.root, gold_sql_only=True)
@@ -144,13 +155,25 @@ def main() -> int:
         "dev_size": len(tasks),
         "temperature": 0,
         "max_tokens": args.max_tokens,
+        "denotation_comparison": args.denotation_comparison,
         "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
         "execution_feedback": False,
         "system_prompt": SYSTEM_PROMPT,
     }, args.resume)
     pending = [(i, task) for i, task in enumerate(tasks) if i not in writer.completed]
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = [pool.submit(run_one, task, i, args.base_url, args.model, args.max_tokens) for i, task in pending]
+        futures = [
+            pool.submit(
+                run_one,
+                task,
+                i,
+                args.base_url,
+                args.model,
+                args.max_tokens,
+                args.denotation_comparison,
+            )
+            for i, task in pending
+        ]
         for done, future in enumerate(as_completed(futures), 1):
             record = future.result()
             writer.append(record)

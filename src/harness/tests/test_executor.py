@@ -268,6 +268,34 @@ def run():
     p = h.project("employees", ["name", "salary"])
     t.check("project", norm(h.rows(p["table_name"])) == norm(h.gold("SELECT name,salary FROM employees")))
 
+    distinct_project = h.project("employees", ["dept"], distinct=True)
+    t.check(
+        "project distinct removes duplicate projected rows",
+        norm(h.rows(distinct_project["table_name"])) ==
+        norm(h.gold("SELECT DISTINCT dept FROM employees")),
+        str(distinct_project),
+    )
+
+    percentage = h.scalar_compute("percent", [39, 59], "percentage")
+    difference = h.scalar_compute("subtract", [25, 89], "difference")
+    t.check(
+        "scalar_compute returns exact 1x1 table results",
+        percentage["columns"] == ["percentage"] and
+        abs(h.rows(percentage["table_name"])[0][0] - 39 / 59 * 100) < 1e-12 and
+        h.rows(difference["table_name"]) == [(-64,)],
+        str((percentage, difference)),
+    )
+    elapsed = h.scalar_compute(
+        "date_diff_days",
+        ["2008-02-15", "2008-02-26"],
+        "taken_days",
+    )
+    t.check(
+        "scalar_compute computes date differences without model arithmetic",
+        h.rows(elapsed["table_name"]) == [(11.0,)],
+        str(elapsed),
+    )
+
     duplicate_names = h._new("dup", "SELECT name AS Name, dept AS Name FROM employees")
     renamed = h.project(duplicate_names["table_name"], ["Name", "Name:1 AS department"])
     t.check("project quotes exact SQLite duplicate-column names",

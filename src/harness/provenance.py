@@ -100,6 +100,18 @@ def build_references(tool: str, args: dict, resolve_step) -> list[dict]:
             else:  # an IN-subquery's set membership is a data input
                 refs.append({"type": "data", "step": sid, "role": "in_table",
                              "target": {"handle": ref}})
+    if tool == "scalar_compute":
+        for index, operand in enumerate(args.get("operands") or []):
+            if not isinstance(operand, dict) or not isinstance(operand.get("value_ref"), str):
+                continue
+            sid = resolve_step(operand["value_ref"])
+            if sid:
+                refs.append({
+                    "type": "value",
+                    "step": sid,
+                    "role": "operand",
+                    "target": {"operand_index": index},
+                })
     return refs
 
 

@@ -20,6 +20,7 @@ TABLE_REF_ARGS: dict[str, list[str]] = {
     "group_aggregate": ["table"],
     "derive_column": ["table"],
     "project": ["table"],
+    "scalar_compute": [],
     "extreme_value_select": ["table"],
     "aggregate": ["table"],
     "read_subtable": ["table"],
@@ -130,6 +131,25 @@ def run_plan(harness, plan: Plan) -> list[tuple]:
         if step.tool == "condition_filter":
             vals = _scalar_values(harness, args.get("conditions"), id_to_table, values)
             args["conditions"] = resolve_cond(args.get("conditions"), id_to_table, vals)
+        if step.tool == "scalar_compute":
+            resolved_operands = []
+            for operand in args.get("operands") or []:
+                if "value_ref" not in operand:
+                    resolved_operands.append(operand["value"])
+                    continue
+                ref = operand["value_ref"]
+                if ref in values:
+                    resolved_operands.append(values[ref])
+                elif ref in id_to_table:
+                    rows = harness.rows(id_to_table[ref])
+                    if len(rows) != 1 or len(rows[0]) != 1 or rows[0][0] is None:
+                        raise ValueError(
+                            f"scalar_compute value_ref {ref!r} is not a non-NULL 1x1 result"
+                        )
+                    resolved_operands.append(rows[0][0])
+                else:
+                    raise ValueError(f"scalar_compute value_ref {ref!r} is unresolved")
+            args["operands"] = resolved_operands
         method = getattr(harness, step.tool, None)
         if method is None:
             raise ValueError(f"harness has no tool {step.tool!r}")

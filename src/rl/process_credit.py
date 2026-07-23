@@ -56,6 +56,7 @@ ROWSET_TOOLS = frozenset(
         "derive_column",
         "window",
         "group_aggregate",
+        "scalar_compute",
         "join_tables",
         "set_op",
         "read_subtable",

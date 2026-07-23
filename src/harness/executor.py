@@ -12,6 +12,8 @@ tools, answer_from_context, provenance/row-id bookkeeping. This module is the re
 """
 from __future__ import annotations
 
+from datetime import date, datetime
+import math
 import re
 import sqlite3
 from typing import Any
@@ -604,9 +606,10 @@ class Harness:
         sel = ", ".join(self._col_sql(cols, col) for col in return_columns) if return_columns else "*"
         return self._new("top", f"SELECT {sel} FROM {self._src(table)}{order}{lim}")
 
-    def project(self, table, expressions) -> dict:
+    def project(self, table, expressions, distinct: bool = False) -> dict:
         """Realize a SELECT projection: SELECT <expressions> FROM (src). Table-producing.
-        `expressions` are SQL column/expression strings, optionally `expr AS alias`."""
+        `expressions` are SQL column/expression strings, optionally `expr AS alias`.
+        `distinct=True` removes duplicate projected rows."""
         cols = self._cols(table)
 
         def quote_expression_columns(expression: str) -> str:
@@ -670,7 +673,109 @@ class Harness:
             return quote_expression_columns(raw)
 
         sel = ", ".join(render(expr) for expr in expressions) if expressions else "*"
-        return self._new("project", f"SELECT {sel} FROM {self._src(table)}")
+        select = "SELECT DISTINCT" if distinct else "SELECT"
+        return self._new("project", f"{select} {sel} FROM {self._src(table)}")
+
+    def scalar_compute(
+        self,
+        operation: str,
+        operands: list,
+        result_name: str = "value",
+    ) -> dict:
+        """Compute one scalar and return a 1x1 table.
+
+        The online layer resolves model-visible ``value_ref`` operands before calling this method.
+        A table-shaped result follows the same scalar-grounding and evidence path as an aggregate.
+        """
+        if not isinstance(operands, list):
+            raise ValueError("scalar_compute.operands must be a list")
+        operation = str(operation).strip().lower()
+        arity = {
+            "add": (2, None),
+            "subtract": (2, None),
+            "multiply": (2, None),
+            "divide": (2, 2),
+            "percent": (2, 2),
+            "percent_change": (2, 2),
+            "date_diff_days": (2, 2),
+        }
+        if operation not in arity:
+            raise ValueError(
+                "scalar_compute.operation must be add, subtract, multiply, divide, percent, "
+                "percent_change, or date_diff_days"
+            )
+        minimum, maximum = arity[operation]
+        if len(operands) < minimum or maximum is not None and len(operands) > maximum:
+            expected = str(minimum) if maximum == minimum else f"at least {minimum}"
+            raise ValueError(
+                f"scalar_compute {operation} requires {expected} operands; got {len(operands)}"
+            )
+        if not isinstance(result_name, str) or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*", result_name
+        ):
+            raise ValueError("scalar_compute.result_name must be an identifier")
+        if any(value is None for value in operands):
+            raise ValueError("scalar_compute operands cannot be NULL")
+
+        def numeric(value):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"scalar_compute {operation} requires numeric operands; got {value!r}"
+                )
+            if not math.isfinite(float(value)):
+                raise ValueError("scalar_compute operands must be finite")
+            return value
+
+        if operation == "add":
+            result = sum(numeric(value) for value in operands)
+        elif operation == "subtract":
+            result = numeric(operands[0])
+            for value in operands[1:]:
+                result -= numeric(value)
+        elif operation == "multiply":
+            result = 1
+            for value in operands:
+                result *= numeric(value)
+        elif operation in {"divide", "percent", "percent_change"}:
+            left, right = (numeric(value) for value in operands)
+            if right == 0:
+                raise ValueError(f"scalar_compute {operation} cannot divide by zero")
+            if operation == "divide":
+                result = left / right
+            elif operation == "percent":
+                result = left / right * 100
+            else:
+                result = (left - right) / right * 100
+        else:
+            def parse_temporal(value):
+                if isinstance(value, datetime):
+                    return value
+                if isinstance(value, date):
+                    return datetime.combine(value, datetime.min.time())
+                if not isinstance(value, str):
+                    raise ValueError(
+                        "scalar_compute date_diff_days requires ISO date/time strings"
+                    )
+                normalized = value.strip().replace("Z", "+00:00")
+                try:
+                    return datetime.fromisoformat(normalized)
+                except ValueError:
+                    try:
+                        return datetime.combine(
+                            date.fromisoformat(normalized), datetime.min.time()
+                        )
+                    except ValueError as exc:
+                        raise ValueError(
+                            "scalar_compute date_diff_days requires ISO date/time strings"
+                        ) from exc
+
+            start, end = (parse_temporal(value) for value in operands)
+            result = (end - start).total_seconds() / 86400
+
+        return self._new(
+            "scalar",
+            f"SELECT {_lit(result)} AS {_qid(result_name)}",
+        )
 
     def preview(self, table: str, cell_limit: int = 100) -> dict:
         """Inline a small table's rows (rows*cols <= cell_limit), else a truncated head flagged with

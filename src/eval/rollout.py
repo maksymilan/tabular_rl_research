@@ -43,9 +43,10 @@ from scalar_grounding import extract_scalar                    # noqa: E402
 from provenance import build_grounding_references, build_references  # noqa: E402
 from catalog import build_catalog                             # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
-from protocol import (ACCEPTED_TOOLS, DENOTATION_COMPARISONS, ProtocolError, get_system_prompt,  # noqa: E402
+from denotation import add_denotation_comparison_argument, compare_denotations  # noqa: E402
+from protocol import (ACCEPTED_TOOLS, ProtocolError, get_system_prompt,  # noqa: E402
                       assistant_message, first_user_message, parse_assistant_strict,
-                      compare_denotations, model_context_messages, protocol_hash, tool_error_message,
+                      model_context_messages, protocol_hash, tool_error_message,
                       rolling_legal_history_messages, rolling_system_prompt,
                       state_context_message, tool_output_message)
 
@@ -207,6 +208,14 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
         values = {ref: extract_scalar(ctx["history"], ref)
                   for ref in _value_ref_ids(exec_args.get("conditions"))}
         exec_args["conditions"] = resolve_cond(exec_args.get("conditions"), {}, values)
+    elif tool == "scalar_compute":
+        resolved_operands = []
+        for operand in exec_args.get("operands") or []:
+            if "value_ref" in operand:
+                resolved_operands.append(extract_scalar(ctx["history"], operand["value_ref"]))
+            else:
+                resolved_operands.append(operand["value"])
+        exec_args["operands"] = resolved_operands
     out = getattr(h, tool)(**exec_args)
     if isinstance(out, dict) and "table_name" in out:
         output = {"table": out["table_name"], "kind": out["kind"],     # V2-ctx: metadata-only handle
@@ -907,11 +916,7 @@ def main() -> int:
                     help="optional common DatasetTask JSON/JSONL file; enables BIRD/other SQLite adapters")
     ap.add_argument("--result-dir", default="")
     ap.add_argument("--resume", action="store_true")
-    ap.add_argument(
-        "--denotation-comparison", choices=DENOTATION_COMPARISONS,
-        default="strict-multiset",
-        help="result comparison contract; use bird-set for literature-comparable BIRD EX",
-    )
+    add_denotation_comparison_argument(ap)
     args = ap.parse_args()
 
     if args.replay:
