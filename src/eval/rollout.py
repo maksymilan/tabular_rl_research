@@ -934,7 +934,7 @@ def main() -> int:
         "--policy-prompt-variant",
         choices=POLICY_PROMPT_VARIANTS,
         default=POLICY_PROMPT_CANONICAL,
-        help="auditable policy ablation; canonical preserves the version19 prompt",
+        help="auditable policy ablation; canonical preserves the version20 prompt",
     )
     ap.add_argument(
         "--rolling-observation-style",

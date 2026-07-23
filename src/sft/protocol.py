@@ -54,7 +54,8 @@ TOOL_SPECS: dict[str, str] = {
         'namespace.column identifiers remain valid inside expressions; a bare downstream column '
         'name is accepted only when it identifies exactly one available column. Project preserves '
         'the input row orientation: it cannot turn category rows into separate columns; use '
-        'group_aggregate(output_layout="columns") for that reshape.',
+        'group_aggregate(output_layout="columns") for that reshape. Arguments are only table, '
+        'expressions, and optional distinct; project has no limit argument.',
     "scalar_compute":
         'scalar_compute(operation, operands, result_name="value") -> a grounded one-row, one-column '
         'table. operation: add|subtract|multiply|divide|percent|percent_change|date_diff_days. '
@@ -62,7 +63,10 @@ TOOL_SPECS: dict[str, str] = {
         '{"value_ref":"step_k","column":"metric"} for one named column of a prior one-row table, or '
         '{"value":constant} for a constant stated by the task. Operand order matters for subtract, '
         'divide, percent (part/whole*100), percent_change ((new-old)/old*100), and date_diff_days '
-        '(start,end). Cite the resulting table directly or reuse its producing step as value_ref.',
+        '(start,end). A value_ref must cite the step that PRODUCED the resident result table, never '
+        'a plan, describe_table, inspect_column, or read_subtable observation step. If you read a '
+        'one-row table at step_5 that was produced at step_4, cite step_4. Cite the resulting '
+        'scalar table directly or reuse its producing step as value_ref.',
     "join_tables":
         'join_tables(base, joins, base_role=None) -> ONE new table for a connected join component. '
         '`base` is a source table or earlier handle. `joins` is an ordered list of '
@@ -74,7 +78,10 @@ TOOL_SPECS: dict[str, str] = {
         'column_namespaces={relation:[column,..]}; reconstruct each as relation.column and never '
         'prefix it with the derived handle. Omit roles normally; use `base_role`/`role` only when '
         'the same relation occurs more than once (self-join). Put a whole consecutive join chain in '
-        'ONE call; use project separately if the result must be narrowed.',
+        'ONE call; use project separately if the result must be narrowed. Per-edge keys are only '
+        'table, on, optional type, and optional role; type never belongs at the top level. In every '
+        'on pair, left is the exact introduced logical column and right has NO dot: use '
+        '{"left":"orders.customer_id","right":"id"}, never right="customers.id".',
     "group_aggregate":
         'group_aggregate(table, group_by, aggregations, passthrough=None, output_layout="rows", '
         'category_values=None, output_columns=None) -> new table grouped by '
@@ -87,7 +94,10 @@ TOOL_SPECS: dict[str, str] = {
         'Default output_layout="rows" returns one row per group. To return one row with one ordered '
         'column per category, use output_layout="columns" with exactly one group_by column, one '
         'aggregation, ordered category_values, and equally ordered output_columns. '
-        '([] with group_by = DISTINCT). passthrough: extra non-grouped columns to carry through.',
+        '([] with group_by = DISTINCT). passthrough is a LIST of extra non-grouped columns. '
+        'Top-level arguments are table, group_by, aggregations, and optional passthrough/'
+        'output_layout/category_values/output_columns. Put where only inside the aggregation it '
+        'conditions; top-level where, conditions, and result_name are invalid.',
     "extreme_value_select":
         'extreme_value_select(table, order_by, top_k=None, return_columns=None) -> new table with '
         'the rows ordered by `order_by` (list of "col" or "col DESC") keeping the top `top_k` '
@@ -107,7 +117,8 @@ TOOL_SPECS: dict[str, str] = {
         'read_subtable(table, limit=20, columns=None) -> up to 20 actual rows of a table '
         '(limit must be 1..20); columns optionally limits which columns are observed. Tool results otherwise '
         'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
-        'the evidence rows before answering. Reading columns does not project or change the table.',
+        'the evidence rows before answering. Reading columns does not project or change the table. '
+        'Arguments are only table, optional limit, and optional columns; there is no offset.',
     "answer_from_context":
         'answer_from_context(evidence, reason="") -> TERMINAL. evidence must be {"table": name} '
         'for a grounded table holding the exact answer rows, columns, and column order. This same '
@@ -124,7 +135,7 @@ LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version19"  # public tool versions now increment numerically: version1, version2, ...
+PROTOCOL_VERSION = "version20"  # public tool versions now increment numerically: version1, version2, ...
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 POLICY_PROMPT_CANONICAL = "canonical"

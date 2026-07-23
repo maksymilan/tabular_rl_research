@@ -22,6 +22,7 @@ from provider_adapter import (  # noqa: E402
 )
 from generate_teacher_rollouts import (  # noqa: E402
     DATA_GENERATION_SUFFIX,
+    chat_with_retries,
     protocol_failure_type,
     request_chat,
 )
@@ -115,6 +116,69 @@ class ProviderAdapterTests(unittest.TestCase):
             },
         )
 
+    def test_length_truncation_retries_same_turn_with_larger_budget(self):
+        truncated_usage = {
+            "prompt_tokens": 10,
+            "completion_tokens": 2048,
+            "completion_tokens_details": {"reasoning_tokens": 2048},
+            "api_finish_reason": "length",
+            "provider_request_options": {"thinking": {"type": "enabled"}},
+            "provider_response_metadata": {"id": "truncated"},
+        }
+        complete_usage = {
+            "prompt_tokens": 10,
+            "completion_tokens": 50,
+            "completion_tokens_details": {"reasoning_tokens": 30},
+            "api_finish_reason": "stop",
+            "provider_request_options": {"thinking": {"type": "enabled"}},
+            "provider_response_metadata": {"id": "complete"},
+        }
+        final_action = '{"tool":"describe_table","arguments":{"tables":["Document"]}}'
+
+        with patch(
+            "generate_teacher_rollouts.request_chat",
+            side_effect=[
+                ("", truncated_usage, "Long truncated reasoning."),
+                (final_action, complete_usage, "Inspect the schema."),
+            ],
+        ) as mocked:
+            content, usage, reasoning = chat_with_retries(
+                base_url="https://api.deepseek.com",
+                api_key="test-key",
+                model="deepseek-v4-flash",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=2048,
+                timeout=30,
+                retries=3,
+            )
+
+        self.assertEqual(
+            [call.kwargs["max_tokens"] for call in mocked.call_args_list],
+            [2048, 4096],
+        )
+        self.assertEqual(content, final_action)
+        self.assertEqual(reasoning, "Inspect the schema.")
+        self.assertEqual(usage["prompt_tokens"], 20)
+        self.assertEqual(usage["completion_tokens"], 2098)
+        self.assertEqual(usage["completion_tokens_details.reasoning_tokens"], 2078)
+        self.assertEqual(usage["api_request_attempts"], 2)
+        self.assertEqual(usage["api_completion_retries"], 1)
+        self.assertEqual(usage["api_transport_retries"], 0)
+        self.assertEqual(usage["api_finish_reason"], "stop")
+        self.assertEqual(usage["provider_response_metadata"], {"id": "complete"})
+        self.assertEqual(
+            usage["api_retry_events"],
+            [{
+                "type": "completion_length",
+                "request_attempt": 1,
+                "max_tokens": 2048,
+                "finish_reason": "length",
+                "visible_content_present": False,
+                "reasoning_content_present": True,
+                "provider_response_metadata": {"id": "truncated"},
+            }],
+        )
+
     def test_teacher_generator_classifies_split_transport_as_protocol_error(self):
         error = ProtocolError(
             'DeepSeek split-response transport error: visible content must be exactly '
@@ -206,8 +270,14 @@ class ProviderAdapterTests(unittest.TestCase):
         self.assertNotIn("<tool_call> block in the provider's visible field", prompt)
         self.assertNotIn("exactly one <tool_call> block", prompt)
         self.assertEqual(prompt.count("DEEPSEEK SPLIT-RESPONSE JSON OUTPUT CONTRACT"), 1)
-        self.assertIn("native reasoning_content", prompt)
-        self.assertIn("visible content field value:", prompt)
+        self.assertIn("separate native reasoning channel", prompt)
+        self.assertIn("under 120 words", prompt)
+        self.assertIn("reasoning is incomplete until the action is emitted", prompt)
+        self.assertIn("emit the next legal inspection or data action", prompt)
+        self.assertIn("Put every tool parameter inside arguments", prompt)
+        self.assertIn("Copy this final-response shape", prompt)
+        self.assertNotIn("reasoning_content field value:", prompt)
+        self.assertNotIn("visible content field value:", prompt)
         self.assertIn(
             '{"tool":"describe_table","arguments":{"tables":["Document"]}}',
             prompt,
@@ -226,6 +296,12 @@ class ProviderAdapterTests(unittest.TestCase):
         self.assertNotIn("Emit exactly one non-empty <think> block", prompt)
         self.assertEqual(prompt.count("DEEPSEEK SPLIT-RESPONSE TOOL-CALL CONTRACT"), 1)
         self.assertNotIn("JSON OUTPUT CONTRACT", prompt)
+        self.assertNotIn("reasoning_content field value:", prompt)
+        self.assertNotIn("visible content field value:", prompt)
+        self.assertIn("under 120 words", prompt)
+        self.assertIn("reasoning is incomplete until the action is emitted", prompt)
+        self.assertIn("Put every tool parameter inside arguments", prompt)
+        self.assertIn("Its first character is < and its last character is >", prompt)
         self.assertIn(
             '<tool_call>{"tool":"describe_table",'
             '"arguments":{"tables":["Document"]}}</tool_call>',

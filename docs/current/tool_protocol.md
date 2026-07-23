@@ -1,4 +1,4 @@
-# Current Trajectory Protocol (version19)
+# Current Trajectory Protocol (version20)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -107,12 +107,18 @@ Public version mapping:
 - `version18`: the separate public `pivot` action is folded into
   `group_aggregate(output_layout="columns", category_values=[...], output_columns=[...])`.
   Historical pivot calls remain replay-compatible only;
-- `version19`: current implementation; `scalar_compute` can cite a named column from a prior
+- `version19`: `scalar_compute` can cite a named column from a prior
   one-row multi-metric result using `{"value_ref":"step_k","column":"metric"}`. The harness
   resolves the exact non-NULL cell and records the output column on each value edge;
-- future changes increment only the integer (`version20`, `version21`, ...).
+- `version20`: current implementation; provider carrier examples contain only the final action
+  shape and no copy-prone field labels. Short schema invariants live beside the affected tools:
+  join `right` is bare, scalar references cite producing steps rather than observation steps,
+  aggregate `where` is per-aggregation, and project/read arguments remain closed. Length-truncated
+  provider completions receive a bounded, audited same-turn client retry and are not themselves
+  semantic agent actions;
+- future changes increment only the integer (`version21`, `version22`, ...).
 
-The current version19 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
+The current version20 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
 - `plan`
@@ -175,7 +181,7 @@ resident table rather than trusting a model-authored value. Omitting `column` re
 
 No `add_to_memory` tool exists in v2c-plan. No reflection or invalidate tool exists.
 
-### Join Identifier Rule (version19; unchanged from version8)
+### Join Identifier Rule (version20; unchanged from version8)
 
 `join_tables(base, joins, base_role?)` joins a connected component in one model action. Every
 `joins[]` item attaches exactly one new table. Its `on.left` values are exact already-introduced

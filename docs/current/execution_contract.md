@@ -1,7 +1,7 @@
 # Canonical Execution Contract
 
 Status: active contract for **new** SFT generation, evaluation, and RL episodes under
-`version19`. `src/sft/protocol.py` is executable authority; this document makes
+`version20`. `src/sft/protocol.py` is executable authority; this document makes
 the ownership boundaries explicit. Old trajectory artifacts remain replay inputs, not examples of
 the public action interface.
 
@@ -47,6 +47,13 @@ interface-specific example are appended. Bounded rolling history likewise sends 
 content in the selected raw-JSON or tool-call carrier only; canonical `<think>` text remains in the
 stored trajectory but is not replayed as a contradictory visible example.
 
+If a provider returns `finish_reason=length`, the response is an incomplete provider completion,
+not an authored semantic action. The client may retry that same turn with a bounded larger
+completion budget. Truncated attempts are recorded under `provider_retry_events`, their token use
+is counted, and their content is never sent to the environment. The fresh response must still pass
+the same strict carrier adapter and parser; exhausting the retry budget remains an explicit
+failure.
+
 ## Ownership Boundary
 
 | Layer | May author | Must not author |
@@ -82,7 +89,7 @@ way to view row values; handles alone expose schema and row-count metadata. Its 
 be an integer from 1 through 20. Larger or non-integer values are explicit argument-validation
 errors and are never silently clamped.
 
-## Current version19 Conditional Aggregation and Wide Output
+## Current version20 Conditional Aggregation and Wide Output
 
 `group_aggregate` keeps one input table and one `group_by` grain. Each aggregation may add an
 optional `where` predicate:
@@ -162,7 +169,7 @@ percent, difference, ratio, or percent-change arithmetic without redundant branc
 Without `column`, the existing rule remains strict: the producing result must be 1x1. Named-column
 references do not apply to predicates, which continue to require a scalar-producing step.
 
-## Current version19 Join and Column Naming
+## Current version20 Join and Column Naming
 
 For source tables and unambiguous derived handles, arguments use the schema column name shown by
 `describe_table` or the state handle. The model never emits SQLite aliases (`L.`, `R.`) or SQL
@@ -259,14 +266,14 @@ Whole episode restarts, when used for pass@k, are separate attempts and retain s
 
 The active shared implementation is `src/eval/rollout.py`, `src/eval/rollout_passk.py`,
 `src/sft/generate_teacher_rollouts.py`, and `src/rl/tool_environment.py` (used by the Accelerate backend). The
-historical Verl token-concatenating adapter is not a version19 training entry point, because state-only
+historical Verl token-concatenating adapter is not a version20 training entry point, because state-only
 rebuilding needs per-turn loss accounting rather than one appended transcript.
 
 ## Migration Rule
 
-Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use version19,
+Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use version20,
 but new SFT construction remains gated on the frozen 200-task accuracy requirement. Historical
 version1-version18 artifacts retain their original model-visible contracts and may only enter
-replay-compatible paths. Every version19 teacher/eval result directory and manifest must record its
-version19 protocol hash and provider request controls; historical data is not relabeled or mutated
+replay-compatible paths. Every version20 teacher/eval result directory and manifest must record its
+version20 protocol hash and provider request controls; historical data is not relabeled or mutated
 in place.

@@ -35,8 +35,8 @@ Start at `docs/current/README.md`.
 ### Model-visible protocol
 
 - Source of truth: `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current implementation: `version19`; `version11` remains the last contract with a completed
-  fixed-200 validation. The former `v2i-state-only-join-feedback-r2` contract is `version1`;
+- Current implementation: `version20`; it has a completed fixed-200 validation. The former
+  `v2i-state-only-join-feedback-r2` contract is `version1`;
   `version2` added canonical calls/final shape, `version3` added precise provider feedback and
   stable projected join columns, and `version4` counted provider-carrier failures precisely.
   `version5` replaced prefix-heavy joins with `base + joins[]`, a flat `relation.column` namespace,
@@ -65,7 +65,12 @@ Start at `docs/current/README.md`.
   `pivot` is replay-only, so the model chooses one aggregate tool rather than two competing tools.
   `version19` lets `scalar_compute` cite a named column from a prior one-row multi-metric table as
   `{"value_ref":"step_k","column":"metric"}`, avoiding duplicate aggregation while preserving
-  harness-owned cell grounding and per-column provenance.
+  harness-owned cell grounding and per-column provenance. `version20` removes copy-prone provider
+  field labels from both DeepSeek carrier examples and adds short argument invariants beside the
+  affected public tools (`join_tables`, `scalar_compute`, `group_aggregate`, `project`, and
+  `read_subtable`). It also treats a length-truncated provider completion as a bounded, audited
+  same-turn client retry rather than a semantic agent action; tool execution semantics and action
+  boundaries are unchanged.
   Future versions increment numerically.
 - The canonical model action contains exactly one `<think>` block and one strict `<tool_call>` JSON
   object. A provider-native reasoning adapter may carry the same authored reason in a separate API
@@ -78,7 +83,7 @@ Start at `docs/current/README.md`.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id
   `value_ref`.
-- Do not construct new version12-version19 SFT data until the frozen 200-task tool-usability gate
+- Do not construct new version12-version20 SFT data until the frozen 200-task tool-usability gate
   is explicitly passed. Small pilots are diagnostic only and are not SFT sources.
 
 ### Recovery and provenance
@@ -111,6 +116,15 @@ Start at `docs/current/README.md`.
 - The completed fixed-200 DeepSeek v4 Flash version11 control is **130/200 strict-multiset**.
   Manual audit of its 70 failures labels 21 exact-output-shape, 13 relational/tool-use,
   17 semantic-understanding, 18 prompt/gold-conflict, and 1 provider-protocol case.
+- The completed version19 fixed-200 canonical rerun is **132/200 strict-multiset**. A global
+  relational-invariants prompt reached 137/200 but had 8 paired regressions, lower legal rate,
+  more process errors, and no significant paired gain; it remains an ablation rather than the
+  canonical prompt. Neither run passed the required 150/200 SFT-construction gate.
+- The completed version20 fixed-200 canonical run is **138/200 strict-multiset**, with 199/200 legal
+  termination and 24 process errors versus version19's 190/200 and 91. It removes all 71 observed
+  carrier protocol errors, but still misses the 150/200 gate; 53 of its 62 failures are error-free
+  legal trajectories. See
+  `docs/reports/evaluation/BIRD_VERSION20_CARRIER_SCHEMA_FIXED200_20260723.md`.
 - A paired six-hard-task diagnostic found no gain from forced resident planning:
   optional and required were both 0/6, while required planning increased mean actions by 16.4%
   and tokens by 18.5%. Keep `required-resident` experimental; do not expand it or make it default

@@ -75,6 +75,7 @@ DEFAULT_MAX_ERRORS_PER_TYPE = 3
 DEFAULT_MAX_STEPS = 30
 DEFAULT_MAX_TOKENS = 1024
 MIN_CONTEXT_RETRY_TOKENS = 256
+MAX_COMPLETION_RETRY_TOKENS = 8192
 DATA_GENERATION_SUFFIX = (
     "\n\nDATA GENERATION STRICTNESS\n"
     "ONE REQUEST = ONE ACTION. Emit exactly one non-empty <think> block and exactly one "
@@ -287,7 +288,8 @@ def request_chat(
     choice = data["choices"][0]
     message = choice["message"]
     usage = dict(data.get("usage") or {})
-    # A successful HTTP response can still be length-truncated. This is audit metadata, not a retry.
+    # A successful HTTP response can still be length-truncated. The bounded caller decides whether
+    # to retry the same semantic turn with a larger completion budget.
     usage["api_finish_reason"] = choice.get("finish_reason")
     usage["provider_request_options"] = request_options
     usage["provider_response_metadata"] = {
@@ -313,9 +315,12 @@ def chat_with_retries(
     budget = max_tokens
     transport_retries = 0
     context_retries = 0
+    completion_retries = 0
+    retry_events: list[dict] = []
+    accumulated_usage: collections.Counter = collections.Counter()
     for attempt in range(max(1, retries)):
         try:
-            text, usage, reasoning = request_chat(
+            text, response_usage, reasoning = request_chat(
                 base_url=base_url,
                 api_key=api_key,
                 model=model,
@@ -324,11 +329,44 @@ def chat_with_retries(
                 timeout=timeout,
                 deepseek_carrier=deepseek_carrier,
             )
-            usage = dict(usage or {})
+            response_usage = dict(response_usage or {})
+            add_usage(accumulated_usage, response_usage)
+            finish_reason = response_usage.get("api_finish_reason")
+            if (
+                finish_reason == "length"
+                and attempt + 1 < max(1, retries)
+                and budget < MAX_COMPLETION_RETRY_TOKENS
+            ):
+                retry_events.append({
+                    "type": "completion_length",
+                    "request_attempt": attempt + 1,
+                    "max_tokens": budget,
+                    "finish_reason": finish_reason,
+                    "visible_content_present": bool(text.strip()),
+                    "reasoning_content_present": bool(reasoning.strip()),
+                    "provider_response_metadata": deepcopy(
+                        response_usage.get("provider_response_metadata") or {}
+                    ),
+                })
+                budget = min(MAX_COMPLETION_RETRY_TOKENS, budget * 2)
+                completion_retries += 1
+                continue
+
+            usage = dict(accumulated_usage)
+            usage["api_finish_reason"] = finish_reason
+            usage["provider_request_options"] = deepcopy(
+                response_usage.get("provider_request_options") or {}
+            )
+            usage["provider_response_metadata"] = deepcopy(
+                response_usage.get("provider_response_metadata") or {}
+            )
             # These are client request retries, deliberately separate from environment error events.
             usage["api_request_attempts"] = attempt + 1
             usage["api_transport_retries"] = transport_retries
             usage["api_context_retries"] = context_retries
+            usage["api_completion_retries"] = completion_retries
+            if retry_events:
+                usage["api_retry_events"] = retry_events
             return text, usage, reasoning
         except ContextOverflowError:
             if budget <= MIN_CONTEXT_RETRY_TOKENS:
@@ -605,6 +643,10 @@ def run_rollout(
             if call_usage.get("provider_response_metadata"):
                 turn["provider_response_metadata"] = deepcopy(
                     call_usage["provider_response_metadata"]
+                )
+            if call_usage.get("api_retry_events"):
+                turn["provider_retry_events"] = deepcopy(
+                    call_usage["api_retry_events"]
                 )
         except ContextOverflowError as exc:
             rec.update({
@@ -923,7 +965,7 @@ def main() -> int:
         "--policy-prompt-variant",
         choices=POLICY_PROMPT_VARIANTS,
         default=POLICY_PROMPT_CANONICAL,
-        help="auditable policy ablation; canonical preserves the version19 prompt",
+        help="auditable policy ablation; canonical preserves the version20 prompt",
     )
     parser.add_argument(
         "--plan-policy",

@@ -24,7 +24,7 @@ from protocol import (  # noqa: E402
 
 class ProtocolParseTests(unittest.TestCase):
     def test_current_prompt_has_canonical_calls_and_exact_final_shape(self):
-        self.assertEqual(PROTOCOL_VERSION, "version19")
+        self.assertEqual(PROTOCOL_VERSION, "version20")
         for tool in (
             "condition_filter", "project", "join_tables", "group_aggregate",
             "scalar_compute", "set_op", "answer_from_context",
@@ -44,6 +44,12 @@ class ProtocolParseTests(unittest.TestCase):
         self.assertIn("same population", SYSTEM_PROMPT)
         self.assertIn('"output_layout":"columns"', SYSTEM_PROMPT)
         self.assertIn("Project preserves the input row orientation", SYSTEM_PROMPT)
+        self.assertIn('right has NO dot', SYSTEM_PROMPT)
+        self.assertIn('never right="customers.id"', SYSTEM_PROMPT)
+        self.assertIn("never a plan, describe_table, inspect_column, or read_subtable", SYSTEM_PROMPT)
+        self.assertIn("Put where only inside the aggregation", SYSTEM_PROMPT)
+        self.assertIn("project has no limit argument", SYSTEM_PROMPT)
+        self.assertIn("there is no offset", SYSTEM_PROMPT)
 
     def test_tool_output_compacts_contiguous_logical_namespaces(self):
         message = tool_output_message(
