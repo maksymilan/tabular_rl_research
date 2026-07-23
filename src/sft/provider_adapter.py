@@ -14,6 +14,12 @@ from typing import Any
 DEEPSEEK_V4_MODELS = frozenset({"deepseek-v4-flash", "deepseek-v4-pro"})
 DEEPSEEK_V4_DEFAULT_MAX_TOKENS = 2048
 DEEPSEEK_V4_REASONING_EFFORT = "high"
+DEEPSEEK_CARRIER_JSON_OUTPUT = "json-output"
+DEEPSEEK_CARRIER_TOOL_CALL = "tool-call"
+DEEPSEEK_CARRIER_CHOICES = (
+    DEEPSEEK_CARRIER_JSON_OUTPUT,
+    DEEPSEEK_CARRIER_TOOL_CALL,
+)
 _CANONICAL_SYSTEM_RESPONSE_RULE = (
     '1. Each turn, output exactly: <think>brief reasoning</think> then '
     '<tool_call>{"tool": "<name>", "arguments": {...}}</tool_call>. Nothing else.'
@@ -73,15 +79,22 @@ def provider_default_max_tokens(model: str, fallback: int) -> int:
     return DEEPSEEK_V4_DEFAULT_MAX_TOKENS if is_deepseek_split_model(model) else fallback
 
 
-def provider_request_options(model: str) -> dict[str, Any]:
+def provider_request_options(
+    model: str,
+    carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
+) -> dict[str, Any]:
     """Return provider controls that must be explicit and auditable."""
     if not is_deepseek_split_model(model):
         return {}
-    return {
+    if carrier not in DEEPSEEK_CARRIER_CHOICES:
+        raise ValueError(f"unknown DeepSeek carrier {carrier!r}")
+    options = {
         "thinking": {"type": "enabled"},
         "reasoning_effort": DEEPSEEK_V4_REASONING_EFFORT,
-        "response_format": {"type": "json_object"},
     }
+    if carrier == DEEPSEEK_CARRIER_JSON_OUTPUT:
+        options["response_format"] = {"type": "json_object"}
+    return options
 
 
 def provider_system_prompt(
@@ -89,6 +102,7 @@ def provider_system_prompt(
     canonical_prompt: str,
     *,
     example_visible_content: str | None = None,
+    carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
 ) -> str:
     """Return one unambiguous API-facing response contract for the selected provider.
 
@@ -130,10 +144,15 @@ def provider_system_prompt(
     return prompt + provider_instruction(
         model,
         example_visible_content=example_visible_content,
+        carrier=carrier,
     )
 
 
-def provider_request_messages(model: str, messages: list[dict]) -> list[dict]:
+def provider_request_messages(
+    model: str,
+    messages: list[dict],
+    carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
+) -> list[dict]:
     """Render canonical legal-history actions in the provider's API-facing carrier.
 
     DeepSeek receives prior assistant actions as one raw JSON action object. Their old reasoning is
@@ -144,6 +163,8 @@ def provider_request_messages(model: str, messages: list[dict]) -> list[dict]:
     rendered = [dict(message) for message in messages]
     if not is_deepseek_split_model(model):
         return rendered
+    if carrier not in DEEPSEEK_CARRIER_CHOICES:
+        raise ValueError(f"unknown DeepSeek carrier {carrier!r}")
     for message in rendered:
         if message.get("role") != "assistant":
             continue
@@ -152,24 +173,64 @@ def provider_request_messages(model: str, messages: list[dict]) -> list[dict]:
             raise ValueError("DeepSeek assistant history content must be a string")
         match = _CANONICAL_ASSISTANT_HISTORY_RE.fullmatch(content)
         if match:
-            message["content"] = match.group("call_json").strip()
+            call_json = match.group("call_json").strip()
+            if carrier == DEEPSEEK_CARRIER_TOOL_CALL:
+                message["content"] = f"<tool_call>{call_json}</tool_call>"
+            else:
+                message["content"] = call_json
             continue
         stripped = content.strip()
-        if _is_exact_json_action(stripped):
+        if carrier == DEEPSEEK_CARRIER_JSON_OUTPUT and _is_exact_json_action(stripped):
+            message["content"] = stripped
+            continue
+        if (
+            carrier == DEEPSEEK_CARRIER_TOOL_CALL
+            and stripped.startswith("<tool_call>")
+            and stripped.endswith("</tool_call>")
+            and _is_exact_json_action(
+                stripped[len("<tool_call>"):-len("</tool_call>")].strip()
+            )
+        ):
             message["content"] = stripped
             continue
         raise ValueError(
-            "DeepSeek assistant history must be one canonical action or one JSON action object"
+            "DeepSeek assistant history must match the selected provider carrier"
         )
     return rendered
 
 
-def provider_instruction(model: str, *, example_visible_content: str | None = None) -> str:
+def provider_instruction(
+    model: str,
+    *,
+    example_visible_content: str | None = None,
+    carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
+) -> str:
     """Return an explicit transport instruction only for a provider with a known split response."""
     if is_deepseek_split_model(model):
+        if carrier not in DEEPSEEK_CARRIER_CHOICES:
+            raise ValueError(f"unknown DeepSeek carrier {carrier!r}")
         example = example_visible_content or (
             '{"tool":"describe_table","arguments":{"tables":["Document"]}}'
         )
+        if carrier == DEEPSEEK_CARRIER_TOOL_CALL:
+            return (
+                "\n\nDEEPSEEK SPLIT-RESPONSE TOOL-CALL CONTRACT\n"
+                "This API transports your response in two fields. You MUST return exactly this "
+                "shape on every turn:\n"
+                "- native reasoning_content: one non-empty, brief reason for the next action; no "
+                "XML tags.\n"
+                "- visible content: exactly one complete <tool_call>{...}</tool_call> block and "
+                "NOTHING before or after it.\n"
+                "Concrete field-value example (the labels below name API fields; do not copy "
+                "either label into visible content):\n"
+                "reasoning_content field value:\n"
+                "Inspect the Document schema before filtering.\n"
+                "visible content field value:\n"
+                f"<tool_call>{example}</tool_call>\n"
+                "Never put reasoning prose, <think>, </think>, Markdown, a second tool call, or "
+                "unfinished JSON in visible content. The client preserves the native reason and "
+                "wraps both fields in the internal canonical action envelope."
+            )
         return (
             "\n\nDEEPSEEK SPLIT-RESPONSE JSON OUTPUT CONTRACT\n"
             "This API transports your response in two fields and enforces JSON Output on visible "
@@ -210,7 +271,12 @@ def _is_exact_json_action(content: str) -> bool:
     )
 
 
-def adapt_provider_response(model: str, content: str, reasoning_content: str) -> tuple[str, dict[str, Any]]:
+def adapt_provider_response(
+    model: str,
+    content: str,
+    reasoning_content: str,
+    carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
+) -> tuple[str, dict[str, Any]]:
     """Return canonical assistant text plus an auditable adapter record.
 
     Only DeepSeek Flash's known split carrier is supported: a non-empty native reasoning field and
@@ -227,17 +293,38 @@ def adapt_provider_response(model: str, content: str, reasoning_content: str) ->
     }
     if not is_deepseek_split_model(model):
         return raw_content, record
+    if carrier not in DEEPSEEK_CARRIER_CHOICES:
+        raise ValueError(f"unknown DeepSeek carrier {carrier!r}")
 
     content_text = raw_content.strip()
     reasoning_text = raw_reasoning.strip()
     reasoning_has_tag = "<think" in reasoning_text.lower() or "</think>" in reasoning_text.lower()
-    record["name"] = "deepseek_reasoning_json_content_v2"
+    record["carrier"] = carrier
+    record["name"] = (
+        "deepseek_reasoning_tool_call_v1"
+        if carrier == DEEPSEEK_CARRIER_TOOL_CALL
+        else "deepseek_reasoning_json_content_v2"
+    )
     if not reasoning_text:
         record["rejection_reason"] = "missing_reasoning_content"
     elif not content_text:
         record["rejection_reason"] = "empty_visible_content"
     elif reasoning_has_tag:
         record["rejection_reason"] = "think_tag_in_reasoning_content"
+    elif carrier == DEEPSEEK_CARRIER_TOOL_CALL:
+        has_think_tag = "<think" in content_text.lower() or "</think>" in content_text.lower()
+        if has_think_tag:
+            record["rejection_reason"] = "think_tag_in_visible_content"
+        elif not content_text.startswith("<tool_call>"):
+            record["rejection_reason"] = "visible_prefix_before_tool_call"
+        elif not content_text.endswith("</tool_call>"):
+            record["rejection_reason"] = "incomplete_or_suffixed_visible_tool_call"
+        elif not _is_exact_json_action(
+            content_text[len("<tool_call>"):-len("</tool_call>")].strip()
+        ):
+            record["rejection_reason"] = "visible_tool_call_invalid_json"
+        else:
+            record["rejection_reason"] = None
     elif not _is_exact_json_action(content_text):
         try:
             parsed_content = json.loads(content_text)
@@ -253,6 +340,8 @@ def adapt_provider_response(model: str, content: str, reasoning_content: str) ->
         return raw_content, record
 
     record["applied"] = True
+    if carrier == DEEPSEEK_CARRIER_TOOL_CALL:
+        return f"<think>{reasoning_text}</think>\n{content_text}", record
     return f"<think>{reasoning_text}</think>\n<tool_call>{content_text}</tool_call>", record
 
 
@@ -261,6 +350,7 @@ def provider_rejection_message(audit: dict[str, Any]) -> str | None:
     reason = audit.get("rejection_reason")
     if not reason:
         return None
+    carrier = audit.get("carrier", DEEPSEEK_CARRIER_JSON_OUTPUT)
     details = {
         "missing_reasoning_content": "native reasoning_content was empty; put the brief action reason there",
         "empty_visible_content": (
@@ -276,8 +366,27 @@ def provider_rejection_message(audit: dict[str, Any]) -> str | None:
         "visible_json_wrong_shape": (
             'visible JSON must contain exactly the top-level keys "tool" and "arguments"'
         ),
+        "think_tag_in_visible_content": (
+            "visible content contained a think tag; put reasoning only in native reasoning_content"
+        ),
+        "visible_prefix_before_tool_call": (
+            "visible content had text before the required tool_call block"
+        ),
+        "incomplete_or_suffixed_visible_tool_call": (
+            "visible content did not end with one complete tool_call block"
+        ),
+        "visible_tool_call_invalid_json": (
+            "the tool_call body was not one valid JSON action object"
+        ),
     }
     detail = details.get(reason, f"provider carrier was rejected: {reason}")
+    if carrier == DEEPSEEK_CARRIER_TOOL_CALL:
+        return (
+            "DeepSeek split-response transport error: " + detail + ". On the retry, visible "
+            "content must be exactly <tool_call>{\"tool\":\"...\",\"arguments\":{...}}</tool_call> "
+            "with nothing before or after it; do not put reasoning prose, Markdown, or think tags "
+            "in visible content."
+        )
     return (
         "DeepSeek split-response transport error: " + detail + ". On the retry, visible content "
         "must be exactly {\"tool\":\"...\",\"arguments\":{...}} with nothing before or after it; "

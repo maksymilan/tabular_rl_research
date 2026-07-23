@@ -20,7 +20,7 @@ from protocol import (  # noqa: E402
 
 class ProtocolParseTests(unittest.TestCase):
     def test_current_prompt_has_canonical_calls_and_exact_final_shape(self):
-        self.assertEqual(PROTOCOL_VERSION, "version13")
+        self.assertEqual(PROTOCOL_VERSION, "version14")
         for tool in (
             "condition_filter", "project", "join_tables", "group_aggregate",
             "scalar_compute", "set_op", "answer_from_context",

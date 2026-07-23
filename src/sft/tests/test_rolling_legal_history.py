@@ -146,6 +146,44 @@ class RollingLegalHistoryTests(unittest.TestCase):
         self.assertNotIn('"orders.id"', rendered)
         self.assertIn("columns", state["tables"]["join_001"])
 
+    def test_plan_evidence_keeps_grounded_identity_without_duplicating_output(self):
+        state = {
+            "plan": [{
+                "id": "inspect",
+                "goal": "Inspect orders",
+                "status": "done",
+                "evidence": {
+                    "step_id": "step_2",
+                    "tool": "describe_table",
+                    "output": {
+                        "tables": [{
+                            "table_name": "orders",
+                            "columns": [{"name": "very_large_schema_column", "type": "TEXT"}],
+                        }],
+                    },
+                },
+            }],
+            "tables": {},
+            "values": {},
+        }
+        messages = rolling_legal_history_messages(
+            "system",
+            {"tables": [], "relations": []},
+            "question",
+            state,
+            None,
+            None,
+            [],
+            4,
+        )
+        rendered = messages[-1]["content"]
+        self.assertIn('"goal":"Inspect orders"', rendered)
+        self.assertIn('"status":"done"', rendered)
+        self.assertIn('"step_id":"step_2"', rendered)
+        self.assertIn('"tool":"describe_table"', rendered)
+        self.assertNotIn("very_large_schema_column", rendered)
+        self.assertIn("very_large_schema_column", str(state))
+
     def test_full_observation_style_reproduces_pre_r2_history(self):
         observation = (
             '{"step_id":"step_1","status":"success","output":'

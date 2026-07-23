@@ -1,4 +1,4 @@
-# Current Trajectory Protocol (version13)
+# Current Trajectory Protocol (version14)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -91,11 +91,15 @@ Public version mapping:
 - `version11`: removes the remaining generic visible-`<tool_call>` wording from
   DeepSeek-facing generation and retry instructions, leaving one raw-JSON visible contract;
 - `version12`: adds `project(distinct=...)` and a grounded `scalar_compute` atom;
-- `version13`: current implementation; terminal actions cite one exact result table, including a
-  1x1 table for scalar answers, and cannot carry model-authored answer values;
-- future changes increment only the integer (`version14`, `version15`, ...).
+- `version13`: terminal actions cite one exact result table, including a 1x1 table for scalar
+  answers, and cannot carry model-authored answer values;
+- `version14`: current implementation; model-visible resident plan evidence keeps only its grounded
+  `step_id + tool` identity, while canonical snapshots retain the full evidence output for
+  replay/audit. This prevents a plan item from duplicating large schemas or row payloads on every
+  later turn;
+- future changes increment only the integer (`version15`, `version16`, ...).
 
-The current version13 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
+The current version14 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
 - `plan`
@@ -127,7 +131,7 @@ actions retain compact result summaries while full factual payloads remain in re
 
 No `add_to_memory` tool exists in v2c-plan. No reflection or invalidate tool exists.
 
-### Join Identifier Rule (version13; unchanged from version8)
+### Join Identifier Rule (version14; unchanged from version8)
 
 `join_tables(base, joins, base_role?)` joins a connected component in one model action. Every
 `joins[]` item attaches exactly one new table. Its `on.left` values are exact already-introduced

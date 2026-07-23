@@ -1,7 +1,7 @@
 # Canonical Execution Contract
 
 Status: active contract for **new** SFT generation, evaluation, and RL episodes under
-`version13`. `src/sft/protocol.py` is executable authority; this document makes
+`version14`. `src/sft/protocol.py` is executable authority; this document makes
 the ownership boundaries explicit. Old trajectory artifacts remain replay inputs, not examples of
 the public action interface.
 
@@ -33,17 +33,19 @@ tool syntax, argument normalization, or silent parameter rewrite.
 
 A provider adapter is allowed only before the strict parser when an API explicitly transports a
 model-authored action across separate fields. For example, the DS Flash adapter accepts exactly
-`reasoning_content` plus visible content consisting of one complete tool-call block, preserves both
-raw fields in the audit record, and carries that existing reasoning into the canonical `<think>`
-field. It never invents reasoning, edits JSON/arguments, balances tags, or accepts partial tags.
-All other shapes still go to the strict parser unchanged and fail normally. Adapter use is recorded
-in the audit turn and successful trajectory metadata.
+`reasoning_content` plus the one visible action shape selected for that experiment: either one raw
+JSON action under JSON Output or one complete tool-call block without that constraint. It preserves
+both raw fields in the audit record and carries that existing reasoning into the canonical
+`<think>` field. It never invents reasoning, edits JSON/arguments, balances tags, or accepts partial
+tags. All other shapes still go to the strict parser unchanged and fail normally. The selected
+carrier, request controls, adapter use, and raw provider identity are recorded in turns and
+manifests.
 
 The API-facing prompt must contain only the selected provider envelope. For DS Flash, positive
 instructions to emit a visible `<think>` block are removed before the split-field contract and its
 interface-specific example are appended. Bounded rolling history likewise sends prior assistant
-content as a visible tool-call block only; canonical `<think>` text remains in the stored trajectory
-but is not replayed as a contradictory visible example.
+content in the selected raw-JSON or tool-call carrier only; canonical `<think>` text remains in the
+stored trajectory but is not replayed as a contradictory visible example.
 
 ## Ownership Boundary
 
@@ -56,6 +58,9 @@ but is not replayed as a contradictory visible example.
 
 `plan` is control state only. It cannot supply a factual answer or a `value_ref`. A scalar
 `value_ref` names an earlier producing `step_id`; the harness extracts and validates that scalar.
+Canonical plan evidence retains the grounded step output for replay and audit. Its model-visible
+resident rendering exposes only the evidence `step_id` and tool identity; the authoritative table
+or scalar payload already appears under resident tables/values and is not duplicated inside plan.
 
 ## Public Tool API
 
@@ -75,7 +80,7 @@ way to view row values; handles alone expose schema and row-count metadata. Its 
 be an integer from 1 through 20. Larger or non-integer values are explicit argument-validation
 errors and are never silently clamped.
 
-## Current version13 Join and Column Naming
+## Current version14 Join and Column Naming
 
 For source tables and unambiguous derived handles, arguments use the schema column name shown by
 `describe_table` or the state handle. The model never emits SQLite aliases (`L.`, `R.`) or SQL
@@ -172,14 +177,14 @@ Whole episode restarts, when used for pass@k, are separate attempts and retain s
 
 The active shared implementation is `src/eval/rollout.py`, `src/eval/rollout_passk.py`,
 `src/sft/generate_teacher_rollouts.py`, and `src/rl/tool_environment.py` (used by the Accelerate backend). The
-historical Verl token-concatenating adapter is not a version13 training entry point, because state-only
+historical Verl token-concatenating adapter is not a version14 training entry point, because state-only
 rebuilding needs per-turn loss accounting rather than one appended transcript.
 
 ## Migration Rule
 
-Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use version13,
+Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use version14,
 but new SFT construction remains gated on the frozen 200-task accuracy requirement. Historical
-version1-version12 artifacts retain their original model-visible contracts and may only enter
-replay-compatible paths. Every version13 teacher/eval result directory and manifest must record its
-version13 protocol hash and provider request controls; historical data is not relabeled or mutated
+version1-version13 artifacts retain their original model-visible contracts and may only enter
+replay-compatible paths. Every version14 teacher/eval result directory and manifest must record its
+version14 protocol hash and provider request controls; historical data is not relabeled or mutated
 in place.

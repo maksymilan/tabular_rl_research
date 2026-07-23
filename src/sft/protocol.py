@@ -114,7 +114,7 @@ LEGACY_TOOLS = {"aggregate"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version13"  # public tool versions now increment numerically: version1, version2, ...
+PROTOCOL_VERSION = "version14"  # public tool versions now increment numerically: version1, version2, ...
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 
@@ -634,9 +634,18 @@ def _compact_state_columns(state: dict | None) -> dict:
         if not isinstance(item, dict):
             continue
         evidence = item.get("evidence")
-        if not isinstance(evidence, dict) or not isinstance(evidence.get("output"), dict):
+        if not isinstance(evidence, dict):
             continue
-        evidence["output"] = _compact_output_columns(evidence["output"])
+        # Canonical harness snapshots retain the grounded evidence output for replay/audit, but
+        # repeating that full schema/table payload inside every resident plan item duplicates the
+        # authoritative table state and can dominate every later prompt. The model needs only the
+        # grounded step identity to understand plan progress; factual reuse still comes from tables
+        # and values in CURRENT ENVIRONMENT STATE.
+        item["evidence"] = {
+            key: deepcopy(evidence[key])
+            for key in ("step_id", "tool")
+            if evidence.get(key) is not None
+        }
     return visible
 
 

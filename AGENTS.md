@@ -35,7 +35,7 @@ Start at `docs/current/README.md`.
 ### Model-visible protocol
 
 - Source of truth: `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current implementation: `version13`; `version11` remains the last contract with a completed
+- Current implementation: `version14`; `version11` remains the last contract with a completed
   fixed-200 validation. The former `v2i-state-only-join-feedback-r2` contract is `version1`;
   `version2` added canonical calls/final shape, `version3` added precise provider feedback and
   stable projected join columns, and `version4` counted provider-carrier failures precisely.
@@ -55,7 +55,9 @@ Start at `docs/current/README.md`.
   the API-facing prompt names only the native-reasoning + raw-JSON carrier. `version12` adds
   `project(distinct=...)` and grounded `scalar_compute`; `version13` makes terminal answers cite
   one exact result table, including 1x1 scalar tables, instead of carrying model-authored answer
-  values. Future versions increment numerically.
+  values. `version14` keeps canonical grounded plan evidence intact but renders only its
+  `step_id + tool` identity in model-visible resident plan state, avoiding repeated large
+  schema/table payloads. Future versions increment numerically.
 - The canonical model action contains exactly one `<think>` block and one strict `<tool_call>` JSON
   object. A provider-native reasoning adapter may carry the same authored reason in a separate API
   field, but its API-facing prompt and history must describe only that one carrier.
@@ -67,7 +69,7 @@ Start at `docs/current/README.md`.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id
   `value_ref`.
-- Do not construct new version12/version13 SFT data until the frozen 200-task tool-usability gate
+- Do not construct new version12-version14 SFT data until the frozen 200-task tool-usability gate
   is explicitly passed. Small pilots are diagnostic only and are not SFT sources.
 
 ### Recovery and provenance
@@ -97,6 +99,14 @@ Start at `docs/current/README.md`.
 - Do not mix result directories across task selections, model/checkpoint, protocol, decoding,
   timeout, external knowledge, or denotation comparison.
 - Report API/transport failures separately from semantic policy failures.
+- The completed fixed-200 DeepSeek v4 Flash version11 control is **130/200 strict-multiset**.
+  Manual audit of its 70 failures labels 21 exact-output-shape, 13 relational/tool-use,
+  17 semantic-understanding, 18 prompt/gold-conflict, and 1 provider-protocol case.
+- A paired six-hard-task diagnostic found no gain from forced resident planning:
+  optional and required were both 0/6, while required planning increased mean actions by 16.4%
+  and tokens by 18.5%. Keep `required-resident` experimental; do not expand it or make it default
+  without a new small-pilot signal. See
+  `docs/reports/evaluation/BIRD_VERSION11_FAILURE_TRAJECTORY_AND_RESIDENT_PLAN_AUDIT.md`.
 
 ## Current BIRD reference points (2026-07-22)
 

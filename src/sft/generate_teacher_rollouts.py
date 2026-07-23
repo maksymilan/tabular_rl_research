@@ -29,6 +29,8 @@ sys.path.insert(0, str(ROOT / "src" / "sft"))
 
 from provider_client import load_api_config  # noqa: E402
 from provider_adapter import (  # noqa: E402
+    DEEPSEEK_CARRIER_CHOICES,
+    DEEPSEEK_CARRIER_JSON_OUTPUT,
     adapt_provider_response,
     provider_default_max_tokens,
     provider_request_messages,
@@ -84,6 +86,114 @@ DATA_GENERATION_SUFFIX = (
     "present in CURRENT ENVIRONMENT STATE. If a plan item has no evidence yet, omit the evidence "
     "field or set it to null; never use an empty string for evidence."
 )
+PLAN_POLICY_OPTIONAL = "optional"
+PLAN_POLICY_REQUIRED_RESIDENT = "required-resident"
+PLAN_POLICY_CHOICES = (PLAN_POLICY_OPTIONAL, PLAN_POLICY_REQUIRED_RESIDENT)
+REQUIRED_RESIDENT_PLAN_SUFFIX = (
+    "\n\nREQUIRED RESIDENT PLAN EXPERIMENT\n"
+    "Your FIRST valid action must be one plan tool call that creates 2 to 4 concrete "
+    "subgoals. Do not execute a data tool before that plan is accepted. The harness stores this "
+    "plan in CURRENT ENVIRONMENT STATE, where it remains visible on every later request; plan "
+    "actions are deliberately not repeated in the bounded rolling transcript. After obtaining "
+    "decisive intermediate evidence, make a batched plan update before answer_from_context: put "
+    "all currently changed items into one ops list containing update ops. Update again only after "
+    "a later non-plan tool makes new material progress; never repeat a plan update when resident "
+    "goal/status/evidence already shows the same state. Each plan update is exactly one action: do "
+    "not emit any second tool call or a complete solution in the same response.\n"
+    "Required plan argument examples (these are arguments, not extra actions):\n"
+    'Initial: {"ops":[{"op":"create","id":"inspect","goal":"Inspect needed schemas",'
+    '"status":"pending"},{"op":"create","id":"solve","goal":"Build the exact result table",'
+    '"status":"pending"}]}\n'
+    'Later batched update: {"ops":[{"op":"update","id":"inspect","status":"done",'
+    '"evidence":"step_2"},{"op":"update","id":"solve","status":"in_progress"}]}\n'
+    'Every item must include the "op" field. Omit evidence until a real prior step supports it.'
+)
+
+
+class ResidentPlanPolicyTracker:
+    """Enforce the opt-in forced-plan experiment without changing the default protocol."""
+
+    def __init__(self, policy: str = PLAN_POLICY_OPTIONAL):
+        if policy not in PLAN_POLICY_CHOICES:
+            raise ValueError(f"unknown plan policy {policy!r}")
+        self.policy = policy
+        self.initial_plan_created = False
+        self.non_plan_success_seen = False
+        self.non_plan_success_since_update = False
+        self.updated_after_work = False
+
+    @property
+    def required(self) -> bool:
+        return self.policy == PLAN_POLICY_REQUIRED_RESIDENT
+
+    def validate_before_execution(self, tool: str, args: dict) -> None:
+        if not self.required:
+            return
+        if not self.initial_plan_created:
+            if tool != "plan":
+                raise ProtocolError(
+                    "required resident-plan policy: the first valid action must be plan"
+                )
+            ops = args.get("ops") if isinstance(args, dict) else None
+            if (
+                not isinstance(ops, list)
+                or not 2 <= len(ops) <= 4
+                or any(not isinstance(op, dict) or op.get("op") not in {"create", "add"}
+                       for op in ops)
+            ):
+                raise ProtocolError(
+                    "required resident-plan policy: the initial plan must contain 2 to 4 "
+                    "create/add ops"
+                )
+            return
+        if tool == "plan":
+            if not self.non_plan_success_since_update:
+                raise ProtocolError(
+                    "required resident-plan policy: new non-plan progress is required before "
+                    "another batched plan update; do not repeat unchanged plan state"
+                )
+            ops = args.get("ops") if isinstance(args, dict) else None
+            if (
+                not isinstance(ops, list)
+                or not ops
+                or any(not isinstance(op, dict) or op.get("op") != "update" for op in ops)
+            ):
+                raise ProtocolError(
+                    "required resident-plan policy: a later plan call must batch one or more "
+                    "update ops"
+                )
+            return
+        if tool == "answer_from_context" and not self.updated_after_work:
+            raise ProtocolError(
+                "required resident-plan policy: after a non-plan tool succeeds, plan must be "
+                "updated with an update op before answer_from_context"
+            )
+
+    def record_success(self, tool: str, args: dict) -> None:
+        if not self.required:
+            return
+        if tool == "plan":
+            if not self.initial_plan_created:
+                self.initial_plan_created = True
+                return
+            ops = args.get("ops") if isinstance(args, dict) else None
+            if self.non_plan_success_seen and isinstance(ops, list) and any(
+                isinstance(op, dict) and op.get("op") == "update" for op in ops
+            ):
+                self.updated_after_work = True
+                self.non_plan_success_since_update = False
+            return
+        self.non_plan_success_seen = True
+        self.non_plan_success_since_update = True
+
+
+def retain_in_rolling_history(tool: str, plan_policy: str) -> bool:
+    """Resident-only plan actions should not be duplicated in bounded assistant history."""
+    return not (
+        plan_policy == PLAN_POLICY_REQUIRED_RESIDENT
+        and tool == "plan"
+    )
+
 
 def compact_json(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str)
@@ -143,6 +253,7 @@ def request_chat(
     messages: list[dict],
     max_tokens: int,
     timeout: int,
+    deepseek_carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
 ) -> tuple[str, dict, str]:
     payload = {
         "model": model,
@@ -150,7 +261,7 @@ def request_chat(
         "temperature": 0,
         "max_tokens": max_tokens,
     }
-    request_options = provider_request_options(model)
+    request_options = provider_request_options(model, carrier=deepseek_carrier)
     payload.update(request_options)
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
@@ -193,6 +304,7 @@ def chat_with_retries(
     max_tokens: int,
     timeout: int,
     retries: int,
+    deepseek_carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
 ) -> tuple[str, dict, str]:
     last: Exception | None = None
     budget = max_tokens
@@ -207,6 +319,7 @@ def chat_with_retries(
                 messages=messages,
                 max_tokens=budget,
                 timeout=timeout,
+                deepseek_carrier=deepseek_carrier,
             )
             usage = dict(usage or {})
             # These are client request retries, deliberately separate from environment error events.
@@ -388,6 +501,8 @@ def run_rollout(
     context_mode: str,
     history_turns: int,
     rolling_prompt_variant: str,
+    plan_policy: str = PLAN_POLICY_OPTIONAL,
+    deepseek_carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
 ) -> dict:
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
@@ -409,6 +524,7 @@ def run_rollout(
     error_counts = collections.Counter()
     error_events: list[dict] = []
     legal_history: list[dict] = []
+    plan_tracker = ResidentPlanPolicyTracker(plan_policy)
     successful_tool_steps = 0
     usage = collections.Counter()
     started = time.time()
@@ -428,6 +544,7 @@ def run_rollout(
         "turns": turns,
         "error_events": error_events,
         "outcome": None,
+        "plan_policy": plan_policy,
     }
 
     while action_count < max_steps:
@@ -453,11 +570,19 @@ def run_rollout(
                 last_error,
                 external_knowledge,
             )
-        model_input = provider_request_messages(model, model_input)
+        model_input = provider_request_messages(
+            model,
+            model_input,
+            carrier=deepseek_carrier,
+        )
         turn = {
             "turn_index": len(turns),
             "model_input": deepcopy(model_input),
-            "provider_request_options": provider_request_options(model),
+            "provider_request_options": provider_request_options(
+                model,
+                carrier=deepseek_carrier,
+            ),
+            "deepseek_carrier": deepseek_carrier,
         }
         try:
             text, call_usage, reasoning_content = chat_with_retries(
@@ -468,6 +593,7 @@ def run_rollout(
                 max_tokens=max_tokens,
                 timeout=api_timeout,
                 retries=api_retries,
+                deepseek_carrier=deepseek_carrier,
             )
             add_usage(usage, call_usage)
             turn["api_finish_reason"] = call_usage.get("api_finish_reason")
@@ -499,7 +625,12 @@ def run_rollout(
             break
 
         raw_model_output = text
-        text, adapter_record = adapt_provider_response(model, raw_model_output, reasoning_content)
+        text, adapter_record = adapt_provider_response(
+            model,
+            raw_model_output,
+            reasoning_content,
+            carrier=deepseek_carrier,
+        )
         turn["raw_model_output"] = raw_model_output
         turn["response_adapter"] = adapter_record
         turn["model_output"] = text
@@ -516,6 +647,7 @@ def run_rollout(
             turn["think_source"] = think_source
             turn["feedback_recovery"] = bool(last_error)
             turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
+            plan_tracker.validate_before_execution(tool, args)
             if tool == "answer_from_context":
                 rec["legal"] = True
                 rec["steps"] = action_count
@@ -568,10 +700,12 @@ def run_rollout(
             turns.append(turn)
             last_error = None
             successful_tool_steps += 1
-            legal_history.append({
-                "assistant": text,
-                "observation": tool_output_message(step_id, out),
-            })
+            plan_tracker.record_success(tool, args)
+            if retain_in_rolling_history(tool, plan_policy):
+                legal_history.append({
+                    "assistant": text,
+                    "observation": tool_output_message(step_id, out),
+                })
             if table_name:
                 created.add(table_name)
             messages.append({"role": "user", "content": tool_output_message(step_id, out)})
@@ -660,6 +794,8 @@ def run_rollout(
                 "context_mode": context_mode,
                 "history_turns": history_turns,
                 "rolling_prompt_variant": rolling_prompt_variant,
+                "plan_policy": plan_policy,
+                "deepseek_carrier": deepseek_carrier,
                 "sft_export_eligible": context_mode == "state-only",
                 "error_actions_are_sft_targets": False,
                 "errors": errors,
@@ -777,6 +913,18 @@ def main() -> int:
                         help="number of successful assistant/tool pairs to retain; 0 keeps all")
     parser.add_argument("--rolling-prompt-variant", choices=["full", "compact"], default="full",
                         help="rolling-only prompt ablation; full preserves existing runs")
+    parser.add_argument(
+        "--plan-policy",
+        choices=PLAN_POLICY_CHOICES,
+        default=PLAN_POLICY_OPTIONAL,
+        help="optional (default) or force a resident-only initial plan plus later plan update",
+    )
+    parser.add_argument(
+        "--deepseek-carrier",
+        choices=DEEPSEEK_CARRIER_CHOICES,
+        default=DEEPSEEK_CARRIER_JSON_OUTPUT,
+        help="auditable provider carrier; tool-call omits the JSON Output request constraint",
+    )
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if args.max_tokens is None:
@@ -804,9 +952,13 @@ def main() -> int:
             base_system_prompt,
             compact=args.rolling_prompt_variant == "compact",
         )
+    prompt_suffix = DATA_GENERATION_SUFFIX
+    if args.plan_policy == PLAN_POLICY_REQUIRED_RESIDENT:
+        prompt_suffix += REQUIRED_RESIDENT_PLAN_SUFFIX
     system_prompt = provider_system_prompt(
         args.model,
-        base_system_prompt + DATA_GENERATION_SUFFIX,
+        base_system_prompt + prompt_suffix,
+        carrier=args.deepseek_carrier,
     )
     started = time.time()
     counts = collections.Counter()
@@ -833,6 +985,8 @@ def main() -> int:
             context_mode=args.context_mode,
             history_turns=args.history_turns,
             rolling_prompt_variant=args.rolling_prompt_variant,
+            plan_policy=args.plan_policy,
+            deepseek_carrier=args.deepseek_carrier,
         )
         rec["attempt_index"] = attempt_index
         rec["attempts_per_example"] = max(1, args.attempts_per_example)
@@ -911,11 +1065,16 @@ def main() -> int:
         "context_mode": args.context_mode,
         "history_turns": args.history_turns,
         "rolling_prompt_variant": args.rolling_prompt_variant,
+        "plan_policy": args.plan_policy,
+        "deepseek_carrier": args.deepseek_carrier,
         "sft_export_eligible": args.context_mode == "state-only",
         "teacher_parser": "strict_no_repair",
         "error_actions_are_sft_targets": False,
         "api_transport_retries_per_request": args.api_retries,
-        "provider_request_options": provider_request_options(args.model),
+        "provider_request_options": provider_request_options(
+            args.model,
+            carrier=args.deepseek_carrier,
+        ),
         "counts": persisted["counts"],
         "raw_attempt_records": persisted["raw_attempt_records"],
         "unique_examples": persisted["unique_examples"],

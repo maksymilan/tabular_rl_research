@@ -11,6 +11,7 @@ SFT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SFT_DIR))
 
 from provider_adapter import (  # noqa: E402
+    DEEPSEEK_CARRIER_TOOL_CALL,
     adapt_provider_response,
     provider_default_max_tokens,
     provider_instruction,
@@ -44,6 +45,16 @@ class ProviderAdapterTests(unittest.TestCase):
             },
         )
         self.assertEqual(provider_request_options("gpt-5.6-sol"), {})
+        self.assertEqual(
+            provider_request_options(
+                "deepseek-v4-flash",
+                carrier=DEEPSEEK_CARRIER_TOOL_CALL,
+            ),
+            {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "high",
+            },
+        )
 
     def test_teacher_request_sends_thinking_and_audits_provider_identity(self):
         response_payload = {
@@ -122,6 +133,23 @@ class ProviderAdapterTests(unittest.TestCase):
         self.assertEqual(tool, "describe_table")
         self.assertEqual(args["tables"], ["Document"])
 
+    def test_deepseek_tool_call_carrier_becomes_same_canonical_action(self):
+        content = (
+            '<tool_call>{"tool":"describe_table",'
+            '"arguments":{"tables":["Document"]}}</tool_call>'
+        )
+        adapted, audit = adapt_provider_response(
+            "deepseek-v4-flash",
+            content,
+            "Inspect the table schema first.",
+            carrier=DEEPSEEK_CARRIER_TOOL_CALL,
+        )
+        self.assertTrue(audit["applied"])
+        think, tool, args = parse_assistant_strict(adapted)
+        self.assertEqual(think, "Inspect the table schema first.")
+        self.assertEqual(tool, "describe_table")
+        self.assertEqual(args["tables"], ["Document"])
+
     def test_adapter_refuses_partial_think_tag_or_missing_reasoning(self):
         malformed = 'reasoning without an opening tag.</think><tool_call>{"tool":"describe_table","arguments":{"tables":["Document"]}}</tool_call>'
         adapted, audit = adapt_provider_response("deepseek-v4-flash", malformed, "")
@@ -188,6 +216,22 @@ class ProviderAdapterTests(unittest.TestCase):
         self.assertIn('"left":"orders.customer_id"', prompt)
         self.assertNotIn('"prefixes"', prompt)
 
+    def test_deepseek_tool_call_prompt_has_one_nonconflicting_contract(self):
+        prompt = provider_system_prompt(
+            "deepseek-v4-flash",
+            SYSTEM_PROMPT + DATA_GENERATION_SUFFIX,
+            carrier=DEEPSEEK_CARRIER_TOOL_CALL,
+        )
+        self.assertNotIn("output exactly: <think>brief reasoning</think>", prompt)
+        self.assertNotIn("Emit exactly one non-empty <think> block", prompt)
+        self.assertEqual(prompt.count("DEEPSEEK SPLIT-RESPONSE TOOL-CALL CONTRACT"), 1)
+        self.assertNotIn("JSON OUTPUT CONTRACT", prompt)
+        self.assertIn(
+            '<tool_call>{"tool":"describe_table",'
+            '"arguments":{"tables":["Document"]}}</tool_call>',
+            prompt,
+        )
+
     def test_deepseek_empty_visible_feedback_requests_json_not_xml(self):
         _, audit = adapt_provider_response(
             "deepseek-v4-flash", "", "Inspect the schema.",
@@ -234,6 +278,18 @@ class ProviderAdapterTests(unittest.TestCase):
             '{"tool":"describe_table","arguments":{"tables":["Document"]}}',
         )
         self.assertNotIn("<think>", rendered[1]["content"])
+
+        tool_call_rendered = provider_request_messages(
+            "deepseek-v4-flash",
+            messages,
+            carrier=DEEPSEEK_CARRIER_TOOL_CALL,
+        )
+        self.assertEqual(
+            tool_call_rendered[1]["content"],
+            '<tool_call>{"tool":"describe_table",'
+            '"arguments":{"tables":["Document"]}}</tool_call>',
+        )
+        self.assertNotIn("<think>", tool_call_rendered[1]["content"])
 
     def test_deepseek_history_rejects_ambiguous_assistant_text(self):
         with self.assertRaises(ValueError):
