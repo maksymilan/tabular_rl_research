@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / "src" / "eval"))
 sys.path.insert(0, str(ROOT / "src" / "harness"))
 sys.path.insert(0, str(ROOT / "src" / "sft"))
 
+from denotation import add_denotation_comparison_argument  # noqa: E402
 from provider_client import load_api_config  # noqa: E402
 from provider_adapter import (  # noqa: E402
     DEEPSEEK_CARRIER_CHOICES,
@@ -545,6 +546,7 @@ def run_rollout(
     policy_prompt_variant: str = POLICY_PROMPT_CANONICAL,
     plan_policy: str = PLAN_POLICY_OPTIONAL,
     deepseek_carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
+    denotation_comparison: str = "strict-multiset",
 ) -> dict:
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
@@ -588,6 +590,7 @@ def run_rollout(
         "outcome": None,
         "plan_policy": plan_policy,
         "policy_prompt_variant": policy_prompt_variant,
+        "denotation_comparison": denotation_comparison,
     }
 
     while action_count < max_steps:
@@ -699,7 +702,13 @@ def run_rollout(
                 rec["legal"] = True
                 rec["steps"] = action_count
                 rec["errors"] = errors
-                correct, pred_sample, gold_sample = score(h, gold_sql, args, created)
+                correct, pred_sample, gold_sample = score(
+                    h,
+                    gold_sql,
+                    args,
+                    created,
+                    denotation_comparison=denotation_comparison,
+                )
                 rec["correct"] = correct
                 rec["pred_sample"] = pred_sample
                 rec["gold_sample"] = gold_sample
@@ -979,6 +988,7 @@ def main() -> int:
         default=DEEPSEEK_CARRIER_JSON_OUTPUT,
         help="auditable provider carrier; tool-call omits the JSON Output request constraint",
     )
+    add_denotation_comparison_argument(parser)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if args.max_tokens is None:
@@ -1046,6 +1056,7 @@ def main() -> int:
             policy_prompt_variant=args.policy_prompt_variant,
             plan_policy=args.plan_policy,
             deepseek_carrier=args.deepseek_carrier,
+            denotation_comparison=args.denotation_comparison,
         )
         rec["attempt_index"] = attempt_index
         rec["attempts_per_example"] = max(1, args.attempts_per_example)
@@ -1127,7 +1138,11 @@ def main() -> int:
         "policy_prompt_variant": args.policy_prompt_variant,
         "plan_policy": args.plan_policy,
         "deepseek_carrier": args.deepseek_carrier,
-        "sft_export_eligible": args.context_mode == "state-only",
+        "denotation_comparison": args.denotation_comparison,
+        "sft_export_eligible": (
+            args.context_mode == "state-only"
+            and args.denotation_comparison == "strict-multiset"
+        ),
         "teacher_parser": "strict_no_repair",
         "error_actions_are_sft_targets": False,
         "api_transport_retries_per_request": args.api_retries,

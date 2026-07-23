@@ -332,12 +332,12 @@ def run():
         str(distinct_project),
     )
 
-    percentage = h.scalar_compute("percent", [39, 59], "percentage")
+    percentage = h.scalar_compute("percent", [18, 19], "percentage")
     difference = h.scalar_compute("subtract", [25, 89], "difference")
     t.check(
         "scalar_compute returns exact 1x1 table results",
         percentage["columns"] == ["percentage"] and
-        abs(h.rows(percentage["table_name"])[0][0] - 39 / 59 * 100) < 1e-12 and
+        h.rows(percentage["table_name"])[0][0] == 18 * 100 / 19 and
         h.rows(difference["table_name"]) == [(-64,)],
         str((percentage, difference)),
     )

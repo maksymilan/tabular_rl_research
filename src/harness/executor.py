@@ -844,7 +844,10 @@ class Harness:
             if operation == "divide":
                 result = left / right
             elif operation == "percent":
-                result = left / right * 100
+                # Match the common BIRD/SQLite expression
+                # CAST(part AS REAL) * 100 / whole exactly. Reordering these
+                # operations can differ by one ULP under raw set equality.
+                result = left * 100 / right
             else:
                 result = (left - right) / right * 100
         else:
