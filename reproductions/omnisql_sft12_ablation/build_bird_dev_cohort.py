@@ -24,6 +24,11 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=20260723)
     parser.add_argument("--total", type=int, default=200)
+    parser.add_argument(
+        "--db-root",
+        type=Path,
+        help="rewrite db_path to DB_ROOT/db_id/db_id.sqlite for remote execution",
+    )
     args = parser.parse_args()
     if args.total <= 0 or args.total % 10:
         parser.error("--total must be a positive multiple of 10")
@@ -60,7 +65,12 @@ def main() -> int:
             )
         selected_indices.extend(candidates[:quota])
     selected_indices.sort()
-    selected = [tasks[index] for index in selected_indices]
+    selected = [dict(tasks[index]) for index in selected_indices]
+    if args.db_root is not None:
+        for task in selected:
+            task["db_path"] = str(
+                args.db_root / task["db_id"] / f"{task['db_id']}.sqlite"
+            )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", encoding="utf-8") as handle:
@@ -83,6 +93,7 @@ def main() -> int:
         ),
         "source_example_indices": selected_indices,
         "db_ids": len({task["db_id"] for task in selected}),
+        "db_root": str(args.db_root) if args.db_root is not None else None,
         "output": str(args.out),
         "output_sha256": file_sha256(args.out),
         "denotation_comparison": "strict-multiset",
