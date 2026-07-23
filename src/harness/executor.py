@@ -288,15 +288,29 @@ class Harness:
         )
 
     def group_aggregate(self, table: str, group_by: list[str], aggregations: list[dict],
-                        passthrough: list[str] | None = None) -> dict:
+                        passthrough: list[str] | None = None, output_layout: str = "rows",
+                        category_values: list | None = None,
+                        output_columns: list[str] | None = None) -> dict:
         # passthrough: columns selected but not grouped/aggregated (SQLite's lenient bare-column
         # extension; they are functionally dependent on the group key in practice).
         cols = self._cols(table)
         group_by = [self._resolve_col(cols, col) for col in group_by]
         passthrough = [self._resolve_col(cols, col) for col in (passthrough or [])]
+        if output_layout not in {"rows", "columns"}:
+            raise ValueError("group_aggregate.output_layout must be rows or columns")
+        if output_layout == "rows" and (
+            category_values is not None or output_columns is not None
+        ):
+            raise ValueError(
+                "group_aggregate.category_values/output_columns require output_layout=columns"
+            )
         gb = ", ".join(self._col_sql(cols, col) for col in group_by)
         extra = ", ".join(self._col_sql(cols, col) for col in passthrough)
-        if aggregations and all(str(a.get("op", "")).lower() == "distinct" for a in aggregations):
+        if (
+            output_layout == "rows"
+            and aggregations
+            and all(str(a.get("op", "")).lower() == "distinct" for a in aggregations)
+        ):
             sel = ", ".join(
                 f"{self._col_sql(cols, a.get('column', '*'))} AS {_qid(a.get('as', a.get('column', 'value')))}"
                 for a in aggregations
@@ -307,22 +321,109 @@ class Harness:
             len(aggregations) == 1
             and str(aggregations[0].get("op", "")).lower() == "count_distinct"
             and aggregations[0].get("column", "*") == "*"
+            and not aggregations[0].get("where")
             and not group_by
+            and output_layout == "rows"
         ):
             alias = aggregations[0].get("as", "count")
             return self._new(
                 "group",
                 f"SELECT COUNT(*) AS {_qid(alias)} FROM (SELECT DISTINCT * FROM {self._src(table)})",
             )
-        aggs = ", ".join(
-            f"{_AGG[a['op']]}({'DISTINCT ' if a['op'] == 'count_distinct' else ''}"
-            f"{self._col_sql(cols, a.get('column', '*')) if a.get('column', '*') != '*' else '*'}) AS {_qid(a['as'])}"
-            for a in aggregations
-        )
+
+        def render_aggregation(aggregation: dict) -> str:
+            op = str(aggregation["op"]).lower()
+            column = aggregation.get("column", "*")
+            condition = aggregation.get("where")
+            if condition:
+                if op == "count_distinct" and column == "*":
+                    raise ValueError(
+                        "group_aggregate count_distinct over * does not support where; "
+                        "name the distinct column"
+                    )
+                resolved = self._resolve_cond_columns(cols, condition)
+                predicate = self._render_cond(resolved, cols)
+                value_sql = "1" if column == "*" else self._col_sql(cols, column)
+                expression = f"CASE WHEN {predicate} THEN {value_sql} END"
+            else:
+                expression = self._col_sql(cols, column) if column != "*" else "*"
+            distinct = "DISTINCT " if op == "count_distinct" else ""
+            return f"{_AGG[op]}({distinct}{expression}) AS {_qid(aggregation['as'])}"
+
+        if output_layout == "columns":
+            if len(group_by) != 1 or len(aggregations) != 1 or passthrough:
+                raise ValueError(
+                    "group_aggregate output_layout=columns requires exactly one group_by column, "
+                    "one aggregation, and no passthrough"
+                )
+            if not category_values:
+                raise ValueError(
+                    "group_aggregate.category_values must be non-empty for output_layout=columns"
+                )
+            aliases = output_columns or [str(item) for item in category_values]
+            if len(aliases) != len(category_values):
+                raise ValueError(
+                    "group_aggregate.output_columns must have the same length as category_values"
+                )
+            if len(set(aliases)) != len(aliases):
+                raise ValueError("group_aggregate wide output column names must be unique")
+            wide_aggregations = []
+            for category, alias in zip(category_values, aliases):
+                aggregation = dict(aggregations[0])
+                category_condition = {
+                    "column": group_by[0],
+                    "op": "=",
+                    "value": category,
+                }
+                if aggregation.get("where"):
+                    aggregation["where"] = {
+                        "and": [aggregation["where"], category_condition],
+                    }
+                else:
+                    aggregation["where"] = category_condition
+                aggregation["as"] = alias
+                wide_aggregations.append(render_aggregation(aggregation))
+            return self._new(
+                "group",
+                f"SELECT {', '.join(wide_aggregations)} FROM {self._src(table)}",
+            )
+
+        aggs = ", ".join(render_aggregation(a) for a in aggregations)
         parts = [p for p in (gb, extra, aggs) if p]
         sel = ", ".join(parts) if parts else "*"
         tail = f" GROUP BY {gb}" if gb else ""
         return self._new("group", f"SELECT {sel} FROM {self._src(table)}{tail}")
+
+    def pivot(self, table: str, key_column: str, value_column: str, key_values: list,
+              output_columns: list[str] | None = None) -> dict:
+        """Turn one grouped key/value row per requested key into one row with one column per key."""
+        cols = self._cols(table)
+        key = self._resolve_col(cols, key_column)
+        value = self._resolve_col(cols, value_column)
+        if key not in cols or value not in cols:
+            raise ValueError(
+                f"pivot requires existing key/value columns; available columns: {cols}"
+            )
+        if not key_values:
+            raise ValueError("pivot.key_values must contain at least one category")
+        aliases = output_columns or [str(item) for item in key_values]
+        if len(aliases) != len(key_values):
+            raise ValueError("pivot.output_columns must have the same length as key_values")
+        duplicate = self.conn.execute(
+            f"SELECT {_qid(key)}, COUNT(*) FROM {self._src(table)} "
+            f"WHERE {_qid(key)} IN ({', '.join(_lit(item) for item in key_values)}) "
+            f"GROUP BY {_qid(key)} HAVING COUNT(*) > 1 LIMIT 1"
+        ).fetchone()
+        if duplicate:
+            raise ValueError(
+                f"pivot input has {duplicate[1]} rows for key {duplicate[0]!r}; "
+                "group to exactly one row per key before pivoting"
+            )
+        select = ", ".join(
+            f"MAX(CASE WHEN {_qid(key)} = {_lit(item)} THEN {_qid(value)} END) AS {_qid(alias)}"
+            for item, alias in zip(key_values, aliases)
+        )
+        return self._new("pivot", f"SELECT {select} FROM {self._src(table)}")
 
     def _join_component(self, base, joins, base_role=None) -> dict:
         """Execute the version5 public join shape with a flat, stable logical namespace."""

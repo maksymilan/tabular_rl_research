@@ -1,4 +1,4 @@
-# Current Trajectory Protocol (version14)
+# Current Trajectory Protocol (version18)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -93,13 +93,23 @@ Public version mapping:
 - `version12`: adds `project(distinct=...)` and a grounded `scalar_compute` atom;
 - `version13`: terminal actions cite one exact result table, including a 1x1 table for scalar
   answers, and cannot carry model-authored answer values;
-- `version14`: current implementation; model-visible resident plan evidence keeps only its grounded
+- `version14`: model-visible resident plan evidence keeps only its grounded
   `step_id + tool` identity, while canonical snapshots retain the full evidence output for
   replay/audit. This prevents a plan item from duplicating large schemas or row payloads on every
   later turn;
-- future changes increment only the integer (`version15`, `version16`, ...).
+- `version15`: each `group_aggregate.aggregations[]` item may carry an
+  optional `where` predicate, so several conditional metrics can be computed over one fixed input
+  population and grain;
+- `version16`: `pivot` reshapes a grouped key/value table from one row per
+  category into one row with ordered category columns;
+- `version17`: the `project` contract explicitly states that it preserves
+  row orientation and directs category-row-to-column reshaping to `pivot`;
+- `version18`: current implementation; the separate public `pivot` action is folded into
+  `group_aggregate(output_layout="columns", category_values=[...], output_columns=[...])`.
+  Historical pivot calls remain replay-compatible only;
+- future changes increment only the integer (`version19`, `version20`, ...).
 
-The current version14 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
+The current version18 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
 - `plan`
@@ -129,9 +139,21 @@ model-authored answer data; think/reason text cannot repair answer data.
 `argument_validation_error`; the harness never clamps it. In bounded rolling mode, prior successful
 actions retain compact result summaries while full factual payloads remain in resident state.
 
+Each `group_aggregate.aggregations[]` item has `op`, `column`, and `as`, plus an optional `where`
+using the same predicate tree as `condition_filter`. A call may therefore produce a one-row,
+multi-column result such as female and male counts without creating two filtered handles. Literal,
+`value_ref`, `in_table`, schema-grounding, and domain-grounding dependencies inside `where` remain
+harness-owned references. Conditional `count_distinct` requires a named column rather than `*`.
+
+For category comparisons, the same `group_aggregate` call may set `output_layout="columns"`.
+This mode requires exactly one `group_by` column and one aggregation. Ordered `category_values`
+become one output slot each; optional `output_columns` renames those slots one-for-one without
+changing their order. Default `output_layout="rows"` retains ordinary SQL GROUP BY row output.
+`project` cannot change row orientation.
+
 No `add_to_memory` tool exists in v2c-plan. No reflection or invalidate tool exists.
 
-### Join Identifier Rule (version14; unchanged from version8)
+### Join Identifier Rule (version18; unchanged from version8)
 
 `join_tables(base, joins, base_role?)` joins a connected component in one model action. Every
 `joins[]` item attaches exactly one new table. Its `on.left` values are exact already-introduced

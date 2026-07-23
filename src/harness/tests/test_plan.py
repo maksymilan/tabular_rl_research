@@ -31,4 +31,39 @@ def run():
     plan3 = [Step("s1", "project", {"table": "depts", "expressions": ["location"]})]
     t.check("source ref passthrough", norm(run_plan(h, plan3)) == norm(h.gold("SELECT location FROM depts")))
 
+    # aggregation-level predicates retain direct scalar step references until execution
+    plan4 = [
+        Step(
+            "s1",
+            "group_aggregate",
+            {
+                "table": "employees",
+                "group_by": [],
+                "aggregations": [{"op": "mean", "column": "salary", "as": "mean_salary"}],
+            },
+        ),
+        Step(
+            "s2",
+            "group_aggregate",
+            {
+                "table": "employees",
+                "group_by": [],
+                "aggregations": [{
+                    "op": "count",
+                    "column": "*",
+                    "as": "above_mean",
+                    "where": {"column": "salary", "op": ">", "value_ref": "s1"},
+                }],
+            },
+        ),
+    ]
+    t.check(
+        "conditional aggregate resolves a scalar value_ref",
+        run_plan(h, plan4) == h.gold(
+            "SELECT COUNT(CASE WHEN salary > (SELECT AVG(salary) FROM employees) THEN 1 END) "
+            "FROM employees"
+        ),
+        str(run_plan(h, plan4)),
+    )
+
     return t.result()

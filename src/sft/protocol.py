@@ -52,7 +52,9 @@ TOOL_SPECS: dict[str, str] = {
         '`expressions` is a list of column names or SQL scalar expressions, optionally with '
         '"expr AS alias"; distinct=true removes duplicate projected rows. Exact '
         'namespace.column identifiers remain valid inside expressions; a bare downstream column '
-        'name is accepted only when it identifies exactly one available column.',
+        'name is accepted only when it identifies exactly one available column. Project preserves '
+        'the input row orientation: it cannot turn category rows into separate columns; use '
+        'group_aggregate(output_layout="columns") for that reshape.',
     "scalar_compute":
         'scalar_compute(operation, operands, result_name="value") -> a grounded one-row, one-column '
         'table. operation: add|subtract|multiply|divide|percent|percent_change|date_diff_days. '
@@ -73,10 +75,17 @@ TOOL_SPECS: dict[str, str] = {
         'the same relation occurs more than once (self-join). Put a whole consecutive join chain in '
         'ONE call; use project separately if the result must be narrowed.',
     "group_aggregate":
-        'group_aggregate(table, group_by, aggregations, passthrough=None) -> new table grouped by '
+        'group_aggregate(table, group_by, aggregations, passthrough=None, output_layout="rows", '
+        'category_values=None, output_columns=None) -> new table grouped by '
         '`group_by` (list of columns; [] = whole table as one group, used for scalar count/sum/'
         'avg/min/max answers too). aggregations: '
-        '[{"op": sum|count|count_distinct|mean|min|max, "column": col or "*", "as": name}, ..] '
+        '[{"op": sum|count|count_distinct|mean|min|max, "column": col or "*", "as": name, '
+        '"where": condition?}, ..]. Optional `where` uses the same predicate shape as '
+        'condition_filter and applies only to that aggregate. Use several conditional aggregates '
+        'in one call when the requested metrics must share one fixed input row set and grain. '
+        'Default output_layout="rows" returns one row per group. To return one row with one ordered '
+        'column per category, use output_layout="columns" with exactly one group_by column, one '
+        'aggregation, ordered category_values, and equally ordered output_columns. '
         '([] with group_by = DISTINCT). passthrough: extra non-grouped columns to carry through.',
     "extreme_value_select":
         'extreme_value_select(table, order_by, top_k=None, return_columns=None) -> new table with '
@@ -110,11 +119,11 @@ TOOLS = set(TOOL_SPECS)
 # ``aggregate`` and the parser repairs below exist only to read historical trajectory artifacts.
 # New model turns must use ``TOOLS`` through ``parse_assistant_strict``.  Keeping this distinction
 # explicit prevents old data compatibility from quietly widening the live agent interface.
-LEGACY_TOOLS = {"aggregate"}
+LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version14"  # public tool versions now increment numerically: version1, version2, ...
+PROTOCOL_VERSION = "version18"  # public tool versions now increment numerically: version1, version2, ...
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 
@@ -130,7 +139,11 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
                             "tables", "on", "join_types", "prefixes",
                             "left", "right", "join_type", "left_prefix", "right_prefix",
                             "return_columns"}),
-    "group_aggregate": ({"table", "group_by", "aggregations"}, {"passthrough"}),
+    "group_aggregate": (
+        {"table", "group_by", "aggregations"},
+        {"passthrough", "output_layout", "category_values", "output_columns"},
+    ),
+    "pivot": ({"table", "key_column", "value_column", "key_values"}, {"output_columns"}),
     "aggregate": ({"table", "column", "op"}, set()),
     "extreme_value_select": ({"table", "order_by"}, {"top_k", "return_columns"}),
     "set_op": ({"left", "right", "op"}, set()),
@@ -161,6 +174,16 @@ CANONICAL_CALL_COOKBOOK = (
     '"aggregations":[{"op":"sum","column":"salary","as":"total_salary"}]}}\n'
     'Scalar aggregate: {"tool":"group_aggregate","arguments":{"table":"filter_001","group_by":[],'
     '"aggregations":[{"op":"count","column":"*","as":"count"}]}}\n'
+    'Conditional aggregates on one fixed input: {"tool":"group_aggregate","arguments":'
+    '{"table":"patients","group_by":[],"aggregations":['
+    '{"op":"count","column":"*","as":"female_count","where":'
+    '{"column":"gender","op":"=","value":"F"}},'
+    '{"op":"count","column":"*","as":"male_count","where":'
+    '{"column":"gender","op":"=","value":"M"}}]}}\n'
+    'Aggregate categories directly into exact output columns: {"tool":"group_aggregate","arguments":'
+    '{"table":"hypertension_patients","group_by":["gender"],"aggregations":'
+    '[{"op":"count_distinct","column":"patient","as":"patient_count"}],'
+    '"output_layout":"columns","category_values":["M","F"]}}\n'
     'Compute a grounded percentage: {"tool":"scalar_compute","arguments":{"operation":"percent",'
     '"operands":[{"value_ref":"step_5"},{"value_ref":"step_3"}],"result_name":"percentage"}}\n'
     'Top 3 with exact output: {"tool":"extreme_value_select","arguments":{"table":"employees",'
@@ -281,6 +304,95 @@ def _validate_model_join(args: dict) -> None:
         )
 
 
+def _validate_model_group_aggregate(args: dict) -> None:
+    group_by = args.get("group_by")
+    if not isinstance(group_by, list) or not all(isinstance(item, str) for item in group_by):
+        raise ProtocolError("group_aggregate.group_by must be a list of columns")
+    passthrough = args.get("passthrough", [])
+    if not isinstance(passthrough, list) or not all(isinstance(item, str) for item in passthrough):
+        raise ProtocolError("group_aggregate.passthrough must be a list of columns")
+    aggregations = args.get("aggregations")
+    if not isinstance(aggregations, list):
+        raise ProtocolError("group_aggregate.aggregations must be a list")
+    allowed_ops = {"sum", "count", "count_distinct", "mean", "min", "max"}
+    for index, aggregation in enumerate(aggregations):
+        where = f"group_aggregate.aggregations[{index}]"
+        if not isinstance(aggregation, dict):
+            raise ProtocolError(f"{where} must be an object")
+        missing = sorted({"op", "column", "as"} - set(aggregation))
+        extra = sorted(set(aggregation) - {"op", "column", "as", "where"})
+        if missing:
+            raise ProtocolError(f"{where}: missing fields {missing}")
+        if extra:
+            raise ProtocolError(f"{where}: unexpected fields {extra}")
+        op = aggregation.get("op")
+        if op not in allowed_ops:
+            raise ProtocolError(f"{where}.op must be one of {sorted(allowed_ops)}")
+        column = aggregation.get("column")
+        if not isinstance(column, str) or not column.strip():
+            raise ProtocolError(f"{where}.column must be a non-empty column name or *")
+        alias = aggregation.get("as")
+        if not isinstance(alias, str) or not alias.strip():
+            raise ProtocolError(f"{where}.as must be a non-empty output column name")
+        condition = aggregation.get("where")
+        if "where" in aggregation and (
+            not isinstance(condition, (dict, list)) or not condition
+        ):
+            raise ProtocolError(f"{where}.where must be a non-empty condition predicate")
+        if condition and op == "count_distinct" and column == "*":
+            raise ProtocolError(
+                f"{where}: conditional count_distinct requires a named column, not *"
+            )
+        if column == "*" and op not in {"count", "count_distinct"}:
+            raise ProtocolError(f"{where}: only count may aggregate column *")
+    output_layout = args.get("output_layout", "rows")
+    if output_layout not in {"rows", "columns"}:
+        raise ProtocolError("group_aggregate.output_layout must be rows or columns")
+    category_values = args.get("category_values")
+    output_columns = args.get("output_columns")
+    if output_layout == "rows":
+        if category_values is not None or output_columns is not None:
+            raise ProtocolError(
+                "group_aggregate.category_values/output_columns require output_layout=columns"
+            )
+        return
+    if len(group_by) != 1 or len(aggregations) != 1 or passthrough:
+        raise ProtocolError(
+            "group_aggregate output_layout=columns requires exactly one group_by column, "
+            "one aggregation, and no passthrough"
+        )
+    if not isinstance(category_values, list) or not category_values:
+        raise ProtocolError(
+            "group_aggregate.category_values must be a non-empty ordered list "
+            "for output_layout=columns"
+        )
+    if not all(
+        item is not None and isinstance(item, (str, int, float, bool))
+        for item in category_values
+    ):
+        raise ProtocolError(
+            "group_aggregate.category_values must contain non-null scalar values"
+        )
+    category_keys = [(type(item).__name__, repr(item)) for item in category_values]
+    if len(set(category_keys)) != len(category_keys):
+        raise ProtocolError("group_aggregate.category_values must be unique")
+    if output_columns is not None:
+        if (
+            not isinstance(output_columns, list)
+            or not all(isinstance(item, str) and item.strip() for item in output_columns)
+        ):
+            raise ProtocolError(
+                "group_aggregate.output_columns must be a list of non-empty column names"
+            )
+        if len(output_columns) != len(category_values):
+            raise ProtocolError(
+                "group_aggregate.output_columns must have the same length as category_values"
+            )
+        folded = [item.casefold() for item in output_columns]
+        if len(set(folded)) != len(folded):
+            raise ProtocolError("group_aggregate.output_columns must be unique")
+
+
 def validate_model_arguments(tool: str, args: dict) -> None:
     """Validate the current public action API, excluding replay-only compatibility forms."""
     validate_arguments(tool, args)
@@ -289,6 +401,8 @@ def validate_model_arguments(tool: str, args: dict) -> None:
         raise ProtocolError(f"{tool}: legacy arguments are not valid in new episodes: {forbidden}")
     if tool == "join_tables":
         _validate_model_join(args)
+    if tool == "group_aggregate":
+        _validate_model_group_aggregate(args)
     if tool == "read_subtable":
         limit = args.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
@@ -381,7 +495,12 @@ SYSTEM_PROMPT = (
     "distinct=true only when unique/distinct rows are requested or required by the task wording.\n"
     "9. For top-k, order and limit before answering and use return_columns (or project) so helper "
     "ranking columns are absent. For arithmetic over aggregate results, call scalar_compute and "
-    "cite its 1x1 result table instead of manually writing a terminal number.\n"
+    "cite its 1x1 result table instead of manually writing a terminal number. When several "
+    "conditional metrics must use the same population, compute them together with aggregation-level "
+    "where predicates so filtering one metric cannot change another metric's denominator or grain. "
+    "A group_by category produces one row per category; if the requested comparison instead needs "
+    "one row with one column per category, set output_layout=columns and give category_values in "
+    "the requested order.\n"
 )
 
 SYSTEM_PROMPT_COMPACT = (
@@ -403,12 +522,15 @@ SYSTEM_PROMPT_COMPACT = (
     "Avoid repeating the same observation. Use read_subtable only when row values are needed. Every "
     "final answer, including a scalar aggregate, cites its exact result table as evidence; never "
     "write answer values in the terminal call. The cited table must contain exactly the requested "
-    "rows and columns; project first if it does not.\n\n"
+    "rows and columns; project first if it does not. Compute several conditional metrics that share "
+    "one population in one group_aggregate call using per-aggregation where predicates. Use "
+    "group_aggregate output_layout=columns, not project, to turn grouped category rows into one row "
+    "of separate metric columns.\n\n"
     "TOOLS\n"
     "plan(ops), describe_table(tables), inspect_column(table,column,top_k?), condition_filter(table,conditions,return_columns?), "
     "project(table,expressions,distinct?), scalar_compute(operation,operands,result_name?), "
     "join_tables(base,joins,base_role?), "
-    "group_aggregate(table,group_by,aggregations,passthrough?), "
+    "group_aggregate(table,group_by,aggregations,passthrough?,output_layout?,category_values?,output_columns?), "
     "extreme_value_select(table,order_by,top_k?,return_columns?), set_op(left,right,op), "
     "read_subtable(table,limit?,columns?), answer_from_context(evidence,reason?).\n"
 )
@@ -445,7 +567,7 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
     "condition_filter(table,conditions,return_columns?); project(table,expressions,distinct?); "
     "scalar_compute(operation,operands,result_name?); "
     "join_tables(base,joins,base_role?); "
-    "group_aggregate(table,group_by,aggregations,passthrough?); "
+    "group_aggregate(table,group_by,aggregations,passthrough?,output_layout?,category_values?,output_columns?); "
     "extreme_value_select(table,order_by,top_k?,return_columns?); set_op(left,right,op); "
     "read_subtable(table,limit?,columns?); answer_from_context(evidence,reason?).\n\n"
     "RULES\n"
@@ -466,7 +588,10 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
     "database fields separate; do not replace "
     "IDs/codes with labels, normalize stored text, or round computed values unless explicitly "
     "requested. Use project distinct=true for unique rows and scalar_compute for arithmetic over "
-    "grounded scalar steps. The harness strictly validates and executes the action."
+    "grounded scalar steps. Use aggregation-level where predicates when several conditional metrics "
+    "must retain one input population and grain. Use group_aggregate output_layout=columns rather "
+    "than project when grouped categories must become separate columns in one row. The harness "
+    "strictly validates and executes the action."
 )
 
 

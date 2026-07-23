@@ -66,6 +66,84 @@ class ProcessRewardTests(unittest.TestCase):
             ],
         )
 
+    def test_conditional_aggregate_emits_value_and_grounding_edges(self):
+        args = {
+            "table": "items",
+            "group_by": [],
+            "aggregations": [{
+                "op": "count",
+                "column": "*",
+                "as": "active_above_threshold",
+                "where": {
+                    "and": [
+                        {"column": "status", "op": "=", "value": "active"},
+                        {"column": "score", "op": ">", "value_ref": "step_2"},
+                    ],
+                },
+            }],
+        }
+        refs = build_references(
+            "group_aggregate",
+            args,
+            lambda ref: ref if ref == "step_2" else None,
+        )
+        self.assertIn(
+            {
+                "type": "value",
+                "step": "step_2",
+                "role": "aggregate_where",
+                "target": {"aggregation_index": 0, "column": "score"},
+            },
+            refs,
+        )
+        grounded = build_grounding_references(
+            "group_aggregate",
+            args,
+            {
+                "step_1": {
+                    "tool": "inspect_column",
+                    "arguments": {"table": "items", "column": "status"},
+                    "output": {
+                        "column": "status",
+                        "distinct_count": 2,
+                        "frequent_values": ["active", "inactive"],
+                    },
+                },
+            },
+        )
+        self.assertEqual(grounded[0]["role"], "domain_observation")
+        self.assertEqual(grounded[0]["target"]["values"], ["active"])
+
+    def test_wide_aggregate_category_values_reuse_domain_grounding(self):
+        refs = build_grounding_references(
+            "group_aggregate",
+            {
+                "table": "patients",
+                "group_by": ["gender"],
+                "aggregations": [{
+                    "op": "count",
+                    "column": "*",
+                    "as": "patient_count",
+                }],
+                "output_layout": "columns",
+                "category_values": ["M", "F"],
+                "output_columns": ["male_count", "female_count"],
+            },
+            {
+                "step_1": {
+                    "tool": "inspect_column",
+                    "arguments": {"table": "patients", "column": "gender"},
+                    "output": {
+                        "column": "gender",
+                        "distinct_count": 2,
+                        "frequent_values": ["M", "F"],
+                    },
+                },
+            },
+        )
+        self.assertEqual(refs[0]["role"], "domain_observation")
+        self.assertEqual(refs[0]["target"]["values"], ["M", "F"])
+
     def test_harness_infers_final_table_and_perception_chain_without_model_evidence(self):
         with tempfile.NamedTemporaryFile(suffix=".sqlite") as tmp:
             conn = sqlite3.connect(tmp.name)

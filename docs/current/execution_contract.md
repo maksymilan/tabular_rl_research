@@ -1,7 +1,7 @@
 # Canonical Execution Contract
 
 Status: active contract for **new** SFT generation, evaluation, and RL episodes under
-`version14`. `src/sft/protocol.py` is executable authority; this document makes
+`version18`. `src/sft/protocol.py` is executable authority; this document makes
 the ownership boundaries explicit. Old trajectory artifacts remain replay inputs, not examples of
 the public action interface.
 
@@ -69,7 +69,7 @@ New actions may use only:
 `plan`, `describe_table`, `inspect_column`, `condition_filter`, `project`, `scalar_compute`, `join_tables`,
 `group_aggregate`, `extreme_value_select`, `set_op`, `read_subtable`, and `answer_from_context`.
 
-`aggregate`, `derive_column`, old two-table join fields (`left`, `right`, `join_type`,
+`aggregate`, `pivot`, `derive_column`, old two-table join fields (`left`, `right`, `join_type`,
 `left_prefix`, `right_prefix`), parser shorthands, and truncated-answer repair are **replay-only
 compatibility**. They may be read in historical artifacts but are rejected by the strict parser and
 must not occur in new SFT/RL/eval actions.
@@ -80,7 +80,62 @@ way to view row values; handles alone expose schema and row-count metadata. Its 
 be an integer from 1 through 20. Larger or non-integer values are explicit argument-validation
 errors and are never silently clamped.
 
-## Current version14 Join and Column Naming
+## Current version18 Conditional Aggregation and Wide Output
+
+`group_aggregate` keeps one input table and one `group_by` grain. Each aggregation may add an
+optional `where` predicate:
+
+```json
+{
+  "table": "patients",
+  "group_by": [],
+  "aggregations": [
+    {
+      "op": "count",
+      "column": "*",
+      "as": "female_count",
+      "where": {"column": "gender", "op": "=", "value": "F"}
+    },
+    {
+      "op": "count",
+      "column": "*",
+      "as": "male_count",
+      "where": {"column": "gender", "op": "=", "value": "M"}
+    }
+  ]
+}
+```
+
+The harness compiles these predicates as conditional aggregate expressions over the same source
+rows. This preserves denominator and row-grain identity while returning one row with the requested
+metric columns. `where` accepts the same predicate tree, direct scalar `value_ref`, and computed-set
+`in_table` references as `condition_filter`; execution resolves those values while canonical
+trajectory arguments retain the authored references. Provenance records the corresponding value,
+data, schema, and literal-grounding edges.
+
+The same aggregate action can request ordered category columns instead of category rows:
+
+```json
+{
+  "table": "hypertension_patients",
+  "group_by": ["gender"],
+  "aggregations": [
+    {"op": "count_distinct", "column": "patient", "as": "patient_count"}
+  ],
+  "output_layout": "columns",
+  "category_values": ["M", "F"]
+}
+```
+
+The result is one row with `M` followed by `F`; optional `output_columns` can rename those slots
+when a later tool needs semantic aliases. This wide layout requires
+exactly one grouping column, one aggregation, no passthrough, and a non-empty ordered category list.
+The harness compiles category predicates into the same aggregate input, so there is no intermediate
+grouped table and no second model action. `project` remains an orthogonal selection/expression atom:
+it preserves row orientation and cannot replace wide aggregation. The version16/17 standalone
+`pivot` call remains replay-only.
+
+## Current version18 Join and Column Naming
 
 For source tables and unambiguous derived handles, arguments use the schema column name shown by
 `describe_table` or the state handle. The model never emits SQLite aliases (`L.`, `R.`) or SQL
@@ -177,14 +232,14 @@ Whole episode restarts, when used for pass@k, are separate attempts and retain s
 
 The active shared implementation is `src/eval/rollout.py`, `src/eval/rollout_passk.py`,
 `src/sft/generate_teacher_rollouts.py`, and `src/rl/tool_environment.py` (used by the Accelerate backend). The
-historical Verl token-concatenating adapter is not a version14 training entry point, because state-only
+historical Verl token-concatenating adapter is not a version18 training entry point, because state-only
 rebuilding needs per-turn loss accounting rather than one appended transcript.
 
 ## Migration Rule
 
-Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use version14,
+Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use version18,
 but new SFT construction remains gated on the frozen 200-task accuracy requirement. Historical
-version1-version13 artifacts retain their original model-visible contracts and may only enter
-replay-compatible paths. Every version14 teacher/eval result directory and manifest must record its
-version14 protocol hash and provider request controls; historical data is not relabeled or mutated
+version1-version17 artifacts retain their original model-visible contracts and may only enter
+replay-compatible paths. Every version18 teacher/eval result directory and manifest must record its
+version18 protocol hash and provider request controls; historical data is not relabeled or mutated
 in place.

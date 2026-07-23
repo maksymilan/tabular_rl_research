@@ -20,7 +20,7 @@ from protocol import (  # noqa: E402
 
 class ProtocolParseTests(unittest.TestCase):
     def test_current_prompt_has_canonical_calls_and_exact_final_shape(self):
-        self.assertEqual(PROTOCOL_VERSION, "version14")
+        self.assertEqual(PROTOCOL_VERSION, "version18")
         for tool in (
             "condition_filter", "project", "join_tables", "group_aggregate",
             "scalar_compute", "set_op", "answer_from_context",
@@ -35,6 +35,10 @@ class ProtocolParseTests(unittest.TestCase):
         self.assertIn("A simple direct task may omit it", SYSTEM_PROMPT)
         self.assertIn("do not concatenate names", SYSTEM_PROMPT)
         self.assertIn('"operation":"percent"', SYSTEM_PROMPT)
+        self.assertIn('"as":"female_count","where"', SYSTEM_PROMPT)
+        self.assertIn("same population", SYSTEM_PROMPT)
+        self.assertIn('"output_layout":"columns"', SYSTEM_PROMPT)
+        self.assertIn("Project preserves the input row orientation", SYSTEM_PROMPT)
 
     def test_tool_output_compacts_contiguous_logical_namespaces(self):
         message = tool_output_message(
@@ -243,6 +247,73 @@ class ProtocolParseTests(unittest.TestCase):
                 '"arguments":{"operation":"subtract","operands":'
                 '[{"value_ref":"step_2","value":2},{"value":1}]}}</tool_call>'
             )
+
+    def test_version15_conditional_aggregate_shape(self):
+        _, tool, args = parse_assistant_strict(
+            '<think>Compute both counts on the same population.</think><tool_call>'
+            '{"tool":"group_aggregate","arguments":{"table":"patients","group_by":[],'
+            '"aggregations":['
+            '{"op":"count","column":"*","as":"female_count","where":'
+            '{"column":"gender","op":"=","value":"F"}},'
+            '{"op":"count","column":"*","as":"male_count","where":'
+            '{"column":"gender","op":"=","value":"M"}}]}}</tool_call>'
+        )
+        self.assertEqual(tool, "group_aggregate")
+        self.assertEqual(args["aggregations"][0]["where"]["value"], "F")
+
+        with self.assertRaisesRegex(ProtocolError, "unexpected fields"):
+            parse_assistant_strict(
+                '<think>Reject an invented aggregate field.</think><tool_call>'
+                '{"tool":"group_aggregate","arguments":{"table":"patients","group_by":[],'
+                '"aggregations":[{"op":"count","column":"*","as":"n","filter":'
+                '{"column":"gender","op":"=","value":"F"}}]}}</tool_call>'
+            )
+        with self.assertRaisesRegex(ProtocolError, "named column"):
+            parse_assistant_strict(
+                '<think>Reject ambiguous whole-row distinct.</think><tool_call>'
+                '{"tool":"group_aggregate","arguments":{"table":"patients","group_by":[],'
+                '"aggregations":[{"op":"count_distinct","column":"*","as":"n","where":'
+                '{"column":"gender","op":"=","value":"F"}}]}}</tool_call>'
+            )
+
+    def test_version18_group_aggregate_columns_layout(self):
+        _, tool, args = parse_assistant_strict(
+            '<think>Count both categories into one ordered row.</think><tool_call>'
+            '{"tool":"group_aggregate","arguments":{"table":"patients","group_by":["gender"],'
+            '"aggregations":[{"op":"count_distinct","column":"patient","as":"patient_count"}],'
+            '"output_layout":"columns","category_values":["M","F"]}}</tool_call>'
+        )
+        self.assertEqual(tool, "group_aggregate")
+        self.assertEqual(args["category_values"], ["M", "F"])
+
+        with self.assertRaisesRegex(ProtocolError, "same length"):
+            parse_assistant_strict(
+                '<think>Reject mismatched output columns.</think><tool_call>'
+                '{"tool":"group_aggregate","arguments":{"table":"patients","group_by":["gender"],'
+                '"aggregations":[{"op":"count","column":"*","as":"patient_count"}],'
+                '"output_layout":"columns","category_values":["M","F"],'
+                '"output_columns":["count"]}}</tool_call>'
+            )
+        with self.assertRaisesRegex(ProtocolError, "category_values must be unique"):
+            parse_assistant_strict(
+                '<think>Reject duplicate category slots.</think><tool_call>'
+                '{"tool":"group_aggregate","arguments":{"table":"patients",'
+                '"group_by":["gender"],"aggregations":'
+                '[{"op":"count","column":"*","as":"patient_count"}],'
+                '"output_layout":"columns","category_values":["M","M"]}}</tool_call>'
+            )
+        with self.assertRaisesRegex(ProtocolError, "unknown tool"):
+            parse_assistant_strict(
+                '<think>The separate reshape tool is retired.</think><tool_call>'
+                '{"tool":"pivot","arguments":{"table":"group_003","key_column":"gender",'
+                '"value_column":"patient_count","key_values":["M","F"]}}</tool_call>'
+            )
+        _, replay_tool, _ = parse_assistant(
+            '<tool_call>{"tool":"pivot","arguments":{"table":"group_003",'
+            '"key_column":"gender","value_column":"patient_count",'
+            '"key_values":["M","F"]}}</tool_call>'
+        )
+        self.assertEqual(replay_tool, "pivot")
 
     def test_version13_terminal_requires_grounded_table_only(self):
         _, tool, args = parse_assistant_strict(

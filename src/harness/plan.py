@@ -18,6 +18,7 @@ from typing import Any
 TABLE_REF_ARGS: dict[str, list[str]] = {
     "condition_filter": ["table"],
     "group_aggregate": ["table"],
+    "pivot": ["table"],
     "derive_column": ["table"],
     "project": ["table"],
     "scalar_compute": [],
@@ -131,6 +132,16 @@ def run_plan(harness, plan: Plan) -> list[tuple]:
         if step.tool == "condition_filter":
             vals = _scalar_values(harness, args.get("conditions"), id_to_table, values)
             args["conditions"] = resolve_cond(args.get("conditions"), id_to_table, vals)
+        if step.tool == "group_aggregate":
+            resolved_aggregations = []
+            for aggregation in args.get("aggregations") or []:
+                resolved = dict(aggregation)
+                condition = resolved.get("where")
+                if condition is not None:
+                    vals = _scalar_values(harness, condition, id_to_table, values)
+                    resolved["where"] = resolve_cond(condition, id_to_table, vals)
+                resolved_aggregations.append(resolved)
+            args["aggregations"] = resolved_aggregations
         if step.tool == "scalar_compute":
             resolved_operands = []
             for operand in args.get("operands") or []:

@@ -100,6 +100,34 @@ def build_references(tool: str, args: dict, resolve_step) -> list[dict]:
             else:  # an IN-subquery's set membership is a data input
                 refs.append({"type": "data", "step": sid, "role": "in_table",
                              "target": {"handle": ref}})
+    if tool == "group_aggregate":
+        for aggregation_index, aggregation in enumerate(args.get("aggregations") or []):
+            if not isinstance(aggregation, dict):
+                continue
+            for kind, ref, col in _cond_value_refs(aggregation.get("where")):
+                sid = resolve_step(ref)
+                if not sid:
+                    continue
+                if kind == "value_ref":
+                    refs.append({
+                        "type": "value",
+                        "step": sid,
+                        "role": "aggregate_where",
+                        "target": {
+                            "aggregation_index": aggregation_index,
+                            "column": _base_col(col),
+                        },
+                    })
+                else:
+                    refs.append({
+                        "type": "data",
+                        "step": sid,
+                        "role": "in_table",
+                        "target": {
+                            "aggregation_index": aggregation_index,
+                            "handle": ref,
+                        },
+                    })
     if tool == "scalar_compute":
         for index, operand in enumerate(args.get("operands") or []):
             if not isinstance(operand, dict) or not isinstance(operand.get("value_ref"), str):
@@ -137,7 +165,7 @@ def _table_refs(tool: str, args: dict) -> set[str]:
 def _columns(value, parent: str | None = None) -> set[str]:
     column_keys = {
         "column", "columns", "group_by", "return_columns", "passthrough",
-        "left", "right", "partition_by", "order_by",
+        "left", "right", "partition_by", "order_by", "key_column", "value_column",
     }
     if isinstance(value, list):
         out: set[str] = set()
@@ -209,6 +237,15 @@ def condition_literal_targets(condition) -> list[tuple[str | None, object]]:
 def _action_literals(tool: str, args: dict) -> list:
     if tool == "condition_filter":
         return _condition_literals(args.get("conditions"))
+    if tool == "group_aggregate":
+        return list(args.get("category_values") or []) + [
+            value
+            for aggregation in args.get("aggregations") or []
+            if isinstance(aggregation, dict)
+            for value in _condition_literals(aggregation.get("where"))
+        ]
+    if tool == "pivot":
+        return list(args.get("key_values") or [])
     return []
 
 
@@ -371,7 +408,27 @@ def build_grounding_references(tool: str, args: dict, history: dict[str, dict]) 
     table_refs = _table_refs(tool, args)
     action_columns = _columns(args)
     literals = _action_literals(tool, args)
-    literal_targets = condition_literal_targets(args.get("conditions")) if tool == "condition_filter" else []
+    if tool == "condition_filter":
+        literal_targets = condition_literal_targets(args.get("conditions"))
+    elif tool == "group_aggregate":
+        literal_targets = [
+            target
+            for aggregation in args.get("aggregations") or []
+            if isinstance(aggregation, dict)
+            for target in condition_literal_targets(aggregation.get("where"))
+        ]
+        if args.get("output_layout") == "columns" and len(args.get("group_by") or []) == 1:
+            literal_targets.extend(
+                (_base_col(args["group_by"][0]), value)
+                for value in args.get("category_values") or []
+            )
+    elif tool == "pivot":
+        literal_targets = [
+            (_base_col(args.get("key_column")), value)
+            for value in args.get("key_values") or []
+        ]
+    else:
+        literal_targets = []
     refs: list[dict] = []
     schema_linked: set[str] = set()
     domain_linked: set[tuple[str, str]] = set()

@@ -35,7 +35,7 @@ Start at `docs/current/README.md`.
 ### Model-visible protocol
 
 - Source of truth: `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current implementation: `version14`; `version11` remains the last contract with a completed
+- Current implementation: `version18`; `version11` remains the last contract with a completed
   fixed-200 validation. The former `v2i-state-only-join-feedback-r2` contract is `version1`;
   `version2` added canonical calls/final shape, `version3` added precise provider feedback and
   stable projected join columns, and `version4` counted provider-carrier failures precisely.
@@ -57,7 +57,13 @@ Start at `docs/current/README.md`.
   one exact result table, including 1x1 scalar tables, instead of carrying model-authored answer
   values. `version14` keeps canonical grounded plan evidence intact but renders only its
   `step_id + tool` identity in model-visible resident plan state, avoiding repeated large
-  schema/table payloads. Future versions increment numerically.
+  schema/table payloads. `version15` adds an optional aggregation-level `where` predicate to
+  `group_aggregate`, allowing several conditional metrics to share one fixed input population and
+  grain instead of being split across drifting filter branches. `version16` briefly exposed a
+  separate `pivot` reshape atom and `version17` clarified its boundary with `project`. `version18`
+  folds that reshape into `group_aggregate(output_layout="columns", category_values=[...])`;
+  `pivot` is replay-only, so the model chooses one aggregate tool rather than two competing tools.
+  Future versions increment numerically.
 - The canonical model action contains exactly one `<think>` block and one strict `<tool_call>` JSON
   object. A provider-native reasoning adapter may carry the same authored reason in a separate API
   field, but its API-facing prompt and history must describe only that one carrier.
@@ -69,7 +75,7 @@ Start at `docs/current/README.md`.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id
   `value_ref`.
-- Do not construct new version12-version14 SFT data until the frozen 200-task tool-usability gate
+- Do not construct new version12-version18 SFT data until the frozen 200-task tool-usability gate
   is explicitly passed. Small pilots are diagnostic only and are not SFT sources.
 
 ### Recovery and provenance

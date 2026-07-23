@@ -51,6 +51,62 @@ def run():
     t.check("group_aggregate", norm(h.rows(g["table_name"])) ==
             norm(h.gold("SELECT dept,AVG(salary) FROM employees WHERE salary>1000 GROUP BY dept")))
 
+    conditional = h.group_aggregate(
+        "employees",
+        [],
+        [
+            {
+                "op": "count",
+                "column": "*",
+                "as": "eng_count",
+                "where": {"column": "dept", "op": "=", "value": "eng"},
+            },
+            {
+                "op": "count_distinct",
+                "column": "dept",
+                "as": "high_salary_depts",
+                "where": {"column": "salary", "op": ">", "value": 1000},
+            },
+            {
+                "op": "mean",
+                "column": "salary",
+                "as": "sales_avg",
+                "where": {"column": "dept", "op": "=", "value": "sales"},
+            },
+        ],
+    )
+    t.check(
+        "group_aggregate supports several conditional metrics on one input grain",
+        h.rows(conditional["table_name"]) == h.gold(
+            "SELECT "
+            "COUNT(CASE WHEN dept='eng' THEN 1 END), "
+            "COUNT(DISTINCT CASE WHEN salary>1000 THEN dept END), "
+            "AVG(CASE WHEN dept='sales' THEN salary END) "
+            "FROM employees"
+        ),
+        str(conditional),
+    )
+
+    wide_department_counts = h.group_aggregate(
+        "employees",
+        ["dept"],
+        [{
+            "op": "count_distinct",
+            "column": "name",
+            "as": "employee_count",
+            "where": {"column": "salary", "op": ">", "value": 1000},
+        }],
+        output_layout="columns",
+        category_values=["eng", "sales", "hr"],
+        output_columns=["engineering", "sales", "human_resources"],
+    )
+    t.check(
+        "group_aggregate columns layout emits ordered one-row category metrics",
+        wide_department_counts["columns"] == ["engineering", "sales", "human_resources"]
+        and h.rows(wide_department_counts["table_name"]) == [(2, 2, 0)],
+        str(wide_department_counts),
+    )
+
     component = h.join_tables(
         base="employees",
         joins=[

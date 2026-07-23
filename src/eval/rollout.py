@@ -208,6 +208,19 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
         values = {ref: extract_scalar(ctx["history"], ref)
                   for ref in _value_ref_ids(exec_args.get("conditions"))}
         exec_args["conditions"] = resolve_cond(exec_args.get("conditions"), {}, values)
+    elif tool == "group_aggregate":
+        resolved_aggregations = []
+        for aggregation in exec_args.get("aggregations") or []:
+            resolved = dict(aggregation)
+            condition = resolved.get("where")
+            if condition is not None:
+                values = {
+                    ref: extract_scalar(ctx["history"], ref)
+                    for ref in _value_ref_ids(condition)
+                }
+                resolved["where"] = resolve_cond(condition, {}, values)
+            resolved_aggregations.append(resolved)
+        exec_args["aggregations"] = resolved_aggregations
     elif tool == "scalar_compute":
         resolved_operands = []
         for operand in exec_args.get("operands") or []:
