@@ -45,8 +45,9 @@ from catalog import build_catalog                             # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
 from denotation import add_denotation_comparison_argument, compare_denotations  # noqa: E402
 from protocol import (ACCEPTED_TOOLS, ProtocolError, get_system_prompt,  # noqa: E402
+                      POLICY_PROMPT_CANONICAL, POLICY_PROMPT_VARIANTS,
                       assistant_message, first_user_message, parse_assistant_strict,
-                      model_context_messages, protocol_hash, tool_error_message,
+                      model_context_messages, policy_system_prompt, protocol_hash, tool_error_message,
                       rolling_legal_history_messages, rolling_system_prompt,
                       state_context_message, tool_output_message)
 
@@ -930,6 +931,12 @@ def main() -> int:
     ap.add_argument("--rolling-prompt-variant", choices=["full", "compact"], default="full",
                     help="rolling-only prompt ablation; full preserves existing runs")
     ap.add_argument(
+        "--policy-prompt-variant",
+        choices=POLICY_PROMPT_VARIANTS,
+        default=POLICY_PROMPT_CANONICAL,
+        help="auditable policy ablation; canonical preserves the version19 prompt",
+    )
+    ap.add_argument(
         "--rolling-observation-style",
         choices=["resident", "full"],
         default="resident",
@@ -988,6 +995,7 @@ def main() -> int:
                 system,
                 compact=args.rolling_prompt_variant == "compact",
             )
+        system = policy_system_prompt(system, args.policy_prompt_variant)
     system += fewshot_text(fewshot_ids)
     writer = None
     if args.result_dir:
@@ -1011,6 +1019,7 @@ def main() -> int:
             "context_mode": args.context_mode,
             "history_turns": args.history_turns,
             "rolling_prompt_variant": args.rolling_prompt_variant,
+            "policy_prompt_variant": args.policy_prompt_variant,
             "rolling_observation_style": args.rolling_observation_style,
             "system_prompt_manifest": args.system_prompt_manifest or None,
             "min_context_retry_tokens": MIN_CONTEXT_RETRY_TOKENS,

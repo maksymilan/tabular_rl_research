@@ -127,6 +127,24 @@ ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 PROTOCOL_VERSION = "version19"  # public tool versions now increment numerically: version1, version2, ...
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
+POLICY_PROMPT_CANONICAL = "canonical"
+POLICY_PROMPT_RELATIONAL_INVARIANTS = "relational-invariants"
+POLICY_PROMPT_VARIANTS = (
+    POLICY_PROMPT_CANONICAL,
+    POLICY_PROMPT_RELATIONAL_INVARIANTS,
+)
+RELATIONAL_INVARIANTS_SUFFIX = (
+    "\n\nRELATIONAL DECISION INVARIANTS — EXPERIMENTAL PROMPT VARIANT\n"
+    "Before aggregation or ranking, identify the current input population and what one row "
+    "represents; do not change that grain or collapse matching rows unless the task asks for it. "
+    "If answer eligibility or output columns depend on another relation, form the required join "
+    "before ranking or aggregation, because operations before and after a join may use different "
+    "populations. Use inner join unless the task explicitly requires retaining base rows without "
+    "matches. Project exactly the entity and output slots defined by the question or EXTERNAL "
+    "KNOWLEDGE; do not replace an identifier/code with a label or vice versa. Do not sum, average, "
+    "count, or otherwise combine repeated observed values unless the requested answer calls for "
+    "that aggregation."
+)
 
 # Strict per-tool argument schema (required, optional). Unlisted keys are rejected so the SFT data
 # and the live rollout can never silently drift. V2b: a predicate's `value_ref` cites the producing
@@ -627,6 +645,17 @@ def rolling_system_prompt(system_prompt: str, *, compact: bool = False) -> str:
     full-prompt rolling artifacts remain byte-for-byte stable.
     """
     return ROLLING_SYSTEM_PROMPT_COMPACT if compact else system_prompt + ROLLING_HISTORY_SYSTEM_SUFFIX
+
+
+def policy_system_prompt(system_prompt: str, variant: str = POLICY_PROMPT_CANONICAL) -> str:
+    """Apply an auditable policy-prompt ablation without changing the canonical version19 prompt."""
+    if variant == POLICY_PROMPT_CANONICAL:
+        return system_prompt
+    if variant == POLICY_PROMPT_RELATIONAL_INVARIANTS:
+        return system_prompt + RELATIONAL_INVARIANTS_SUFFIX
+    raise ValueError(
+        f"unknown policy prompt variant {variant!r}; expected one of {POLICY_PROMPT_VARIANTS}"
+    )
 
 
 class ProtocolError(Exception):

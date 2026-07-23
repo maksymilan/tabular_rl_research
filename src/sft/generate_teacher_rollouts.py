@@ -53,12 +53,15 @@ from rollout import (  # noqa: E402
 )
 from executor import Harness  # noqa: E402
 from protocol import (  # noqa: E402
+    POLICY_PROMPT_CANONICAL,
+    POLICY_PROMPT_VARIANTS,
     ProtocolError,
     assistant_message,
     first_user_message,
     get_system_prompt,
     model_context_messages,
     parse_assistant_strict,
+    policy_system_prompt,
     protocol_hash,
     rolling_legal_history_messages,
     rolling_system_prompt,
@@ -501,6 +504,7 @@ def run_rollout(
     context_mode: str,
     history_turns: int,
     rolling_prompt_variant: str,
+    policy_prompt_variant: str = POLICY_PROMPT_CANONICAL,
     plan_policy: str = PLAN_POLICY_OPTIONAL,
     deepseek_carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
 ) -> dict:
@@ -545,6 +549,7 @@ def run_rollout(
         "error_events": error_events,
         "outcome": None,
         "plan_policy": plan_policy,
+        "policy_prompt_variant": policy_prompt_variant,
     }
 
     while action_count < max_steps:
@@ -794,6 +799,7 @@ def run_rollout(
                 "context_mode": context_mode,
                 "history_turns": history_turns,
                 "rolling_prompt_variant": rolling_prompt_variant,
+                "policy_prompt_variant": policy_prompt_variant,
                 "plan_policy": plan_policy,
                 "deepseek_carrier": deepseek_carrier,
                 "sft_export_eligible": context_mode == "state-only",
@@ -914,6 +920,12 @@ def main() -> int:
     parser.add_argument("--rolling-prompt-variant", choices=["full", "compact"], default="full",
                         help="rolling-only prompt ablation; full preserves existing runs")
     parser.add_argument(
+        "--policy-prompt-variant",
+        choices=POLICY_PROMPT_VARIANTS,
+        default=POLICY_PROMPT_CANONICAL,
+        help="auditable policy ablation; canonical preserves the version19 prompt",
+    )
+    parser.add_argument(
         "--plan-policy",
         choices=PLAN_POLICY_CHOICES,
         default=PLAN_POLICY_OPTIONAL,
@@ -952,6 +964,10 @@ def main() -> int:
             base_system_prompt,
             compact=args.rolling_prompt_variant == "compact",
         )
+    base_system_prompt = policy_system_prompt(
+        base_system_prompt,
+        args.policy_prompt_variant,
+    )
     prompt_suffix = DATA_GENERATION_SUFFIX
     if args.plan_policy == PLAN_POLICY_REQUIRED_RESIDENT:
         prompt_suffix += REQUIRED_RESIDENT_PLAN_SUFFIX
@@ -985,6 +1001,7 @@ def main() -> int:
             context_mode=args.context_mode,
             history_turns=args.history_turns,
             rolling_prompt_variant=args.rolling_prompt_variant,
+            policy_prompt_variant=args.policy_prompt_variant,
             plan_policy=args.plan_policy,
             deepseek_carrier=args.deepseek_carrier,
         )
@@ -1065,6 +1082,7 @@ def main() -> int:
         "context_mode": args.context_mode,
         "history_turns": args.history_turns,
         "rolling_prompt_variant": args.rolling_prompt_variant,
+        "policy_prompt_variant": args.policy_prompt_variant,
         "plan_policy": args.plan_policy,
         "deepseek_carrier": args.deepseek_carrier,
         "sft_export_eligible": args.context_mode == "state-only",

@@ -9,11 +9,15 @@ SFT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SFT_DIR))
 
 from protocol import (  # noqa: E402
+    POLICY_PROMPT_CANONICAL,
+    POLICY_PROMPT_RELATIONAL_INVARIANTS,
     PROTOCOL_VERSION,
+    RELATIONAL_INVARIANTS_SUFFIX,
     SYSTEM_PROMPT,
     ProtocolError,
     parse_assistant,
     parse_assistant_strict,
+    policy_system_prompt,
     tool_output_message,
 )
 
@@ -57,6 +61,22 @@ class ProtocolParseTests(unittest.TestCase):
             '"customers":["id","name"]}',
             message,
         )
+
+    def test_relational_policy_prompt_is_an_explicit_noncanonical_ablation(self):
+        self.assertEqual(
+            policy_system_prompt(SYSTEM_PROMPT, POLICY_PROMPT_CANONICAL),
+            SYSTEM_PROMPT,
+        )
+        guided = policy_system_prompt(
+            SYSTEM_PROMPT,
+            POLICY_PROMPT_RELATIONAL_INVARIANTS,
+        )
+        self.assertEqual(guided, SYSTEM_PROMPT + RELATIONAL_INVARIANTS_SUFFIX)
+        self.assertIn("form the required join before ranking or aggregation", guided)
+        self.assertIn("Use inner join unless", guided)
+        self.assertIn("what one row represents", guided)
+        with self.assertRaisesRegex(ValueError, "unknown policy prompt variant"):
+            policy_system_prompt(SYSTEM_PROMPT, "gold-recipes")
 
     def test_tool_output_keeps_mixed_projection_order_flat(self):
         message = tool_output_message(
