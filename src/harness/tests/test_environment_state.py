@@ -76,8 +76,18 @@ def run():
 
     f = h.condition_filter("employees", {"column": "dept", "op": "=", "value": "eng"})
     output = {"table": f["table_name"], "kind": f["kind"],
-              "columns": f["columns"], "row_count": f["row_count"]}
+              "columns": f["columns"], "row_count": f["row_count"],
+              "structural_feedback": {
+                  "type": "aggregate_shape",
+                  "row_grain": ["dept"],
+                  "layout": "one_row_per_group",
+              }}
     state.apply_tool_result("condition_filter", {"table": "employees", "conditions": {}}, output, "step_4")
+    snap = state.snapshot()
+    t.check("latest structural feedback is resident",
+            snap["latest_structural_feedback"]["from_step"] == "step_4" and
+            snap["latest_structural_feedback"]["feedback"]["row_grain"] == ["dept"],
+            str(snap))
     rows = h.read_subtable(f["table_name"], limit=2)
     state.apply_tool_result(
         "read_subtable",
@@ -90,6 +100,8 @@ def run():
             snap["tables"][f["table_name"]]["created_by"] == "step_4", str(snap))
     t.check("read rows grouped under handle",
             snap["tables"][f["table_name"]]["reads"][0]["from_step"] == "step_5", str(snap))
+    t.check("perception preserves latest structural feedback",
+            snap["latest_structural_feedback"]["from_step"] == "step_4", str(snap))
     state.apply_tool_result(
         "read_subtable",
         {"table": f["table_name"], "limit": 2},
@@ -100,6 +112,16 @@ def run():
     reads = snap["tables"][f["table_name"]]["reads"]
     t.check("duplicate read_subtable replaces previous read",
             len(reads) == 1 and reads[0]["from_step"] == "step_5b", str(snap))
+
+    state.apply_tool_result(
+        "project",
+        {"table": f["table_name"], "expressions": ["dept"]},
+        {"table": "project_999", "kind": "project", "columns": ["dept"], "row_count": 2},
+        "step_5_clear",
+    )
+    t.check("next derived action clears stale structural feedback",
+            "latest_structural_feedback" not in state.snapshot(),
+            str(state.snapshot()))
 
     state.apply_tool_result(
         "aggregate",

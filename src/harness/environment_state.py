@@ -115,6 +115,7 @@ class EnvironmentState:
         self.plan_order: list[str] = []
         self.tables: dict[str, dict] = {}
         self.values: dict[str, dict] = {}
+        self.latest_structural_feedback: dict | None = None
         for table in self.catalog.get("tables", []):
             name = table.get("table_name")
             if not name:
@@ -158,7 +159,12 @@ class EnvironmentState:
             out = {k: deepcopy(v) for k, v in table.items()
                    if v not in (None, {}, [])}
             tables[name] = out
-        return {"plan": plan, "tables": tables, "values": deepcopy(self.values)}
+        snapshot = {"plan": plan, "tables": tables, "values": deepcopy(self.values)}
+        if self.latest_structural_feedback is not None:
+            snapshot["latest_structural_feedback"] = deepcopy(
+                self.latest_structural_feedback
+            )
+        return snapshot
 
     # ---- plan tool ----
     def apply_plan_ops(self, ops: list[dict], step_id: str,
@@ -295,6 +301,17 @@ class EnvironmentState:
 
         table_name = output.get("table")
         if table_name:
+            feedback = output.get("structural_feedback")
+            self.latest_structural_feedback = (
+                {
+                    "from_step": step_id,
+                    "tool": tool,
+                    "table": table_name,
+                    "feedback": deepcopy(feedback),
+                }
+                if isinstance(feedback, dict)
+                else None
+            )
             entry = self._ensure_table(table_name)
             entry["kind"] = output.get("kind", entry.get("kind", "derived"))
             entry["created_by"] = step_id

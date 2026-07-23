@@ -413,6 +413,98 @@ class EvalTests(unittest.TestCase):
             ],
         )
 
+    def test_structural_feedback_is_derived_without_changing_tool_arguments(self):
+        harness = Harness(":memory:")
+        self.addCleanup(harness.conn.close)
+        harness.conn.executescript(
+            "CREATE TABLE people(id INTEGER, first_name TEXT, last_name TEXT, team TEXT);"
+            "INSERT INTO people VALUES "
+            "(1, 'Ada', 'Lovelace', 'math'),"
+            "(2, 'Grace', 'Hopper', 'navy');"
+            "CREATE TABLE badges(person_id INTEGER, badge TEXT);"
+            "INSERT INTO badges VALUES (1, 'founder');"
+        )
+        harness.register_sources()
+        ctx = new_ctx({
+            "tables": [
+                {"table_name": "people", "num_rows": 2},
+                {"table_name": "badges", "num_rows": 1},
+            ],
+            "relations": [],
+        })
+
+        project_args = {
+            "table": "people",
+            "expressions": ["first_name || ' ' || last_name AS full_name"],
+        }
+        projected, _ = execute_tool(
+            harness, "project", project_args, ctx, "step_1"
+        )
+        self.assertEqual(project_args, {
+            "table": "people",
+            "expressions": ["first_name || ' ' || last_name AS full_name"],
+        })
+        self.assertEqual(
+            projected["structural_feedback"]["collapsed_outputs"],
+            [{
+                "output_column": "full_name",
+                "source_columns": ["first_name", "last_name"],
+            }],
+        )
+
+        grouped, _ = execute_tool(
+            harness,
+            "group_aggregate",
+            {
+                "table": "people",
+                "group_by": ["team"],
+                "aggregations": [
+                    {"op": "count", "column": "*", "as": "people_count"},
+                ],
+            },
+            ctx,
+            "step_2",
+        )
+        self.assertEqual(grouped["row_count"], 2)
+        group_feedback = grouped["structural_feedback"]
+        self.assertEqual(group_feedback["type"], "aggregate_shape")
+        self.assertEqual(group_feedback["row_grain"], ["team"])
+        self.assertEqual(group_feedback["layout"], "one_row_per_group")
+        self.assertEqual(
+            group_feedback["count_semantics"],
+            {"people_count": "input_rows"},
+        )
+        self.assertIn("multiplicity introduced by earlier joins", group_feedback["advice"])
+        self.assertIn("one result row per group", group_feedback["advice"])
+
+        joined, _ = execute_tool(
+            harness,
+            "join_tables",
+            {
+                "base": "people",
+                "joins": [{
+                    "table": "badges",
+                    "type": "left",
+                    "on": [{"left": "people.id", "right": "person_id"}],
+                }],
+            },
+            ctx,
+            "step_3",
+        )
+        self.assertEqual(joined["row_count"], 2)
+        self.assertEqual(
+            joined["structural_feedback"]["unmatched_left_rows"],
+            1,
+        )
+        self.assertEqual(
+            joined["structural_feedback"]["joined_relation"],
+            "badges",
+        )
+        self.assertIn(
+            "preserved 1 base rows with no matching badges row",
+            joined["structural_feedback"]["advice"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

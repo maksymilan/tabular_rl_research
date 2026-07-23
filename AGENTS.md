@@ -35,7 +35,7 @@ Start at `docs/current/README.md`.
 ### Model-visible protocol
 
 - Source of truth: `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current implementation: `version20`; it has a completed fixed-200 validation. The former
+- Current experimental implementation: `version23`; its fixed-200 run is not authorized. The former
   `v2i-state-only-join-feedback-r2` contract is `version1`;
   `version2` added canonical calls/final shape, `version3` added precise provider feedback and
   stable projected join columns, and `version4` counted provider-carrier failures precisely.
@@ -70,7 +70,20 @@ Start at `docs/current/README.md`.
   affected public tools (`join_tables`, `scalar_compute`, `group_aggregate`, `project`, and
   `read_subtable`). It also treats a length-truncated provider completion as a bounded, audited
   same-turn client retry rather than a semantic agent action; tool execution semantics and action
-  boundaries are unchanged.
+  boundaries are unchanged. `version21` was a deterministic-resolution ablation that was audited
+  but not promoted. `version22` keeps the version20 public calls and argument schemas unchanged and
+  adds compact harness-derived feedback for multi-column projection collapse, aggregate
+  grain/layout/count semantics, and actual unmatched rows after a single-edge left join. Only the
+  latest structural feedback is resident. Its frozen 16-task pilot preserved all eight controls
+  but recovered only 2/7 unambiguous targets, below the expansion gate. `version23` leaves tools,
+  arguments, execution, and resident-state boundaries unchanged and makes the existing feedback
+  operationally explicit about named output fields, join multiplicity/global aggregate grain, and
+  unmatched left-join rows. Its frozen 16-task pilot recovered 3/7 targets with 1/8 control
+  regression, 16/16 legal termination, and a +0.125 mean-action change versus the original; this is
+  a weak pass authorizing only the frozen 50-task gate. The completed 50-task gate scored 35/50
+  versus the paired original 30/50: 6/20 capability recoveries, 29/30 controls retained, 50/50
+  legal termination, unchanged 6.96 mean actions, and six recoverable errors. It missed the
+  predeclared 7/20 recovery and +7 net-gain thresholds, so do not launch a version23 fixed-200 run.
   Future versions increment numerically.
 - The canonical model action contains exactly one `<think>` block and one strict `<tool_call>` JSON
   object. A provider-native reasoning adapter may carry the same authored reason in a separate API
@@ -83,7 +96,7 @@ Start at `docs/current/README.md`.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id
   `value_ref`.
-- Do not construct new version12-version20 SFT data until the frozen 200-task tool-usability gate
+- Do not construct new version12-version23 SFT data until the frozen 200-task tool-usability gate
   is explicitly passed. Small pilots are diagnostic only and are not SFT sources.
 
 ### Recovery and provenance
@@ -127,8 +140,12 @@ Start at `docs/current/README.md`.
   `docs/reports/evaluation/BIRD_VERSION20_CARRIER_SCHEMA_FIXED200_20260723.md`.
 - A deterministic-resolution version21 ablation reached 139/200 but reduced legal termination to
   197/200, raised process errors from 24 to 38, and used 8.0% more tokens. Its 9 paired gains versus
-  8 regressions were not significant, so it was not promoted and the active code remains version20.
+  8 regressions were not significant, so it was not promoted.
   See `docs/reports/evaluation/BIRD_VERSION21_RESOLUTION_ABLATION_FIXED200_20260723.md`.
+- Under the baseline-aligned `bird-set` metric, deterministic replay of the version20 trajectories
+  with the corrected percentage operator scores 143/200. Version23 passed its 16-task pilot weakly
+  but failed the frozen 50-task expansion gate at 35/50 versus the paired original 30/50: +5 net
+  rather than the required +7. Do not launch its fixed-200 run.
 - A paired six-hard-task diagnostic found no gain from forced resident planning:
   optional and required were both 0/6, while required planning increased mean actions by 16.4%
   and tokens by 18.5%. Keep `required-resident` experimental; do not expand it or make it default

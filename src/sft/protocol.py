@@ -135,7 +135,7 @@ LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version20"  # public tool versions now increment numerically: version1, version2, ...
+PROTOCOL_VERSION = "version23"  # actionable wording over version22 harness-derived feedback
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 POLICY_PROMPT_CANONICAL = "canonical"
@@ -754,7 +754,7 @@ def compact_resident_observation(observation: str) -> str:
     summary: dict = {}
     for key in (
         "table", "kind", "columns", "column_namespaces", "row_count",
-        "column", "distinct_count", "has_null",
+        "column", "distinct_count", "has_null", "structural_feedback",
     ):
         if output.get(key) is not None:
             summary[key] = output[key]

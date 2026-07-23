@@ -1,4 +1,4 @@
-# Current Trajectory Protocol (version20)
+# Current Trajectory Protocol (version23)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -110,15 +110,28 @@ Public version mapping:
 - `version19`: `scalar_compute` can cite a named column from a prior
   one-row multi-metric result using `{"value_ref":"step_k","column":"metric"}`. The harness
   resolves the exact non-NULL cell and records the output column on each value edge;
-- `version20`: current implementation; provider carrier examples contain only the final action
+- `version20`: provider carrier examples contain only the final action
   shape and no copy-prone field labels. Short schema invariants live beside the affected tools:
   join `right` is bare, scalar references cite producing steps rather than observation steps,
   aggregate `where` is per-aggregation, and project/read arguments remain closed. Length-truncated
   provider completions receive a bounded, audited same-turn client retry and are not themselves
   semantic agent actions;
-- future changes increment only the integer (`version21`, `version22`, ...).
+- `version21`: audited deterministic resolver ablation; not promoted because its fixed-200 run
+  increased process errors and trajectory length without a stable accuracy gain;
+- `version22`: keeps the version20 public tools and argument schemas
+  unchanged and adds compact, harness-derived structural feedback after high-risk legal actions:
+  multi-column projection collapse, aggregate result grain/layout/count semantics, and unmatched
+  rows for a single-edge left join. Only the latest such feedback is resident, so it cannot
+  accumulate across a trajectory. Its frozen 16-task pilot was non-destructive but recovered only
+  2/7 unambiguous targets, below the 3/7 expansion gate;
+- `version23`: current implementation; keeps every version22 tool, argument, execution, and state
+  boundary unchanged while making those three existing feedback payloads operationally explicit:
+  named component fields remain separate unless formatting is requested, row counts preserve join
+  multiplicity and global totals are not per-entity totals, and unmatched left-join rows lack the
+  right-side attribute;
+- future changes increment only the integer (`version24`, `version25`, ...).
 
-The current version20 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
+The current version23 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
 - `plan`

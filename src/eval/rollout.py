@@ -164,6 +164,159 @@ def _normalize_table_refs(args, ctx: dict, parent_key: str | None = None):
     return args
 
 
+def _expression_source_columns(expression: str, available_columns: list[str]) -> list[str]:
+    """Resolve source-column tokens in one model-authored project expression.
+
+    This is diagnostic only: execution has already succeeded, and failure to identify lineage must
+    never turn a legal relational action into an error.
+    """
+    without_literals = re.sub(r"'(?:''|[^'])*'", " ", str(expression))
+    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?", without_literals)
+    exact = {column.casefold(): column for column in available_columns}
+    by_suffix: dict[str, list[str]] = {}
+    for column in available_columns:
+        by_suffix.setdefault(column.rsplit(".", 1)[-1].casefold(), []).append(column)
+    resolved = []
+    for token in tokens:
+        column = exact.get(token.casefold())
+        if column is None:
+            matches = by_suffix.get(token.casefold(), [])
+            column = matches[0] if len(matches) == 1 else None
+        if column is not None and column not in resolved:
+            resolved.append(column)
+    return resolved
+
+
+def _structural_feedback(h: Harness, tool: str, args: dict, table_name: str) -> dict | None:
+    """Return compact, gold-free feedback about the shape produced by a legal action."""
+    try:
+        if tool == "project":
+            input_columns = h._cols(args["table"])
+            output_columns = h._cols(table_name)
+            collapses = []
+            for index, expression in enumerate(args.get("expressions") or []):
+                text = str(expression)
+                if "||" not in text and not re.search(r"\bconcat\s*\(", text, re.I):
+                    continue
+                sources = _expression_source_columns(text, input_columns)
+                if len(sources) < 2:
+                    continue
+                collapses.append({
+                    "output_column": (
+                        output_columns[index] if index < len(output_columns) else f"column_{index + 1}"
+                    ),
+                    "source_columns": sources,
+                })
+            if collapses:
+                return {
+                    "type": "column_collapse",
+                    "collapsed_outputs": collapses,
+                    "advice": (
+                        "This projection collapsed several named stored fields into one formatted "
+                        "output slot. Labels such as 'name' or 'full name' do not by themselves "
+                        "authorize concatenation: when the question or external knowledge names "
+                        "first/middle/last (or other component fields), return those stored fields "
+                        "as separate columns unless one formatted/concatenated string is explicitly "
+                        "requested."
+                    ),
+                }
+
+        if tool == "group_aggregate":
+            group_by = list(args.get("group_by") or [])
+            output_layout = args.get("output_layout", "rows")
+            if output_layout == "columns":
+                layout = "one_row_with_category_columns"
+            elif group_by:
+                layout = "one_row_per_group"
+            else:
+                layout = "one_row_for_entire_input"
+            count_semantics = {}
+            for aggregation in args.get("aggregations") or []:
+                op = str(aggregation.get("op", "")).lower()
+                if op == "count":
+                    count_semantics[aggregation.get("as", "count")] = "input_rows"
+                elif op == "count_distinct":
+                    count_semantics[aggregation.get("as", "count")] = (
+                        f"distinct:{aggregation.get('column', '*')}"
+                    )
+            feedback = {
+                "type": "aggregate_shape",
+                "row_grain": group_by,
+                "layout": layout,
+            }
+            if count_semantics:
+                feedback["count_semantics"] = count_semantics
+            advice = []
+            if any(
+                str(aggregation.get("op", "")).lower() == "count"
+                for aggregation in args.get("aggregations") or []
+            ):
+                advice.append(
+                    "COUNT counts physical input rows and preserves multiplicity introduced by "
+                    "earlier joins; when the question counts entities, count a distinct stable "
+                    "entity identifier instead."
+                )
+            if output_layout == "columns":
+                advice.append(
+                    "This is one result row with one ordered output slot per requested category."
+                )
+            elif group_by:
+                advice.append(
+                    "This is one result row per group. If the requested output is one row with "
+                    "one slot per category, use output_layout='columns'."
+                )
+            else:
+                advice.append(
+                    "This is one global result row. Do not cross-replicate a global total onto "
+                    "several entities to represent per-entity totals; group by the requested "
+                    "entity instead."
+                )
+            feedback["advice"] = " ".join(advice)
+            return feedback
+
+        if tool == "join_tables":
+            joins = args.get("joins")
+            if not isinstance(joins, list) or len(joins) != 1:
+                return None
+            edge = joins[0]
+            if not isinstance(edge, dict) or edge.get("type", "inner") != "left":
+                return None
+            on = edge.get("on") or []
+            if not on or not isinstance(on[0], dict):
+                return None
+            namespace = edge.get("role") or edge.get("table")
+            right_key = on[0].get("right")
+            expected = f"{namespace}.{right_key}"
+            output_columns = h._cols(table_name)
+            matches = [
+                column for column in output_columns
+                if column.casefold() == expected.casefold()
+            ]
+            if len(matches) != 1:
+                return None
+            quoted = '"' + matches[0].replace('"', '""') + '"'
+            unmatched = h.conn.execute(
+                f"SELECT COUNT(*) FROM {h._src(table_name)} WHERE {quoted} IS NULL"
+            ).fetchone()[0]
+            return {
+                "type": "left_join_match",
+                "joined_relation": namespace,
+                "unmatched_left_rows": unmatched,
+                "advice": (
+                    f"This left join preserved {unmatched} base rows with no matching "
+                    f"{namespace} row, so their {namespace} fields are NULL. Rows without a "
+                    "requested right-side attribute are not matched entity-attribute pairs; use "
+                    "an inner join unless the task explicitly requests unmatched entities, "
+                    "missing values, or NULLs."
+                ),
+            }
+    except Exception:
+        # Feedback is advisory. A successful relational action remains successful even if compact
+        # lineage diagnostics cannot be derived for an unusual legacy expression or handle.
+        return None
+    return None
+
+
 def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
                  table_output_rows: int = 0):
     """Run one tool call, threading online provenance in `ctx`. Returns (output, created|None).
@@ -253,6 +406,9 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
     if isinstance(out, dict) and "table_name" in out:
         output = {"table": out["table_name"], "kind": out["kind"],     # V2-ctx: metadata-only handle
                   "columns": out["columns"], "row_count": out["row_count"]}
+        feedback = _structural_feedback(h, tool, args, out["table_name"])
+        if feedback:
+            output["structural_feedback"] = feedback
         preview_limit = max(0, int(table_output_rows or 0))
         if preview_limit:
             rows = _preview_table_rows(h, out["table_name"], preview_limit)

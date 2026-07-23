@@ -111,6 +111,19 @@ class RollingLegalHistoryTests(unittest.TestCase):
         )
         self.assertNotIn('"orders.id"', compact)
 
+    def test_structural_feedback_survives_compact_rolling_observation(self):
+        observation = (
+            '{"step_id":"step_2","status":"success","output":'
+            '{"table":"group_001","kind":"group","columns":["team","n"],'
+            '"row_count":2,"structural_feedback":{"type":"aggregate_shape",'
+            '"row_grain":["team"],"layout":"one_row_per_group",'
+            '"count_semantics":{"n":"input_rows"}}}}'
+        )
+        compact = compact_resident_observation(observation)
+        self.assertIn('"structural_feedback"', compact)
+        self.assertIn('"row_grain":["team"]', compact)
+        self.assertIn('"count_semantics":{"n":"input_rows"}', compact)
+
     def test_current_state_compacts_join_columns_without_changing_handle(self):
         state = {
             "plan": [],
