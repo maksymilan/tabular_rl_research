@@ -23,8 +23,11 @@ The two rare SFT-1 `set_op` targets are also retained so every historical public
   after SFT. Qwen2.5-Coder uses the controlled full-schema prompt and repetition penalty 1.05.
   OmniSQL uses its exact official prompt/inference contract.
 - Historical tool acquisition: a frozen difficulty-stratified BIRD-dev 200 cohort, greedy,
-  `strict-multiset`, rolling legal history (4 turns), full prompt, resident observations, at most
-  30 actions. This metric is reported separately from `bird-set`.
+  `tool-output-only + strict-multiset`, rolling legal history (4 turns), full prompt, resident
+  observations, at most 30 actions. Only the exact harness-owned result table cited by the terminal
+  `answer_from_context` call is graded. Model-authored answer values, SQL text, reasoning text, and
+  evidence-column permutations are not scoring fallbacks. This metric is reported separately from
+  `bird-set`.
 
 The direct-SQL delta measures retention/catastrophic forgetting; the tool result measures whether
 the SFT actually taught the interface. Absolute direct-SQL and tool percentages are not mixed.

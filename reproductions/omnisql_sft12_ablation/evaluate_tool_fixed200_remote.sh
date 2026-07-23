@@ -29,7 +29,7 @@ case "$MODEL_KEY" in
 esac
 
 SERVED_MODEL="${MODEL_KEY//-/_}_sft_tool_fixed200"
-RESULT_DIR="$OUTPUT_ROOT/results/tool/${MODEL_KEY}_sft_fixed200_strict_multiset"
+RESULT_DIR="$OUTPUT_ROOT/results/tool/${MODEL_KEY}_sft_fixed200_tool_output_only_strict_multiset"
 PID_FILE="$OUTPUT_ROOT/logs/$SERVED_MODEL.vllm.pid"
 SERVER_LOG="$OUTPUT_ROOT/logs/$SERVED_MODEL.vllm.log"
 mkdir -p "$RESULT_DIR" "$OUTPUT_ROOT/logs"

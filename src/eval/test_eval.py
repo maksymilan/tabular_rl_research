@@ -103,7 +103,7 @@ class EvalTests(unittest.TestCase):
         self.assertIn([["Village"]], answer_row_candidates("Village", [["Village"]]))
         self.assertIn([["a"], ["b"]], answer_row_candidates(["a", "b"], [["a"], ["b"]]))
 
-    def test_score_accepts_answer_when_evidence_table_is_broader(self):
+    def test_score_ignores_model_authored_answer_when_evidence_table_is_broader(self):
         harness = FakeHarness([[151]], {"join_001": [[151, "Alice", "dept"]]})
         ok, pred, gold = score(
             harness,
@@ -111,8 +111,8 @@ class EvalTests(unittest.TestCase):
             {"evidence": {"table": "join_001"}, "answer": [151]},
             {"join_001"},
         )
-        self.assertTrue(ok)
-        self.assertEqual(pred, [[151]])
+        self.assertFalse(ok)
+        self.assertEqual(pred, [[151, "Alice", "dept"]])
         self.assertEqual(gold, [[151]])
 
     def test_score_still_accepts_exact_evidence_table(self):
@@ -144,7 +144,7 @@ class EvalTests(unittest.TestCase):
         self.assertIn([["Town", 1], ["Village", 4]], projected_row_candidates(rows, [["Town", 1], ["Village", 4]]))
         self.assertEqual(projected_row_candidates(rows, [["Town"], ["Village"]]), [])
 
-    def test_score_accepts_evidence_columns_in_different_order(self):
+    def test_score_rejects_evidence_columns_in_different_order(self):
         harness = FakeHarness(
             [["2017-08-03", 571], ["2017-10-21", 801]],
             {"setop_001": [[571, "2017-08-03"], [801, "2017-10-21"]]},
@@ -155,9 +155,33 @@ class EvalTests(unittest.TestCase):
             {"evidence": {"table": "setop_001"}, "answer": []},
             {"setop_001"},
         )
-        self.assertTrue(ok)
-        self.assertEqual(pred, [["2017-08-03", 571], ["2017-10-21", 801]])
+        self.assertFalse(ok)
+        self.assertEqual(pred, [[571, "2017-08-03"], [801, "2017-10-21"]])
         self.assertEqual(gold, [["2017-08-03", 571], ["2017-10-21", 801]])
+
+    def test_score_rejects_correct_answer_without_created_evidence(self):
+        harness = FakeHarness([[151]])
+        ok, pred, gold = score(
+            harness,
+            "SELECT 151",
+            {"evidence": None, "answer": [151]},
+            set(),
+        )
+        self.assertFalse(ok)
+        self.assertEqual(pred, [])
+        self.assertEqual(gold, [[151]])
+
+    def test_score_rejects_existing_but_uncited_uncreated_view(self):
+        harness = FakeHarness([[151]], {"project_001": [[151]]})
+        ok, pred, gold = score(
+            harness,
+            "SELECT 151",
+            {"evidence": {"table": "project_001"}, "answer": [151]},
+            set(),
+        )
+        self.assertFalse(ok)
+        self.assertEqual(pred, [])
+        self.assertEqual(gold, [[151]])
 
     def test_normalize_step_id_table_refs(self):
         ctx = {"history": {"step_3": {"output": {"table": "filter_003"}}}}

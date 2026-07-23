@@ -25,10 +25,18 @@ def pct(correct: int, total: int) -> float:
 
 def main() -> int:
     q_tool = pass1(
-        load(ROOT / "results/tool/qwen25-coder_sft_fixed200_strict_multiset/summary.json")
+        load(
+            ROOT
+            / "results/tool/qwen25-coder_sft_fixed200_tool_output_only_strict_multiset"
+            / "summary.json"
+        )
     )
     o_tool = pass1(
-        load(ROOT / "results/tool/omnisql_sft_fixed200_strict_multiset/summary.json")
+        load(
+            ROOT
+            / "results/tool/omnisql_sft_fixed200_tool_output_only_strict_multiset"
+            / "summary.json"
+        )
     )
     q_direct = pass1(
         load(ROOT / "results/direct_sql/qwen25_coder_sft_greedy_bird_set/summary.json")
@@ -52,10 +60,12 @@ two-epoch QLoRA configuration.
 | Qwen2.5-Coder-7B-Instruct | 0/200 = 0.00% | {q_tool[0]}/{q_tool[1]} = {pct(*q_tool):.2f}% | 748/1534 = 48.76% | {q_direct[0]}/{q_direct[1]} = {pct(*q_direct):.2f}% | {pct(*q_direct) - 48.7614:+.2f} pp |
 | OmniSQL-7B | stopped at user request | {o_tool[0]}/{o_tool[1]} = {pct(*o_tool):.2f}% | 983/1534 = 64.08% | {omni_correct}/1534 = {100 * omni_rate:.2f}% | {100 * omni_rate - 64.0808:+.2f} pp |
 
-Metrics are intentionally separate: historical tool evaluation is greedy `strict-multiset` on the
-frozen difficulty-stratified 200 cohort; direct SQL is greedy BIRD reference EX (`bird-set`) on all
-1,534 dev tasks. Direct-SQL deltas measure capability retention; tool scores measure interface
-acquisition.
+Metrics are intentionally separate: historical tool evaluation is greedy
+`tool-output-only + strict-multiset` on the frozen difficulty-stratified 200 cohort. It grades only
+the exact harness-owned result table cited by `answer_from_context`; model-authored answer values
+and column permutation fallbacks are disabled. Direct SQL is greedy BIRD reference EX (`bird-set`)
+on all 1,534 dev tasks. Direct-SQL deltas measure capability retention; tool scores measure
+interface acquisition.
 """
     out = ROOT / "results/OVERNIGHT_SUMMARY.md"
     out.write_text(report, encoding="utf-8")

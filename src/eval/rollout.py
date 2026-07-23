@@ -331,29 +331,21 @@ def projected_row_candidates(rows, gold: list | None = None, max_combinations: i
 
 
 def score(h: Harness, gold_sql: str, answer_args: dict, created: set) -> tuple[bool, list, list]:
+    """Score only the exact harness-owned table cited by the terminal tool call.
+
+    Model-authored ``answer`` values and inferred column permutations are deliberately ignored.
+    This makes the metric a test of the executed tool trajectory's output rather than a hybrid
+    tool/direct-answer metric.
+    """
     gold = h.gold(gold_sql)
     ev = _evidence_table(answer_args.get("evidence"))
-    evidence_rows = None
-    if ev and (ev in created or ev in getattr(h, "views", {})):
-        try:
-            evidence_rows = h.rows(ev)
-        except Exception:
-            evidence_rows = None
-    if evidence_rows is not None and _rows_equal_safe(evidence_rows, gold):
-        return True, evidence_rows[:5], gold[:5]
-
-    answer_candidates = answer_row_candidates(answer_args.get("answer"), gold)
-    for candidate in answer_candidates:
-        if _rows_equal_safe(candidate, gold):
-            return True, candidate[:5], gold[:5]
-
-    if evidence_rows is not None:
-        for candidate in projected_row_candidates(evidence_rows, gold):
-            if _rows_equal_safe(candidate, gold):
-                return True, candidate[:5], gold[:5]
-
-    pred = evidence_rows if evidence_rows is not None else (answer_candidates[0] if answer_candidates else [])
-    return False, pred[:5], gold[:5]
+    if not ev or ev not in created:
+        return False, [], gold[:5]
+    try:
+        evidence_rows = h.rows(ev)
+    except Exception:
+        return False, [], gold[:5]
+    return _rows_equal_safe(evidence_rows, gold), evidence_rows[:5], gold[:5]
 
 
 def _condition_table_refs(cond) -> list[str]:

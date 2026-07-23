@@ -620,6 +620,10 @@ def main() -> int:
         "history_turns": args.history_turns,
         "rolling_prompt_variant": args.rolling_prompt_variant,
         "rolling_observation_style": args.rolling_observation_style,
+        "terminal_output_scoring": "tool-output-only",
+        "denotation_comparison": "strict-multiset",
+        "model_authored_answer_fallback": False,
+        "evidence_column_permutation": False,
     }
     if is_eval_tasks:
         manifest.update({"dataset_purpose": "evaluation", "sft_export_eligible": False})
