@@ -210,6 +210,7 @@ def build(
     history_turns: int,
     prompt_variant: str = "full",
     observation_style: str = "resident",
+    denotation_comparison: str | None = None,
 ) -> dict:
     if history_turns <= 0:
         raise ValueError("history_turns must be positive for the bounded rolling training protocol")
@@ -241,7 +242,10 @@ def build(
                     raise ValueError(
                         f"{trajectory['trajectory_id']}: history window {generation.get('history_turns')} != {history_turns}"
                     )
-                replay_ok, replay_error = replay_success_trajectory(trajectory)
+                replay_ok, replay_error = replay_success_trajectory(
+                    trajectory,
+                    denotation_comparison=denotation_comparison,
+                )
                 if not replay_ok:
                     raise ValueError(f"{trajectory['trajectory_id']}: replay failed: {replay_error}")
                 replayed += 1
@@ -289,6 +293,7 @@ def build(
         ),
         "history_turns": history_turns,
         "loss_policy": "last_assistant_turn_only",
+        "replay_denotation_comparison_override": denotation_comparison,
         "required_llamafactory_flag": "mask_history: true",
         "system_prompt_sha256": hashlib.sha256(system.encode("utf-8")).hexdigest(),
         "base_protocol_hash": protocol_hash(system),
@@ -325,6 +330,15 @@ def main() -> int:
         default="resident",
         help="resident is R2; full reproduces pre-R2 historical tool observations for old adapters",
     )
+    parser.add_argument(
+        "--denotation-comparison",
+        choices=["strict-multiset", "bird-set"],
+        default=None,
+        help=(
+            "explicit replay metric for historical trajectories that predate the per-trajectory "
+            "denotation_comparison field"
+        ),
+    )
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", args.dataset_name):
         parser.error("--dataset-name must contain only letters, digits, '.', '_' or '-'")
@@ -338,6 +352,7 @@ def main() -> int:
         history_turns=args.history_turns,
         prompt_variant=args.rolling_prompt_variant,
         observation_style=args.rolling_observation_style,
+        denotation_comparison=args.denotation_comparison,
     )
     snippet, registry = write_dataset_info(out_path, args.dataset_name)
     manifest["dataset_name"] = args.dataset_name

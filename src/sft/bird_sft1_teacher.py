@@ -370,9 +370,26 @@ def run_episode(
     return record
 
 
-def replay_success_trajectory(trajectory: dict) -> tuple[bool, str | None]:
+def replay_success_trajectory(
+    trajectory: dict,
+    *,
+    denotation_comparison: str | None = None,
+) -> tuple[bool, str | None]:
     """Re-execute accepted steps from scratch and verify state snapshots and final denotation."""
     source = trajectory["source"]
+    generation = trajectory.get("rollout_generation") or {}
+    recorded_comparison = generation.get("denotation_comparison")
+    if (
+        denotation_comparison
+        and recorded_comparison
+        and denotation_comparison != recorded_comparison
+    ):
+        return (
+            False,
+            "replay_mismatch: denotation comparison override "
+            f"{denotation_comparison!r} conflicts with recorded {recorded_comparison!r}",
+        )
+    comparison = recorded_comparison or denotation_comparison or "strict-multiset"
     h = Harness(str(source.get("db_path") or ROOT / "data" / "bird" / "train" / "train_databases" /
                     source["db_id"] / f"{source['db_id']}.sqlite"))
     try:
@@ -416,7 +433,13 @@ def replay_success_trajectory(trajectory: dict) -> tuple[bool, str | None]:
             if future:
                 return False, f"future_reference: {future} at step_{index}"
             if tool_call["tool"] == "answer_from_context":
-                correct, _, _ = score(h, source["gold_sql"], tool_call["arguments"], created)
+                correct, _, _ = score(
+                    h,
+                    source["gold_sql"],
+                    tool_call["arguments"],
+                    created,
+                    denotation_comparison=comparison,
+                )
                 if not correct:
                     return False, "replay_mismatch: final denotation"
             else:

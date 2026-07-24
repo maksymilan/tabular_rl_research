@@ -6,6 +6,12 @@ SFT examples come from causal student or external-teacher model↔harness episod
 episode must pass terminal denotation scoring, fresh replay, protocol/quality gates, and the rolling
 single-action export checks before entering a mixture.
 
+The denotation comparison used to admit an episode is stored in
+`rollout_generation.denotation_comparison`, and fresh replay reuses that exact comparison.
+Historical artifacts that predate this field require an explicit replay override; they must never
+be silently replayed under the default `strict-multiset` comparison when their manifest declares
+`bird-set`.
+
 The current BIRD SFT-2 construction is student-first pass@k. Teacher fallback is restricted to true
 student pass@k failures. Provider attempts, transport failures, rejected trajectories, and duplicate
 actions remain auditable but do not become training targets.

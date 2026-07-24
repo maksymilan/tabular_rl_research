@@ -1,3 +1,4 @@
+import copy
 import sqlite3
 import sys
 import tempfile
@@ -13,6 +14,64 @@ from build_bird_sft2_dataset import replay_sample  # noqa: E402
 
 
 class PrepareBirdSft2OnpolicyTest(unittest.TestCase):
+    def test_replay_uses_recorded_denotation_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tiny.sqlite"
+            connection = sqlite3.connect(db_path)
+            connection.execute("CREATE TABLE items(value TEXT)")
+            connection.execute("INSERT INTO items VALUES ('x')")
+            connection.commit()
+            connection.close()
+            trajectory = {
+                "trajectory_id": "tiny_bird_set",
+                "source": {
+                    "db_id": "tiny",
+                    "db_path": str(db_path),
+                    "gold_sql": "SELECT value FROM items",
+                },
+                "initial_state": {"dataset_overview": None},
+                "steps": [],
+                "rollout_generation": {"denotation_comparison": "bird-set"},
+            }
+            from executor import Harness
+            from rollout import new_ctx, overview
+
+            harness = Harness(str(db_path))
+            try:
+                catalog = overview(harness)
+                state = new_ctx(catalog)["environment"].snapshot()
+            finally:
+                harness.conn.close()
+            trajectory["initial_state"]["dataset_overview"] = catalog
+            trajectory["steps"].append({
+                "step_id": "step_1",
+                "tool_call": {
+                    "tool": "answer_from_context",
+                    "arguments": {"answer": ["x", "x"], "evidence": []},
+                },
+                "environment_state_before": state,
+                "environment_state": state,
+            })
+
+            self.assertEqual((True, None), replay_success_trajectory(trajectory))
+            self.assertEqual(
+                (
+                    False,
+                    "replay_mismatch: denotation comparison override "
+                    "'strict-multiset' conflicts with recorded 'bird-set'",
+                ),
+                replay_success_trajectory(
+                    trajectory,
+                    denotation_comparison="strict-multiset",
+                ),
+            )
+            strict = copy.deepcopy(trajectory)
+            strict["rollout_generation"]["denotation_comparison"] = "strict-multiset"
+            self.assertEqual(
+                (False, "replay_mismatch: final denotation"),
+                replay_success_trajectory(strict),
+            )
+
     def test_describe_table_order_is_semantically_equivalent(self):
         left = {"tool": "describe_table", "arguments": {"tables": ["B", "A"]}}
         right = {"tool": "describe_table", "arguments": {"tables": ["A", "B"]}}

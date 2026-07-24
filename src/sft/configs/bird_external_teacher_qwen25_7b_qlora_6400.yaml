@@ -1,0 +1,49 @@
+# Qwen2.5-7B-Instruct QLoRA on the fixed-1K external-teacher causal SFT derivative.
+
+### model
+model_name_or_path: /home/dengyan/models/Qwen2.5-7B-Instruct
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: bird_external_teacher_fixed1000_full_prefix_qwen25_6400
+dataset_dir: /home/dengyan/tabular_rl_outputs/sft_external_teacher_fixed1000_20260724
+template: qwen
+cutoff_len: 6400
+mask_history: true
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 4
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/checkpoints/qwen2.5-7b-bird-external-teacher-fixed1000-full-prefix-6400-qlora
+logging_steps: 5
+save_strategy: epoch
+save_total_limit: 2
+eval_strategy: "no"
+report_to: none
+plot_loss: true
+overwrite_output_dir: false
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-4
+num_train_epochs: 2.0
+optim: paged_adamw_8bit
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+seed: 42
+data_seed: 42

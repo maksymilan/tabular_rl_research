@@ -853,6 +853,7 @@ def run_rollout(
                 "policy_prompt_variant": policy_prompt_variant,
                 "plan_policy": plan_policy,
                 "deepseek_carrier": deepseek_carrier,
+                "denotation_comparison": denotation_comparison,
                 "sft_export_eligible": context_mode == "state-only",
                 "error_actions_are_sft_targets": False,
                 "errors": errors,
