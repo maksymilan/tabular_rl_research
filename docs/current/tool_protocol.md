@@ -134,7 +134,9 @@ Public version mapping:
   sidecar. Every table-producing operator now emits one validated, fact-only
   `relation-derivation-v1` record bound to its output handle. Derivation construction lives in the
   harness, is complete over the active table action space, and is separate from SQL execution,
-  provenance, state storage, protocol rendering, and model policy;
+  provenance, state storage, protocol rendering, and model policy. Its completed frozen-200
+  DeepSeek v4 Flash evaluation is 145/200 under `bird-set`, versus the paired version20 143/200,
+  but it fails the 150/200 gate and slightly regresses legal termination and process errors;
 - future changes increment only the integer (`version25`, `version26`, ...).
 
 The current version24 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:

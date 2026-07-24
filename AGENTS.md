@@ -35,7 +35,8 @@ Start at `docs/current/README.md`.
 ### Model-visible protocol
 
 - Source of truth: `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current experimental implementation: `version24`; its fixed-200 run is not authorized. The former
+- Current experimental implementation: `version24`. Its fixed-200 run is complete but did not pass
+  the 75% tool-usability gate. The former
   `v2i-state-only-join-feedback-r2` contract is `version1`;
   `version2` added canonical calls/final shape, `version3` added precise provider feedback and
   stable projected join columns, and `version4` counted provider-carrier failures precisely.
@@ -89,6 +90,11 @@ Start at `docs/current/README.md`.
   fact-only `relation-derivation-v1` object on every derived table. The schema covers every active
   table-producing tool and is implemented in `src/harness/relation_derivation/`, separate from
   SQL execution, provenance, resident storage, protocol rendering, and model policy.
+  Its staged DeepSeek v4 Flash evaluation used the frozen 200-task cohort, rolling history,
+  optional plan, JSON Output, and `bird-set`: the first 50 were 42/50 versus the paired version20
+  39/50, then the full result was 145/200 versus 143/200. The +2 is not significant (10 gains,
+  8 regressions); legal termination fell from 199 to 197, process errors rose from 24 to 29, and
+  total tokens rose 5.8%. It remains an engineering boundary, not a 75%-validated SFT protocol.
   Future versions increment numerically.
 - The canonical model action contains exactly one `<think>` block and one strict `<tool_call>` JSON
   object. A provider-native reasoning adapter may carry the same authored reason in a separate API
@@ -151,13 +157,17 @@ Start at `docs/current/README.md`.
   with the corrected percentage operator scores 143/200. Version23 passed its 16-task pilot weakly
   but failed the frozen 50-task expansion gate at 35/50 versus the paired original 30/50: +5 net
   rather than the required +7. Do not launch its fixed-200 run.
+- The completed version24 fixed-200 `bird-set` evaluation is **145/200 = 72.5%**, with 197/200
+  legal termination, 29 process errors, 10 paired gains, and 8 paired regressions versus
+  version20. It fails the 150/200 gate and is ineligible as an SFT source. See
+  `docs/reports/evaluation/BIRD_VERSION24_RELATION_DERIVATION_FIXED200_20260724.md`.
 - A paired six-hard-task diagnostic found no gain from forced resident planning:
   optional and required were both 0/6, while required planning increased mean actions by 16.4%
   and tokens by 18.5%. Keep `required-resident` experimental; do not expand it or make it default
   without a new small-pilot signal. See
   `docs/reports/evaluation/BIRD_VERSION11_FAILURE_TRAJECTORY_AND_RESIDENT_PLAN_AUDIT.md`.
 
-## Current BIRD reference points (2026-07-22)
+## Current BIRD reference points (2026-07-24)
 
 - Direct SQL, fresh greedy Qwen2.5-7B under BIRD reference EX: **650/1534 = 42.37%**.
 - Direct SQL K=4 sampling under BIRD reference EX: pass@1/2/4 =
