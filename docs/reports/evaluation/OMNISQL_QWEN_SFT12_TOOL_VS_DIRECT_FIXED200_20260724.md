@@ -74,6 +74,37 @@ The root cause is therefore an optimization/configuration failure at two low-fre
 tokens: the LoRA learned much of the action JSON but did not calibrate the strict carrier. The
 parser correctly surfaced that failure.
 
+### Why the earlier Qwen2.5-7B SFT did not show this failure
+
+The earlier successful tool checkpoint is not the same base-model/data regime:
+
+- it used `Qwen2.5-7B-Instruct`, while this ablation uses
+  `Qwen2.5-Coder-7B-Instruct` and OmniSQL-7B;
+- its selected SFT-1 checkpoint had already seen 4,319 action targets for one epoch, then SFT-2
+  continued from that adapter on 11,874 additional targets for one epoch;
+- this ablation starts from each new base and mixes 1,024 targets for two epochs: 2,048 target
+  exposures versus about 16,193 in the earlier staged checkpoint, a 7.9x difference;
+- the earlier continuation reduced the learning rate from `1e-4` in SFT-1 to `5e-5` in SFT-2;
+  this ablation uses `1e-4` from the base throughout.
+
+The base prior is the most direct difference. On the exact same saved prompt and think prefix,
+before any adapter:
+
+| Base/checkpoint | Rank of `<tool_call>` | Log probability |
+|---|---:|---:|
+| Qwen2.5-7B-Instruct base | 1 | log p = -1.305 |
+| Earlier Qwen2.5-7B SFT-1 checkpoint-270 | 1 | log p = -0.0024 |
+| Qwen2.5-Coder-7B-Instruct base | 68,547 | log p = -19.469 |
+| Current Qwen-Coder 1K adapter | 82 | log p = -8.175 |
+| OmniSQL-7B base | 49,205 | log p = -14.793 |
+| Current OmniSQL 1K adapter | 83 | log p = -8.167 |
+
+The old and new adapters have the same projection-only LoRA target set and no saved output head.
+The earlier run succeeded despite the frozen `lm_head` because the Instruct base already had the
+correct carrier as its top-1 continuation and the staged corpus reinforced it. The current bases
+lack that prior, and the much smaller mixed run cannot move the wrapper token from rank ~50k-70k
+to rank 1.
+
 ## Carrier-compatible diagnostic
 
 The diagnostic parser first tries the strict parser, then accepts exactly one complete
