@@ -5,7 +5,12 @@ MODEL_KEY=${1:?usage: evaluate_tool_fixed200_remote.sh qwen25-coder|omnisql sft 
 VARIANT=${2:?usage: evaluate_tool_fixed200_remote.sh qwen25-coder|omnisql sft GPU PORT}
 GPU_ID=${3:?usage: evaluate_tool_fixed200_remote.sh qwen25-coder|omnisql sft GPU PORT}
 PORT=${4:?usage: evaluate_tool_fixed200_remote.sh qwen25-coder|omnisql sft GPU PORT}
+PARSER_MODE=${5:-strict}
 [[ "$VARIANT" == sft ]] || { echo "remote overnight runner expects sft" >&2; exit 2; }
+[[ "$PARSER_MODE" == strict || "$PARSER_MODE" == raw-json-compatible ]] || {
+  echo "parser mode must be strict or raw-json-compatible" >&2
+  exit 2
+}
 
 PROJECT_DIR=/home/dengyan/tabular_rl_experiments/omnisql_sft12_ablation
 OUTPUT_ROOT=/home/dengyan/tabular_rl_outputs/ablation/omnisql_sft12_1k
@@ -29,7 +34,11 @@ case "$MODEL_KEY" in
 esac
 
 SERVED_MODEL="${MODEL_KEY//-/_}_sft_tool_fixed200"
-RESULT_DIR="$OUTPUT_ROOT/results/tool/${MODEL_KEY}_sft_fixed200_tool_output_only_strict_multiset"
+if [[ "$PARSER_MODE" == strict ]]; then
+  RESULT_DIR="$OUTPUT_ROOT/results/tool/${MODEL_KEY}_sft_fixed200_tool_output_only_strict_multiset"
+else
+  RESULT_DIR="$OUTPUT_ROOT/results/tool/${MODEL_KEY}_sft_fixed200_tool_output_only_strict_multiset_carrier_compatible"
+fi
 PID_FILE="$OUTPUT_ROOT/logs/$SERVED_MODEL.vllm.pid"
 SERVER_LOG="$OUTPUT_ROOT/logs/$SERVED_MODEL.vllm.log"
 mkdir -p "$RESULT_DIR" "$OUTPUT_ROOT/logs"
@@ -105,5 +114,6 @@ EVAL_ENABLE_THINKING=0 NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
   --history-turns 4 \
   --rolling-prompt-variant full \
   --rolling-observation-style resident \
+  --parser-mode "$PARSER_MODE" \
   --result-dir "$RESULT_DIR" \
   --resume

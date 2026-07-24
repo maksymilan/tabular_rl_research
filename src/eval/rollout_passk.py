@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -34,6 +35,7 @@ from protocol import (  # noqa: E402
     first_user_message,
     get_system_prompt,
     model_context_messages,
+    parse_assistant_raw_json_compatible,
     parse_assistant_strict,
     rolling_legal_history_messages,
     rolling_system_prompt,
@@ -177,6 +179,7 @@ def run_sample(
     context_mode: str,
     history_turns: int,
     compact_history_observations: bool,
+    parser_mode: str,
 ) -> dict:
     gold_sql = task_gold_sql(ex)
     if not gold_sql:
@@ -265,8 +268,17 @@ def run_sample(
         rec["api_transport_retries"] += retry_stats["api_transport_retries"]
         rec["api_context_retries"] += retry_stats["api_context_retries"]
         try:
-            think, tool, args = parse_assistant_strict(text)
+            parser = (
+                parse_assistant_strict
+                if parser_mode == "strict"
+                else parse_assistant_raw_json_compatible
+            )
+            think, tool, args = parser(text)
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
+            turn["carrier_compatible_parse"] = (
+                parser_mode == "raw-json-compatible"
+                and not bool(re.search(r"<tool_call>.*?</tool_call>", text, re.S))
+            )
             turn["feedback_recovery"] = bool(last_error)
             turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
             if tool == "answer_from_context":
@@ -391,6 +403,7 @@ def run_one(
     context_mode: str,
     history_turns: int,
     compact_history_observations: bool,
+    parser_mode: str,
 ) -> dict:
     gold_sql = task_gold_sql(ex)
     if not gold_sql:
@@ -440,6 +453,7 @@ def run_one(
         "context_mode": context_mode,
         "history_turns": history_turns,
         "compact_history_observations": compact_history_observations,
+        "parser_mode": parser_mode,
     }
     if stop_on_success:
         samples = []
@@ -548,6 +562,15 @@ def main() -> int:
     parser.add_argument("--api-retries", type=int, default=3)
     parser.add_argument("--few-shot", type=int, default=0)
     parser.add_argument(
+        "--parser-mode",
+        choices=["strict", "raw-json-compatible"],
+        default="strict",
+        help=(
+            "strict is the canonical protocol score; raw-json-compatible is an "
+            "evaluation-only carrier diagnostic that still grades only executed harness tools"
+        ),
+    )
+    parser.add_argument(
         "--context-mode", choices=["state-only", "rolling-legal-history"], default="state-only",
     )
     parser.add_argument("--history-turns", type=int, default=4)
@@ -620,6 +643,8 @@ def main() -> int:
         "history_turns": args.history_turns,
         "rolling_prompt_variant": args.rolling_prompt_variant,
         "rolling_observation_style": args.rolling_observation_style,
+        "parser_mode": args.parser_mode,
+        "protocol_compliance_score": args.parser_mode == "strict",
         "terminal_output_scoring": "tool-output-only",
         "denotation_comparison": "strict-multiset",
         "model_authored_answer_fallback": False,
@@ -657,6 +682,7 @@ def main() -> int:
                 context_mode=args.context_mode,
                 history_turns=args.history_turns,
                 compact_history_observations=args.rolling_observation_style == "resident",
+                parser_mode=args.parser_mode,
                 max_steps=args.max_steps,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,

@@ -28,6 +28,14 @@ The two rare SFT-1 `set_op` targets are also retained so every historical public
   `answer_from_context` call is graded. Model-authored answer values, SQL text, reasoning text, and
   evidence-column permutations are not scoring fallbacks. This metric is reported separately from
   `bird-set`.
+- Carrier diagnostic: if strict evaluation shows that the model emits one valid tool-action JSON
+  object but omits the `<tool_call>` wrapper, rerun the same cohort with
+  `--parser-mode raw-json-compatible`. This mode still executes the tool loop and keeps the same
+  tool-output-only scorer; it does not count as protocol compliance and must be reported beside the
+  strict score, never in place of it.
+- Tool-vs-direct comparison: rescore the post-SFT direct-SQL outputs on that exact 200-task cohort
+  with `strict-multiset`. The paired accuracy difference then isolates tool-loop performance from
+  task-selection and metric differences.
 
 The direct-SQL delta measures retention/catastrophic forgetting; the tool result measures whether
 the SFT actually taught the interface. Absolute direct-SQL and tool percentages are not mixed.

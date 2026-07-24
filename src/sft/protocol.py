@@ -662,6 +662,47 @@ def parse_assistant_strict(text: str) -> tuple[str, str, dict]:
     return think_blocks[0].strip(), tool, args
 
 
+def parse_assistant_raw_json_compatible(text: str) -> tuple[str, str, dict]:
+    """Parse a strict action whose wrapper tokens were not emitted.
+
+    This is an evaluation-only carrier diagnostic. The canonical live protocol remains
+    :func:`parse_assistant_strict`. The fallback accepts exactly one top-level
+    ``{"tool": ..., "arguments": ...}`` object while retaining the strict think, tool, and
+    argument checks. It does not repair JSON, infer tools, normalize arguments, or accept
+    terminal-answer shorthand.
+    """
+    try:
+        return parse_assistant_strict(text)
+    except ProtocolError as strict_error:
+        decoder = json.JSONDecoder()
+        candidates = []
+        for match in re.finditer(r"\{", text):
+            try:
+                candidate, _ = decoder.raw_decode(text, match.start())
+            except json.JSONDecodeError:
+                continue
+            if (
+                isinstance(candidate, dict)
+                and set(candidate) == {"tool", "arguments"}
+                and candidate.get("tool") in TOOLS
+                and isinstance(candidate.get("arguments"), dict)
+            ):
+                candidates.append(candidate)
+        if len(candidates) != 1:
+            raise ProtocolError(
+                "raw-JSON compatibility requires exactly one strict tool action object; "
+                f"received {len(candidates)} (strict parser: {strict_error})"
+            ) from strict_error
+        think_blocks = _THINK_RE.findall(text)
+        if len(think_blocks) != 1 or not think_blocks[0].strip():
+            raise ProtocolError(
+                "raw-JSON compatibility requires exactly one non-empty <think>...</think> block"
+            ) from strict_error
+        call = candidates[0]
+        validate_model_arguments(call["tool"], call["arguments"])
+        return think_blocks[0].strip(), call["tool"], call["arguments"]
+
+
 # ---- answer comparison (execution-accuracy scoring) ----
 def _cell(x) -> str:
     """Canonical cell: numbers normalized ('2014'==2014, 56.999999->'57'), text stripped."""

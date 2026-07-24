@@ -8,10 +8,34 @@ from pathlib import Path
 SFT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SFT_DIR))
 
-from protocol import ProtocolError, parse_assistant, parse_assistant_strict  # noqa: E402
+from protocol import (  # noqa: E402
+    ProtocolError,
+    parse_assistant,
+    parse_assistant_raw_json_compatible,
+    parse_assistant_strict,
+)
 
 
 class ProtocolParseTests(unittest.TestCase):
+    def test_raw_json_compatibility_accepts_one_unwrapped_strict_action(self):
+        text = (
+            "<think>Inspect the relevant schema.</think>\n"
+            'noise{"tool":"describe_table","arguments":{"tables":["items"]}}suffix'
+        )
+        self.assertEqual(
+            parse_assistant_raw_json_compatible(text),
+            ("Inspect the relevant schema.", "describe_table", {"tables": ["items"]}),
+        )
+
+    def test_raw_json_compatibility_rejects_multiple_actions(self):
+        text = (
+            "<think>Ambiguous.</think>\n"
+            '{"tool":"describe_table","arguments":{"tables":["items"]}}'
+            '{"tool":"describe_table","arguments":{"tables":["orders"]}}'
+        )
+        with self.assertRaises(ProtocolError):
+            parse_assistant_raw_json_compatible(text)
+
     def test_parse_standard_tool_call(self):
         think, tool, args = parse_assistant(
             '<think>Count rows.</think>\n'
