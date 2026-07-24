@@ -35,7 +35,7 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def is_empty_visible_content_failure(record: dict[str, Any]) -> bool:
+def is_retryable_provider_failure(record: dict[str, Any]) -> bool:
     legacy_protocol_failure = (
         not record.get("correct")
         and record.get("failure_type") == "protocol_error"
@@ -48,7 +48,11 @@ def is_empty_visible_content_failure(record: dict[str, Any]) -> bool:
         not record.get("correct")
         and record.get("failure_type") == "provider_carrier_error"
     )
-    return legacy_protocol_failure or explicit_carrier_failure
+    explicit_api_failure = (
+        not record.get("correct")
+        and record.get("failure_type") == "api_error"
+    )
+    return legacy_protocol_failure or explicit_carrier_failure or explicit_api_failure
 
 
 def build(source_path: Path, attempts_path: Path, out_path: Path) -> dict[str, Any]:
@@ -70,12 +74,12 @@ def build(source_path: Path, attempts_path: Path, out_path: Path) -> dict[str, A
     retry_ids = {
         trajectory_id
         for trajectory_id, record in latest_by_id.items()
-        if is_empty_visible_content_failure(record)
+        if is_retryable_provider_failure(record)
     }
     selected = [row for row in source if str(row["example_id"]) in retry_ids]
     write_jsonl_atomic(out_path, selected)
     manifest = {
-        "selection": "provider_carrier_empty_visible_content_retry",
+        "selection": "provider_transport_or_empty_carrier_retry",
         "source": str(source_path),
         "source_sha256": sha256(source_path),
         "attempts": str(attempts_path),
@@ -86,8 +90,8 @@ def build(source_path: Path, attempts_path: Path, out_path: Path) -> dict[str, A
         "output": str(out_path),
         "output_sha256": sha256(out_path),
         "semantic_interpretation": (
-            "provider-carrier incomplete; excluded from policy accuracy and eligible for a fresh "
-            "causal low-concurrency attempt"
+            "provider transport/carrier incomplete; excluded from policy accuracy and eligible "
+            "for a fresh causal low-concurrency attempt"
         ),
     }
     manifest_path = out_path.with_suffix(".manifest.json")
