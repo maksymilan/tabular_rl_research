@@ -389,7 +389,7 @@ def replay_success_trajectory(
             "replay_mismatch: denotation comparison override "
             f"{denotation_comparison!r} conflicts with recorded {recorded_comparison!r}",
         )
-    comparison = recorded_comparison or denotation_comparison or "strict-multiset"
+    comparison = recorded_comparison or denotation_comparison or "bird-set"
     h = Harness(str(source.get("db_path") or ROOT / "data" / "bird" / "train" / "train_databases" /
                     source["db_id"] / f"{source['db_id']}.sqlite"))
     try:

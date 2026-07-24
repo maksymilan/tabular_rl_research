@@ -99,8 +99,10 @@ Start at `docs/current/README.md`.
 - The canonical model action contains exactly one `<think>` block and one strict `<tool_call>` JSON
   object. A provider-native reasoning adapter may carry the same authored reason in a separate API
   field, but its API-facing prompt and history must describe only that one carrier.
-- Context is rebuilt from catalog + question + optional external knowledge + current resident state
-  + optional `LAST TOOL ERROR`; it is not an appended observation transcript.
+- The active context contract is bounded rolling legal history with `history_turns=4`: catalog,
+  question, and optional external knowledge are followed by at most four successful
+  assistant/observation pairs, and the latest observation carries rebuilt resident state plus
+  optional `LAST TOOL ERROR`. Rejected assistant text is never added to history.
 - Current tools: `plan`, `describe_table`, `inspect_column`, `read_subtable`,
   `condition_filter`, `project`, `scalar_compute`, `join_tables`, `group_aggregate`,
   `extreme_value_select`, `set_op`, and `answer_from_context`.
@@ -132,8 +134,9 @@ Start at `docs/current/README.md`.
 
 ### Evaluation
 
-- Always name the denotation metric. BIRD reference EX uses `bird-set`; training replay and process
-  audits retain normalized `strict-multiset` unless explicitly overridden.
+- Always name the denotation metric. All current/new BIRD evaluation, SFT replay, grounding gates,
+  and RL/process audits use `bird-set`. `strict-multiset` remains only for immutable historical
+  artifacts and explicitly named compatibility audits; never silently mix the two.
 - Do not mix result directories across task selections, model/checkpoint, protocol, decoding,
   timeout, external knowledge, or denotation comparison.
 - Report API/transport failures separately from semantic policy failures.

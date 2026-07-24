@@ -7,7 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tool_environment import ToolUseEnv
-from task_loader import load_result_only_task_records
+from build_sft_task_set import numeric_example_index
+from task_loader import load_rl_task_records
 
 
 class FakeState:
@@ -25,6 +26,17 @@ class FakeHarness:
 
 
 class BirdTaskAdapterTests(unittest.TestCase):
+    def test_sft_task_set_uses_stable_bird_numeric_suffix(self):
+        self.assertEqual(
+            numeric_example_index(
+                {
+                    "trajectory_id": "bird_train_00123",
+                    "source": {"example_id": "bird_train_00123"},
+                }
+            ),
+            123,
+        )
+
     def test_tool_env_preserves_external_knowledge_on_every_turn(self):
         task = {
             "example_index": 7,
@@ -99,7 +111,7 @@ class BirdTaskAdapterTests(unittest.TestCase):
             with patch("task_loader.Harness", FakeHarness), patch(
                 "task_loader.build_catalog", return_value={"tables": []}
             ):
-                records = load_result_only_task_records(
+                records = load_rl_task_records(
                     Path(directory), split="train", examples_json=path,
                 )
         self.assertEqual(records[0]["environment"]["db_path"], task["db_path"])

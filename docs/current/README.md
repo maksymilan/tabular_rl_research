@@ -13,7 +13,6 @@ sources of truth.
 - `sft_pipeline.md`: accepted data and export path.
 - `rl_pipeline.md`: result-only control and process-credit mainline.
 - `evaluation.md`: evaluation contracts and baseline comparability.
-- `research_plan.md`: current staged BIRD research plan.
 
 When documentation conflicts, executable protocol code in `src/sft/protocol.py`, harness behavior,
 and explicit evaluation manifests take precedence; update the affected current document in the same

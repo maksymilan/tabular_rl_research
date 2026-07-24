@@ -10,8 +10,8 @@
   contracts. `denotation.py` owns the named result-comparison registry independently of candidate
   generation; `candidate_selection.py` owns optional multi-candidate selection independently of
   correctness scoring.
-- `src/rl/`: task loading, tool environment, terminal reward, process credit, policy objective, and
-  the supported Accelerate backend.
+- `src/rl/`: task loading, tool environment, hidden target support, terminal reward, process credit,
+  SFT-index reward audits, policy objective, and the supported Accelerate backend.
 - `experiment_dashboard/`: local inspection UI; it is not part of training semantics.
 
 ## Shared ownership

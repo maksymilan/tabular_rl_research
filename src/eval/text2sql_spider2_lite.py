@@ -61,7 +61,7 @@ def run_one(
     base_url: str,
     model: str,
     max_tokens: int,
-    denotation_comparison: str = "strict-multiset",
+    denotation_comparison: str = "bird-set",
 ) -> dict:
     started = time.time()
     h = Harness(task["db_path"])

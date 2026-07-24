@@ -62,6 +62,18 @@ class FilterSftByTokenAuditTest(unittest.TestCase):
                         "feedback_recovery": False,
                     },
                 },
+                {
+                    "system": "system",
+                    "conversations": [
+                        {"from": "human", "value": "fully rejected episode"},
+                        {"from": "gpt", "value": "overlong action"},
+                    ],
+                    "metadata": {
+                        "record_id": "episode_3_step_1",
+                        "source_episode_id": "episode_3",
+                        "feedback_recovery": False,
+                    },
+                },
             ]
             indexes = [
                 {
@@ -72,7 +84,7 @@ class FilterSftByTokenAuditTest(unittest.TestCase):
                 for row in records
             ]
             audit = {
-                "records": 3,
+                "records": 4,
                 "model_path": "model",
                 "template": "qwen",
                 "cutoff_len": 6400,
@@ -85,7 +97,15 @@ class FilterSftByTokenAuditTest(unittest.TestCase):
                         "current_source_tokens_kept": 10,
                         "history_pairs_original": 1,
                         "first_pair_complete": False,
-                    }
+                    },
+                    {
+                        "record_id": "episode_3_step_1",
+                        "target_status": "complete",
+                        "current_source_tokens_original": 10,
+                        "current_source_tokens_kept": 10,
+                        "history_pairs_original": 1,
+                        "first_pair_complete": False,
+                    },
                 ],
             }
             write_jsonl(records_path, records)
@@ -118,8 +138,10 @@ class FilterSftByTokenAuditTest(unittest.TestCase):
                 [row["record_id"] for row in kept_indexes],
             )
             self.assertEqual(2, manifest["kept_records"])
-            self.assertEqual(1, manifest["dropped_records"])
-            self.assertEqual(1, manifest["episodes_with_dropped_records"])
+            self.assertEqual(2, manifest["dropped_records"])
+            self.assertEqual(2, manifest["episodes_with_dropped_records"])
+            self.assertEqual(3, manifest["source_episodes"])
+            self.assertEqual(2, manifest["contributing_episodes"])
             self.assertEqual(1, manifest["complete_episodes"])
             self.assertEqual(1, manifest["records_from_complete_episodes"])
             self.assertIsNone(manifest["selection_policy"]["reasoning_word_limit"])

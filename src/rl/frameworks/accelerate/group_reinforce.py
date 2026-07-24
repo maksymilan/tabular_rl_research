@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Single-GPU QLoRA group-REINFORCE baseline for interactive table tools.
 
-This deliberately small trainer is the hardware-compatible baseline for the two non-P2P RTX 3090s.
-For each question it samples a group of complete tool episodes, receives only terminal 0/1 execution
-rewards, normalizes rewards inside the group, and updates LoRA weights with REINFORCE.  It is a
-GRPO-style estimator without PPO clipping, KL shaping, process reward, or vLLM/FSDP dependencies.
+This trainer supports two controlled conditions over the same causal rollout loop:
+
+* result-only: terminal 0/1 group-relative REINFORCE;
+* process: harness-replayed per-turn rewards plus a sampled forward-KL penalty to a frozen copy of
+  the initialization adapter.
+
+Neither condition uses a learned reward/value model or token-level authored-credit heuristic.
 """
 from __future__ import annotations
 
@@ -28,7 +31,14 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path[:0] = [str(ROOT / "src" / "rl"), str(ROOT / "src" / "eval"), str(ROOT / "src" / "harness"), str(ROOT / "src" / "sft")]
 
 from tool_environment import ToolUseEnv  # noqa: E402
-from task_loader import load_result_only_task_records  # noqa: E402
+from task_loader import load_rl_task_records  # noqa: E402
+from terminal_reward import terminal_result_reward  # noqa: E402
+from external_failure_adapter import normalize_failure_record  # noqa: E402
+from process_credit import (  # noqa: E402
+    ProcessRewardConfig,
+    score_rollout_trajectory,
+)
+from process_objective import sampled_forward_kl  # noqa: E402
 
 
 @dataclass
@@ -38,6 +48,16 @@ class Sample:
     failure_type: str | None
     turns: list[tuple[list[int], list[int]]]
     audit_record: dict[str, Any]
+    step_rewards: list[float] | None = None
+    process_update: bool = True
+
+
+def activate_adapter(model, adapter_name: str) -> None:
+    """Switch adapters while keeping the SFT reference parameters explicitly frozen."""
+    model.set_adapter(adapter_name)
+    for name, parameter in model.named_parameters():
+        if ".sft_reference." in name:
+            parameter.requires_grad = False
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,10 +76,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-turns", choices=("all", "last"), default="all",
                         help="assistant turns receiving REINFORCE loss; use last only for an explicit speed ablation")
     parser.add_argument("--learning-rate", type=float, default=5e-6)
+    parser.add_argument("--reward-mode", choices=("result-only", "process"), default="result-only")
+    parser.add_argument("--process-reward-config", type=Path)
+    parser.add_argument("--kl-beta", type=float, default=0.0)
+    parser.add_argument(
+        "--denotation-comparison",
+        choices=("bird-set",),
+        default="bird-set",
+    )
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--max-context-tokens", type=int, default=8192)
-    parser.add_argument("--context-mode", choices=("state-only", "rolling-legal-history"),
+    parser.add_argument("--context-mode", choices=("rolling-legal-history",),
                         default="rolling-legal-history")
     parser.add_argument("--history-turns", type=int, default=4)
     parser.add_argument("--temperature", type=float, default=0.7)
@@ -92,6 +120,13 @@ def load_model(args: argparse.Namespace, accelerator: Accelerator):
     model.config.use_cache = False
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     model = PeftModel.from_pretrained(model, args.adapter_path, is_trainable=True)
+    if args.kl_beta > 0:
+        model.load_adapter(
+            args.adapter_path,
+            adapter_name="sft_reference",
+            is_trainable=False,
+        )
+        activate_adapter(model, "default")
     model.gradient_checkpointing_enable()
     trainable = [param for param in model.parameters() if param.requires_grad]
     if not trainable:
@@ -99,6 +134,17 @@ def load_model(args: argparse.Namespace, accelerator: Accelerator):
     # LoRA has few trainable parameters, but paged 8-bit state keeps the long-context margin on a
     # 24GB card available for activations rather than reserving it for optimizer tensors.
     return model, tokenizer, bnb.optim.PagedAdamW8bit(trainable, lr=args.learning_rate)
+
+
+def load_process_reward_config(path: Path | None) -> ProcessRewardConfig:
+    if path is None:
+        return ProcessRewardConfig()
+    values = {
+        key: value
+        for key, value in json.loads(path.read_text(encoding="utf-8")).items()
+        if not key.startswith("_")
+    }
+    return ProcessRewardConfig(**values)
 
 
 def render_prompt(tokenizer, messages: list[dict[str, str]], device: torch.device | None = None) -> list[int]:
@@ -219,7 +265,13 @@ def episode_example(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 @torch.inference_mode()
-def sample_group(model, tokenizer, metadata: dict[str, Any], args: argparse.Namespace) -> list[Sample]:
+def sample_group(
+    model,
+    tokenizer,
+    metadata: dict[str, Any],
+    args: argparse.Namespace,
+    process_config: ProcessRewardConfig | None = None,
+) -> list[Sample]:
     example = episode_example(metadata)
     device = next(model.parameters()).device
     envs = [
@@ -229,7 +281,8 @@ def sample_group(model, tokenizer, metadata: dict[str, Any], args: argparse.Name
             max_steps=args.max_steps,
             context_mode=args.context_mode,
             history_turns=args.history_turns,
-            compact_observations=False,
+            compact_observations=True,
+            denotation_comparison=args.denotation_comparison,
         )
         for _ in range(args.group_size)
     ]
@@ -265,15 +318,61 @@ def sample_group(model, tokenizer, metadata: dict[str, Any], args: argparse.Name
                 env.apply_model_output(text)
 
     samples = []
-    for env, sample_turns in zip(envs, turns, strict=True):
+    for sample_index, (env, sample_turns) in enumerate(zip(envs, turns, strict=True)):
         record = env.record()
+        record["trajectory_id"] = (
+            f"rl_{metadata['example_index']}_sample_{sample_index}"
+        )
+        step_rewards = None
+        process_update = record["failure_type"] != "generation_oom"
+        scalar_reward = terminal_result_reward(record["correct"])
+        if not process_update:
+            record["optimization_exclusion"] = "nonsemantic_runtime_failure"
+        if args.reward_mode == "process":
+            normalized, exclusion = normalize_failure_record(
+                record,
+                {
+                    "example_id": record["trajectory_id"],
+                    "dataset": "bird-sql",
+                    "split": "train",
+                    "db_id": metadata["db_id"],
+                    "db_path": metadata.get("db_path"),
+                    "question": metadata["question"],
+                    "gold_sql": metadata["gold_sql"],
+                    "external_knowledge": metadata.get("external_knowledge"),
+                    "denotation_comparison": args.denotation_comparison,
+                },
+            )
+            if normalized is None:
+                step_rewards = []
+                process_update = False
+                scalar_reward = 0.0
+                record["process_reward_exclusion"] = exclusion
+            else:
+                reward = score_rollout_trajectory(
+                    normalized,
+                    process_config,
+                    denotation_comparison=args.denotation_comparison,
+                )
+                step_rewards = [step.reward for step in reward.steps]
+                if len(step_rewards) != len(sample_turns):
+                    raise RuntimeError(
+                        "generated turns and replayed process steps do not align: "
+                        f"{len(sample_turns)} != {len(step_rewards)}"
+                    )
+                process_update = reward.process_update
+                scalar_reward = reward.total_reward
+                record["process_reward"] = reward.to_dict()
         samples.append(Sample(
-            reward=1.0 if record["correct"] else 0.0,
+            reward=scalar_reward,
             correct=bool(record["correct"]),
             failure_type=record["failure_type"],
             turns=sample_turns,
             audit_record=record,
+            step_rewards=step_rewards,
+            process_update=process_update,
         ))
+        env.close()
     return samples
 
 
@@ -299,7 +398,12 @@ def _model_logits_for_response(model, input_ids: torch.Tensor, attention_mask: t
 
 def response_logprobs_batched(model, tokenizer, turns: list[tuple[list[int], list[int]]],
                               device: torch.device) -> list[torch.Tensor]:
-    """Mean log-probabilities for assistant turns, padded into one training microbatch."""
+    """Full assistant-turn log-probabilities, padded into one training microbatch.
+
+    One process reward applies to the complete ``think + tool_call`` action.  Summing token
+    log-probabilities implements ``log pi(a_t | s_t)``; averaging here would silently divide each
+    turn's policy gradient by its own token count and would no longer match the stated objective.
+    """
     max_response_len = max(len(response_ids) for _, response_ids in turns)
     sequences = [prompt_ids + response_ids[:-1] for prompt_ids, response_ids in turns]
     max_sequence_len = max(len(seq) for seq in sequences)
@@ -323,7 +427,7 @@ def response_logprobs_batched(model, tokenizer, turns: list[tuple[list[int], lis
         reduction="none",
     )
     mask = targets.ne(-100)
-    return [-(token_losses[index][mask[index]].mean()) for index in range(len(turns))]
+    return [-(token_losses[index][mask[index]].sum()) for index in range(len(turns))]
 
 
 def trainable_turns(sample: Sample, mode: str) -> list[tuple[list[int], list[int]]]:
@@ -333,90 +437,205 @@ def trainable_turns(sample: Sample, mode: str) -> list[tuple[list[int], list[int
     return turns[-1:] if turns else []
 
 
-def group_loss(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int) -> tuple[torch.Tensor | None, list[float]]:
-    rewards = torch.tensor([sample.reward for sample in samples], dtype=torch.float32)
-    if rewards.std(unbiased=False).item() == 0.0:
-        return None, [0.0] * len(samples)
-    advantages = ((rewards - rewards.mean()) / (rewards.std(unbiased=False) + 1e-6)).tolist()
-    device = next(model.parameters()).device
-    entries: list[tuple[int, tuple[list[int], list[int]]]] = []
-    for sample_index, sample in enumerate(samples):
-        entries.extend((sample_index, turn) for turn in trainable_turns(sample, "all"))
-    if not entries:
-        return None, advantages
-
-    per_sample_logps: list[list[torch.Tensor]] = [[] for _ in samples]
-    micro_batch_size = max(1, int(logprob_micro_batch_size))
-    for offset in range(0, len(entries), micro_batch_size):
-        chunk = entries[offset: offset + micro_batch_size]
-        logps = response_logprobs_batched(model, tokenizer, [turn for _, turn in chunk], device)
-        for (sample_index, _), logp in zip(chunk, logps, strict=True):
-            per_sample_logps[sample_index].append(logp)
-
-    terms = []
-    for sample_logps, advantage in zip(per_sample_logps, advantages, strict=True):
-        if sample_logps:
-            terms.append(-float(advantage) * torch.stack(sample_logps).mean())
-    return (torch.stack(terms).mean() if terms else None), advantages
-
-
 def backward_group_loss(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int, train_turns: str,
-                        accelerator: Accelerator) -> tuple[float | None, list[float]]:
+                        kl_beta: float,
+                        accelerator: Accelerator) -> tuple[float | None, list[float], float, int]:
     """Backpropagate the group loss incrementally so long episodes do not retain every graph."""
-    rewards = torch.tensor([sample.reward for sample in samples], dtype=torch.float32)
-    if rewards.std(unbiased=False).item() == 0.0:
-        return None, [0.0] * len(samples)
-    advantages = ((rewards - rewards.mean()) / (rewards.std(unbiased=False) + 1e-6)).tolist()
+    eligible_indices = [
+        index for index, sample in enumerate(samples) if sample.process_update
+    ]
+    if not eligible_indices:
+        return None, [0.0] * len(samples), 0.0, 0
+    rewards = torch.tensor(
+        [samples[index].reward for index in eligible_indices],
+        dtype=torch.float32,
+    )
+    reward_std = rewards.std(unbiased=False).item()
+    advantages = [0.0] * len(samples)
+    if reward_std == 0.0:
+        if kl_beta == 0:
+            return None, advantages, 0.0, 0
+    else:
+        for sample_index, advantage in zip(
+            eligible_indices,
+            ((rewards - rewards.mean()) / (reward_std + 1e-6)).tolist(),
+            strict=True,
+        ):
+            advantages[sample_index] = advantage
     device = next(model.parameters()).device
     entries: list[tuple[int, tuple[list[int], list[int]]]] = []
-    turn_counts = []
-    for sample_index, sample in enumerate(samples):
+    for sample_index in eligible_indices:
+        sample = samples[sample_index]
         turns = trainable_turns(sample, train_turns)
-        turn_counts.append(len(turns))
         entries.extend((sample_index, turn) for turn in turns)
     if not entries:
-        return None, advantages
+        return None, advantages, 0.0, 0
 
     loss_value = 0.0
+    kl_value = 0.0
     micro_batch_size = max(1, int(logprob_micro_batch_size))
     for offset in range(0, len(entries), micro_batch_size):
         chunk = entries[offset: offset + micro_batch_size]
-        logps = response_logprobs_batched(model, tokenizer, [turn for _, turn in chunk], device)
+        turns = [turn for _, turn in chunk]
+        reference_logps = None
+        if kl_beta > 0:
+            activate_adapter(model, "sft_reference")
+            with torch.no_grad():
+                reference_logps = response_logprobs_batched(model, tokenizer, turns, device)
+            activate_adapter(model, "default")
+        logps = response_logprobs_batched(model, tokenizer, turns, device)
         terms = []
-        for (sample_index, _), logp in zip(chunk, logps, strict=True):
-            # Original objective: mean over samples of advantage * mean turn log-probability.
-            weight = -float(advantages[sample_index]) / (len(samples) * max(1, turn_counts[sample_index]))
-            terms.append(weight * logp)
+        for index, ((sample_index, _), logp) in enumerate(zip(chunk, logps, strict=True)):
+            term = -float(advantages[sample_index]) * logp
+            if reference_logps is not None:
+                kl = sampled_forward_kl(logp, reference_logps[index])
+                kl_value += float(kl.detach().cpu()) / len(entries)
+                term = term + float(kl_beta) * kl
+            terms.append(term / len(entries))
         micro_loss = torch.stack(terms).sum()
         loss_value += float(micro_loss.detach().cpu())
         accelerator.backward(micro_loss)
-    return loss_value, advantages
+    return loss_value, advantages, kl_value, len(entries)
 
 
 def backward_group_loss_with_retry(model, tokenizer, samples: list[Sample], logprob_micro_batch_size: int,
                                    train_turns: str,
+                                   kl_beta: float,
                                    accelerator: Accelerator, optimizer):
     """Retry the gradient path with smaller logprob microbatches after OOM."""
     micro_batch_size = max(1, int(logprob_micro_batch_size))
     while True:
         optimizer.zero_grad(set_to_none=True)
         try:
-            loss_value, advantages = backward_group_loss(
-                model, tokenizer, samples, micro_batch_size, train_turns, accelerator
+            loss_value, advantages, sampled_kl, trained_turns = backward_group_loss(
+                model,
+                tokenizer,
+                samples,
+                micro_batch_size,
+                train_turns,
+                kl_beta,
+                accelerator,
             )
-            return loss_value, advantages, micro_batch_size, None
+            return (
+                loss_value,
+                advantages,
+                sampled_kl,
+                trained_turns,
+                micro_batch_size,
+                None,
+            )
         except torch.OutOfMemoryError:
             optimizer.zero_grad(set_to_none=True)
             torch.cuda.empty_cache()
             if micro_batch_size == 1:
-                return None, [0.0] * len(samples), micro_batch_size, "gradient_oom"
+                return (
+                    None,
+                    [0.0] * len(samples),
+                    0.0,
+                    0,
+                    micro_batch_size,
+                    "gradient_oom",
+                )
+            micro_batch_size = max(1, micro_batch_size // 2)
+
+
+def process_entries(
+    samples: list[Sample],
+    train_turns: str,
+) -> list[tuple[tuple[list[int], list[int]], float]]:
+    entries: list[tuple[tuple[list[int], list[int]], float]] = []
+    for sample in samples:
+        if not sample.process_update:
+            continue
+        rewards = sample.step_rewards or []
+        if len(sample.turns) != len(rewards):
+            raise ValueError("process turn/reward lengths must align")
+        paired = list(zip(sample.turns, rewards, strict=True))
+        if train_turns == "last":
+            paired = paired[-1:]
+        entries.extend(paired)
+    return entries
+
+
+def backward_process_loss(
+    model,
+    tokenizer,
+    samples: list[Sample],
+    logprob_micro_batch_size: int,
+    train_turns: str,
+    kl_beta: float,
+    accelerator: Accelerator,
+) -> tuple[float | None, float, int]:
+    """Backpropagate ``-(1/M) sum r_t log pi + beta/M sum KL_t`` incrementally."""
+    entries = process_entries(samples, train_turns)
+    if not entries:
+        return None, 0.0, 0
+    device = next(model.parameters()).device
+    micro_batch_size = max(1, int(logprob_micro_batch_size))
+    loss_value = 0.0
+    kl_value = 0.0
+    for offset in range(0, len(entries), micro_batch_size):
+        chunk = entries[offset: offset + micro_batch_size]
+        turns = [turn for turn, _ in chunk]
+        reference_logps = None
+        if kl_beta > 0:
+            activate_adapter(model, "sft_reference")
+            with torch.no_grad():
+                reference_logps = response_logprobs_batched(model, tokenizer, turns, device)
+            activate_adapter(model, "default")
+        current_logps = response_logprobs_batched(model, tokenizer, turns, device)
+        terms = []
+        for index, (current_logp, (_, reward)) in enumerate(zip(current_logps, chunk, strict=True)):
+            term = -float(reward) * current_logp
+            if reference_logps is not None:
+                kl = sampled_forward_kl(current_logp, reference_logps[index])
+                kl_value += float(kl.detach().cpu()) / len(entries)
+                term = term + float(kl_beta) * kl
+            terms.append(term / len(entries))
+        micro_loss = torch.stack(terms).sum()
+        loss_value += float(micro_loss.detach().cpu())
+        accelerator.backward(micro_loss)
+    return loss_value, kl_value, len(entries)
+
+
+def backward_process_loss_with_retry(
+    model,
+    tokenizer,
+    samples: list[Sample],
+    logprob_micro_batch_size: int,
+    train_turns: str,
+    kl_beta: float,
+    accelerator: Accelerator,
+    optimizer,
+):
+    micro_batch_size = max(1, int(logprob_micro_batch_size))
+    while True:
+        optimizer.zero_grad(set_to_none=True)
+        try:
+            loss_value, sampled_kl, trained_turns = backward_process_loss(
+                model,
+                tokenizer,
+                samples,
+                micro_batch_size,
+                train_turns,
+                kl_beta,
+                accelerator,
+            )
+            return loss_value, sampled_kl, trained_turns, micro_batch_size, None
+        except torch.OutOfMemoryError:
+            activate_adapter(model, "default")
+            optimizer.zero_grad(set_to_none=True)
+            torch.cuda.empty_cache()
+            if micro_batch_size == 1:
+                return None, 0.0, 0, micro_batch_size, "gradient_oom"
             micro_batch_size = max(1, micro_batch_size // 2)
 
 
 def save_adapter(model, output_dir: Path, step: int) -> None:
     target = output_dir / f"checkpoint-{step}"
     target.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(target)
+    activate_adapter(model, "default")
+    model.save_pretrained(target, selected_adapters=["default"])
 
 
 def main() -> int:
@@ -425,18 +644,27 @@ def main() -> int:
         raise SystemExit("--group-size must be at least 2 for a group-relative baseline")
     if args.rollout_batch_size < 0:
         raise SystemExit("--rollout-batch-size must be non-negative")
+    if args.kl_beta < 0:
+        raise SystemExit("--kl-beta must be non-negative")
     accelerator = Accelerator()
     if accelerator.num_processes != 1:
         raise SystemExit("this baseline is intentionally single-GPU; launch without accelerate multi-process")
     random.seed(args.seed)
     torch.manual_seed(args.seed)
-    records = load_result_only_task_records(
+    records = load_rl_task_records(
         ROOT, split="train", selection=args.selection, examples_json=args.examples_json,
         limit=args.limit, seed=args.seed,
     )
     if not records:
         raise SystemExit("no training records selected")
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    process_config = (
+        load_process_reward_config(args.process_reward_config)
+        if args.reward_mode == "process"
+        else None
+    )
+    if process_config is not None:
+        process_config.validate()
     model, tokenizer, optimizer = load_model(args, accelerator)
     log_path = args.output_dir / "metrics.jsonl"
     rollout_log_path = args.output_dir / "rollouts.jsonl"
@@ -444,13 +672,54 @@ def main() -> int:
         step_started = time.time()
         record = records[(step - 1) % len(records)]
         rollout_started = time.time()
-        samples = sample_group(model, tokenizer, record["environment"], args)
+        samples = sample_group(
+            model,
+            tokenizer,
+            record["environment"],
+            args,
+            process_config,
+        )
         rollout_seconds = time.time() - rollout_started
         model.train()
         optimization_error = None
-        loss_value, advantages, used_logprob_micro_batch_size, optimization_error = backward_group_loss_with_retry(
-            model, tokenizer, samples, args.logprob_micro_batch_size, args.train_turns, accelerator, optimizer
-        )
+        sampled_kl = 0.0
+        trained_turns = 0
+        if args.reward_mode == "result-only":
+            (
+                loss_value,
+                advantages,
+                sampled_kl,
+                trained_turns,
+                used_logprob_micro_batch_size,
+                optimization_error,
+            ) = backward_group_loss_with_retry(
+                model,
+                tokenizer,
+                samples,
+                args.logprob_micro_batch_size,
+                args.train_turns,
+                args.kl_beta,
+                accelerator,
+                optimizer,
+            )
+        else:
+            advantages = [0.0] * len(samples)
+            (
+                loss_value,
+                sampled_kl,
+                trained_turns,
+                used_logprob_micro_batch_size,
+                optimization_error,
+            ) = backward_process_loss_with_retry(
+                model,
+                tokenizer,
+                samples,
+                args.logprob_micro_batch_size,
+                args.train_turns,
+                args.kl_beta,
+                accelerator,
+                optimizer,
+            )
         updated = loss_value is not None
         if updated:
             try:
@@ -471,7 +740,17 @@ def main() -> int:
             "correct_count": sum(sample.correct for sample in samples),
             "failure_types": [sample.failure_type for sample in samples],
             "sample_turns": [len(sample.turns) for sample in samples],
+            "step_rewards": [sample.step_rewards for sample in samples],
+            "process_update": [sample.process_update for sample in samples],
+            "reward_mode": args.reward_mode,
+            "denotation_comparison": args.denotation_comparison,
+            "kl_beta": args.kl_beta,
+            "sampled_kl": sampled_kl,
+            "trained_turns": trained_turns,
             "train_turns": args.train_turns,
+            "context_mode": args.context_mode,
+            "history_turns": args.history_turns,
+            "rolling_observation_style": "resident",
             "loss": loss_value,
             "updated": updated,
             "optimization_error": optimization_error,

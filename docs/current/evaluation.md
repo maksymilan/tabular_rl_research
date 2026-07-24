@@ -5,8 +5,10 @@ database snapshot, external knowledge, generated-query deadline, and denotation 
 must name its metric; strict multiset and BIRD reference set equality are not interchangeable.
 
 For released BIRD EX reporting, `bird-set` matches the reference scorer by comparing sets of rows,
-ignoring row order and duplicate multiplicity. Training replay, grounding gates, and reward audits
-retain normalized strict-multiset comparison unless an experiment explicitly declares otherwise.
+ignoring row order and duplicate multiplicity. All current/new evaluation, SFT replay, grounding
+gates, and RL reward audits use this same `bird-set` contract. `strict-multiset` remains available
+only through low-level compatibility code for immutable historical artifacts; active launchers
+accept only `bird-set`.
 Arctic-Text2SQL-R1-7B's headline BIRD-dev result uses greedy decoding (`n=1`,
 `temperature=0`) with this `bird-set` contract. The existing direct-SQL greedy launcher uses those
 decoding and denotation settings; set the generated-query timeout to 10 seconds when matching the

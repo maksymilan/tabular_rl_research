@@ -36,6 +36,11 @@ def main() -> int:
     parser.add_argument("--penalty-cap", type=float, default=0.8)
     parser.add_argument("--config-json", type=Path, default=None)
     parser.add_argument(
+        "--denotation-comparison",
+        choices=("bird-set",),
+        default="bird-set",
+    )
+    parser.add_argument(
         "--grounding-audit-approved",
         action="store_true",
         help="mark a separately completed manual precision audit; structural coverage alone is insufficient",
@@ -61,7 +66,11 @@ def main() -> int:
     results = []
     with scored_path.open("w", encoding="utf-8") as sink:
         for index, trajectory in enumerate(rows, 1):
-            result = score_verified_trajectory(trajectory, config)
+            result = score_verified_trajectory(
+                trajectory,
+                config,
+                denotation_comparison=args.denotation_comparison,
+            )
             results.append(result)
             sink.write(json.dumps(result.to_dict(), ensure_ascii=False) + "\n")
             if not args.quiet:
@@ -104,6 +113,10 @@ def main() -> int:
                 "new_used_evidence",
                 "search_reduction",
                 "feedback_response",
+                "target_table_delta",
+                "target_column_delta",
+                "target_row_delta",
+                "target_potential_delta",
                 "feedback_error_before",
                 "feedback_empty_before",
                 "action_changed_after_empty",
@@ -112,6 +125,10 @@ def main() -> int:
                 "repeat_without_feedback",
                 "legal_no_state_change",
                 "ignored_feedback",
+                "answer_format",
+                "unsupported_guess",
+                "empty_result_penalty",
+                "verified_negative_evidence",
                 "failure_responsibility",
             ):
                 feature_hits[name] += float(step.features.get(name, 0)) > 0
@@ -148,6 +165,7 @@ def main() -> int:
         "expected_label": args.expected_label,
         "scored_output": str(scored_path.resolve()),
         "config": config.__dict__,
+        "denotation_comparison": args.denotation_comparison,
         "trajectories": len(results),
         "replay_correct": sum(result.correct for result in results),
         "grounding_methods": dict(sorted(grounding.items())),
@@ -159,6 +177,7 @@ def main() -> int:
             deterministic_complete / len(results) if results else 0.0
         ),
         "fallback_terminal_credit": sum(result.fallback_terminal_credit for result in results),
+        "process_update": sum(result.process_update for result in results),
         "ungrounded_nonfallback": ungrounded_nonfallback,
         "reward": {
             "min": min(rewards) if rewards else 0.0,
@@ -211,8 +230,11 @@ def main() -> int:
         "invariants": {
             "all_replay_correct": all(result.correct for result in results),
             "outcomes_match_expectation": outcomes_match_expectation,
-            "all_totals_equal_C_minus_P": all(
-                abs(result.total_reward - (float(result.correct) - result.capped_penalty)) < 1e-8
+            "all_totals_match_reward_identity": all(
+                abs(
+                    result.total_reward
+                    - float(result.diagnostics.get("expected_total_reward"))
+                ) < 1e-8
                 for result in results
             ),
             "all_correct_totals_positive": all(
@@ -230,8 +252,13 @@ def main() -> int:
     }
     summary_path = args.output_dir / "summary.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
-    required = ("outcomes_match_expectation", "all_totals_equal_C_minus_P", "all_correct_totals_positive")
+    if not args.quiet:
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+    required = (
+        "outcomes_match_expectation",
+        "all_totals_match_reward_identity",
+        "all_correct_totals_positive",
+    )
     return 0 if all(summary["invariants"][key] for key in required) else 1
 
 

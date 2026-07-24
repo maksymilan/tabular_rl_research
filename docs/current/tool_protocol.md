@@ -28,28 +28,24 @@ anything under `docs/archive/`.
 Use `execution_contract.md` for the single current/new-episode contract. This file is the
 protocol index; historical v2h and older documents are replay references only.
 
-Before every assistant turn, the model sees a state-only context rebuilt by
-`src/sft/protocol.py::model_context_messages`:
+Before every assistant turn, the active SFT/evaluation/RL contract is rendered by
+`src/sft/protocol.py::rolling_legal_history_messages` with `history_turns=4`:
 
 ```text
 system: protocol/system prompt
 user: DATASET OVERVIEW + QUESTION + optional EXTERNAL KNOWLEDGE
-      + CURRENT ENVIRONMENT STATE + optional LAST TOOL ERROR
+[up to four successful assistant action + harness observation pairs]
+user: latest observation + CURRENT ENVIRONMENT STATE + optional LAST TOOL ERROR
 assistant: <think>...</think>
            <tool_call>{"tool": "...", "arguments": {...}}</tool_call>
 ```
 
 The environment state is harness-managed resident context. It groups the current task plan and
-known table context by source table or derived handle. It is NOT a historical tool-observation
-transcript. Online rollout/RL constructs each model input as:
-
-```
-system + (catalog + question + optional evidence + current state + optional last error)
-```
-
-Old tool observations may exist in debug artifacts, but must never be appended to model input. A
-single-step SFT record uses the same renderer and contains exactly one human/gpt pair; the human
-message is the state before the supervised call and never includes that call's output.
+known table context by source table or derived handle. Legal history is bounded and is not the
+source of factual provenance; harness state and references remain authoritative. Rejected
+assistant text is never appended, and its structured error appears only in the current user
+message. A rolling SFT record masks prior assistant turns and applies loss only to the final
+supervised assistant action; the final input never includes that action's output.
 
 Every new model turn is generated causally inside a real model↔harness episode. The model sees only
 the legal prefix represented by current resident state and the latest environment feedback; it
@@ -278,7 +274,7 @@ They should not be copied into model tool arguments.
 
 Recoverable model errors stay inside the same episode. The harness preserves the resident factual
 state, spends one action from the shared `max_steps` budget, and supplies the next turn with the
-normal state-only renderer plus structured `LAST TOOL ERROR`:
+bounded rolling renderer plus structured `LAST TOOL ERROR` in the current user message:
 
 ```json
 {"step_id":"step_4","status":"error","error":{"type":"argument_validation_error","message":"..."}}

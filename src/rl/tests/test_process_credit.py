@@ -14,14 +14,24 @@ sys.path.insert(0, str(RL_DIR))
 from process_credit import (  # noqa: E402
     ProcessRewardConfig,
     StepFeature,
-    _task_text_supports_literal,
+    _expression_columns,
+    _expression_predicate_literals,
     allocate_process_rewards,
     normalized_search_reduction,
     replay_step_features,
 )
-from process_objective import process_policy_loss  # noqa: E402
+from process_objective import process_policy_loss, sampled_forward_kl  # noqa: E402
 from provenance import build_grounding_references, build_references  # noqa: E402
 from review_grounding_edges_external import build_review_package  # noqa: E402
+from target_support import (  # noqa: E402
+    TargetSupport,
+    build_target_support,
+    normalized_row_unit,
+    observed_target_row_units,
+)
+from terminal_reward import terminal_result_reward  # noqa: E402
+from task_support import task_text_supports_literal  # noqa: E402
+from tool_environment import ToolUseEnv  # noqa: E402
 
 
 def feature(index: int, **kwargs) -> StepFeature:
@@ -35,6 +45,93 @@ def feature(index: int, **kwargs) -> StepFeature:
 
 
 class ProcessRewardTests(unittest.TestCase):
+    def test_sql_expression_support_extracts_sources_and_domain_predicates(self):
+        expression = (
+            'CASE WHEN "SalesPerson.SalesQuota" > 300000 THEN 1 ELSE 0 END'
+        )
+        self.assertEqual(
+            _expression_columns(expression),
+            {"SalesPerson.SalesQuota"},
+        )
+        self.assertEqual(
+            _expression_predicate_literals(expression),
+            [("SalesPerson.SalesQuota", 300000)],
+        )
+
+    def test_visible_literal_support_accepts_canonical_derivations_only(self):
+        text = (
+            "Born after 1970/1/1; during July, 2014; in year 2003; "
+            "no more than one car; puree of split peas; Basketball Men''s."
+        )
+        self.assertTrue(task_text_supports_literal("1970-01-01", text))
+        self.assertTrue(task_text_supports_literal("2014-07-01", text))
+        self.assertTrue(task_text_supports_literal("2014-07-31", text))
+        self.assertTrue(task_text_supports_literal("2003-12-31", text))
+        self.assertTrue(task_text_supports_literal(1, text))
+        self.assertTrue(task_text_supports_literal("%puree%split%peas%", text))
+        self.assertTrue(task_text_supports_literal("Basketball Men's", text))
+        self.assertFalse(task_text_supports_literal(559, text))
+        self.assertFalse(task_text_supports_literal("C001035", text))
+
+    def test_result_only_control_is_exactly_binary(self):
+        self.assertEqual(terminal_result_reward(True), 1.0)
+        self.assertEqual(terminal_result_reward(False), 0.0)
+
+    def test_target_row_units_use_bird_raw_cell_equality(self):
+        self.assertNotEqual(normalized_row_unit(["1"]), normalized_row_unit([1]))
+        self.assertEqual(normalized_row_unit([1]), normalized_row_unit([1.0]))
+
+    def test_read_observation_discovers_only_rows_actually_exposed(self):
+        target = TargetSupport(
+            tables=frozenset({"items"}),
+            columns=frozenset({"items.name"}),
+            row_units=frozenset({("a",), ("b",)}),
+            output_columns=("name",),
+            sql_parse_complete=True,
+            rows_complete=True,
+        )
+        self.assertEqual(
+            observed_target_row_units(["id", "name"], [[1, "a"]], target),
+            {("a",)},
+        )
+
+    def test_target_support_excludes_cte_names_from_physical_tables(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite") as tmp:
+            connection = sqlite3.connect(tmp.name)
+            connection.execute("CREATE TABLE items(id INTEGER, value TEXT)")
+            connection.execute("INSERT INTO items VALUES (1, 'x')")
+            connection.commit()
+            connection.close()
+            from executor import Harness
+
+            harness = Harness(tmp.name)
+            try:
+                target = build_target_support(
+                    harness,
+                    "WITH selected AS (SELECT id, value FROM items) "
+                    "SELECT value FROM selected",
+                )
+            finally:
+                harness.conn.close()
+        self.assertEqual(target.tables, frozenset({"items"}))
+        self.assertNotIn("selected", target.tables)
+        self.assertEqual(target.columns, frozenset({"items.id", "items.value"}))
+
+    def test_active_rl_environment_rejects_historical_denotation_metric(self):
+        with self.assertRaisesRegex(ValueError, "require.*bird-set"):
+            ToolUseEnv(
+                {
+                    "db_path": ":memory:",
+                    "question": "x",
+                    "gold_sql": "SELECT 1",
+                },
+                denotation_comparison="strict-multiset",
+            )
+
+    def test_process_reward_rejects_historical_denotation_metric(self):
+        with self.assertRaisesRegex(ValueError, "bird-set"):
+            replay_step_features({}, denotation_comparison="strict-multiset")
+
     def test_version5_join_emits_one_data_edge_per_relation_input(self):
         args = {
             "base": "orders",
@@ -243,10 +340,12 @@ class ProcessRewardTests(unittest.TestCase):
             ["step_1", "step_2", "step_3", "step_4", "step_5"],
         )
         self.assertFalse(result.fallback_terminal_credit)
-        self.assertEqual(result.steps[-1].reward, 0.0)
+        self.assertEqual(result.steps[-1].reward, 0.02)
         self.assertGreater(result.steps[0].reward, 0.0)  # describe_table
         self.assertGreater(result.steps[2].reward, 0.0)  # first read used as a later literal
         self.assertGreater(result.steps[4].reward, 0.0)  # final row observation
+        self.assertTrue(features[2].state_changed)
+        self.assertEqual(features[2].legal_no_state_change, 0.0)
         dependency_roles = {edge["role"] for edge in review_package["dependency_edges"]}
         self.assertIn("automatic_final_table", dependency_roles)
         self.assertTrue(review_package["grounding_edges"])
@@ -358,9 +457,9 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertEqual(refs, [])
 
     def test_numeric_task_literal_uses_token_boundaries(self):
-        self.assertFalse(_task_text_supports_literal(2, "orders placed in 2021"))
-        self.assertTrue(_task_text_supports_literal(2021, "orders placed in 2021"))
-        self.assertTrue(_task_text_supports_literal(392194, "match ID 392194."))
+        self.assertFalse(task_text_supports_literal(2, "orders placed in 2021"))
+        self.assertTrue(task_text_supports_literal(2021, "orders placed in 2021"))
+        self.assertTrue(task_text_supports_literal(392194, "match ID 392194."))
 
     def test_compound_filter_can_link_multiple_prior_row_observations(self):
         history = {
@@ -554,7 +653,7 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertEqual([step.c_positive for step in result.steps], [1.0, 0.0, 0.0])
         self.assertAlmostEqual(result.total_reward, 1.0)
 
-    def test_fallback_distributes_credit_by_environment_effect(self):
+    def test_correct_zero_grounded_signal_is_excluded_without_fallback(self):
         result = allocate_process_rewards(
             "t2",
             [
@@ -563,21 +662,30 @@ class ProcessRewardTests(unittest.TestCase):
             ],
             correct=True,
         )
-        self.assertTrue(result.fallback_terminal_credit)
-        self.assertEqual([step.c_positive for step in result.steps], [0.625, 0.375])
+        self.assertFalse(result.fallback_terminal_credit)
+        self.assertFalse(result.process_update)
+        self.assertEqual([step.c_positive for step in result.steps], [0.0, 0.0])
+        self.assertEqual([step.reward for step in result.steps], [0.0, 0.0])
 
     def test_penalty_cap_preserves_positive_correct_total(self):
         config = ProcessRewardConfig(penalty_cap=0.8, lambda_tool_error=10.0)
         result = allocate_process_rewards(
             "t3",
-            [feature(1, legal_success=False, error_type="execution_error")],
+            [
+                feature(
+                    1,
+                    legal_success=False,
+                    error_type="execution_error",
+                    back_slice=1,
+                )
+            ],
             correct=True,
             config=config,
         )
         self.assertAlmostEqual(result.capped_penalty, 0.8)
         self.assertAlmostEqual(result.total_reward, 0.2)
 
-    def test_failed_trajectory_is_negative_and_conserves_reward(self):
+    def test_failed_trajectory_puts_outcome_penalty_at_terminal_boundary(self):
         result = allocate_process_rewards(
             "t4",
             [
@@ -594,10 +702,12 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertLess(result.total_reward, 0)
         self.assertAlmostEqual(result.total_reward, -0.3)
         self.assertAlmostEqual(result.total_reward, -result.capped_penalty)
-        self.assertTrue(all(step.reward < 0 for step in result.steps))
-        self.assertNotEqual(result.steps[0].reward, result.steps[1].reward)
+        self.assertEqual(result.steps[0].reward, 0.0)
+        self.assertEqual(result.steps[0].p_outcome, 0.0)
+        self.assertAlmostEqual(result.steps[1].reward, -0.3)
+        self.assertAlmostEqual(result.steps[1].p_outcome, 0.3)
 
-    def test_failure_outcome_chain_and_local_error_have_distinct_penalties(self):
+    def test_terminal_failure_and_local_error_remain_step_local(self):
         result = allocate_process_rewards(
             "t4-distributed",
             [
@@ -613,36 +723,33 @@ class ProcessRewardTests(unittest.TestCase):
             correct=False,
         )
         self.assertAlmostEqual(result.total_reward, -0.38)
-        self.assertGreater(result.steps[0].p_outcome, 0)
+        self.assertEqual(result.steps[0].reward, 0.0)
+        self.assertEqual(result.steps[0].p_outcome, 0)
         self.assertEqual(result.steps[1].p_outcome, 0)
         self.assertAlmostEqual(result.steps[1].p_local, 0.08)
-        self.assertGreater(result.steps[2].p_outcome, 0)
-        self.assertEqual(len({step.reward for step in result.steps}), 3)
+        self.assertAlmostEqual(result.steps[1].reward, -0.08)
+        self.assertAlmostEqual(result.steps[2].p_outcome, 0.3)
+        self.assertAlmostEqual(result.steps[2].reward, -0.3)
 
-    def test_v2_config_remains_terminal_only_historical_control(self):
-        config_path = (
-            RL_DIR.parents[1]
-            / "archive"
-            / "experiments"
-            / "rl"
-            / "configs"
-            / "process_reward_v2.json"
-        )
+    def test_active_atomic_config_matches_dataclass_and_reward_bounds(self):
+        config_path = RL_DIR / "configs" / "atomic_process_reward.json"
         values = {
             key: value
             for key, value in json.loads(config_path.read_text(encoding="utf-8")).items()
             if not key.startswith("_")
         }
+        config = ProcessRewardConfig(**values)
+        config.validate()
         result = allocate_process_rewards(
-            "v2-control",
+            "atomic-control",
             [
                 feature(1, attempted_back_slice=1, state_changed=True),
                 feature(2, tool="answer_from_context", is_terminal=True),
             ],
             correct=False,
-            config=ProcessRewardConfig(**values),
+            config=config,
         )
-        self.assertEqual([step.reward for step in result.steps], [0.0, -0.8])
+        self.assertEqual([step.reward for step in result.steps], [0.0, -0.3])
 
     def test_fixed_root_search_reduction_telescopes(self):
         first = normalized_search_reduction(100, 100, 10)
@@ -678,11 +785,24 @@ class ProcessRewardTests(unittest.TestCase):
             episode_step_kls=[[Scalar(0.1), Scalar(0.2)]],
             beta=0.5,
         )
-        self.assertAlmostEqual(loss, 1.9)
+        self.assertAlmostEqual(loss, 0.95)
+
+    def test_process_objective_excludes_correct_zero_signal_episode(self):
+        loss = process_policy_loss(
+            [[-5.0], [-2.0, -1.0]],
+            [[0.0], [0.75, 0.25]],
+            episode_update_mask=[False, True],
+        )
+        self.assertAlmostEqual(loss, 0.875)
 
     def test_positive_beta_requires_frozen_reference_kl(self):
         with self.assertRaisesRegex(ValueError, "frozen SFT-2 reference"):
             process_policy_loss([[-1.0]], [[1.0]], beta=0.1)
+
+    def test_sampled_forward_kl_is_nonnegative_and_zero_at_reference(self):
+        self.assertEqual(sampled_forward_kl(-2.0, -2.0), 0.0)
+        self.assertGreater(sampled_forward_kl(-1.0, -2.0), 0.0)
+        self.assertGreater(sampled_forward_kl(-3.0, -2.0), 0.0)
 
 
 if __name__ == "__main__":

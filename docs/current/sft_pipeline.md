@@ -9,8 +9,8 @@ single-action export checks before entering a mixture.
 The denotation comparison used to admit an episode is stored in
 `rollout_generation.denotation_comparison`, and fresh replay reuses that exact comparison.
 Historical artifacts that predate this field require an explicit replay override; they must never
-be silently replayed under the default `strict-multiset` comparison when their manifest declares
-`bird-set`.
+be silently replayed under a comparison that conflicts with their manifest. The current default
+for every new BIRD episode, replay, grounding gate, and reward audit is `bird-set`.
 
 The current BIRD SFT-2 construction is student-first pass@k. Teacher fallback is restricted to true
 student pass@k failures. Provider attempts, transport failures, rejected trajectories, and duplicate

@@ -14,6 +14,7 @@ from generate_teacher_rollouts import (  # noqa: E402
     PLAN_POLICY_REQUIRED_RESIDENT,
     ResidentPlanPolicyTracker,
     retain_in_rolling_history,
+    sft_export_eligible,
 )
 from protocol import ProtocolError  # noqa: E402
 
@@ -27,6 +28,24 @@ INITIAL_PLAN = {
 
 
 class RequiredResidentPlanTest(unittest.TestCase):
+    def test_sft_eligibility_matches_current_rolling_bird_contract(self):
+        current = {
+            "context_mode": "rolling-legal-history",
+            "history_turns": 4,
+            "rolling_prompt_variant": "full",
+            "denotation_comparison": "bird-set",
+        }
+        self.assertTrue(sft_export_eligible(**current))
+        for key, value in (
+            ("context_mode", "state-only"),
+            ("history_turns", 3),
+            ("rolling_prompt_variant", "compact"),
+            ("denotation_comparison", "strict-multiset"),
+        ):
+            candidate = dict(current)
+            candidate[key] = value
+            self.assertFalse(sft_export_eligible(**candidate))
+
     def test_optional_policy_does_not_restrict_actions(self):
         tracker = ResidentPlanPolicyTracker(PLAN_POLICY_OPTIONAL)
         tracker.validate_before_execution("describe_table", {"tables": ["t"]})

@@ -76,7 +76,9 @@ _METRICS = {
 }
 
 DENOTATION_COMPARISONS = tuple(_METRICS)
-DEFAULT_DENOTATION_COMPARISON = "strict-multiset"
+# Current/new episodes use the BIRD reference EX contract everywhere.  The strict metric remains
+# registered for immutable historical artifacts and explicit compatibility audits only.
+DEFAULT_DENOTATION_COMPARISON = "bird-set"
 
 
 def get_denotation_metric(name: str) -> DenotationMetric:
@@ -99,14 +101,18 @@ def compare_denotations(
 
 
 def add_denotation_comparison_argument(parser, *, default: str = DEFAULT_DENOTATION_COMPARISON):
-    """Add the shared CLI switch without duplicating metric choices or documentation."""
+    """Add the current BIRD CLI contract.
+
+    Historical metric implementations stay registered so immutable artifacts can be replayed by
+    explicit compatibility code, but active evaluation launchers cannot accidentally start a new
+    non-BIRD run.
+    """
     get_denotation_metric(default)
+    if default != DEFAULT_DENOTATION_COMPARISON:
+        raise ValueError("active evaluation entry points must default to bird-set")
     return parser.add_argument(
         "--denotation-comparison",
-        choices=DENOTATION_COMPARISONS,
+        choices=(DEFAULT_DENOTATION_COMPARISON,),
         default=default,
-        help=(
-            "executed-result comparison contract; use bird-set for Arctic-Text2SQL-R1 and "
-            "literature-comparable BIRD EX"
-        ),
+        help="executed-result comparison contract; fixed to BIRD reference EX set equality",
     )

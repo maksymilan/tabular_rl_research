@@ -104,7 +104,7 @@ def run_one(
     model: str,
     max_tokens: int = 512,
     execution_timeout_seconds: float = 5.0,
-    denotation_comparison: str = "strict-multiset",
+    denotation_comparison: str = "bird-set",
 ) -> dict:
     gold_sql = task_gold_sql(ex)
     h = Harness(task_db_path(ex))

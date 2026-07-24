@@ -153,7 +153,7 @@ def build(
     episodes_with_dropped_records = sorted(
         episode_id
         for episode_id, count in all_by_episode.items()
-        if kept_by_episode[episode_id] != count
+        if kept_by_episode.get(episode_id, 0) != count
     )
     complete_episodes = sorted(set(all_by_episode) - set(episodes_with_dropped_records))
 

@@ -20,6 +20,7 @@ from candidate_selection import (  # noqa: E402
     select_arctic_majority,
 )
 from denotation import (  # noqa: E402
+    DEFAULT_DENOTATION_COMPARISON,
     DENOTATION_COMPARISONS,
     bird_rows_equal,
     compare_denotations,
@@ -116,6 +117,7 @@ class EvalTests(unittest.TestCase):
 
     def test_denotation_registry_keeps_metrics_independent(self):
         self.assertEqual(DENOTATION_COMPARISONS, ("strict-multiset", "bird-set"))
+        self.assertEqual(DEFAULT_DENOTATION_COMPARISON, "bird-set")
         self.assertIs(get_denotation_metric("strict-multiset").compare, rows_equal)
         self.assertIs(get_denotation_metric("bird-set").compare, bird_rows_equal)
 
@@ -307,14 +309,12 @@ class EvalTests(unittest.TestCase):
         self.assertEqual(pred, [["Village"]])
         self.assertEqual(gold, [["Village"]])
 
-    def test_score_can_use_bird_set_semantics_without_changing_default(self):
+    def test_score_defaults_to_bird_set_and_keeps_explicit_historical_comparator(self):
         harness = FakeHarness([["Village"]], {"project_001": [["Village"], ["Village"]]})
         args = {"evidence": {"table": "project_001"}, "answer": []}
-        self.assertFalse(score(harness, "SELECT 'Village'", args, {"project_001"})[0])
-        self.assertTrue(
-            score(
-                harness, "SELECT 'Village'", args, {"project_001"}, "bird-set"
-            )[0]
+        self.assertTrue(score(harness, "SELECT 'Village'", args, {"project_001"})[0])
+        self.assertFalse(
+            score(harness, "SELECT 'Village'", args, {"project_001"}, "strict-multiset")[0]
         )
 
     def test_score_rejects_broader_evidence_without_explicit_answer(self):

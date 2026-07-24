@@ -1,6 +1,7 @@
 # BIRD Two-Stage SFT and RL Plan
 
-Status: current design and experiment SSOT, 2026-07-14.
+Status: archived state-only design, superseded by the rolling-history contracts under
+`docs/current/`, 2026-07-24.
 
 This document records the decisions reached after the BIRD environment setup, the fixed 30-task
 teacher pilot, the switch to single-step state-only SFT records, and the correction/recovery

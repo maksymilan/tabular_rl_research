@@ -39,7 +39,7 @@ def load_selection(path: Path | None) -> list[int] | None:
         return [int(json.loads(line)["example_index"]) for line in source if line.strip()]
 
 
-def load_result_only_task_records(
+def load_rl_task_records(
     project_root: Path,
     *,
     split: str,
@@ -48,7 +48,7 @@ def load_result_only_task_records(
     limit: int = 0,
     seed: int = 20260710,
 ) -> list[dict[str, Any]]:
-    """Create generic records for the binary terminal-result baseline."""
+    """Create generic hidden-label task records shared by both RL reward conditions."""
     if selection is not None and examples_json is not None:
         raise ValueError("selection and examples_json are mutually exclusive")
 
@@ -95,7 +95,7 @@ def load_result_only_task_records(
             catalogs[db_id] = catalog
         records.append(
             {
-                "data_source": "spider_table_result_only",
+                "data_source": f"{example.get('dataset', 'spider')}_table_rl",
                 "prompt": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": first_user_message(

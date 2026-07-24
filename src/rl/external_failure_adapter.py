@@ -38,8 +38,15 @@ def normalize_failure_record(
     record: dict[str, Any], task: dict[str, Any]
 ) -> tuple[dict[str, Any] | None, str | None]:
     failure_type = record.get("failure_type")
-    if failure_type == "api_error":
-        return None, "api_transport_failure"
+    if failure_type in {"api_error", "generation_oom"}:
+        return None, "nonsemantic_runtime_failure"
+    denotation_comparison = (
+        record.get("denotation_comparison")
+        or task.get("denotation_comparison")
+        or "bird-set"
+    )
+    if denotation_comparison != "bird-set":
+        raise ValueError("active RL failure replay requires denotation_comparison='bird-set'")
 
     trajectory_id = str(record.get("trajectory_id") or _task_id(task) or "unknown")
     legal_steps: list[dict[str, Any]] = []
@@ -118,6 +125,7 @@ def normalize_failure_record(
             "action_count": len(legal_indices) + len(error_indices),
             "error_actions_are_sft_targets": False,
             "adapter": "external_failure_adapter_v1",
+            "denotation_comparison": denotation_comparison,
         },
         "failure_audit": {
             "recorded_correct": bool(record.get("correct")),

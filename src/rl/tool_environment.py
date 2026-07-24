@@ -59,7 +59,7 @@ class EnvStep:
 
 
 class ToolUseEnv:
-    """One dataset-adapter task episode with state-only model context and harness state."""
+    """One dataset-adapter task episode with rolling model context and harness state."""
 
     def __init__(
         self,
@@ -69,9 +69,10 @@ class ToolUseEnv:
         system_prompt: str = SYSTEM_PROMPT,
         max_steps: int = 20,
         max_errors_per_type: int = MAX_ERRORS_PER_TYPE,
-        context_mode: str = "state-only",
+        context_mode: str = "rolling-legal-history",
         history_turns: int = 4,
-        compact_observations: bool = False,
+        compact_observations: bool = True,
+        denotation_comparison: str = "bird-set",
     ):
         self.example = example
         self.example_index = example_index
@@ -81,9 +82,16 @@ class ToolUseEnv:
         self.context_mode = context_mode
         self.history_turns = history_turns
         self.compact_observations = compact_observations
+        if denotation_comparison != "bird-set":
+            raise ValueError("active RL environments require denotation_comparison='bird-set'")
+        self.denotation_comparison = denotation_comparison
         self.reset()
 
     def reset(self) -> list[dict]:
+        previous = getattr(self, "harness", None)
+        previous_connection = getattr(previous, "conn", None)
+        if previous_connection is not None:
+            previous_connection.close()
         self.harness = Harness(task_db_path(self.example))
         self.overview = overview(self.harness)
         self.messages = [
@@ -151,10 +159,22 @@ class ToolUseEnv:
             "steps": self.steps,
             "errors": self.errors,
             "failure_type": self.failure_type,
+            "denotation_comparison": self.denotation_comparison,
+            "context_mode": self.context_mode,
+            "history_turns": self.history_turns,
+            "rolling_observation_style": (
+                "resident" if self.compact_observations else "full"
+            ),
             "error_events": deepcopy(self.error_events),
             "final_messages": deepcopy(self.messages),
             "elapsed_seconds": round(time.time() - self.started, 3),
         }
+
+    def close(self) -> None:
+        harness = getattr(self, "harness", None)
+        connection = getattr(harness, "conn", None)
+        if connection is not None:
+            connection.close()
 
     def apply_model_output(self, text: str) -> EnvStep:
         """Apply one assistant message, append feedback, and return the environment transition."""
@@ -178,7 +198,11 @@ class ToolUseEnv:
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
             if tool == "answer_from_context":
                 self.correct, turn["pred_sample"], turn["gold_sample"] = score(
-                    self.harness, task_gold_sql(self.example), args, self.created
+                    self.harness,
+                    task_gold_sql(self.example),
+                    args,
+                    self.created,
+                    denotation_comparison=self.denotation_comparison,
                 )
                 self.legal = True
                 if not self.correct:

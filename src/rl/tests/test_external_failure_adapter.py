@@ -63,7 +63,25 @@ class ExternalFailureAdapterTests(unittest.TestCase):
             self.task,
         )
         self.assertIsNone(normalized)
-        self.assertEqual(reason, "api_transport_failure")
+        self.assertEqual(reason, "nonsemantic_runtime_failure")
+
+    def test_excludes_generation_oom(self):
+        normalized, reason = normalize_failure_record(
+            {"trajectory_id": "bird_train_x", "failure_type": "generation_oom", "turns": []},
+            self.task,
+        )
+        self.assertIsNone(normalized)
+        self.assertEqual(reason, "nonsemantic_runtime_failure")
+
+    def test_rejects_historical_denotation_metric(self):
+        record = {
+            "trajectory_id": "bird_train_x",
+            "failure_type": "wrong_answer",
+            "denotation_comparison": "strict-multiset",
+            "turns": [],
+        }
+        with self.assertRaisesRegex(ValueError, "bird-set"):
+            normalize_failure_record(record, self.task)
 
 
 if __name__ == "__main__":

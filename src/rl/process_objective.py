@@ -2,7 +2,16 @@
 """Tensor objective for step rewards with an explicit fixed-reference KL term."""
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
+
+
+def sampled_forward_kl(current_logp, reference_logp):
+    """Non-negative k3 estimator of ``KL(current || reference)`` on current-policy samples."""
+    log_ratio = current_logp - reference_logp
+    negative = -log_ratio
+    exp_negative = negative.exp() if hasattr(negative, "exp") else math.exp(negative)
+    return exp_negative + log_ratio - 1.0
 
 
 def process_policy_loss(
@@ -10,6 +19,7 @@ def process_policy_loss(
     episode_step_rewards: Sequence[Sequence[float]],
     *,
     episode_step_kls: Sequence[Sequence] | None = None,
+    episode_update_mask: Sequence[bool] | None = None,
     beta: float = 0.0,
 ):
     """Return ``-(1/M) sum_i,t r_it log pi + beta/M sum_i,t KL_it``.
@@ -28,12 +38,16 @@ def process_policy_loss(
         raise ValueError("a positive beta requires KL values from a frozen SFT-2 reference")
     if episode_step_kls is not None and len(episode_step_kls) != len(episode_step_logprobs):
         raise ValueError("episode KL groups must align")
+    if episode_update_mask is not None and len(episode_update_mask) != len(episode_step_logprobs):
+        raise ValueError("episode update mask must align")
 
     policy_terms = []
     kl_terms = []
     for episode_index, (logps, rewards) in enumerate(
         zip(episode_step_logprobs, episode_step_rewards, strict=True)
     ):
+        if episode_update_mask is not None and not episode_update_mask[episode_index]:
+            continue
         if len(logps) != len(rewards):
             raise ValueError(f"episode {episode_index} step log-probabilities and rewards must align")
         policy_terms.extend(-float(reward) * logp for logp, reward in zip(logps, rewards, strict=True))
@@ -48,5 +62,5 @@ def process_policy_loss(
     total = sum(policy_terms)
     if kl_terms:
         total = total + float(beta) * sum(kl_terms)
-    return total / len(episode_step_logprobs)
-
+    # M is the number of assistant turns that actually enter the process update, not episodes.
+    return total / len(policy_terms)

@@ -210,7 +210,7 @@ def build(
     history_turns: int,
     prompt_variant: str = "full",
     observation_style: str = "resident",
-    denotation_comparison: str | None = None,
+    denotation_comparison: str = "bird-set",
 ) -> dict:
     if history_turns <= 0:
         raise ValueError("history_turns must be positive for the bounded rolling training protocol")
@@ -332,12 +332,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--denotation-comparison",
-        choices=["strict-multiset", "bird-set"],
-        default=None,
-        help=(
-            "explicit replay metric for historical trajectories that predate the per-trajectory "
-            "denotation_comparison field"
-        ),
+        choices=["bird-set"],
+        default="bird-set",
+        help="replay metric for current SFT construction; fixed to BIRD reference EX",
     )
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", args.dataset_name):

@@ -10,15 +10,16 @@ the public action interface.
 An episode is a sequence of model actions against one immutable source database and one
 harness-managed resident state.
 
-1. In state-only mode, the harness sends `system + user` only. The user message contains the catalog, question,
-   optional external knowledge, current environment state, and, only after an error, `LAST TOOL ERROR`.
+1. The active renderer starts with the catalog, question, and optional external knowledge, then
+   retains at most four successful assistant/observation pairs. The current user message contains
+   resident environment state and, only after an error, `LAST TOOL ERROR`.
 2. The canonical action has exactly one non-empty `<think>` block and one complete `<tool_call>`
    JSON object. An API with native reasoning transport receives one provider-specific prompt and
    emits the same reason/tool action across its two fields.
 3. The harness strictly parses, validates, executes, records the action, and updates resident state.
-4. The next model input is rebuilt from resident state. In bounded rolling mode, up to four prior
-   successful assistant actions plus structured result summaries are also retained; full schemas,
-   values, and rows remain present only once in resident state.
+4. The next model input is rebuilt from resident state and bounded rolling legal history. Rejected
+   assistant text is excluded; full schemas, values, and rows remain present only once in resident
+   state.
 5. `answer_from_context` is terminal and is execution-scored against the hidden gold SQL result.
 
 ```text

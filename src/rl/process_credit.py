@@ -3,7 +3,7 @@
 
 The module implements the normalized reward proposed in the project notes:
 
-    r_t = C * c_t^+ - P * c_t^-
+    r_t = C*c_t^+ + (1-C)*eta*DeltaPhi_t + lambda_A*A_t - P*c_t^-
 
 It deliberately separates replay-derived feature extraction from the pure reward algebra.  Online
 RL can feed the same feature rows directly; the offline adapter replays verified teacher episodes
@@ -17,9 +17,12 @@ import json
 import math
 import re
 import sys
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from sqlglot import exp, parse_one
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [
@@ -35,6 +38,15 @@ from provenance import (  # noqa: E402
     build_grounding_references,
     condition_literal_targets,
 )
+from target_support import (  # noqa: E402
+    TargetSupport,
+    build_target_support,
+    canonical_table,
+    matching_target_columns,
+    observed_target_row_units,
+    table_target_row_units,
+)
+from task_support import task_text_supports_literal  # noqa: E402
 from rollout import (  # noqa: E402
     execute_tool,
     new_ctx,
@@ -45,6 +57,17 @@ from rollout import (  # noqa: E402
 
 
 SELECTIVE_TOOLS = frozenset({"condition_filter", "extreme_value_select"})
+TABLE_PRODUCING_TOOLS = frozenset(
+    {
+        "condition_filter",
+        "project",
+        "scalar_compute",
+        "join_tables",
+        "group_aggregate",
+        "extreme_value_select",
+        "set_op",
+    }
+)
 LINEAGE_PRESERVING_TOOLS = frozenset(
     {"condition_filter", "extreme_value_select", "project", "derive_column", "window"}
 )
@@ -73,17 +96,19 @@ class ProcessRewardConfig:
     w_new_evidence: float = 1.0
     w_search_reduction: float = 1.0
     w_feedback_response: float = 1.0
+    w_target_potential: float = 1.0
+    omega_target_table: float = 0.25
+    omega_target_column: float = 0.25
+    omega_target_row: float = 0.50
+    eta_failure_progress: float = 0.05
+    lambda_answer_format: float = 0.02
     lambda_terminal_failure: float = 0.30
     lambda_tool_error: float = 0.08
     lambda_repeat_without_feedback: float = 0.06
     lambda_legal_no_state_change: float = 0.03
     lambda_ignored_feedback: float = 0.05
-    failure_chain_weight: float = 1.0
-    failure_state_change_bonus: float = 0.25
-    failure_terminal_bonus: float = 0.50
-    fallback_legal_weight: float = 0.25
-    fallback_state_change_weight: float = 1.0
-    fallback_terminal_weight: float = 0.50
+    lambda_unsupported_guess: float = 0.08
+    lambda_empty_result: float = 0.10
     penalty_cap: float = 0.80
 
     def validate(self) -> None:
@@ -92,6 +117,19 @@ class ProcessRewardConfig:
             raise ValueError("all reward and penalty weights must be non-negative")
         if not 0 < self.penalty_cap < 1:
             raise ValueError("penalty_cap must satisfy 0 < P_max < 1")
+        omega = self.omega_target_table + self.omega_target_column + self.omega_target_row
+        if not math.isclose(omega, 1.0, rel_tol=0.0, abs_tol=1e-9):
+            raise ValueError("target-potential omega weights must sum to 1")
+        if not (
+            0
+            < self.eta_failure_progress + self.lambda_answer_format
+            < self.lambda_terminal_failure
+            <= self.penalty_cap
+            < 1
+        ):
+            raise ValueError(
+                "reward bounds require 0 < eta+lambda_A < lambda_fail <= P_max < 1"
+            )
 
 
 @dataclass
@@ -109,11 +147,20 @@ class StepFeature:
     feedback_error_before: bool = False
     feedback_empty_before: bool = False
     action_changed_after_empty: bool = False
+    action_changed_after_feedback: bool = False
     back_slice: float = 0.0
     attempted_back_slice: float = 0.0
     new_used_evidence: float = 0.0
     search_reduction: float = 0.0
+    empty_result_penalty: float = 0.0
+    verified_negative_evidence: bool = False
     feedback_response: float = 0.0
+    target_table_delta: float = 0.0
+    target_column_delta: float = 0.0
+    target_row_delta: float = 0.0
+    target_potential_delta: float = 0.0
+    answer_format: float = 0.0
+    unsupported_guess: float = 0.0
     terminal_failure: float = 0.0
     tool_error: float = 0.0
     repeat_without_feedback: float = 0.0
@@ -154,6 +201,7 @@ class EpisodeReward:
     capped_penalty: float
     total_reward: float
     fallback_terminal_credit: bool
+    process_update: bool
     steps: list[StepReward]
     diagnostics: dict[str, Any]
 
@@ -170,6 +218,7 @@ class EpisodeReward:
             "capped_penalty": self.capped_penalty,
             "total_reward": self.total_reward,
             "fallback_terminal_credit": self.fallback_terminal_credit,
+            "process_update": self.process_update,
             "steps": [asdict(step) for step in self.steps],
             "diagnostics": self.diagnostics,
         }
@@ -208,6 +257,217 @@ def _audit_evidence_rows(rows: list[list[Any]], answer: Any, limit: int = 10) ->
 def action_signature(tool: str, arguments: dict[str, Any]) -> str:
     payload = {"tool": tool, "arguments": arguments}
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()[:16]
+
+
+def _evidence_table(arguments: dict[str, Any]) -> str | None:
+    evidence = arguments.get("evidence")
+    if isinstance(evidence, str):
+        return evidence
+    if isinstance(evidence, dict) and isinstance(evidence.get("table"), str):
+        return evidence["table"]
+    return None
+
+
+def _semantic_state(value: Any) -> Any:
+    """Remove allocation/provenance identities before comparing environment meaning."""
+    volatile = {
+        "from_step",
+        "created_by",
+        "step_id",
+        "produced_by",
+        "evidence_step_id",
+    }
+    if isinstance(value, list):
+        return [_semantic_state(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    normalized = {
+        key: _semantic_state(item)
+        for key, item in value.items()
+        if key not in volatile
+    }
+    # Derived handles are allocation identities. Compare their semantic artifact payloads as a
+    # sorted multiset so repeating the same operation cannot manufacture a state change.
+    tables = normalized.get("tables")
+    if isinstance(tables, dict):
+        sources = {}
+        derived: dict[str, Any] = {}
+        for name, table in tables.items():
+            if isinstance(table, dict) and table.get("kind") == "source":
+                sources[name] = table
+            else:
+                derived[canonical_json(table)] = table
+        normalized["tables"] = {
+            "sources": sources,
+            "derived": [derived[key] for key in sorted(derived)],
+        }
+    return normalized
+
+
+def semantic_state_digest(state: dict[str, Any]) -> str:
+    return hashlib.sha256(canonical_json(_semantic_state(state)).encode("utf-8")).hexdigest()
+
+
+def _condition_columns(condition: Any) -> set[str]:
+    if isinstance(condition, list):
+        return {column for item in condition for column in _condition_columns(item)}
+    if not isinstance(condition, dict):
+        return set()
+    columns: set[str] = set()
+    for key in ("and", "or"):
+        for item in condition.get(key, []) or []:
+            columns.update(_condition_columns(item))
+    if "not" in condition:
+        columns.update(_condition_columns(condition["not"]))
+    for key in ("column", "column_value"):
+        value = condition.get(key)
+        if isinstance(value, str):
+            columns.add(value)
+    return columns
+
+
+def _expression_columns(expression: str) -> set[str]:
+    """Extract logical columns from a SQLite expression, including quoted dotted names."""
+    try:
+        tree = parse_one(expression, read="sqlite")
+    except Exception:
+        return {expression}
+    columns = set()
+    for column in tree.find_all(exp.Column):
+        if column.table:
+            columns.add(f"{column.table}.{column.name}")
+        else:
+            columns.add(column.name)
+    return columns
+
+
+def _expression_predicate_literals(expression: str) -> list[tuple[str | None, Any]]:
+    """Extract domain constants from expression predicates, excluding arithmetic/CASE encodings."""
+    try:
+        tree = parse_one(expression, read="sqlite")
+    except Exception:
+        return []
+    targets: list[tuple[str | None, Any]] = []
+    predicates = (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.Like, exp.ILike)
+    for predicate in tree.find_all(*predicates):
+        predicate_columns = _expression_columns(predicate.sql(dialect="sqlite"))
+        column = next(iter(predicate_columns)) if len(predicate_columns) == 1 else None
+        for literal in predicate.find_all(exp.Literal):
+            value: Any = literal.this
+            if not literal.is_string:
+                try:
+                    value = int(value)
+                except (TypeError, ValueError):
+                    try:
+                        value = float(value)
+                    except (TypeError, ValueError):
+                        pass
+            targets.append((column, value))
+    return targets
+
+
+def _tool_columns(tool: str, arguments: dict[str, Any], output: dict[str, Any]) -> set[str]:
+    columns: set[str] = set()
+    if tool == "describe_table":
+        for described in output.get("tables", []) or []:
+            for column in described.get("columns", []) or []:
+                if isinstance(column, dict) and isinstance(column.get("name"), str):
+                    columns.add(column["name"])
+    elif tool == "inspect_column":
+        if isinstance(arguments.get("column"), str):
+            columns.add(arguments["column"])
+    elif tool == "read_subtable":
+        requested = arguments.get("columns")
+        if isinstance(requested, list):
+            columns.update(item for item in requested if isinstance(item, str))
+        elif isinstance(output.get("columns"), list):
+            columns.update(item for item in output["columns"] if isinstance(item, str))
+    elif tool == "condition_filter":
+        columns.update(_condition_columns(arguments.get("conditions")))
+        columns.update(arguments.get("return_columns") or [])
+    elif tool == "project":
+        derivation = output.get("derivation") or {}
+        for item in (derivation.get("semantics") or {}).get("column_lineage", []) or []:
+            columns.update(source for source in item.get("sources", []) if isinstance(source, str))
+    elif tool == "join_tables":
+        for join in arguments.get("joins") or []:
+            for edge in join.get("on", []) or []:
+                columns.update(
+                    value for value in (edge.get("left"), edge.get("right"))
+                    if isinstance(value, str)
+                )
+    elif tool == "group_aggregate":
+        columns.update(arguments.get("group_by") or [])
+        columns.update(arguments.get("passthrough") or [])
+        for aggregation in arguments.get("aggregations") or []:
+            column = aggregation.get("column")
+            if isinstance(column, str) and column != "*":
+                columns.update(_expression_columns(column))
+            columns.update(_condition_columns(aggregation.get("where")))
+    elif tool == "extreme_value_select":
+        for item in arguments.get("order_by") or []:
+            if isinstance(item, str):
+                columns.add(re.sub(r"\s+(?:ASC|DESC)\s*$", "", item, flags=re.IGNORECASE))
+        columns.update(arguments.get("return_columns") or [])
+    elif tool == "scalar_compute":
+        for operand in arguments.get("operands") or []:
+            if isinstance(operand, dict) and isinstance(operand.get("column"), str):
+                columns.add(operand["column"])
+    return {column for column in columns if isinstance(column, str) and column != "*"}
+
+
+def _action_literal_targets(tool: str, arguments: dict[str, Any]) -> list[tuple[str | None, Any]]:
+    if tool == "condition_filter":
+        return condition_literal_targets(arguments.get("conditions"))
+    if tool == "group_aggregate":
+        targets = [
+            pair
+            for aggregation in arguments.get("aggregations") or []
+            for pair in condition_literal_targets(aggregation.get("where"))
+        ]
+        targets.extend(
+            pair
+            for aggregation in arguments.get("aggregations") or []
+            if isinstance(aggregation.get("column"), str)
+            for pair in _expression_predicate_literals(aggregation["column"])
+        )
+        group_by = arguments.get("group_by") or []
+        category_column = group_by[0] if len(group_by) == 1 else None
+        targets.extend(
+            (category_column, value)
+            for value in arguments.get("category_values") or []
+        )
+        return targets
+    if tool == "scalar_compute":
+        return [
+            (operand.get("column"), operand["value"])
+            for operand in arguments.get("operands") or []
+            if isinstance(operand, dict) and "value" in operand
+        ]
+    return []
+
+
+def _source_roots_from_references(
+    references: list[dict[str, Any]],
+    roots_by_step: dict[str, set[str]],
+) -> set[str]:
+    roots: set[str] = set()
+    for reference in references:
+        if reference.get("type", "data") != "data":
+            continue
+        source = reference.get("source")
+        if isinstance(source, str):
+            roots.add(canonical_table(source))
+        parent = reference.get("step")
+        if isinstance(parent, str):
+            roots.update(roots_by_step.get(parent, set()))
+    return roots
+
+
+def _fraction_delta(before: set[Any], after: set[Any], target: set[Any] | frozenset[Any]) -> float:
+    if not target:
+        return 0.0
+    return len((after - before) & set(target)) / len(target)
 
 
 def _remap_replay_handles(value: Any, handle_map: dict[str, str]) -> Any:
@@ -299,21 +559,6 @@ def _same_grounded_value(left: Any, right: Any) -> bool:
         return False
 
 
-def _task_text_supports_literal(value: Any, text: str) -> bool:
-    """Conservative check for constants supplied directly by the question/evidence."""
-    if value is None:
-        return True
-    needle = str(value).strip().strip("%_").casefold()
-    if not needle:
-        return True
-    haystack = " ".join(str(text).casefold().split())
-    # Numeric boundaries prevent id 7 from matching 2017.
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        import re
-        return bool(re.search(rf"(?<!\d){re.escape(needle)}(?!\d)", haystack))
-    return needle in haystack
-
-
 def _history_value_support(
     handle: str,
     history: dict[str, dict[str, Any]],
@@ -350,8 +595,14 @@ def _lineage_for_output(
         lineages[output_table] = lineages[input_table]
 
 
-def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature], dict[str, Any]]:
+def replay_step_features(
+    trajectory: dict[str, Any],
+    *,
+    denotation_comparison: str = "bird-set",
+) -> tuple[list[StepFeature], dict[str, Any]]:
     """Replay one normalized trajectory and return harness-authored feature rows."""
+    if denotation_comparison != "bird-set":
+        raise ValueError("active process reward requires denotation_comparison='bird-set'")
     source = trajectory.get("source") or {}
     db_path = source.get("db_path")
     gold_sql = source.get("gold_sql")
@@ -360,16 +611,31 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
 
     harness = Harness(str(db_path))
     try:
-        catalog = overview(harness)
+        comparison = denotation_comparison
+        target_support = build_target_support(harness, gold_sql)
+        recorded_catalog = (trajectory.get("initial_state") or {}).get("dataset_overview")
+        catalog = (
+            deepcopy(recorded_catalog)
+            if isinstance(recorded_catalog, dict)
+            else overview(harness)
+        )
+        catalog_source = "recorded_harness_initial_state" if recorded_catalog else "fresh_database"
         ctx = new_ctx(catalog)
         created: set[str] = set()
         table_history: list[tuple[str, str, str]] = []
         lineages: dict[str, tuple[str, int]] = {}
+        roots_by_step: dict[str, set[str]] = {}
+        roots_by_table: dict[str, set[str]] = {}
+        discovered_tables: set[str] = set()
+        discovered_columns: set[str] = set()
+        discovered_rows: set[tuple[Any, ...] | str] = set()
+        target_row_match_incomplete_steps: list[str] = []
         for table in catalog.get("tables", []):
             name = table.get("table_name")
             count = table.get("row_count", table.get("num_rows"))
             if isinstance(name, str) and isinstance(count, int):
                 lineages[name] = (name, count)
+                roots_by_table[name] = {canonical_table(name)}
 
         legal_steps = {int(step["step_id"].rsplit("_", 1)[1]): step for step in trajectory.get("steps") or []}
         error_events = {
@@ -383,11 +649,13 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
         features: list[StepFeature] = []
         provenance_steps: list[dict[str, Any]] = []
         seen_signatures: set[str] = set()
+        seen_observation_signatures: set[str] = set()
         final_arguments: dict[str, Any] | None = None
         final_step_id: str | None = None
         replay_correct = False
         replay_handle_map: dict[str, str] = {}
         unsupported_action_literals: list[dict[str, Any]] = []
+        unsupported_action_columns: list[dict[str, Any]] = []
         task_text = "\n".join(filter(None, [
             trajectory.get("question"),
             source.get("external_knowledge"),
@@ -431,33 +699,58 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
             references: list[dict[str, Any]] = []
             output: dict[str, Any] = {}
             output_table: str | None = None
+            tables_before = set(discovered_tables)
+            columns_before = set(discovered_columns)
+            rows_before = set(discovered_rows)
+            verified_negative_evidence = False
+            step_unsupported_literals: list[dict[str, Any]] = []
+            step_unsupported_columns: list[dict[str, Any]] = []
+            known_column_suffixes: set[str] = set()
+            for resident in (before.get("tables") or {}).values():
+                if not isinstance(resident, dict):
+                    continue
+                resident_columns = resident.get("columns")
+                if not isinstance(resident_columns, list):
+                    resident_columns = [
+                        item.get("name")
+                        for item in ((resident.get("schema") or {}).get("columns") or [])
+                        if isinstance(item, dict)
+                    ]
+                known_column_suffixes.update(
+                    str(item).rsplit(".", 1)[-1].casefold()
+                    for item in resident_columns
+                    if isinstance(item, str)
+                )
 
             if tool == "answer_from_context":
-                replay_correct, _, _ = score(harness, gold_sql, arguments, created)
+                replay_correct, _, _ = score(
+                    harness,
+                    gold_sql,
+                    arguments,
+                    created,
+                    denotation_comparison=comparison,
+                )
                 final_arguments = arguments
                 final_step_id = step_id
                 after = before
             else:
                 output, output_table = execute_tool(harness, tool, arguments, ctx, step_id)
                 references = list((ctx["history"].get(step_id) or {}).get("references") or [])
-                if tool == "condition_filter":
-                    observed_values = [
-                        value
-                        for ref in references
-                        if ref.get("type") == "grounding"
-                        and ref.get("role") in {"domain_observation", "row_observation"}
-                        for value in (ref.get("target") or {}).get("values", [])
-                    ]
-                    for column, literal in condition_literal_targets(arguments.get("conditions")):
-                        if _task_text_supports_literal(literal, task_text):
-                            continue
-                        if any(_same_grounded_value(literal, value) for value in observed_values):
-                            continue
-                        unsupported_action_literals.append({
-                            "step_id": step_id,
-                            "column": column,
-                            "value": literal,
-                        })
+                observed_values = [
+                    value
+                    for ref in references
+                    if ref.get("type") == "grounding"
+                    and ref.get("role") in {"domain_observation", "row_observation"}
+                    for value in (ref.get("target") or {}).get("values", [])
+                ]
+                for column, literal in _action_literal_targets(tool, arguments):
+                    if task_text_supports_literal(literal, task_text):
+                        continue
+                    if any(_same_grounded_value(literal, value) for value in observed_values):
+                        continue
+                    item = {"step_id": step_id, "column": column, "value": literal}
+                    unsupported_action_literals.append(item)
+                    step_unsupported_literals.append(item)
                 after = ctx["environment"].snapshot()
                 if output_table:
                     recorded_output = step.get("tool_output") or {}
@@ -470,6 +763,93 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
                 elif input_table and tool in {"aggregate", "inspect_column", "read_subtable"}:
                     table_history.append((step_id, input_table, tool))
 
+            observation_changed = False
+            if tool in PERCEPTION_TOOLS and output:
+                observation_signature = canonical_json(
+                    {"tool": tool, "arguments": arguments, "output": output}
+                )
+                observation_changed = observation_signature not in seen_observation_signatures
+                seen_observation_signatures.add(observation_signature)
+
+            step_roots = _source_roots_from_references(references, roots_by_step)
+            if input_table:
+                step_roots.update(
+                    roots_by_table.get(input_table, {canonical_table(input_table)})
+                )
+            if tool == "describe_table":
+                step_roots.update(
+                    canonical_table(item)
+                    for item in arguments.get("tables") or []
+                    if isinstance(item, str)
+                )
+            if tool == "join_tables":
+                for joined in arguments.get("joins") or []:
+                    table = joined.get("table") if isinstance(joined, dict) else None
+                    if isinstance(table, str):
+                        step_roots.update(
+                            roots_by_table.get(table, {canonical_table(table)})
+                        )
+            roots_by_step[step_id] = step_roots
+            if output_table:
+                roots_by_table[output_table] = set(step_roots)
+
+            discovered_tables.update(step_roots & set(target_support.tables))
+            column_output = dict(output)
+            history_record = ctx["history"].get(step_id) or {}
+            if tool == "read_subtable" and history_record.get("observed_columns"):
+                column_output["columns"] = history_record["observed_columns"]
+            observed_columns = _tool_columns(tool, arguments, column_output)
+            if tool != "describe_table":
+                for column in observed_columns:
+                    suffix = column.rsplit(".", 1)[-1].casefold()
+                    if suffix not in known_column_suffixes:
+                        item = {"step_id": step_id, "column": column}
+                        unsupported_action_columns.append(item)
+                        step_unsupported_columns.append(item)
+            if tool == "describe_table":
+                for described in output.get("tables", []) or []:
+                    table = described.get("table_name")
+                    if not isinstance(table, str):
+                        continue
+                    for item in described.get("columns", []) or []:
+                        column = item.get("name") if isinstance(item, dict) else None
+                        if isinstance(column, str):
+                            discovered_columns.update(
+                                matching_target_columns(
+                                    column,
+                                    {canonical_table(table)},
+                                    target_support,
+                                )
+                            )
+            else:
+                for column in observed_columns:
+                    discovered_columns.update(
+                        matching_target_columns(column, step_roots, target_support)
+                    )
+            if output_table and tool in TABLE_PRODUCING_TOOLS:
+                row_units, row_audit = table_target_row_units(
+                    harness,
+                    output_table,
+                    target_support,
+                )
+                discovered_rows.update(row_units)
+                verified_negative_evidence = bool(
+                    row_units and all(isinstance(item, str) for item in row_units)
+                )
+                if not row_audit.get("rows_complete", True):
+                    target_row_match_incomplete_steps.append(step_id)
+            elif tool == "read_subtable":
+                observed_rows = output.get("rows")
+                read_columns = history_record.get("observed_columns")
+                if isinstance(observed_rows, list) and isinstance(read_columns, list):
+                    discovered_rows.update(
+                        observed_target_row_units(
+                            [str(column) for column in read_columns],
+                            observed_rows,
+                            target_support,
+                        )
+                    )
+
             n_out = output.get("row_count") if isinstance(output.get("row_count"), int) else None
             root = lineages.get(input_table or "")
             feature = StepFeature(
@@ -479,9 +859,26 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
                 legal_success=True,
                 is_terminal=tool == "answer_from_context",
                 action_signature=signature,
-                state_changed=state_digest(before) != state_digest(after),
+                state_changed=(
+                    semantic_state_digest(before) != semantic_state_digest(after)
+                    or observation_changed
+                ),
                 empty_result=_is_empty_result(tool, output),
                 repeated_call=repeated,
+                verified_negative_evidence=verified_negative_evidence,
+                target_table_delta=_fraction_delta(
+                    tables_before, discovered_tables, target_support.tables
+                ),
+                target_column_delta=_fraction_delta(
+                    columns_before, discovered_columns, target_support.columns
+                ),
+                target_row_delta=_fraction_delta(
+                    rows_before, discovered_rows, target_support.row_units
+                ),
+                answer_format=float(tool == "answer_from_context"),
+                unsupported_guess=float(
+                    bool(step_unsupported_literals or step_unsupported_columns)
+                ),
                 n_root=root[1] if root else None,
                 n_in=n_in,
                 n_out=n_out,
@@ -496,10 +893,20 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
             grounding_method, grounding_handle = "no_final_answer", None
             grounding_step_id = grounding_step_role = None
             final_refs: list[dict[str, Any]] = []
+            grounding_handles: list[str] = []
+            final_values: list[Any] = []
+            required_value_indices: set[int] = set()
+            supported_value_indices: set[int] = set()
         else:
-            grounding_method, grounding_handle, grounding_step_id, grounding_step_role = (
-                _automatic_final_table(table_history)
-            )
+            grounding_handle = _evidence_table(final_arguments)
+            if grounding_handle:
+                grounding_method = "terminal_evidence"
+                grounding_step_id = grounding_step_role = None
+            else:
+                # Historical explicit-answer trajectories predate the mandatory evidence table.
+                grounding_method, grounding_handle, grounding_step_id, grounding_step_role = (
+                    _automatic_final_table(table_history)
+                )
             grounding_handles = [grounding_handle] if grounding_handle else []
             final_refs = build_grounding_references(
                 "answer_from_context", final_arguments, ctx["history"]
@@ -510,7 +917,11 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
                     {
                         "type": "data",
                         "step": producer,
-                        "role": "automatic_final_table",
+                        "role": (
+                            "terminal_evidence"
+                            if grounding_method == "terminal_evidence"
+                            else "automatic_final_table"
+                        ),
                         "target": {"handle": grounding_handle},
                     }
                 )
@@ -531,7 +942,11 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
                 index for index, value in enumerate(final_values) if value not in (None, "")
             }
             supported_value_indices: set[int] = set()
-            if grounding_handle:
+            if grounding_method == "terminal_evidence" and replay_correct:
+                # The exact cited relation was execution-scored under the named denotation metric;
+                # there is no model-authored answer payload left to ground cell by cell.
+                supported_value_indices.update(required_value_indices)
+            elif grounding_handle:
                 supported, observed_at = _history_value_support(
                     grounding_handle, ctx["history"], final_values
                 )
@@ -544,46 +959,48 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
                         "target": {"handle": grounding_handle, "observation_tool": "read_subtable"},
                     })
 
-            # A row-valued answer may combine values from several separately read handles. Search
-            # backward only for still-uncovered string values; numeric equality is too collision-
-            # prone to establish an additional dependency without an explicit data edge.
-            latest_by_handle: dict[str, tuple[str, str]] = {}
-            for history_step_id, handle, role in table_history:
-                latest_by_handle[handle] = (history_step_id, role)
-            for candidate_handle in reversed(list(latest_by_handle)):
-                missing_strings = {
-                    index
-                    for index in required_value_indices - supported_value_indices
-                    if isinstance(final_values[index], str)
-                }
-                if not missing_strings or candidate_handle in grounding_handles:
-                    continue
-                supported, observed_at = _history_value_support(
-                    candidate_handle, ctx["history"], final_values
-                )
-                useful = supported & missing_strings
-                if not useful:
-                    continue
-                grounding_handles.append(candidate_handle)
-                supported_value_indices.update(useful)
-                candidate_producer = ctx["handle_to_step"].get(candidate_handle)
-                if candidate_producer:
-                    final_refs.append({
-                        "type": "data",
-                        "step": candidate_producer,
-                        "role": "automatic_additional_final_table",
-                        "target": {"handle": candidate_handle},
-                    })
-                observation_step = observed_at or latest_by_handle[candidate_handle][0]
-                if observation_step and observation_step != candidate_producer:
-                    final_refs.append({
-                        "type": "grounding",
-                        "step": observation_step,
-                        "role": "automatic_additional_final_observation",
-                        "target": {"handle": candidate_handle, "observation_tool": "read_subtable"},
-                    })
-            if len(grounding_handles) > 1:
-                grounding_method = "automatic_multi_table"
+            if grounding_method != "terminal_evidence":
+                # Replay-only compatibility for old explicit multi-handle answer payloads.
+                latest_by_handle: dict[str, tuple[str, str]] = {}
+                for history_step_id, handle, role in table_history:
+                    latest_by_handle[handle] = (history_step_id, role)
+                for candidate_handle in reversed(list(latest_by_handle)):
+                    missing_strings = {
+                        index
+                        for index in required_value_indices - supported_value_indices
+                        if isinstance(final_values[index], str)
+                    }
+                    if not missing_strings or candidate_handle in grounding_handles:
+                        continue
+                    supported, observed_at = _history_value_support(
+                        candidate_handle, ctx["history"], final_values
+                    )
+                    useful = supported & missing_strings
+                    if not useful:
+                        continue
+                    grounding_handles.append(candidate_handle)
+                    supported_value_indices.update(useful)
+                    candidate_producer = ctx["handle_to_step"].get(candidate_handle)
+                    if candidate_producer:
+                        final_refs.append({
+                            "type": "data",
+                            "step": candidate_producer,
+                            "role": "automatic_additional_final_table",
+                            "target": {"handle": candidate_handle},
+                        })
+                    observation_step = observed_at or latest_by_handle[candidate_handle][0]
+                    if observation_step and observation_step != candidate_producer:
+                        final_refs.append({
+                            "type": "grounding",
+                            "step": observation_step,
+                            "role": "automatic_additional_final_observation",
+                            "target": {
+                                "handle": candidate_handle,
+                                "observation_tool": "read_subtable",
+                            },
+                        })
+                if len(grounding_handles) > 1:
+                    grounding_method = "automatic_multi_table"
             deduped_refs: list[dict[str, Any]] = []
             seen_refs: set[str] = set()
             for ref in final_refs:
@@ -593,12 +1010,6 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
                     deduped_refs.append(ref)
             final_refs = deduped_refs
             provenance_steps.append({"step_id": final_step_id, "references": final_refs})
-
-        if final_arguments is None:
-            grounding_handles = []
-            final_values = []
-            required_value_indices = set()
-            supported_value_indices = set()
 
         attempted_slice_ids = backward_slice(
             {"steps": provenance_steps},
@@ -666,8 +1077,17 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
             if previous is not None:
                 feature.feedback_error_before = bool(previous.error_type)
                 feature.feedback_empty_before = previous.empty_result
-                if previous.empty_result and previous.action_signature and feature.action_signature:
-                    feature.action_changed_after_empty = previous.action_signature != feature.action_signature
+                if (
+                    (previous.error_type or previous.empty_result)
+                    and previous.action_signature
+                    and feature.action_signature
+                ):
+                    feature.action_changed_after_feedback = (
+                        previous.action_signature != feature.action_signature
+                    )
+                    feature.action_changed_after_empty = bool(
+                        previous.empty_result and feature.action_changed_after_feedback
+                    )
             if (
                 feature.tool in SELECTIVE_TOOLS
                 and feature.back_slice
@@ -680,16 +1100,41 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
                 feature.search_reduction = normalized_search_reduction(
                     feature.n_root, feature.n_in, feature.n_out
                 )
-            if feature.legal_success:
-                feature.feedback_response = min(
-                    1.0,
-                    float(feature.feedback_error_before)
-                    + float(
-                        feature.feedback_empty_before
-                        and feature.action_changed_after_empty
-                        and feature.state_changed
-                    ),
+            if (
+                feature.tool in SELECTIVE_TOOLS
+                and feature.n_root is not None
+                and feature.n_in is not None
+                and feature.n_out == 0
+                and feature.n_root >= feature.n_in > 0
+                and not feature.verified_negative_evidence
+            ):
+                feature.empty_result_penalty = 1.0
+            feedback_before = feature.feedback_error_before or feature.feedback_empty_before
+            verifiable_progress = bool(
+                feature.target_table_delta
+                + feature.target_column_delta
+                + feature.target_row_delta
+                > 0
+                or (
+                    replay_correct
+                    and feature.back_slice
+                    + feature.new_used_evidence
+                    + feature.search_reduction
+                    > 0
                 )
+            )
+            valid_response = bool(
+                feature.legal_success
+                and (
+                    replay_correct and feature.is_terminal
+                    or (
+                        feature.action_changed_after_feedback
+                        and feature.state_changed
+                        and verifiable_progress
+                    )
+                )
+            )
+            feature.feedback_response = float(feedback_before and valid_response)
             feature.repeat_without_feedback = float(
                 feature.repeated_call
                 and not feature.feedback_error_before
@@ -699,16 +1144,13 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
                 feature.legal_success and not feature.is_terminal and not feature.state_changed
             )
             feature.ignored_feedback = float(
-                (feature.feedback_error_before or feature.feedback_empty_before)
-                and not feature.is_terminal
-                and (
-                    (previous is not None and previous.action_signature == feature.action_signature)
-                    or not feature.state_changed
-                )
+                feedback_before and not valid_response
             )
             previous = feature
 
         return features, {
+            "denotation_comparison": comparison,
+            "catalog_source": catalog_source,
             "replay_correct": replay_correct,
             "replay_handle_map": replay_handle_map,
             "grounding_method": grounding_method,
@@ -732,11 +1174,31 @@ def replay_step_features(trajectory: dict[str, Any]) -> tuple[list[StepFeature],
                 not required_value_indices or required_value_indices <= supported_value_indices
             ),
             "unsupported_action_literals": unsupported_action_literals,
+            "unsupported_action_columns": unsupported_action_columns,
             "action_literal_grounding_complete": not unsupported_action_literals,
+            "action_grounding_clean": (
+                not unsupported_action_literals and not unsupported_action_columns
+            ),
             "deterministic_grounding_complete": (
                 (not required_value_indices or required_value_indices <= supported_value_indices)
-                and not unsupported_action_literals
+                and target_support.sql_parse_complete
+                and target_support.rows_complete
+                and (not replay_correct or bool(slice_ids))
             ),
+            "target_support": {
+                "tables": sorted(target_support.tables),
+                "columns": sorted(target_support.columns),
+                "row_units": len(target_support.row_units),
+                "sql_parse_complete": target_support.sql_parse_complete,
+                "rows_complete": target_support.rows_complete,
+                "row_match_incomplete_steps": target_row_match_incomplete_steps,
+                **target_support.diagnostics,
+            },
+            "discovered_target_support": {
+                "tables": sorted(discovered_tables),
+                "columns": sorted(discovered_columns),
+                "row_units": len(discovered_rows),
+            },
             "max_grounding_rows": MAX_GROUNDING_ROWS,
         }
     finally:
@@ -759,13 +1221,23 @@ def allocate_process_rewards(
     for feature in features:
         feature.tool_error = max(feature.tool_error, float(bool(feature.error_type)))
         feature.terminal_failure = float(not correct and feature is features[-1])
-        feature.failure_responsibility = 0.0
+        feature.failure_responsibility = feature.terminal_failure
+        feature.target_potential_delta = (
+            config.omega_target_table * feature.target_table_delta
+            + config.omega_target_column * feature.target_column_delta
+            + config.omega_target_row * feature.target_row_delta
+        )
 
     positive = [
         config.w_back_slice * feature.back_slice
         + config.w_new_evidence * feature.new_used_evidence
         + config.w_search_reduction * feature.search_reduction
         + config.w_feedback_response * feature.feedback_response
+        + config.w_target_potential * feature.target_potential_delta
+        for feature in features
+    ]
+    outcome_penalties = [
+        config.lambda_terminal_failure * feature.terminal_failure
         for feature in features
     ]
     local_penalties = [
@@ -773,40 +1245,10 @@ def allocate_process_rewards(
         + config.lambda_repeat_without_feedback * feature.repeat_without_feedback
         + config.lambda_legal_no_state_change * feature.legal_no_state_change
         + config.lambda_ignored_feedback * feature.ignored_feedback
+        + config.lambda_unsupported_guess * feature.unsupported_guess
+        + config.lambda_empty_result * feature.empty_result_penalty
         for feature in features
     ]
-    outcome_weights = [0.0] * len(features)
-    if not correct:
-        has_attempted_slice = any(feature.attempted_back_slice for feature in features)
-        has_legal_action = any(feature.legal_success for feature in features)
-        for index, feature in enumerate(features):
-            if has_attempted_slice:
-                eligible = bool(feature.attempted_back_slice or feature.is_terminal)
-            elif has_legal_action:
-                eligible = feature.legal_success
-            else:
-                eligible = True
-            if not eligible:
-                continue
-            weight = config.failure_chain_weight
-            if feature.state_changed:
-                weight += config.failure_state_change_bonus
-            if feature.is_terminal or index == len(features) - 1:
-                weight += config.failure_terminal_bonus
-            outcome_weights[index] = weight
-            feature.failure_responsibility = weight
-    outcome_weight_mass = sum(outcome_weights)
-    if not correct and outcome_weight_mass <= 0:
-        # A zeroed legacy/custom configuration must still conserve the requested failure budget.
-        outcome_weights[-1] = 1.0
-        features[-1].failure_responsibility = 1.0
-        outcome_weight_mass = 1.0
-    outcome_penalties = [0.0] * len(features)
-    if not correct and outcome_weight_mass > 0:
-        outcome_penalties = [
-            config.lambda_terminal_failure * weight / outcome_weight_mass
-            for weight in outcome_weights
-        ]
     penalties = [
         outcome + local
         for outcome, local in zip(outcome_penalties, local_penalties, strict=True)
@@ -814,36 +1256,38 @@ def allocate_process_rewards(
     positive_mass = sum(positive)
     raw_penalty_mass = sum(penalties)
     capped_penalty = min(config.penalty_cap, raw_penalty_mass)
-    fallback = positive_mass <= 0
+    process_update = bool(not correct or positive_mass > 0)
     c_positive = [0.0] * len(features)
     if positive_mass > 0:
         c_positive = [value / positive_mass for value in positive]
-    else:
-        fallback_weights = [
-            config.fallback_legal_weight * float(feature.legal_success)
-            + config.fallback_state_change_weight * float(feature.state_changed)
-            + config.fallback_terminal_weight * float(feature.is_terminal)
-            for feature in features
-        ]
-        fallback_mass = sum(fallback_weights)
-        if fallback_mass > 0:
-            c_positive = [value / fallback_mass for value in fallback_weights]
-        else:
-            c_positive[-1] = 1.0
     c_negative = (
         [value / raw_penalty_mass for value in penalties]
         if raw_penalty_mass > 0
         else [0.0] * len(features)
     )
     rewards = [
-        float(correct) * plus - capped_penalty * minus
-        for plus, minus in zip(c_positive, c_negative, strict=True)
+        (
+            float(correct) * plus
+            + float(not correct) * config.eta_failure_progress * feature.target_potential_delta
+            + config.lambda_answer_format * feature.answer_format
+            - capped_penalty * minus
+        )
+        for feature, plus, minus in zip(features, c_positive, c_negative, strict=True)
     ]
-    expected = float(correct) - capped_penalty
+    expected = (
+        float(correct and positive_mass > 0)
+        + float(not correct)
+        * config.eta_failure_progress
+        * sum(feature.target_potential_delta for feature in features)
+        + config.lambda_answer_format * sum(feature.answer_format for feature in features)
+        - capped_penalty
+    )
     if not math.isclose(sum(rewards), expected, rel_tol=0.0, abs_tol=1e-9):
         raise AssertionError(f"reward conservation failed: {sum(rewards)} != {expected}")
-    if correct and sum(rewards) <= 0:
+    if correct and process_update and sum(rewards) <= 0:
         raise AssertionError("a correct trajectory must retain positive total reward")
+    if not correct and sum(rewards) >= 0:
+        raise AssertionError("a failed trajectory must retain negative total reward")
 
     step_rewards = []
     for feature, g_value, p_outcome, p_local, p_value, plus, minus, reward in zip(
@@ -878,10 +1322,22 @@ def allocate_process_rewards(
         )
 
     diagnostics = dict(diagnostics or {})
-    diagnostics["failure_outcome_allocation"] = "attempted_dependency_chain"
-    diagnostics["fallback_positive_allocation"] = "environment_weighted"
+    diagnostics["failure_outcome_allocation"] = "terminal_boundary"
+    diagnostics["fallback_positive_allocation"] = "disabled_exclude_correct_G0"
     diagnostics["outcome_penalty_mass"] = round(sum(outcome_penalties), 10)
     diagnostics["local_penalty_mass"] = round(sum(local_penalties), 10)
+    diagnostics["answer_format_mass"] = round(
+        config.lambda_answer_format * sum(feature.answer_format for feature in features),
+        10,
+    )
+    diagnostics["failure_progress_mass"] = round(
+        float(not correct)
+        * config.eta_failure_progress
+        * sum(feature.target_potential_delta for feature in features),
+        10,
+    )
+    diagnostics["process_update"] = process_update
+    diagnostics["expected_total_reward"] = round(expected, 10)
     return EpisodeReward(
         trajectory_id=trajectory_id,
         correct=correct,
@@ -893,21 +1349,48 @@ def allocate_process_rewards(
         raw_penalty_mass=round(raw_penalty_mass, 10),
         capped_penalty=round(capped_penalty, 10),
         total_reward=round(sum(rewards), 10),
-        fallback_terminal_credit=fallback,
+        fallback_terminal_credit=False,
+        process_update=process_update,
         steps=step_rewards,
         diagnostics=diagnostics,
     )
 
 
 def score_verified_trajectory(
-    trajectory: dict[str, Any], config: ProcessRewardConfig | None = None
+    trajectory: dict[str, Any],
+    config: ProcessRewardConfig | None = None,
+    *,
+    denotation_comparison: str = "bird-set",
 ) -> EpisodeReward:
-    features, diagnostics = replay_step_features(trajectory)
+    features, diagnostics = replay_step_features(
+        trajectory,
+        denotation_comparison=denotation_comparison,
+    )
     correct = bool(diagnostics["replay_correct"] and trajectory.get("label_status") == "verified")
     return allocate_process_rewards(
         str(trajectory.get("trajectory_id", "unknown")),
         features,
         correct=correct,
+        config=config,
+        diagnostics=diagnostics,
+    )
+
+
+def score_rollout_trajectory(
+    trajectory: dict[str, Any],
+    config: ProcessRewardConfig | None = None,
+    *,
+    denotation_comparison: str = "bird-set",
+) -> EpisodeReward:
+    """Score one freshly sampled semantic rollout without requiring an SFT verification label."""
+    features, diagnostics = replay_step_features(
+        trajectory,
+        denotation_comparison=denotation_comparison,
+    )
+    return allocate_process_rewards(
+        str(trajectory.get("trajectory_id", "unknown")),
+        features,
+        correct=bool(diagnostics["replay_correct"]),
         config=config,
         diagnostics=diagnostics,
     )

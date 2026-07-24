@@ -92,6 +92,24 @@ DATA_GENERATION_SUFFIX = (
     "present in CURRENT ENVIRONMENT STATE. If a plan item has no evidence yet, omit the evidence "
     "field or set it to null; never use an empty string for evidence."
 )
+
+
+def sft_export_eligible(
+    *,
+    context_mode: str,
+    history_turns: int,
+    rolling_prompt_variant: str,
+    denotation_comparison: str,
+) -> bool:
+    """Return whether a rollout matches the current SFT/RL causal context contract."""
+    return bool(
+        context_mode == "rolling-legal-history"
+        and history_turns == 4
+        and rolling_prompt_variant == "full"
+        and denotation_comparison == "bird-set"
+    )
+
+
 PLAN_POLICY_OPTIONAL = "optional"
 PLAN_POLICY_REQUIRED_RESIDENT = "required-resident"
 PLAN_POLICY_CHOICES = (PLAN_POLICY_OPTIONAL, PLAN_POLICY_REQUIRED_RESIDENT)
@@ -584,7 +602,7 @@ def run_rollout(
     policy_prompt_variant: str = POLICY_PROMPT_CANONICAL,
     plan_policy: str = PLAN_POLICY_OPTIONAL,
     deepseek_carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
-    denotation_comparison: str = "strict-multiset",
+    denotation_comparison: str = "bird-set",
 ) -> dict:
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
@@ -908,7 +926,12 @@ def run_rollout(
                 "plan_policy": plan_policy,
                 "deepseek_carrier": deepseek_carrier,
                 "denotation_comparison": denotation_comparison,
-                "sft_export_eligible": context_mode == "state-only",
+                "sft_export_eligible": sft_export_eligible(
+                    context_mode=context_mode,
+                    history_turns=history_turns,
+                    rolling_prompt_variant=rolling_prompt_variant,
+                    denotation_comparison=denotation_comparison,
+                ),
                 "error_actions_are_sft_targets": False,
                 "errors": errors,
                 "successful_tool_steps": successful_tool_steps,
@@ -1020,7 +1043,7 @@ def main() -> int:
     parser.add_argument("--api-retries", type=int, default=3)
     parser.add_argument("--table-output-rows", type=int, default=0)
     parser.add_argument("--context-mode", choices=["state-only", "rolling-legal-history"],
-                        default="state-only")
+                        default="rolling-legal-history")
     parser.add_argument("--history-turns", type=int, default=4,
                         help="number of successful assistant/tool pairs to retain; 0 keeps all")
     parser.add_argument("--rolling-prompt-variant", choices=["full", "compact"], default="full",
@@ -1195,9 +1218,11 @@ def main() -> int:
         "plan_policy": args.plan_policy,
         "deepseek_carrier": args.deepseek_carrier,
         "denotation_comparison": args.denotation_comparison,
-        "sft_export_eligible": (
-            args.context_mode == "state-only"
-            and args.denotation_comparison == "strict-multiset"
+        "sft_export_eligible": sft_export_eligible(
+            context_mode=args.context_mode,
+            history_turns=args.history_turns,
+            rolling_prompt_variant=args.rolling_prompt_variant,
+            denotation_comparison=args.denotation_comparison,
         ),
         "teacher_parser": "strict_no_repair",
         "error_actions_are_sft_targets": False,

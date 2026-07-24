@@ -388,7 +388,7 @@ def score(
     gold_sql: str,
     answer_args: dict,
     created: set,
-    denotation_comparison: str = "strict-multiset",
+    denotation_comparison: str = "bird-set",
 ) -> tuple[bool, list, list]:
     gold = h.gold(gold_sql)
     ev = _evidence_table(answer_args.get("evidence"))
@@ -650,10 +650,10 @@ def run_live(
     api_retries: int,
     max_errors_per_type: int = MAX_ERRORS_PER_TYPE,
     table_output_rows: int = 0,
-    context_mode: str = "state-only",
+    context_mode: str = "rolling-legal-history",
     history_turns: int = 4,
     compact_history_observations: bool = True,
-    denotation_comparison: str = "strict-multiset",
+    denotation_comparison: str = "bird-set",
 ) -> dict:
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
@@ -933,7 +933,7 @@ def main() -> int:
     ap.add_argument("--table-output-rows", type=int, default=0,
                     help="include up to N rows in each table-producing tool observation (0 = metadata only)")
     ap.add_argument("--context-mode", choices=["state-only", "rolling-legal-history"],
-                    default="state-only")
+                    default="rolling-legal-history")
     ap.add_argument("--history-turns", type=int, default=4,
                     help="successful assistant/tool pairs retained in rolling mode; 0 keeps all")
     ap.add_argument("--rolling-prompt-variant", choices=["full", "compact"], default="full",

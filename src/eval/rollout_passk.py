@@ -554,7 +554,9 @@ def main() -> int:
     parser.add_argument("--api-retries", type=int, default=3)
     parser.add_argument("--few-shot", type=int, default=0)
     parser.add_argument(
-        "--context-mode", choices=["state-only", "rolling-legal-history"], default="state-only",
+        "--context-mode",
+        choices=["state-only", "rolling-legal-history"],
+        default="rolling-legal-history",
     )
     parser.add_argument("--history-turns", type=int, default=4)
     parser.add_argument(
