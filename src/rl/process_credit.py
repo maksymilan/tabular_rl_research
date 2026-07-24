@@ -47,6 +47,7 @@ from target_support import (  # noqa: E402
     table_target_row_units,
 )
 from task_support import task_text_supports_literal  # noqa: E402
+from trajectory_replay import remap_replay_handles  # noqa: E402
 from rollout import (  # noqa: E402
     execute_tool,
     new_ctx,
@@ -523,33 +524,6 @@ def _fraction_delta(before: set[Any], after: set[Any], target: set[Any] | frozen
     return len((after - before) & set(target)) / len(target)
 
 
-def _remap_replay_handles(value: Any, handle_map: dict[str, str]) -> Any:
-    """Translate recorded online handles to handles allocated during legal-only replay.
-
-    Recoverable execution failures are retained as audit events but omitted from the legal SFT
-    step list. Some executor failures consume an internal handle number before raising, so a later
-    online handle can be ``project_006`` while legal-only replay allocates ``project_005``. Keep
-    model-authored calls unchanged in the stored trajectory, but translate exact table references
-    and logical ``handle.column`` namespaces at replay time.
-    """
-    if isinstance(value, list):
-        return [_remap_replay_handles(item, handle_map) for item in value]
-    if isinstance(value, dict):
-        return {key: _remap_replay_handles(item, handle_map) for key, item in value.items()}
-    if not isinstance(value, str) or not handle_map:
-        return value
-    if value in handle_map:
-        return handle_map[value]
-    rendered = value
-    for recorded, replayed in sorted(handle_map.items(), key=lambda item: -len(item[0])):
-        rendered = re.sub(
-            rf"(?<![A-Za-z0-9_]){re.escape(recorded)}(?=\.)",
-            replayed,
-            rendered,
-        )
-    return rendered
-
-
 def _table_ref(arguments: dict[str, Any], ctx: dict[str, Any]) -> str | None:
     ref = arguments.get("table")
     if not isinstance(ref, str):
@@ -743,7 +717,7 @@ def replay_step_features(
             call = step["tool_call"]
             tool = call["tool"]
             authored_arguments = call.get("arguments") or {}
-            arguments = _remap_replay_handles(authored_arguments, replay_handle_map)
+            arguments = remap_replay_handles(authored_arguments, replay_handle_map)
             before = ctx["environment"].snapshot()
             signature = action_signature(tool, authored_arguments)
             repeated = signature in seen_signatures

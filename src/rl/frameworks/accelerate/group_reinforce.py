@@ -12,6 +12,7 @@ Neither condition uses a learned reward/value model or token-level authored-cred
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -22,10 +23,16 @@ from typing import Any
 
 import torch
 import bitsandbytes as bnb
-import torch.nn.functional as F
 from accelerate import Accelerator
 from peft import PeftModel, prepare_model_for_kbit_training
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, LogitsProcessor, LogitsProcessorList
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    LogitsProcessor,
+    LogitsProcessorList,
+    get_scheduler,
+)
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path[:0] = [str(ROOT / "src" / "rl"), str(ROOT / "src" / "eval"), str(ROOT / "src" / "harness"), str(ROOT / "src" / "sft")]
@@ -38,7 +45,20 @@ from process_credit import (  # noqa: E402
     ProcessRewardConfig,
     score_rollout_trajectory,
 )
-from process_objective import sampled_forward_kl  # noqa: E402
+from process_objective import sampled_turn_forward_kl  # noqa: E402
+from counterfactual_suite import (  # noqa: E402
+    CounterfactualSuiteManifest,
+    CounterfactualTaskSuite,
+    load_counterfactual_suite_manifest,
+)
+from trajectory_replay import evaluate_counterfactual_suite  # noqa: E402
+from frameworks.accelerate.turn_logprobs import (  # noqa: E402
+    response_token_logprobs_batched,
+)
+from frameworks.accelerate.training_state import (  # noqa: E402
+    load_training_state,
+    save_training_state,
+)
 
 
 @dataclass
@@ -75,9 +95,16 @@ def parse_args() -> argparse.Namespace:
                         help="turns per gradient forward pass; lower this if logprob still OOMs")
     parser.add_argument("--train-turns", choices=("all", "last"), default="all",
                         help="assistant turns receiving REINFORCE loss; use last only for an explicit speed ablation")
-    parser.add_argument("--learning-rate", type=float, default=5e-6)
+    parser.add_argument("--learning-rate", type=float, default=1e-6)
+    parser.add_argument(
+        "--lr-scheduler-type",
+        choices=("constant", "linear", "cosine"),
+        default="cosine",
+    )
+    parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--reward-mode", choices=("result-only", "process"), default="result-only")
     parser.add_argument("--process-reward-config", type=Path)
+    parser.add_argument("--counterfactual-suite-manifest", type=Path)
     parser.add_argument("--kl-beta", type=float, default=0.0)
     parser.add_argument(
         "--denotation-comparison",
@@ -94,6 +121,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--seed", type=int, default=20260711)
     parser.add_argument("--save-every", type=int, default=25)
+    parser.add_argument("--resume-from-checkpoint", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     return parser.parse_args()
 
@@ -119,7 +147,8 @@ def load_model(args: argparse.Namespace, accelerator: Accelerator):
     )
     model.config.use_cache = False
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-    model = PeftModel.from_pretrained(model, args.adapter_path, is_trainable=True)
+    trainable_adapter_path = args.resume_from_checkpoint or args.adapter_path
+    model = PeftModel.from_pretrained(model, trainable_adapter_path, is_trainable=True)
     if args.kl_beta > 0:
         model.load_adapter(
             args.adapter_path,
@@ -271,6 +300,7 @@ def sample_group(
     metadata: dict[str, Any],
     args: argparse.Namespace,
     process_config: ProcessRewardConfig | None = None,
+    counterfactual_suite: CounterfactualTaskSuite | None = None,
 ) -> list[Sample]:
     example = episode_example(metadata)
     device = next(model.parameters()).device
@@ -363,6 +393,26 @@ def sample_group(
                 process_update = reward.process_update
                 scalar_reward = reward.total_reward
                 record["process_reward"] = reward.to_dict()
+                if reward.correct and process_update:
+                    if counterfactual_suite is None:
+                        raise RuntimeError(
+                            "correct process trajectory has no counterfactual task suite"
+                        )
+                    completeness = evaluate_counterfactual_suite(
+                        normalized,
+                        counterfactual_suite.database_paths,
+                        min_informative_databases=(
+                            counterfactual_suite.min_informative_databases
+                        ),
+                        denotation_comparison=args.denotation_comparison,
+                    )
+                    record["counterfactual_completeness"] = completeness.to_dict()
+                    if not completeness.passed:
+                        process_update = False
+                        scalar_reward = 0.0
+                        record["process_reward_exclusion"] = (
+                            f"counterfactual_completeness:{completeness.reason}"
+                        )
         samples.append(Sample(
             reward=scalar_reward,
             correct=bool(record["correct"]),
@@ -374,60 +424,6 @@ def sample_group(
         ))
         env.close()
     return samples
-
-
-def _model_logits_for_response(model, input_ids: torch.Tensor, attention_mask: torch.Tensor,
-                               logits_to_keep: int) -> torch.Tensor:
-    """Return only the response-prediction logits when the model supports it.
-
-    Qwen-family causal LM forward methods in recent Transformers accept ``logits_to_keep``.
-    Avoiding full-context logits is the difference between a usable long-context RL step and a
-    gradient OOM on 24GB cards.  The fallback keeps compatibility with older installs.
-    """
-    try:
-        logits = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            use_cache=False,
-            logits_to_keep=logits_to_keep,
-        ).logits
-    except TypeError:
-        logits = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False).logits
-    return logits[:, -logits_to_keep:, :]
-
-
-def response_logprobs_batched(model, tokenizer, turns: list[tuple[list[int], list[int]]],
-                              device: torch.device) -> list[torch.Tensor]:
-    """Full assistant-turn log-probabilities, padded into one training microbatch.
-
-    One process reward applies to the complete ``think + tool_call`` action.  Summing token
-    log-probabilities implements ``log pi(a_t | s_t)``; averaging here would silently divide each
-    turn's policy gradient by its own token count and would no longer match the stated objective.
-    """
-    max_response_len = max(len(response_ids) for _, response_ids in turns)
-    sequences = [prompt_ids + response_ids[:-1] for prompt_ids, response_ids in turns]
-    max_sequence_len = max(len(seq) for seq in sequences)
-    input_rows = []
-    mask_rows = []
-    target_rows = []
-    for seq, (_, response_ids) in zip(sequences, turns, strict=True):
-        pad_len = max_sequence_len - len(seq)
-        input_rows.append([tokenizer.pad_token_id] * pad_len + seq)
-        mask_rows.append([0] * pad_len + [1] * len(seq))
-        target_pad = max_response_len - len(response_ids)
-        target_rows.append([-100] * target_pad + response_ids)
-    input_ids = torch.tensor(input_rows, device=device, dtype=torch.long)
-    attention_mask = torch.tensor(mask_rows, device=device, dtype=torch.long)
-    targets = torch.tensor(target_rows, device=device, dtype=torch.long)
-    logits = _model_logits_for_response(model, input_ids, attention_mask, max_response_len)
-    token_losses = F.cross_entropy(
-        logits.float().transpose(1, 2),
-        targets,
-        ignore_index=-100,
-        reduction="none",
-    )
-    mask = targets.ne(-100)
-    return [-(token_losses[index][mask[index]].sum()) for index in range(len(turns))]
 
 
 def trainable_turns(sample: Sample, mode: str) -> list[tuple[list[int], list[int]]]:
@@ -477,18 +473,32 @@ def backward_group_loss(model, tokenizer, samples: list[Sample], logprob_micro_b
     for offset in range(0, len(entries), micro_batch_size):
         chunk = entries[offset: offset + micro_batch_size]
         turns = [turn for _, turn in chunk]
-        reference_logps = None
+        reference_token_logps = None
         if kl_beta > 0:
             activate_adapter(model, "sft_reference")
             with torch.no_grad():
-                reference_logps = response_logprobs_batched(model, tokenizer, turns, device)
+                reference_token_logps = response_token_logprobs_batched(
+                    model,
+                    tokenizer,
+                    turns,
+                    device,
+                )
             activate_adapter(model, "default")
-        logps = response_logprobs_batched(model, tokenizer, turns, device)
+        current_token_logps = response_token_logprobs_batched(
+            model,
+            tokenizer,
+            turns,
+            device,
+        )
+        logps = [token_logps.sum() for token_logps in current_token_logps]
         terms = []
         for index, ((sample_index, _), logp) in enumerate(zip(chunk, logps, strict=True)):
             term = -float(advantages[sample_index]) * logp
-            if reference_logps is not None:
-                kl = sampled_forward_kl(logp, reference_logps[index])
+            if reference_token_logps is not None:
+                kl = sampled_turn_forward_kl(
+                    current_token_logps[index],
+                    reference_token_logps[index],
+                )
                 kl_value += float(kl.detach().cpu()) / len(entries)
                 term = term + float(kl_beta) * kl
             terms.append(term / len(entries))
@@ -577,18 +587,32 @@ def backward_process_loss(
     for offset in range(0, len(entries), micro_batch_size):
         chunk = entries[offset: offset + micro_batch_size]
         turns = [turn for turn, _ in chunk]
-        reference_logps = None
+        reference_token_logps = None
         if kl_beta > 0:
             activate_adapter(model, "sft_reference")
             with torch.no_grad():
-                reference_logps = response_logprobs_batched(model, tokenizer, turns, device)
+                reference_token_logps = response_token_logprobs_batched(
+                    model,
+                    tokenizer,
+                    turns,
+                    device,
+                )
             activate_adapter(model, "default")
-        current_logps = response_logprobs_batched(model, tokenizer, turns, device)
+        current_token_logps = response_token_logprobs_batched(
+            model,
+            tokenizer,
+            turns,
+            device,
+        )
+        current_logps = [token_logprobs.sum() for token_logprobs in current_token_logps]
         terms = []
         for index, (current_logp, (_, reward)) in enumerate(zip(current_logps, chunk, strict=True)):
             term = -float(reward) * current_logp
-            if reference_logps is not None:
-                kl = sampled_forward_kl(current_logp, reference_logps[index])
+            if reference_token_logps is not None:
+                kl = sampled_turn_forward_kl(
+                    current_token_logps[index],
+                    reference_token_logps[index],
+                )
                 kl_value += float(kl.detach().cpu()) / len(entries)
                 term = term + float(kl_beta) * kl
             terms.append(term / len(entries))
@@ -631,11 +655,70 @@ def backward_process_loss_with_retry(
             micro_batch_size = max(1, micro_batch_size // 2)
 
 
-def save_adapter(model, output_dir: Path, step: int) -> None:
+def checkpoint_metadata(args: argparse.Namespace) -> dict[str, Any]:
+    """Fields that must remain fixed when continuing an interrupted controlled run."""
+    def artifact_identity(path: Path | None) -> dict[str, str] | None:
+        if path is None:
+            return None
+        resolved = path.resolve()
+        digest = hashlib.sha256(resolved.read_bytes()).hexdigest() if resolved.is_file() else ""
+        return {"path": str(resolved), "sha256": digest}
+
+    return {
+        "model_path": str(args.model_path.resolve()),
+        "sft_adapter_path": str(args.adapter_path.resolve()),
+        "examples_json": artifact_identity(args.examples_json),
+        "selection": artifact_identity(args.selection),
+        "process_reward_config": (
+            artifact_identity(args.process_reward_config)
+            if args.reward_mode == "process"
+            else None
+        ),
+        "counterfactual_suite_manifest": (
+            artifact_identity(args.counterfactual_suite_manifest)
+            if args.reward_mode == "process"
+            else None
+        ),
+        "reward_mode": args.reward_mode,
+        "denotation_comparison": args.denotation_comparison,
+        "steps": args.steps,
+        "group_size": args.group_size,
+        "rollout_batch_size": args.rollout_batch_size,
+        "train_turns": args.train_turns,
+        "context_mode": args.context_mode,
+        "history_turns": args.history_turns,
+        "max_steps": args.max_steps,
+        "max_new_tokens": args.max_new_tokens,
+        "max_context_tokens": args.max_context_tokens,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "seed": args.seed,
+        "learning_rate": args.learning_rate,
+        "lr_scheduler_type": args.lr_scheduler_type,
+        "warmup_ratio": args.warmup_ratio,
+        "kl_beta": args.kl_beta,
+    }
+
+
+def save_checkpoint(
+    model,
+    optimizer,
+    scheduler,
+    output_dir: Path,
+    step: int,
+    args: argparse.Namespace,
+) -> None:
     target = output_dir / f"checkpoint-{step}"
     target.mkdir(parents=True, exist_ok=True)
     activate_adapter(model, "default")
     model.save_pretrained(target, selected_adapters=["default"])
+    save_training_state(
+        target,
+        step=step,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        metadata=checkpoint_metadata(args),
+    )
 
 
 def main() -> int:
@@ -646,6 +729,15 @@ def main() -> int:
         raise SystemExit("--rollout-batch-size must be non-negative")
     if args.kl_beta < 0:
         raise SystemExit("--kl-beta must be non-negative")
+    if not 0.0 <= args.warmup_ratio < 1.0:
+        raise SystemExit("--warmup-ratio must be in [0, 1)")
+    if args.save_every <= 0:
+        raise SystemExit("--save-every must be positive")
+    if args.reward_mode == "process" and args.counterfactual_suite_manifest is None:
+        raise SystemExit(
+            "--counterfactual-suite-manifest is required for process RL; "
+            "single-database correctness cannot pass the dependency-completeness gate"
+        )
     accelerator = Accelerator()
     if accelerator.num_processes != 1:
         raise SystemExit("this baseline is intentionally single-GPU; launch without accelerate multi-process")
@@ -665,10 +757,46 @@ def main() -> int:
     )
     if process_config is not None:
         process_config.validate()
-    model, tokenizer, optimizer = load_model(args, accelerator)
+    counterfactual_manifest: CounterfactualSuiteManifest | None = (
+        load_counterfactual_suite_manifest(args.counterfactual_suite_manifest)
+        if args.reward_mode == "process"
+        else None
+    )
+    counterfactual_suites: dict[str, CounterfactualTaskSuite] = {}
+    if counterfactual_manifest is not None:
+        for record in records:
+            metadata = record["environment"]
+            suite = counterfactual_manifest.suite_for(metadata)
+            counterfactual_suites[str(metadata["task_id"])] = suite
     log_path = args.output_dir / "metrics.jsonl"
     rollout_log_path = args.output_dir / "rollouts.jsonl"
-    for step in range(1, args.steps + 1):
+    if args.resume_from_checkpoint is None and (log_path.exists() or rollout_log_path.exists()):
+        raise SystemExit(
+            "output directory already contains run logs; use --resume-from-checkpoint "
+            "or choose an isolated output directory"
+        )
+
+    model, tokenizer, optimizer = load_model(args, accelerator)
+    scheduler = get_scheduler(
+        args.lr_scheduler_type,
+        optimizer=optimizer,
+        num_warmup_steps=round(args.steps * args.warmup_ratio),
+        num_training_steps=args.steps,
+    )
+    completed_step = 0
+    if args.resume_from_checkpoint is not None:
+        completed_step = load_training_state(
+            args.resume_from_checkpoint,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            expected_metadata=checkpoint_metadata(args),
+            map_location=next(model.parameters()).device,
+        )
+        if completed_step >= args.steps:
+            raise SystemExit(
+                f"checkpoint already completed step {completed_step}, requested steps={args.steps}"
+            )
+    for step in range(completed_step + 1, args.steps + 1):
         step_started = time.time()
         record = records[(step - 1) % len(records)]
         rollout_started = time.time()
@@ -678,6 +806,11 @@ def main() -> int:
             record["environment"],
             args,
             process_config,
+            (
+                counterfactual_suites[str(record["environment"]["task_id"])]
+                if args.reward_mode == "process"
+                else None
+            ),
         )
         rollout_seconds = time.time() - rollout_started
         model.train()
@@ -725,8 +858,9 @@ def main() -> int:
             try:
                 accelerator.clip_grad_norm_((param for param in model.parameters() if param.requires_grad), 1.0)
                 optimizer.step()
+                scheduler.step()
             except torch.OutOfMemoryError:
-                optimization_error = "backward_oom"
+                optimization_error = "optimizer_oom"
                 updated = False
                 loss_value = None
         if not updated:
@@ -752,6 +886,7 @@ def main() -> int:
             "history_turns": args.history_turns,
             "rolling_observation_style": "resident",
             "loss": loss_value,
+            "learning_rate": scheduler.get_last_lr()[0],
             "updated": updated,
             "optimization_error": optimization_error,
             "rollout_batch_size": args.rollout_batch_size or args.group_size,
@@ -771,8 +906,23 @@ def main() -> int:
                 }, ensure_ascii=False) + "\n")
         accelerator.print(json.dumps(event, ensure_ascii=False))
         if step % args.save_every == 0:
-            save_adapter(model, args.output_dir, step)
-    save_adapter(model, args.output_dir, args.steps)
+            save_checkpoint(
+                model,
+                optimizer,
+                scheduler,
+                args.output_dir,
+                step,
+                args,
+            )
+    if args.steps % args.save_every != 0:
+        save_checkpoint(
+            model,
+            optimizer,
+            scheduler,
+            args.output_dir,
+            args.steps,
+            args,
+        )
     return 0
 
 

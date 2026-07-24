@@ -116,9 +116,58 @@ class BirdTaskAdapterTests(unittest.TestCase):
                 )
         self.assertEqual(records[0]["environment"]["db_path"], task["db_path"])
         self.assertEqual(records[0]["environment"]["gold_sql"], task["gold_sql"])
+        self.assertEqual(records[0]["environment"]["task_id"], "spider_train_00009")
         prompt = records[0]["prompt"][1]["content"]
         self.assertIn(task["external_knowledge"], prompt)
         self.assertNotIn(task["gold_sql"], prompt)
+
+    def test_cached_catalog_does_not_leak_another_database_path(self):
+        tasks = [
+            {
+                "example_index": 1,
+                "example_id": "task_a1",
+                "db_id": "a",
+                "db_path": "/tmp/a.sqlite",
+                "question": "a1",
+                "gold_sql": "SELECT 1",
+            },
+            {
+                "example_index": 2,
+                "example_id": "task_b",
+                "db_id": "b",
+                "db_path": "/tmp/b.sqlite",
+                "question": "b",
+                "gold_sql": "SELECT 1",
+            },
+            {
+                "example_index": 3,
+                "example_id": "task_a2",
+                "db_id": "a",
+                "db_path": "/tmp/a.sqlite",
+                "question": "a2",
+                "gold_sql": "SELECT 1",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "tasks.json")
+            path.write_text(json.dumps({"examples": tasks}), encoding="utf-8")
+            with patch("task_loader.Harness", FakeHarness), patch(
+                "task_loader.build_catalog", return_value={"tables": []}
+            ):
+                records = load_rl_task_records(
+                    Path(directory),
+                    split="train",
+                    examples_json=path,
+                )
+
+        self.assertEqual(
+            [record["environment"]["db_path"] for record in records],
+            ["/tmp/a.sqlite", "/tmp/b.sqlite", "/tmp/a.sqlite"],
+        )
+        self.assertEqual(
+            [record["environment"]["task_id"] for record in records],
+            ["task_a1", "task_b", "task_a2"],
+        )
 
 
 if __name__ == "__main__":

@@ -6,12 +6,33 @@ import math
 from collections.abc import Sequence
 
 
-def sampled_forward_kl(current_logp, reference_logp):
-    """Non-negative k3 estimator of ``KL(current || reference)`` on current-policy samples."""
+def sampled_forward_kl(current_logp, reference_logp, *, max_value: float = 10.0):
+    """Stable non-negative k3 estimator of ``KL(current || reference)``.
+
+    Inputs may be scalars or aligned token-log-probability tensors.  Clamping is applied per token,
+    before a caller sums a complete turn.  Applying k3 to a sequence-summed log-ratio instead would
+    exponentiate the product of all token ratios and becomes unstable for long assistant turns.
+    """
+    if max_value <= 0:
+        raise ValueError("max_value must be positive")
     log_ratio = current_logp - reference_logp
-    negative = -log_ratio
-    exp_negative = negative.exp() if hasattr(negative, "exp") else math.exp(negative)
-    return exp_negative + log_ratio - 1.0
+    if hasattr(log_ratio, "clamp"):
+        safe_log_ratio = log_ratio.float().clamp(min=-20.0, max=20.0)
+        estimate = (-safe_log_ratio).exp() + safe_log_ratio - 1.0
+        return estimate.clamp(min=0.0, max=float(max_value))
+    safe_log_ratio = min(20.0, max(-20.0, float(log_ratio)))
+    estimate = math.exp(-safe_log_ratio) + safe_log_ratio - 1.0
+    return min(float(max_value), max(0.0, estimate))
+
+
+def sampled_turn_forward_kl(current_token_logps, reference_token_logps):
+    """Sum conditional token KL estimates to obtain one complete-turn action KL."""
+    if getattr(current_token_logps, "shape", None) != getattr(reference_token_logps, "shape", None):
+        raise ValueError("current and reference token log-probabilities must align")
+    token_kls = sampled_forward_kl(current_token_logps, reference_token_logps)
+    if hasattr(token_kls, "sum"):
+        return token_kls.sum()
+    return sum(token_kls)
 
 
 def process_policy_loss(

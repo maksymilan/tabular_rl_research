@@ -403,7 +403,16 @@ def score(
     ):
         return True, evidence_rows[:5], gold[:5]
 
-    answer_candidates = answer_row_candidates(answer_args.get("answer"), gold)
+    # A missing explicit-answer field is not an authored empty answer.  Current protocol episodes
+    # cite an exact evidence table and intentionally omit ``answer``; treating that omission as
+    # ``[]`` creates a false positive whenever the gold denotation is empty but the cited table is
+    # not.  Preserve the historical explicit-answer fallback only when the field is actually
+    # present in the recorded call.
+    answer_candidates = (
+        answer_row_candidates(answer_args["answer"], gold)
+        if "answer" in answer_args
+        else []
+    )
     for candidate in answer_candidates:
         if _rows_equal_safe(candidate, gold, denotation_comparison):
             return True, candidate[:5], gold[:5]

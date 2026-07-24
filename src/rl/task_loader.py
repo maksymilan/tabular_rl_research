@@ -32,6 +32,18 @@ def _task_gold_sql(example: dict[str, Any]) -> str | None:
     return example.get("gold_sql") or example.get("query")
 
 
+def _task_id(example: dict[str, Any], *, split: str, index: int) -> str:
+    provided = (
+        example.get("example_id")
+        or example.get("instance_id")
+        or example.get("trajectory_id")
+    )
+    if provided:
+        return str(provided)
+    dataset = str(example.get("dataset") or "spider").replace("-", "_")
+    return f"{dataset}_{split}_{index:05d}"
+
+
 def load_selection(path: Path | None) -> list[int] | None:
     if path is None:
         return None
@@ -82,11 +94,11 @@ def load_rl_task_records(
     catalogs: dict[str, dict[str, Any]] = {}
     for index, example in indexed:
         db_id = example["db_id"]
+        db_path = _task_db_path(example)
+        if not Path(db_path).is_absolute():
+            db_path = str(project_root / db_path)
         catalog = catalogs.get(db_id)
         if catalog is None:
-            db_path = _task_db_path(example)
-            if not Path(db_path).is_absolute():
-                db_path = str(project_root / db_path)
             harness = Harness(db_path)
             try:
                 catalog = build_catalog(harness)
@@ -105,6 +117,7 @@ def load_rl_task_records(
                 "environment": {
                     "dataset_split": split,
                     "example_index": index,
+                    "task_id": _task_id(example, split=split, index=index),
                     "db_id": db_id,
                     "db_path": db_path,
                     "question": example["question"],

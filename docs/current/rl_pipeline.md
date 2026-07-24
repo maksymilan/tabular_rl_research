@@ -15,6 +15,9 @@ to score terminal denotation on training tasks.
 - `src/rl/task_support.py`: deterministic model-visible literal support and canonical rewrites.
 - `src/rl/process_credit.py`: replay-derived, step-local process credit.
 - `src/rl/process_objective.py`: per-step policy objective.
+- `src/rl/trajectory_replay.py`: path-independent replay of the same authored tool program on
+  schema-compatible counterfactual databases.
+- `src/rl/counterfactual_suite.py`: immutable task-suite manifest loading and artifact binding.
 - `src/rl/build_sft_task_set.py`: exact BIRD task cohort from the retained SFT index.
 - `src/rl/audit_sft_process_rewards.py`: exact SFT-index reward coverage and one-factor ablations.
 - `src/rl/audit_reward_sensitivity.py`: matched success/failure coefficient sensitivity scan.
@@ -22,7 +25,8 @@ to score terminal denotation on training tasks.
   reviews.
 - `src/rl/select_grounding_recheck.py` and `src/rl/summarize_grounding_external_audit.py`:
   deterministic second-opinion selection and consensus aggregation.
-- `src/rl/frameworks/accelerate/`: the supported single-GPU QLoRA training backend.
+- `src/rl/frameworks/accelerate/`: the supported QLoRA transition-level training backend,
+  including exact turn-token alignment, tokenwise fixed-reference KL, and resumable training state.
 
 The historical Verl integration is archived under `archive/code/experimental_backends/verl/` and
 is not a supported training entry point.
@@ -72,24 +76,39 @@ special positive reward. Every other current tool can receive back-slice/evidenc
 credit when its executed output participates in the verified answer.
 
 The active optimizer applies one scalar reward to the complete authored assistant turn and uses the
-sum of its token log-probabilities as `log pi(action|state)`. It divides by the total participating
-turn count `M`, not by episode count. Optional KL uses a frozen copy of the SFT initialization
-adapter. Result-only and process conditions share the same causal environment and `bird-set`
-terminal scorer; reward mode is the controlled difference.
+sum of its exact rollout-token log-probabilities as `log pi(action|state)`. It divides by the total
+participating turn count `M`, not by episode or token count. Optional KL uses a frozen copy of the
+SFT initialization adapter, computes a bounded k3 estimate per response token, and sums those
+conditional KL terms within the turn. Result-only and process conditions share the same causal
+environment and `bird-set` terminal scorer; reward mode is the controlled difference.
+
+The default pilot optimizer uses learning rate `1e-6`, cosine scheduling, and 3% warmup. Each
+checkpoint includes adapter, optimizer, scheduler, and Python/Torch/CUDA RNG state. Resume validates
+the task artifact, reward condition, rollout settings, and optimizer settings before continuing.
+The source-informed backend rationale and framework equivalence requirements are recorded in
+`docs/decisions/process_rl_backend.md`.
 
 `run_atomic_group_reinforce.sh` launches either condition. For a controlled ablation, pin the same
 model/adapter, task-set artifact, group size, decoding settings, action/context budgets, learning
 rate, update count, and KL coefficient; change only `REWARD_MODE` (and the process reward config
 that is unused by the result-only control).
 
-Before process credit is connected to an optimizer, both deterministic completeness and independent
-edge-precision audits must pass. Versioned reports and frozen configs live in `docs/reports/rl/` and
+Process RL is the main research condition; result-only RL is only its matched baseline. Before the
+process condition is launched, both deterministic completeness and independent edge-precision
+audits must pass. Versioned reports and frozen configs live in `docs/reports/rl/` and
 `src/rl/configs/` respectively.
 
 Current gate status (2026-07-24): deterministic replay coverage and independent grounding-edge
 precision pass, but independent dependency completeness fails on confirmed denotation-shortcut
-trajectories. Result-only RL may continue as the control; process-RL optimization remains disabled.
-See `docs/reports/rl/ATOMIC_PROCESS_REWARD_PRECISION_SENSITIVITY_AUDIT_20260724.md`.
+trajectories. This is a blocker to the process launch, not a change in research priority.
+Path-independent counterfactual replay is now implemented: it executes the actor's fixed legal
+tool program on schema-compatible databases, scores only the mandatory terminal evidence table,
+requires at least one changed/non-vacuous gold denotation, and excludes a correct trajectory from
+process optimization when any database distinguishes it. Process mode therefore requires a
+content-hashed counterfactual-suite manifest whose independent quality gate is marked passed and
+bound to an audit SHA-256; stochastic database generation is never run inside the optimizer. The
+remaining task is to build and audit adequate BIRD suites. See
+`docs/reports/rl/ATOMIC_PROCESS_REWARD_PRECISION_SENSITIVITY_AUDIT_20260724.md`.
 
 ## Invariants
 
@@ -98,5 +117,8 @@ See `docs/reports/rl/ATOMIC_PROCESS_REWARD_PRECISION_SENSITIVITY_AUDIT_20260724.
 - Rejected actions spend the shared action budget and remain audit-only, never SFT targets.
 - Terminal scoring must complete before an episode is marked legal.
 - All active terminal, replay, and reward scoring uses `bird-set`.
+- A missing legacy `answer` field is never interpreted as an authored empty answer; current
+  terminal correctness comes from the cited evidence relation.
+- Correct process trajectories update only after their immutable counterfactual suite passes.
 - API transport retries are client events, not semantic actions.
 - SFT, evaluation, and RL share the same protocol renderer and harness semantics.

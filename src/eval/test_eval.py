@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -284,6 +285,32 @@ class EvalTests(unittest.TestCase):
         self.assertIn([[151]], answer_row_candidates([151], [[151]]))
         self.assertIn([["Village"]], answer_row_candidates("Village", [["Village"]]))
         self.assertIn([["a"], ["b"]], answer_row_candidates(["a", "b"], [["a"], ["b"]]))
+
+    def test_missing_explicit_answer_does_not_match_empty_gold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = str(Path(tmp) / "score.sqlite")
+            conn = sqlite3.connect(db)
+            conn.execute("CREATE TABLE items (value TEXT)")
+            conn.execute("INSERT INTO items VALUES ('not-empty')")
+            conn.commit()
+            conn.close()
+
+            harness = Harness(db)
+            try:
+                harness.views["evidence_001"] = "SELECT value FROM items"
+                correct, predicted, gold = score(
+                    harness,
+                    "SELECT value FROM items WHERE 0",
+                    {"evidence": {"table": "evidence_001"}},
+                    {"evidence_001"},
+                    denotation_comparison="bird-set",
+                )
+            finally:
+                harness.conn.close()
+
+        self.assertFalse(correct)
+        self.assertEqual(predicted, [("not-empty",)])
+        self.assertEqual(gold, [])
 
     def test_score_accepts_answer_when_evidence_table_is_broader(self):
         harness = FakeHarness([[151]], {"join_001": [[151, "Alice", "dept"]]})
