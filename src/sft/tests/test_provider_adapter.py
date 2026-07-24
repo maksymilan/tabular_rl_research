@@ -22,6 +22,7 @@ from provider_adapter import (  # noqa: E402
 )
 from generate_teacher_rollouts import (  # noqa: E402
     DATA_GENERATION_SUFFIX,
+    ProviderCarrierError,
     chat_with_retries,
     protocol_failure_type,
     request_chat,
@@ -178,6 +179,87 @@ class ProviderAdapterTests(unittest.TestCase):
                 "provider_response_metadata": {"id": "truncated"},
             }],
         )
+
+    def test_empty_visible_carrier_retries_without_spending_a_semantic_action(self):
+        empty_usage = {
+            "prompt_tokens": 10,
+            "completion_tokens": 40,
+            "api_finish_reason": "stop",
+            "provider_request_options": {"thinking": {"type": "enabled"}},
+            "provider_response_metadata": {"id": "empty"},
+        }
+        complete_usage = {
+            "prompt_tokens": 10,
+            "completion_tokens": 50,
+            "api_finish_reason": "stop",
+            "provider_request_options": {"thinking": {"type": "enabled"}},
+            "provider_response_metadata": {"id": "complete"},
+        }
+        final_action = '{"tool":"describe_table","arguments":{"tables":["Document"]}}'
+
+        with patch(
+            "generate_teacher_rollouts.request_chat",
+            side_effect=[
+                ("", empty_usage, "Reasoning without a visible action."),
+                (final_action, complete_usage, "Inspect the schema."),
+            ],
+        ) as mocked, patch("generate_teacher_rollouts.time.sleep"):
+            content, usage, reasoning = chat_with_retries(
+                base_url="https://api.deepseek.com",
+                api_key="test-key",
+                model="deepseek-v4-flash",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=2048,
+                timeout=30,
+                retries=3,
+            )
+
+        self.assertEqual(2, mocked.call_count)
+        self.assertEqual(content, final_action)
+        self.assertEqual(reasoning, "Inspect the schema.")
+        self.assertEqual(usage["api_request_attempts"], 2)
+        self.assertEqual(usage["api_carrier_retries"], 1)
+        self.assertEqual(usage["api_transport_retries"], 0)
+        self.assertEqual(
+            usage["api_retry_events"],
+            [{
+                "type": "provider_carrier_empty",
+                "request_attempt": 1,
+                "max_tokens": 2048,
+                "finish_reason": "stop",
+                "visible_content_present": False,
+                "reasoning_content_present": True,
+                "provider_response_metadata": {"id": "empty"},
+            }],
+        )
+
+    def test_repeated_empty_visible_carrier_fails_as_provider_event(self):
+        empty_usage = {
+            "prompt_tokens": 10,
+            "completion_tokens": 40,
+            "api_finish_reason": "stop",
+            "provider_request_options": {"thinking": {"type": "enabled"}},
+            "provider_response_metadata": {"id": "empty"},
+        }
+        with patch(
+            "generate_teacher_rollouts.request_chat",
+            return_value=("", empty_usage, "Reasoning without a visible action."),
+        ), patch("generate_teacher_rollouts.time.sleep"):
+            with self.assertRaises(ProviderCarrierError) as captured:
+                chat_with_retries(
+                    base_url="https://api.deepseek.com",
+                    api_key="test-key",
+                    model="deepseek-v4-flash",
+                    messages=[{"role": "user", "content": "test"}],
+                    max_tokens=2048,
+                    timeout=30,
+                    retries=3,
+                )
+
+        self.assertEqual(3, captured.exception.usage["api_request_attempts"])
+        self.assertEqual(2, captured.exception.usage["api_carrier_retries"])
+        self.assertEqual(30, captured.exception.usage["prompt_tokens"])
+        self.assertEqual(3, len(captured.exception.usage["api_retry_events"]))
 
     def test_teacher_generator_classifies_split_transport_as_protocol_error(self):
         error = ProtocolError(

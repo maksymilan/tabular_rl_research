@@ -33,6 +33,7 @@ from provider_adapter import (  # noqa: E402
     DEEPSEEK_CARRIER_CHOICES,
     DEEPSEEK_CARRIER_JSON_OUTPUT,
     adapt_provider_response,
+    is_deepseek_split_model,
     provider_default_max_tokens,
     provider_request_messages,
     provider_request_options,
@@ -113,6 +114,14 @@ REQUIRED_RESIDENT_PLAN_SUFFIX = (
     '"evidence":"step_2"},{"op":"update","id":"solve","status":"in_progress"}]}\n'
     'Every item must include the "op" field. Omit evidence until a real prior step supports it.'
 )
+
+
+class ProviderCarrierError(ChatAPIError):
+    """A provider returned no model-visible action after bounded same-request retries."""
+
+    def __init__(self, message: str, *, usage: dict):
+        super().__init__(message)
+        self.usage = usage
 
 
 class ResidentPlanPolicyTracker:
@@ -317,6 +326,7 @@ def chat_with_retries(
     transport_retries = 0
     context_retries = 0
     completion_retries = 0
+    carrier_retries = 0
     retry_events: list[dict] = []
     accumulated_usage: collections.Counter = collections.Counter()
     for attempt in range(max(1, retries)):
@@ -352,6 +362,27 @@ def chat_with_retries(
                 budget = min(MAX_COMPLETION_RETRY_TOKENS, budget * 2)
                 completion_retries += 1
                 continue
+            carrier_empty = (
+                is_deepseek_split_model(model)
+                and finish_reason != "length"
+                and not text.strip()
+            )
+            if carrier_empty:
+                retry_events.append({
+                    "type": "provider_carrier_empty",
+                    "request_attempt": attempt + 1,
+                    "max_tokens": budget,
+                    "finish_reason": finish_reason,
+                    "visible_content_present": False,
+                    "reasoning_content_present": bool(reasoning.strip()),
+                    "provider_response_metadata": deepcopy(
+                        response_usage.get("provider_response_metadata") or {}
+                    ),
+                })
+                if attempt + 1 < max(1, retries):
+                    carrier_retries += 1
+                    time.sleep(min(2 ** attempt, 8))
+                    continue
 
             usage = dict(accumulated_usage)
             usage["api_finish_reason"] = finish_reason
@@ -366,8 +397,15 @@ def chat_with_retries(
             usage["api_transport_retries"] = transport_retries
             usage["api_context_retries"] = context_retries
             usage["api_completion_retries"] = completion_retries
+            usage["api_carrier_retries"] = carrier_retries
             if retry_events:
                 usage["api_retry_events"] = retry_events
+            if carrier_empty:
+                raise ProviderCarrierError(
+                    "DeepSeek provider carrier returned empty visible content after "
+                    f"{attempt + 1} request attempts",
+                    usage=usage,
+                )
             return text, usage, reasoning
         except ContextOverflowError:
             if budget <= MIN_CONTEXT_RETRY_TOKENS:
@@ -651,6 +689,22 @@ def run_rollout(
                 turn["provider_retry_events"] = deepcopy(
                     call_usage["api_retry_events"]
                 )
+        except ProviderCarrierError as exc:
+            add_usage(usage, exc.usage)
+            rec.update({
+                "failure_type": "provider_carrier_error",
+                "fail": f"api: {type(exc).__name__}: {exc}",
+                "steps": action_count - 1,
+                "errors": errors,
+            })
+            turn["api_error"] = rec["fail"]
+            turn["api_error_type"] = "provider_carrier_error"
+            if exc.usage.get("api_retry_events"):
+                turn["provider_retry_events"] = deepcopy(
+                    exc.usage["api_retry_events"]
+                )
+            turns.append(turn)
+            break
         except ContextOverflowError as exc:
             rec.update({
                 "failure_type": "context_overflow",
@@ -1129,6 +1183,7 @@ def main() -> int:
         "all_output": str(all_path),
         "protocol_hash": protocol_hash(system_prompt),
         "max_steps": args.max_steps,
+        "workers": max(1, args.workers),
         "max_errors_per_type": args.max_errors_per_type,
         "attempts_per_example": max(1, args.attempts_per_example),
         "max_tokens": args.max_tokens,

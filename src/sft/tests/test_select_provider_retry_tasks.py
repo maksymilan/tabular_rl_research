@@ -47,6 +47,13 @@ class SelectProviderRetryTasksTest(unittest.TestCase):
                     "failure_type": "protocol_error",
                     "error_events": [{"message": "invalid JSON object"}],
                 },
+                {
+                    "trajectory_id": "task_3",
+                    "attempt_index": 2,
+                    "correct": False,
+                    "failure_type": "provider_carrier_error",
+                    "error_events": [],
+                },
             ])
 
             manifest = build(source, attempts, output)
@@ -55,8 +62,8 @@ class SelectProviderRetryTasksTest(unittest.TestCase):
                 json.loads(line)
                 for line in output.read_text(encoding="utf-8").splitlines()
             ]
-            self.assertEqual([{"example_id": "task_1"}], selected)
-            self.assertEqual(1, manifest["retry_tasks"])
+            self.assertEqual([{"example_id": "task_1"}, {"example_id": "task_3"}], selected)
+            self.assertEqual(2, manifest["retry_tasks"])
             self.assertIn("provider-carrier incomplete", manifest["semantic_interpretation"])
 
 

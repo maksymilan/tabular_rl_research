@@ -36,7 +36,7 @@ def sha256(path: Path) -> str:
 
 
 def is_empty_visible_content_failure(record: dict[str, Any]) -> bool:
-    return (
+    legacy_protocol_failure = (
         not record.get("correct")
         and record.get("failure_type") == "protocol_error"
         and any(
@@ -44,6 +44,11 @@ def is_empty_visible_content_failure(record: dict[str, Any]) -> bool:
             for event in record.get("error_events") or []
         )
     )
+    explicit_carrier_failure = (
+        not record.get("correct")
+        and record.get("failure_type") == "provider_carrier_error"
+    )
+    return legacy_protocol_failure or explicit_carrier_failure
 
 
 def build(source_path: Path, attempts_path: Path, out_path: Path) -> dict[str, Any]:
