@@ -210,7 +210,7 @@ def _condition_literals(condition) -> list:
             out.extend(_condition_literals(item))
     if "not" in condition:
         out.extend(_condition_literals(condition["not"]))
-    if "value" in condition:
+    if "value" in condition and not isinstance(condition["value"], dict):
         out.extend(_flatten_values(condition["value"]))
     if "values" in condition:
         out.extend(_flatten_values(condition["values"]))
@@ -230,7 +230,7 @@ def condition_literal_targets(condition) -> list[tuple[str | None, object]]:
     if "not" in condition:
         out.extend(condition_literal_targets(condition["not"]))
     column = _base_col(condition.get("column"))
-    if "value" in condition:
+    if "value" in condition and not isinstance(condition["value"], dict):
         out.extend((column, value) for value in _flatten_values(condition["value"]))
     if "values" in condition:
         out.extend((column, value) for value in _flatten_values(condition["values"]))
@@ -486,13 +486,30 @@ def build_grounding_references(tool: str, args: dict, history: dict[str, dict]) 
                 "target": {"table": table, "column": column, "values": matched},
             })
 
-        elif prior_tool == "read_subtable" and literal_targets:
+        elif literal_targets:
             columns = record.get("observed_columns") or output.get("columns")
             rows = output.get("rows")
             if not isinstance(columns, list) or not isinstance(rows, list):
                 continue
-            source_table = prior_args.get("table") or output.get("table")
+            # Any row actually rendered by the harness is model-visible evidence.  This includes
+            # bounded previews emitted by relation-producing tools, not only an explicit
+            # read_subtable.  Prefer the produced handle so its recorded lineage is preserved.
+            source_table = output.get("table") or prior_args.get("table")
             source_roots = _root_tables_for_handle(source_table, history, producers, root_memo)
+            computed_columns: set[str] = set()
+            if prior_tool == "scalar_compute":
+                computed_columns.update(
+                    _base_col(column)
+                    for column in columns
+                    if isinstance(column, str)
+                )
+            elif prior_tool == "group_aggregate":
+                computed_columns.update(
+                    _base_col(aggregation.get("as"))
+                    for aggregation in prior_args.get("aggregations") or []
+                    if isinstance(aggregation, dict)
+                    and isinstance(aggregation.get("as"), str)
+                )
             matched_details: list[dict] = []
             for target_column, literal in literal_targets:
                 if not isinstance(target_column, str):
@@ -502,12 +519,15 @@ def build_grounding_references(tool: str, args: dict, history: dict[str, dict]) 
                     continue
                 for column_index, source_column in enumerate(columns):
                     source_column = _base_col(source_column)
-                    if not isinstance(source_column, str) or not _columns_equivalent(
-                        source_roots,
-                        source_column,
-                        target_roots,
-                        target_column,
-                        foreign_keys,
+                    if not isinstance(source_column, str):
+                        continue
+                    computed_result = source_column in computed_columns
+                    if not computed_result and not _columns_equivalent(
+                            source_roots,
+                            source_column,
+                            target_roots,
+                            target_column,
+                            foreign_keys,
                     ):
                         continue
                     if any(
@@ -521,6 +541,9 @@ def build_grounding_references(tool: str, args: dict, history: dict[str, dict]) 
                             "source_column": source_column,
                             "target_tables": sorted(target_roots),
                             "target_column": target_column,
+                            "match_kind": (
+                                "computed_result" if computed_result else "column_equivalent"
+                            ),
                         })
                         linked_row_literals.add(literal_key)
                         break

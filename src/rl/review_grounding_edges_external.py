@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import json
 import sys
 import time
@@ -22,16 +23,59 @@ from process_credit import replay_step_features  # noqa: E402
 
 
 LABELS = frozenset({"valid", "invalid", "ambiguous"})
+REVIEW_PROTOCOL_VERSION = "grounding-review-v4-visible-literal-copy"
 SYSTEM = """You audit causal grounding edges produced by a deterministic table-tool harness.
 Use ONLY tool calls, harness outputs, and final-table samples in the supplied JSON. Never use or
 infer from hidden/model reasoning. An edge is valid when the source observation structurally
 supports the exact table, column, or value consumed by the target action. Mark invalid for a wrong
 table/column, an unrelated final branch, or an incidental common-value collision. Mark ambiguous
 when the supplied environment facts are insufficient. Check for important missing observation
-dependencies. The dependency_edges field contains trusted harness data/value provenance supplied
-only as context; do not report those edges as missing grounding edges and do not include them in
-the output edge list. Return exactly one JSON object and no markdown. Keep each reason under 30
-words."""
+dependencies.
+
+Protocol facts you MUST apply:
+- dependency_edges are complete, trusted data/value lineage. Never repeat one in missing_edges.
+- A relation-producing tool registers a resident relation with its schema and all rows. Downstream
+  relational tools may consume it directly even when the compact output shows no row preview.
+- answer_from_context with an evidence table consumes that resident relation directly. It does not
+  require a preceding read_subtable or row_observation edge.
+- A derived relation's columns are carried by its producer output and trusted dependency edge.
+  Do not request a repeated describe_table/schema_observation edge for a derived handle.
+- A filter literal stated directly in question or external_knowledge needs no separate domain
+  observation. The same applies to deterministic renderings such as an attached ID, a normalized
+  date, a schema-declared unit conversion, or a conventional acronym. Do not flag such literals.
+- A row/domain grounding edge normally represents the model copying an exact scalar from an
+  earlier visible harness output into a later literal argument. It does NOT require value_ref or
+  any syntactic source pointer. For example, aggregate output [[0]] followed by a filter literal 0
+  is a valid row observation when the target column is structurally compatible. value_ref is a
+  separate trusted value dependency and therefore would not need a grounding edge.
+- Grounding edges represent observations needed for a base-table schema choice or for copying a
+  domain/row value into a later action. Report a missing edge only for such an observation.
+- Separately mark the final dependency invalid when the executed relation path omits a question
+  constraint, comparison, aggregation, ordering, negation, or entity-mapping step, even if its
+  denotation happens to equal the reference answer.
+
+The dependency_edges field is supplied only as context; do not include those edges in the output
+edge list. Return exactly one JSON object and no markdown. Keep each reason under 30 words."""
+SYSTEM_SHA256 = hashlib.sha256(SYSTEM.encode("utf-8")).hexdigest()
+
+
+def _edge_id(
+    from_step: str,
+    to_step: str,
+    edge_type: str,
+    role: str,
+    target: dict[str, Any],
+) -> str:
+    """Return a stable target-aware id so parallel edges cannot collapse."""
+    payload = json.dumps(
+        target,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    suffix = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:10]
+    return f"{from_step}->{to_step}:{edge_type}:{role}:{suffix}"
 
 
 def _flatten_values(value: Any) -> list[Any]:
@@ -67,13 +111,15 @@ def _compact_output(tool: str | None, output: dict[str, Any], target: dict[str, 
         return {"tables": tables}
     if tool == "inspect_column":
         return output
-    if tool == "read_subtable":
+    if isinstance(output.get("rows"), list):
         rows = output.get("rows") or []
-        return {
-            "columns": output.get("columns"),
-            "row_count": output.get("row_count"),
-            "rows": _evidence_rows(rows, target),
+        compact = {
+            key: output.get(key)
+            for key in ("table", "table_name", "kind", "columns", "row_count", "result_sample")
+            if output.get(key) is not None
         }
+        compact["rows"] = _evidence_rows(rows, target)
+        return compact
     return {
         key: output.get(key)
         for key in ("table", "table_name", "kind", "columns", "row_count", "rows", "result_sample")
@@ -97,6 +143,24 @@ def _risk_flags(role: str, target: dict[str, Any], final_audit: dict[str, Any] |
     return flags
 
 
+def _validate_package_output_path(
+    packages_input: Path | None,
+    packages_output: Path,
+    *,
+    selected_ids: set[str] | None,
+    limit: int,
+) -> None:
+    """Prevent a subset review from truncating its complete package source."""
+    if (
+        packages_input is not None
+        and packages_input.resolve() == packages_output.resolve()
+        and (selected_ids is not None or limit > 0)
+    ):
+        raise ValueError(
+            "--packages-output must differ from --packages-input for a selected or limited review"
+        )
+
+
 def build_review_package(trajectory: dict[str, Any]) -> dict[str, Any]:
     features, diagnostics = replay_step_features(trajectory)
     if not diagnostics.get("replay_correct"):
@@ -114,12 +178,12 @@ def build_review_package(trajectory: dict[str, Any]) -> dict[str, Any]:
     seen_dependencies = set()
 
     def add_edge(ref: dict[str, Any], to_step: str) -> None:
-        if ref.get("type") != "grounding" or ref.get("step") not in slice_ids:
+        if ref.get("type") != "grounding" or not ref.get("step"):
             return
         from_step = str(ref["step"])
         role = str(ref.get("role") or "grounding")
         target = ref.get("target") or {}
-        edge_id = f"{from_step}->{to_step}:{role}"
+        edge_id = _edge_id(from_step, to_step, "grounding", role, target)
         if edge_id in seen:
             return
         seen.add(edge_id)
@@ -145,7 +209,14 @@ def build_review_package(trajectory: dict[str, Any]) -> dict[str, Any]:
         if ref.get("type") not in {"data", "value"} or ref.get("step") not in slice_ids:
             return
         from_step = str(ref["step"])
-        edge_id = f"{from_step}->{to_step}:{ref['type']}:{ref.get('role', 'dependency')}"
+        target = ref.get("target") or {}
+        edge_id = _edge_id(
+            from_step,
+            to_step,
+            str(ref["type"]),
+            str(ref.get("role") or "dependency"),
+            target,
+        )
         if edge_id in seen_dependencies:
             return
         seen_dependencies.add(edge_id)
@@ -160,12 +231,12 @@ def build_review_package(trajectory: dict[str, Any]) -> dict[str, Any]:
             "from_step": from_step,
             "from_tool": source_call.get("tool"),
             "from_output": _compact_output(
-                source_call.get("tool"), source.get("tool_output") or {}, ref.get("target") or {}
+                source_call.get("tool"), source.get("tool_output") or {}, target
             ),
             "to_step": to_step,
             "to_tool": destination_call.get("tool"),
             "to_arguments": destination_call.get("arguments"),
-            "target": ref.get("target"),
+            "target": target,
         })
 
     for feature in features:
@@ -192,6 +263,7 @@ def build_review_package(trajectory: dict[str, Any]) -> dict[str, Any]:
         "trajectory_id": trajectory.get("trajectory_id"),
         "difficulty": trajectory.get("difficulty"),
         "question": trajectory.get("question"),
+        "external_knowledge": (trajectory.get("source") or {}).get("external_knowledge"),
         "final_dependency": final_dependency,
         "grounding_edges": edges,
         "dependency_edges": dependency_edges,
@@ -294,7 +366,9 @@ def review_one(package: dict[str, Any], *, base_url: str, api_key: str, model: s
             review = _validate_review(package, text)
             return {"trajectory_id": package["trajectory_id"], "model": model, "review": review,
                     "usage": usage, "raw_content": text, "attempts": attempt + 1,
-                    "attempt_audit": attempt_audit}
+                    "attempt_audit": attempt_audit,
+                    "review_protocol_version": REVIEW_PROTOCOL_VERSION,
+                    "system_prompt_sha256": SYSTEM_SHA256}
         except Exception as exc:  # transport and strict format failures remain audited
             last_error = f"{type(exc).__name__}: {exc}"
             if not attempt_audit or attempt_audit[-1].get("attempt") != attempt + 1:
@@ -303,47 +377,137 @@ def review_one(package: dict[str, Any], *, base_url: str, api_key: str, model: s
                 attempt_audit[-1]["validation_error"] = last_error
             if attempt < retries:
                 time.sleep(min(2 ** attempt, 4))
-    return {"trajectory_id": package["trajectory_id"], "model": model,
-            "review_error": last_error, "attempts": retries + 1, "attempt_audit": attempt_audit}
+    return {
+        "trajectory_id": package["trajectory_id"],
+        "model": model,
+        "review_error": last_error,
+        "attempts": retries + 1,
+        "attempt_audit": attempt_audit,
+        "review_protocol_version": REVIEW_PROTOCOL_VERSION,
+        "system_prompt_sha256": SYSTEM_SHA256,
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, action="append", required=True)
+    parser.add_argument("--input", type=Path, action="append", default=[])
+    parser.add_argument("--packages-input", type=Path)
     parser.add_argument("--packages-output", type=Path, required=True)
     parser.add_argument("--reviews-output", type=Path, required=True)
     parser.add_argument("--summary-output", type=Path, required=True)
     parser.add_argument("--model", default="deepseek-v4-flash")
     parser.add_argument("--trajectory-ids-file", type=Path)
+    parser.add_argument("--sft-index", type=Path)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--retries", type=int, default=1)
     parser.add_argument("--max-tokens", type=int, default=3000)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--packages-only", action="store_true")
     args = parser.parse_args()
+    if not args.input and not args.packages_input:
+        parser.error("provide at least one --input or --packages-input")
+    if args.input and args.packages_input:
+        parser.error("--input and --packages-input are mutually exclusive")
+    if args.trajectory_ids_file and args.sft_index:
+        parser.error("--trajectory-ids-file and --sft-index are mutually exclusive")
 
-    trajectories = []
-    for path in args.input:
-        trajectories.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+    selected_ids: set[str] | None = None
     if args.trajectory_ids_file:
         selected_ids = {
             line.strip()
             for line in args.trajectory_ids_file.read_text(encoding="utf-8").splitlines()
             if line.strip()
         }
-        trajectories = [
-            trajectory for trajectory in trajectories
-            if trajectory.get("trajectory_id") in selected_ids
+    elif args.sft_index:
+        selected_ids = {
+            str(row.get("trajectory_id") or row.get("source_episode_id"))
+            for row in (
+                json.loads(line)
+                for line in args.sft_index.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
+            if row.get("trajectory_id") or row.get("source_episode_id")
+        }
+    try:
+        _validate_package_output_path(
+            args.packages_input,
+            args.packages_output,
+            selected_ids=selected_ids,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    if args.packages_input:
+        packages = [
+            json.loads(line)
+            for line in args.packages_input.read_text(encoding="utf-8").splitlines()
+            if line.strip()
         ]
+        if selected_ids is not None:
+            packages = [
+                package
+                for package in packages
+                if package.get("trajectory_id") in selected_ids
+            ]
+            observed_ids = {
+                str(package.get("trajectory_id"))
+                for package in packages
+            }
+            missing_ids = sorted(selected_ids - observed_ids)
+            if missing_ids:
+                parser.error(f"{len(missing_ids)} selected packages are missing from input")
+    else:
+        trajectories = []
+        for path in args.input:
+            trajectories.extend(
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
+        if selected_ids is not None:
+            trajectories = [
+                trajectory for trajectory in trajectories
+                if trajectory.get("trajectory_id") in selected_ids
+            ]
+            observed_ids = {
+                str(trajectory.get("trajectory_id"))
+                for trajectory in trajectories
+            }
+            missing_ids = sorted(selected_ids - observed_ids)
+            if missing_ids:
+                parser.error(f"{len(missing_ids)} selected trajectories are missing from inputs")
+        if args.limit > 0:
+            trajectories = trajectories[:args.limit]
+        packages = [build_review_package(trajectory) for trajectory in trajectories]
+
     if args.limit > 0:
-        trajectories = trajectories[:args.limit]
-    packages = [build_review_package(trajectory) for trajectory in trajectories]
+        packages = packages[:args.limit]
     for output_path in (args.packages_output, args.reviews_output, args.summary_output):
         output_path.parent.mkdir(parents=True, exist_ok=True)
     args.packages_output.write_text(
         "".join(json.dumps(package, ensure_ascii=False) + "\n" for package in packages), encoding="utf-8"
     )
+    if args.packages_only:
+        summary = {
+            "model": None,
+            "review_protocol_version": REVIEW_PROTOCOL_VERSION,
+            "system_prompt_sha256": SYSTEM_SHA256,
+            "trajectories": len(packages),
+            "review_errors": 0,
+            "external_review_only": True,
+            "packages_only": True,
+            "grounding_precision_audit_approved": False,
+        }
+        args.reviews_output.write_text("", encoding="utf-8")
+        args.summary_output.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0
 
     existing = {}
     if args.resume and args.reviews_output.exists():
@@ -400,6 +564,8 @@ def main() -> int:
                 usage[key] += value
     summary = {
         "model": args.model,
+        "review_protocol_version": REVIEW_PROTOCOL_VERSION,
+        "system_prompt_sha256": SYSTEM_SHA256,
         "trajectories": len(packages),
         "review_errors": errors,
         "final_dependency_labels": dict(sorted(final_labels.items())),

@@ -105,7 +105,25 @@ def _like_pattern_supported(pattern: str, text: str) -> bool:
     return bool(fragments and re.search(r".*".join(fragments), text))
 
 
-def task_text_supports_literal(value: Any, text: str) -> bool:
+def _scaled_thousands_supported(value: Any, column: str | None, text: str) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    if not isinstance(column, str) or not re.search(r"(?:^|_)k$", column.casefold()):
+        return False
+    scaled = float(value) * 1000
+    rounded = round(scaled)
+    return abs(scaled - rounded) < 1e-6 and _has_token(text, str(rounded))
+
+
+def _initialism_supported(value: str, text: str) -> bool:
+    words = re.findall(r"[a-z0-9]+", value.casefold())
+    if len(words) < 2:
+        return False
+    initialism = "".join(word[0] for word in words)
+    return len(initialism) >= 2 and _has_token(text, initialism)
+
+
+def task_text_supports_literal(value: Any, text: str, *, column: str | None = None) -> bool:
     """Whether a literal is explicitly present or canonically derivable from visible task text."""
     if value is None:
         return True
@@ -118,11 +136,20 @@ def task_text_supports_literal(value: Any, text: str) -> bool:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if _has_token(haystack, rendered):
             return True
+        if re.search(
+            rf"(?<![a-z0-9_])id\s*[:#-]?\s*{re.escape(rendered)}(?!\d)",
+            haystack,
+        ):
+            return True
+        if _scaled_thousands_supported(value, column, haystack):
+            return True
         if isinstance(value, int):
             return any(_has_token(haystack, word) for word in _NUMBER_WORDS.get(value, ()))
         return False
 
     if rendered in haystack:
+        return True
+    if _initialism_supported(rendered, haystack):
         return True
     if _like_pattern_supported(rendered, haystack):
         return True

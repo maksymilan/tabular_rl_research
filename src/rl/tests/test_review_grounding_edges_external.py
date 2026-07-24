@@ -9,7 +9,14 @@ from pathlib import Path
 RL_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RL_DIR))
 
-from review_grounding_edges_external import _evidence_rows, _risk_flags, _validate_review  # noqa: E402
+from review_grounding_edges_external import (  # noqa: E402
+    _compact_output,
+    _edge_id,
+    _evidence_rows,
+    _risk_flags,
+    _validate_package_output_path,
+    _validate_review,
+)
 
 
 class ExternalGroundingReviewTests(unittest.TestCase):
@@ -53,6 +60,56 @@ class ExternalGroundingReviewTests(unittest.TestCase):
         selected = _evidence_rows(rows, {"values": [17]})
         self.assertEqual(selected[:3], rows[:3])
         self.assertIn(rows[17], selected)
+
+    def test_relation_preview_is_compacted_like_read_observation(self):
+        compact = _compact_output(
+            "condition_filter",
+            {
+                "table": "filter_001",
+                "columns": ["id"],
+                "row_count": 20,
+                "rows": [[index] for index in range(20)],
+            },
+            {"values": [17]},
+        )
+        self.assertEqual(compact["rows"][:3], [[0], [1], [2]])
+        self.assertIn([17], compact["rows"])
+
+    def test_parallel_grounding_edges_have_target_unique_ids(self):
+        left = _edge_id(
+            "step_1",
+            "step_2",
+            "grounding",
+            "schema_observation",
+            {"table": "Paper", "columns": ["Id"]},
+        )
+        right = _edge_id(
+            "step_1",
+            "step_2",
+            "grounding",
+            "schema_observation",
+            {"table": "PaperAuthor", "columns": ["PaperId"]},
+        )
+        self.assertNotEqual(left, right)
+
+    def test_subset_review_cannot_overwrite_complete_package_input(self):
+        path = Path("/tmp/grounding-packages.jsonl")
+        with self.assertRaisesRegex(ValueError, "must differ"):
+            _validate_package_output_path(
+                path,
+                path,
+                selected_ids={"trajectory_1"},
+                limit=0,
+            )
+
+    def test_complete_package_reuse_may_keep_same_output_path(self):
+        path = Path("/tmp/grounding-packages.jsonl")
+        _validate_package_output_path(
+            path,
+            path,
+            selected_ids=None,
+            limit=0,
+        )
 
 
 if __name__ == "__main__":

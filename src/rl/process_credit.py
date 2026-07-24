@@ -447,6 +447,59 @@ def _action_literal_targets(tool: str, arguments: dict[str, Any]) -> list[tuple[
     return []
 
 
+def _visible_output_values(output: dict[str, Any]) -> list[Any]:
+    """Return factual scalar cells actually rendered in one model-visible tool output."""
+    values: list[Any] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                visit(item)
+        elif not isinstance(value, dict):
+            values.append(value)
+
+    for key in ("rows", "frequent_values", "result_sample"):
+        if key in output:
+            visit(output[key])
+    return values
+
+
+def _grounding_reference_redundant_with_task(
+    reference: dict[str, Any],
+    task_text: str,
+) -> bool:
+    """Whether a row/domain edge only repeats literals already supplied by the task."""
+    if (
+        reference.get("type") != "grounding"
+        or reference.get("role") not in {"domain_observation", "row_observation"}
+    ):
+        return False
+    target = reference.get("target") or {}
+    values = _flatten_values(target.get("values"))
+    if not values:
+        return False
+    columns = {
+        column
+        for column in (
+            target.get("column"),
+            *(
+                match.get("target_column")
+                for match in target.get("column_matches") or []
+                if isinstance(match, dict)
+            ),
+        )
+        if isinstance(column, str)
+    }
+    candidates: tuple[str | None, ...] = tuple(sorted(columns)) or (None,)
+    return all(
+        any(
+            task_text_supports_literal(value, task_text, column=column)
+            for column in candidates
+        )
+        for value in values
+    )
+
+
 def _source_roots_from_references(
     references: list[dict[str, Any]],
     roots_by_step: dict[str, set[str]],
@@ -656,6 +709,7 @@ def replay_step_features(
         replay_handle_map: dict[str, str] = {}
         unsupported_action_literals: list[dict[str, Any]] = []
         unsupported_action_columns: list[dict[str, Any]] = []
+        visible_observation_values: list[Any] = []
         task_text = "\n".join(filter(None, [
             trajectory.get("question"),
             source.get("external_knowledge"),
@@ -736,22 +790,24 @@ def replay_step_features(
             else:
                 output, output_table = execute_tool(harness, tool, arguments, ctx, step_id)
                 references = list((ctx["history"].get(step_id) or {}).get("references") or [])
-                observed_values = [
-                    value
-                    for ref in references
-                    if ref.get("type") == "grounding"
-                    and ref.get("role") in {"domain_observation", "row_observation"}
-                    for value in (ref.get("target") or {}).get("values", [])
+                references = [
+                    reference
+                    for reference in references
+                    if not _grounding_reference_redundant_with_task(reference, task_text)
                 ]
                 for column, literal in _action_literal_targets(tool, arguments):
-                    if task_text_supports_literal(literal, task_text):
+                    if task_text_supports_literal(literal, task_text, column=column):
                         continue
-                    if any(_same_grounded_value(literal, value) for value in observed_values):
+                    if any(
+                        _same_grounded_value(literal, value)
+                        for value in visible_observation_values
+                    ):
                         continue
                     item = {"step_id": step_id, "column": column, "value": literal}
                     unsupported_action_literals.append(item)
                     step_unsupported_literals.append(item)
                 after = ctx["environment"].snapshot()
+                visible_observation_values.extend(_visible_output_values(output))
                 if output_table:
                     recorded_output = step.get("tool_output") or {}
                     recorded_handle = recorded_output.get("table")
@@ -1011,8 +1067,25 @@ def replay_step_features(
             final_refs = deduped_refs
             provenance_steps.append({"step_id": final_step_id, "references": final_refs})
 
+        # B is the answer's data/value dependency chain.  Row/domain observations carry factual
+        # values and therefore remain causal data dependencies; schema observations are control
+        # evidence and belong to E only.  Keeping schema edges out of B prevents describe_table
+        # from receiving duplicate B+E credit for the same observation.
+        causal_steps = []
+        for node in provenance_steps:
+            causal_steps.append({
+                **node,
+                "references": [
+                    ref
+                    for ref in node.get("references") or []
+                    if not (
+                        ref.get("type") == "grounding"
+                        and ref.get("role") == "schema_observation"
+                    )
+                ],
+            })
         attempted_slice_ids = backward_slice(
-            {"steps": provenance_steps},
+            {"steps": causal_steps},
             reference_type=("data", "value", "grounding"),
         )
         slice_ids = attempted_slice_ids if replay_correct else set()
@@ -1042,6 +1115,7 @@ def replay_step_features(
                 }
         used_units: set[str] = set()
         evidence_steps: set[str] = set()
+        by_step = {feature.step_id: feature for feature in features}
         if replay_correct and evidence_producer:
             evidence_steps.add(evidence_producer)
             used_units.add(f"table:{grounding_handle}")
@@ -1056,12 +1130,11 @@ def replay_step_features(
                 continue
             for ref in node.get("references") or []:
                 ref_step = ref.get("step")
-                if ref.get("type") != "grounding" or ref_step not in slice_ids:
+                if ref.get("type") != "grounding" or ref_step not in by_step:
                     continue
                 evidence_steps.add(ref_step)
                 used_units.add(f"{ref.get('role', 'grounding')}:{ref_step}")
 
-        by_step = {feature.step_id: feature for feature in features}
         for step_id in attempted_slice_ids:
             if step_id in by_step:
                 by_step[step_id].attempted_back_slice = 1.0

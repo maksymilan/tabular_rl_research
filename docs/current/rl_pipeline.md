@@ -17,6 +17,11 @@ to score terminal denotation on training tasks.
 - `src/rl/process_objective.py`: per-step policy objective.
 - `src/rl/build_sft_task_set.py`: exact BIRD task cohort from the retained SFT index.
 - `src/rl/audit_sft_process_rewards.py`: exact SFT-index reward coverage and one-factor ablations.
+- `src/rl/audit_reward_sensitivity.py`: matched success/failure coefficient sensitivity scan.
+- `src/rl/review_grounding_edges_external.py`: strict external grounding/dependency packages and
+  reviews.
+- `src/rl/select_grounding_recheck.py` and `src/rl/summarize_grounding_external_audit.py`:
+  deterministic second-opinion selection and consensus aggregation.
 - `src/rl/frameworks/accelerate/`: the supported single-GPU QLoRA training backend.
 
 The historical Verl integration is archived under `archive/code/experimental_backends/verl/` and
@@ -80,6 +85,11 @@ that is unused by the result-only control).
 Before process credit is connected to an optimizer, both deterministic completeness and independent
 edge-precision audits must pass. Versioned reports and frozen configs live in `docs/reports/rl/` and
 `src/rl/configs/` respectively.
+
+Current gate status (2026-07-24): deterministic replay coverage and independent grounding-edge
+precision pass, but independent dependency completeness fails on confirmed denotation-shortcut
+trajectories. Result-only RL may continue as the control; process-RL optimization remains disabled.
+See `docs/reports/rl/ATOMIC_PROCESS_REWARD_PRECISION_SENSITIVITY_AUDIT_20260724.md`.
 
 ## Invariants
 

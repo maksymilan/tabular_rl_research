@@ -16,6 +16,8 @@ from process_credit import (  # noqa: E402
     StepFeature,
     _expression_columns,
     _expression_predicate_literals,
+    _grounding_reference_redundant_with_task,
+    _visible_output_values,
     allocate_process_rewards,
     normalized_search_reduction,
     replay_step_features,
@@ -70,8 +72,56 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertTrue(task_text_supports_literal(1, text))
         self.assertTrue(task_text_supports_literal("%puree%split%peas%", text))
         self.assertTrue(task_text_supports_literal("Basketball Men's", text))
+        self.assertTrue(task_text_supports_literal(12882, "menu ID12882"))
+        self.assertTrue(
+            task_text_supports_literal(
+                25.746,
+                "a place with 25746 inhabitants",
+                column="INHABITANTS_K",
+            )
+        )
+        self.assertTrue(task_text_supports_literal("New Jersey", 'schools in "NJ"'))
         self.assertFalse(task_text_supports_literal(559, text))
         self.assertFalse(task_text_supports_literal("C001035", text))
+
+    def test_only_factual_rendered_cells_count_as_visible_literal_support(self):
+        output = {
+            "table": "filter_001",
+            "columns": ["movie_id"],
+            "row_count": 1,
+            "rows": [[559]],
+            "derivation": {"predicate": {"value": "not-visible-as-a-row"}},
+        }
+        self.assertEqual(_visible_output_values(output), [559])
+
+    def test_task_literal_does_not_create_redundant_row_evidence(self):
+        reference = {
+            "type": "grounding",
+            "role": "row_observation",
+            "step": "step_3",
+            "target": {
+                "values": ["Zentral Theater Terrace", "Young's Hotel"],
+                "column_matches": [{"target_column": "name"}],
+            },
+        }
+        self.assertTrue(
+            _grounding_reference_redundant_with_task(
+                reference,
+                'Compare "Zentral Theater Terrace" with "Young\'s Hotel".',
+            )
+        )
+        self.assertFalse(
+            _grounding_reference_redundant_with_task(
+                {
+                    **reference,
+                    "target": {
+                        "values": [35487],
+                        "column_matches": [{"target_column": "menu_id"}],
+                    },
+                },
+                'Compare "Zentral Theater Terrace" with "Young\'s Hotel".',
+            )
+        )
 
     def test_result_only_control_is_exactly_binary(self):
         self.assertEqual(terminal_result_reward(True), 1.0)
@@ -295,8 +345,10 @@ class ProcessRewardTests(unittest.TestCase):
 
             trajectory = {
                 "trajectory_id": "automatic-grounding",
+                "question": "Where is Bob Corker on Instagram?",
                 "source": {
                     "db_path": tmp.name,
+                    "external_knowledge": "Instagram handle refers to social.instagram.",
                     "gold_sql": (
                         "SELECT social.instagram FROM people JOIN social "
                         "ON people.bioguide = social.bioguide "
@@ -337,11 +389,13 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertEqual(diagnostics["grounding_handle"], "filter_002")
         self.assertEqual(
             diagnostics["back_slice_step_ids"],
-            ["step_1", "step_2", "step_3", "step_4", "step_5"],
+            ["step_2", "step_3", "step_4", "step_5"],
         )
         self.assertFalse(result.fallback_terminal_credit)
         self.assertEqual(result.steps[-1].reward, 0.02)
-        self.assertGreater(result.steps[0].reward, 0.0)  # describe_table
+        self.assertEqual(features[0].back_slice, 0.0)
+        self.assertEqual(features[0].new_used_evidence, 1.0)  # schema evidence, not data B
+        self.assertGreater(result.steps[0].reward, 0.0)  # describe_table receives E only
         self.assertGreater(result.steps[2].reward, 0.0)  # first read used as a later literal
         self.assertGreater(result.steps[4].reward, 0.0)  # final row observation
         self.assertTrue(features[2].state_changed)
@@ -349,6 +403,10 @@ class ProcessRewardTests(unittest.TestCase):
         dependency_roles = {edge["role"] for edge in review_package["dependency_edges"]}
         self.assertIn("automatic_final_table", dependency_roles)
         self.assertTrue(review_package["grounding_edges"])
+        self.assertEqual(
+            review_package["external_knowledge"],
+            "Instagram handle refers to social.instagram.",
+        )
 
     def test_inspected_domain_value_builds_harness_grounding_edge(self):
         history = {
@@ -440,6 +498,95 @@ class ProcessRewardTests(unittest.TestCase):
         match = row_refs[0]["target"]["column_matches"][0]
         self.assertEqual(match["source_column"], "Team_Id")
         self.assertEqual(match["target_column"], "Match_Winner")
+
+    def test_model_visible_relation_preview_can_ground_later_foreign_key_literal(self):
+        history = {
+            "step_1": {
+                "tool": "describe_table",
+                "arguments": {"tables": ["movie", "movie_cast"]},
+                "output": {"tables": [
+                    {
+                        "table_name": "movie",
+                        "columns": [
+                            {"name": "movie_id", "pk": True},
+                            {"name": "title", "pk": False},
+                        ],
+                        "foreign_keys": [],
+                    },
+                    {
+                        "table_name": "movie_cast",
+                        "columns": [{"name": "movie_id", "pk": False}],
+                        "foreign_keys": [
+                            {"column": "movie_id", "references": "movie.movie_id"}
+                        ],
+                    },
+                ]},
+            },
+            "step_2": {
+                "tool": "condition_filter",
+                "arguments": {
+                    "table": "movie",
+                    "conditions": {"column": "title", "op": "=", "value": "Spider-Man 3"},
+                    "return_columns": ["movie_id"],
+                },
+                "output": {
+                    "table": "filter_001",
+                    "columns": ["movie_id"],
+                    "rows": [[559]],
+                    "row_count": 1,
+                },
+                "references": [
+                    {
+                        "type": "data",
+                        "source": "movie",
+                        "role": "table",
+                        "target": {"table": "movie"},
+                    }
+                ],
+            },
+        }
+        refs = build_grounding_references(
+            "condition_filter",
+            {
+                "table": "movie_cast",
+                "conditions": {"column": "movie_id", "op": "=", "value": 559},
+            },
+            history,
+        )
+        row_refs = [ref for ref in refs if ref["role"] == "row_observation"]
+        self.assertEqual([ref["step"] for ref in row_refs], ["step_2"])
+        self.assertEqual(row_refs[0]["target"]["values"], [559])
+
+    def test_computed_scalar_result_can_ground_a_later_predicate_literal(self):
+        refs = build_grounding_references(
+            "condition_filter",
+            {
+                "table": "players",
+                "conditions": {"column": "dob", "op": "=", "value": "1998-07-18"},
+            },
+            {
+                "step_1": {
+                    "tool": "group_aggregate",
+                    "arguments": {
+                        "table": "players",
+                        "group_by": [],
+                        "aggregations": [{"op": "max", "column": "dob", "as": "max_dob"}],
+                    },
+                    "output": {
+                        "table": "group_001",
+                        "columns": ["max_dob"],
+                        "rows": [["1998-07-18"]],
+                        "row_count": 1,
+                    },
+                }
+            },
+        )
+        row_refs = [ref for ref in refs if ref["role"] == "row_observation"]
+        self.assertEqual([ref["step"] for ref in row_refs], ["step_1"])
+        self.assertEqual(
+            row_refs[0]["target"]["column_matches"][0]["match_kind"],
+            "computed_result",
+        )
 
     def test_answer_value_equality_does_not_create_direct_row_edge(self):
         history = {
