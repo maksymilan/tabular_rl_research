@@ -39,14 +39,12 @@ if [[ "$MODE" == "smoke" ]]; then
   general_overrides=(
     "max_steps=5"
     "num_train_epochs=1.0"
-    "save_strategy=no"
     "output_dir=$OUTPUT_ROOT/checkpoints/smoke-qwen2.5-7b-bird-external-teacher-fixed1000-6400"
     "overwrite_output_dir=true"
   )
   coder_overrides=(
     "max_steps=5"
     "num_train_epochs=1.0"
-    "save_strategy=no"
     "output_dir=$OUTPUT_ROOT/checkpoints/smoke-qwen2.5-coder-7b-bird-external-teacher-fixed1000-6400"
     "overwrite_output_dir=true"
   )
