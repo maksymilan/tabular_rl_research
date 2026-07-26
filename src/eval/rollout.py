@@ -47,10 +47,16 @@ from artifacts import ArtifactWriter                           # noqa: E402
 from denotation import add_denotation_comparison_argument, compare_denotations  # noqa: E402
 from protocol import (ACCEPTED_TOOLS, ProtocolError, get_system_prompt,  # noqa: E402
                       POLICY_PROMPT_CANONICAL, POLICY_PROMPT_VARIANTS,
+                      PROTOCOL_VERSION,
                       assistant_message, first_user_message, parse_assistant_strict,
                       model_context_messages, policy_system_prompt, protocol_hash, tool_error_message,
                       rolling_legal_history_messages, rolling_system_prompt,
                       state_context_message, tool_output_message)
+from tool_schemes import (  # noqa: E402
+    ATOMIC_ASSISTANT_CARRIER,
+    ATOMIC_TOOL_SCHEME,
+    TOOL_SCHEME_REGISTRY_VERSION,
+)
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 MAX_ERRORS_PER_TYPE = 3
@@ -693,6 +699,11 @@ def run_live(
     turns = []
     started = time.time()
     rec = {
+        "tool_scheme": ATOMIC_TOOL_SCHEME,
+        "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+        "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
+        "protocol_version": PROTOCOL_VERSION,
+        "protocol_hash": protocol_hash(system),
         "example_index": example_index,
         "db_id": ex["db_id"],
         "question": ex["question"],
@@ -1018,6 +1029,10 @@ def main() -> int:
     if args.result_dir:
         writer = ArtifactWriter(args.result_dir, {
             "runner": "tool_rollout",
+            "tool_scheme": ATOMIC_TOOL_SCHEME,
+            "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+            "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
+            "protocol_version": PROTOCOL_VERSION,
             "dataset": args.tasks_json or "data/spider_data/dev.json",
             "model": args.model,
             "base_url": args.base_url,

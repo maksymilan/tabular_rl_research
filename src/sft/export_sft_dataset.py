@@ -33,6 +33,11 @@ sys.path.insert(0, HERE)
 
 from protocol import (SYSTEM_PROMPT, PROTOCOL_VERSION, assistant_message,  # noqa: E402
                       first_user_message, protocol_hash, state_context_message)
+from tool_schemes import (  # noqa: E402
+    ATOMIC_TOOL_SCHEME,
+    TOOL_SCHEME_REGISTRY_VERSION,
+    assert_record_tool_scheme,
+)
 
 CHARS_PER_TOKEN = 3.5  # rough for English+JSON; manifest reports char counts too
 DEFAULT_INPUT_PATTERN = "data/trajectories/spider_{split}.jsonl"
@@ -66,7 +71,14 @@ def convert(traj: dict) -> dict:
         tc = s["tool_call"]
         conv.append({"from": "gpt",
                      "value": assistant_message(s.get("think", ""), tc["tool"], tc["arguments"])})
-    return {"system": SYSTEM_PROMPT, "conversations": conv}
+    return {
+        "system": SYSTEM_PROMPT,
+        "conversations": conv,
+        "metadata": {
+            "tool_scheme": ATOMIC_TOOL_SCHEME,
+            "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+        },
+    }
 
 
 def est_tokens(rec: dict) -> int:
@@ -103,6 +115,11 @@ def validate_trajectory(
     line_no: int,
 ) -> None:
     where = f"{source}:{line_no}"
+    assert_record_tool_scheme(
+        traj,
+        ATOMIC_TOOL_SCHEME,
+        allow_legacy_atomic=True,
+    )
     if traj.get("label_status") != "verified":
         raise ValueError(f"{where}: trajectory is not execution-verified")
     if has_memory_residue(traj):
@@ -185,6 +202,8 @@ def build(
     pct = lambda p: toks[min(len(toks) - 1, int(p * len(toks)))] if toks else 0  # noqa: E731
     char_pct = lambda p: chars[min(len(chars) - 1, int(p * len(chars)))] if chars else 0  # noqa: E731
     manifest = {
+        "tool_scheme": ATOMIC_TOOL_SCHEME,
+        "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
         "split": split,
         "input": os.path.relpath(source, ROOT),
         "input_sha256": file_sha256(source),

@@ -33,6 +33,11 @@ from protocol import (  # noqa: E402
     rolling_system_prompt,
     tool_output_message,
 )
+from tool_schemes import (  # noqa: E402
+    ATOMIC_TOOL_SCHEME,
+    TOOL_SCHEME_REGISTRY_VERSION,
+    assert_record_tool_scheme,
+)
 
 ROLE_MAP = {"user": "human", "assistant": "gpt"}
 STEP_REF = re.compile(r"\bstep_(\d+)\b")
@@ -167,6 +172,8 @@ def convert_step(
             "record_id": record_id,
             "source_episode_id": trajectory["trajectory_id"],
             "source_step_id": step["step_id"],
+            "tool_scheme": ATOMIC_TOOL_SCHEME,
+            "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
             "context_mode": "rolling-legal-history",
             "history_turns": history_turns,
             "loss_policy": "last_assistant_turn_only",
@@ -233,6 +240,11 @@ def build(
     try:
         with tmp_out.open("w", encoding="utf-8") as out, tmp_index.open("w", encoding="utf-8") as index:
             for trajectory in trajectories:
+                assert_record_tool_scheme(
+                    trajectory,
+                    ATOMIC_TOOL_SCHEME,
+                    allow_legacy_atomic=True,
+                )
                 if trajectory.get("label_status") != "verified":
                     raise ValueError(f"{trajectory.get('trajectory_id')}: not verified")
                 generation = trajectory.get("rollout_generation") or {}
@@ -276,6 +288,8 @@ def build(
     prefix_lengths.sort()
     percentile = lambda fraction: prefix_lengths[min(len(prefix_lengths) - 1, int(fraction * len(prefix_lengths)))] if prefix_lengths else 0
     return {
+        "tool_scheme": ATOMIC_TOOL_SCHEME,
+        "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
         "input": str(input_path),
         "input_sha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),
         "output": str(out_path),

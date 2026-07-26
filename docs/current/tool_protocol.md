@@ -1,7 +1,12 @@
-# Current Trajectory Protocol (version24)
+# Atomic Tool-Scheme Trajectory Protocol (version24)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
+
+This document describes the original `atomic` scheme. The independently selectable
+`action-block` scheme is indexed in `docs/current/tool_schemes.md` and
+`src/eval/batch_plan_protocol.py`. A model is given exactly one scheme; the two top-level action
+spaces are never merged in one prompt.
 
 ## Sources of Truth
 

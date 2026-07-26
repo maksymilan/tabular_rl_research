@@ -37,7 +37,12 @@ from transformers import (
 ROOT = Path(__file__).resolve().parents[4]
 sys.path[:0] = [str(ROOT / "src" / "rl"), str(ROOT / "src" / "eval"), str(ROOT / "src" / "harness"), str(ROOT / "src" / "sft")]
 
-from tool_environment import ToolUseEnv  # noqa: E402
+from tool_environment import create_tool_use_env  # noqa: E402
+from tool_schemes import (  # noqa: E402
+    ACTION_BLOCK_TOOL_SCHEME,
+    ATOMIC_TOOL_SCHEME,
+    TOOL_SCHEME_NAMES,
+)
 from task_loader import load_rl_task_records  # noqa: E402
 from terminal_reward import terminal_result_reward  # noqa: E402
 from external_failure_adapter import normalize_failure_record  # noqa: E402
@@ -103,6 +108,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--reward-mode", choices=("result-only", "process"), default="result-only")
+    parser.add_argument(
+        "--tool-scheme",
+        choices=TOOL_SCHEME_NAMES,
+        default=ATOMIC_TOOL_SCHEME,
+        help="exclusive model action protocol; schemes never share one visible action space",
+    )
     parser.add_argument("--process-reward-config", type=Path)
     parser.add_argument("--counterfactual-suite-manifest", type=Path)
     parser.add_argument("--kl-beta", type=float, default=0.0)
@@ -112,6 +123,8 @@ def parse_args() -> argparse.Namespace:
         default="bird-set",
     )
     parser.add_argument("--max-steps", type=int, default=20)
+    parser.add_argument("--max-atomic-actions", type=int, default=30)
+    parser.add_argument("--max-batch-calls", type=int, default=8)
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--max-context-tokens", type=int, default=8192)
     parser.add_argument("--context-mode", choices=("rolling-legal-history",),
@@ -236,7 +249,21 @@ def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]]
     input_ids = torch.tensor(input_rows, device=device, dtype=torch.long)
     attention_mask = torch.tensor(mask_rows, device=device, dtype=torch.long)
     try:
-        stop_ids = tokenizer("</tool_call>", add_special_tokens=False).input_ids
+        stop_ids = (
+            tokenizer("</tool_call>", add_special_tokens=False).input_ids
+            if args.tool_scheme == ATOMIC_TOOL_SCHEME
+            else []
+        )
+        processors = LogitsProcessorList()
+        if stop_ids:
+            processors.append(
+                ForceEosAfterStop(
+                    tokenizer,
+                    stop_ids,
+                    prompt_width=max_prompt_len,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
+            )
         generated = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -246,14 +273,7 @@ def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]]
             top_p=args.top_p,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
-            logits_processor=LogitsProcessorList([
-                ForceEosAfterStop(
-                    tokenizer,
-                    stop_ids,
-                    prompt_width=max_prompt_len,
-                    eos_token_id=tokenizer.eos_token_id,
-                )
-            ]),
+            logits_processor=processors,
             use_cache=True,
         )
     except torch.OutOfMemoryError:
@@ -305,10 +325,13 @@ def sample_group(
     example = episode_example(metadata)
     device = next(model.parameters()).device
     envs = [
-        ToolUseEnv(
+        create_tool_use_env(
             example,
+            tool_scheme=args.tool_scheme,
             example_index=int(metadata["example_index"]),
             max_steps=args.max_steps,
+            max_atomic_actions=args.max_atomic_actions,
+            max_batch_calls=args.max_batch_calls,
             context_mode=args.context_mode,
             history_turns=args.history_turns,
             compact_observations=True,
@@ -664,7 +687,7 @@ def checkpoint_metadata(args: argparse.Namespace) -> dict[str, Any]:
         digest = hashlib.sha256(resolved.read_bytes()).hexdigest() if resolved.is_file() else ""
         return {"path": str(resolved), "sha256": digest}
 
-    return {
+    metadata = {
         "model_path": str(args.model_path.resolve()),
         "sft_adapter_path": str(args.adapter_path.resolve()),
         "examples_json": artifact_identity(args.examples_json),
@@ -680,6 +703,7 @@ def checkpoint_metadata(args: argparse.Namespace) -> dict[str, Any]:
             else None
         ),
         "reward_mode": args.reward_mode,
+        "tool_scheme": args.tool_scheme,
         "denotation_comparison": args.denotation_comparison,
         "steps": args.steps,
         "group_size": args.group_size,
@@ -698,6 +722,12 @@ def checkpoint_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "warmup_ratio": args.warmup_ratio,
         "kl_beta": args.kl_beta,
     }
+    if args.tool_scheme == ACTION_BLOCK_TOOL_SCHEME:
+        metadata.update({
+            "max_atomic_actions": args.max_atomic_actions,
+            "max_batch_calls": args.max_batch_calls,
+        })
+    return metadata
 
 
 def save_checkpoint(
@@ -733,11 +763,23 @@ def main() -> int:
         raise SystemExit("--warmup-ratio must be in [0, 1)")
     if args.save_every <= 0:
         raise SystemExit("--save-every must be positive")
+    if (
+        args.tool_scheme == ACTION_BLOCK_TOOL_SCHEME
+        and args.reward_mode == "process"
+    ):
+        raise SystemExit(
+            "action-block currently supports result-only RL only; atomic-local process "
+            "credit must not be assigned to an entire authored block"
+        )
     if args.reward_mode == "process" and args.counterfactual_suite_manifest is None:
         raise SystemExit(
             "--counterfactual-suite-manifest is required for process RL; "
             "single-database correctness cannot pass the dependency-completeness gate"
         )
+    if args.max_atomic_actions < 2:
+        raise SystemExit("--max-atomic-actions must be at least 2")
+    if args.max_batch_calls < 1:
+        raise SystemExit("--max-batch-calls must be positive")
     accelerator = Accelerator()
     if accelerator.num_processes != 1:
         raise SystemExit("this baseline is intentionally single-GPU; launch without accelerate multi-process")
@@ -790,6 +832,7 @@ def main() -> int:
             optimizer=optimizer,
             scheduler=scheduler,
             expected_metadata=checkpoint_metadata(args),
+            legacy_metadata_defaults={"tool_scheme": ATOMIC_TOOL_SCHEME},
             map_location=next(model.parameters()).device,
         )
         if completed_step >= args.steps:
@@ -877,6 +920,7 @@ def main() -> int:
             "step_rewards": [sample.step_rewards for sample in samples],
             "process_update": [sample.process_update for sample in samples],
             "reward_mode": args.reward_mode,
+            "tool_scheme": args.tool_scheme,
             "denotation_comparison": args.denotation_comparison,
             "kl_beta": args.kl_beta,
             "sampled_kl": sampled_kl,

@@ -32,6 +32,12 @@ LOW_FRICTION_INTERFACE_PROTOCOL_VERSION = "action-block-v10"
 SAFE_LOW_FRICTION_INTERFACE_PROTOCOL_VERSION = "action-block-v11"
 BATCH_PLAN_TOOL = "action_block"
 TERMINAL_TOOL = "answer_from_context"
+BATCH_CARRIER_PROVIDER_NATIVE = "provider-native-reasoning-raw-json"
+BATCH_CARRIER_INLINE_THINK = "inline-think-raw-json"
+BATCH_CARRIERS = (
+    BATCH_CARRIER_PROVIDER_NATIVE,
+    BATCH_CARRIER_INLINE_THINK,
+)
 EXECUTABLE_TOOLS = tuple(
     tool for tool in TOOL_SPECS
     if tool not in {"plan", TERMINAL_TOOL}
@@ -59,11 +65,33 @@ def _atomic_specs() -> str:
     return "\n".join(TOOL_SPECS[tool] for tool in EXECUTABLE_TOOLS)
 
 
-def build_batch_plan_system_prompt(max_batch_calls: int = 8) -> str:
+def build_batch_plan_system_prompt(
+    max_batch_calls: int = 8,
+    *,
+    assistant_carrier: str = BATCH_CARRIER_PROVIDER_NATIVE,
+) -> str:
     """Build the concise action-block-v4 provider contract."""
     if max_batch_calls < 1:
         raise ValueError("max_batch_calls must be positive")
+    if assistant_carrier not in BATCH_CARRIERS:
+        raise ValueError(
+            f"unknown action-block assistant carrier {assistant_carrier!r}; "
+            f"expected one of {BATCH_CARRIERS}"
+        )
     tools = _atomic_specs()
+    if assistant_carrier == BATCH_CARRIER_PROVIDER_NATIVE:
+        format_rule = (
+            "1. Visible output is exactly one JSON object with only tool and arguments. JSON Output "
+            "is enabled.\n"
+            "   Put one non-empty brief reason in the provider's native reasoning field. No "
+            "Markdown/XML/tags."
+        )
+    else:
+        format_rule = (
+            "1. Output exactly one non-empty <think>brief reason</think> block followed directly by "
+            "one complete raw JSON object with only tool and arguments. No <tool_call> tag, "
+            "Markdown, prose, or second action."
+        )
     return f"""You are a relational table-tool agent using a hybrid action-block interface.
 
 CONTEXT
@@ -125,8 +153,7 @@ EXAMPLE AFTER SCHEMAS ARE VISIBLE
 ]}}}}
 
 RULES
-1. Visible output is exactly one JSON object with only tool and arguments. JSON Output is enabled.
-   Put one non-empty brief reason in the provider's native reasoning field. No Markdown/XML/tags.
+{format_rule}
 2. Resolve unknown schemas before using columns. Inspect text domains before uncertain literals.
 3. Join on.left is an exact introduced relation.column; on.right is the new table's bare column.
    condition_filter.column_value compares two columns in its SAME input table; for another table
@@ -217,6 +244,43 @@ def parse_batch_plan_action(
         if not isinstance(call.get("arguments"), dict):
             raise BatchPlanProtocolError(f"{where}.arguments must be an object")
     return tool, arguments
+
+
+def render_batch_plan_assistant(
+    reasoning: str,
+    tool: str,
+    arguments: dict,
+) -> str:
+    """Render the strict inline carrier used by local student models and SFT."""
+    if not isinstance(reasoning, str) or not reasoning.strip():
+        raise BatchPlanProtocolError("inline action-block reasoning must be non-empty")
+    raw_action = _compact({"tool": tool, "arguments": arguments})
+    return f"<think>{reasoning.strip()}</think>\n{raw_action}"
+
+
+def parse_batch_plan_assistant(
+    text: str,
+    *,
+    max_batch_calls: int,
+) -> tuple[str, str, dict]:
+    """Parse one inline-think action-block turn without provider-specific fields."""
+    if not isinstance(text, str) or not text.strip():
+        raise BatchPlanProtocolError("inline action-block response is empty")
+    match = re.fullmatch(
+        r"\s*<think>(?P<reason>.*?)</think>\s*(?P<action>\{.*\})\s*",
+        text,
+        re.S,
+    )
+    if match is None or not match.group("reason").strip():
+        raise BatchPlanProtocolError(
+            "inline action-block response must contain one non-empty <think> block "
+            "followed directly by one raw JSON action"
+        )
+    tool, arguments = parse_batch_plan_action(
+        match.group("action"),
+        max_batch_calls=max_batch_calls,
+    )
+    return match.group("reason").strip(), tool, arguments
 
 
 def _validate_terminal_arguments(arguments: dict) -> None:

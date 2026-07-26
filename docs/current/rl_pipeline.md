@@ -8,7 +8,8 @@ to score terminal denotation on training tasks.
 
 ## Active modules
 
-- `src/rl/tool_environment.py`: one causal model↔harness episode.
+- `src/rl/tool_environment.py`: one causal model↔harness episode, selected exclusively as
+  `atomic` or `action-block`.
 - `src/rl/task_loader.py`: model-visible task records plus hidden execution labels.
 - `src/rl/terminal_reward.py`: the binary result-only control.
 - `src/rl/target_support.py`: bounded hidden gold T/C/R support used only on the reward side.
@@ -93,6 +94,12 @@ model/adapter, task-set artifact, group size, decoding settings, action/context 
 rate, update count, and KL coefficient; change only `REWARD_MODE` (and the process reward config
 that is unused by the result-only control).
 
+The backend also accepts `--tool-scheme atomic|action-block`. The action-block scheme currently
+supports result-only RL. It deliberately rejects process mode because existing process credit is
+atomic-action-local, while one action-block response may contain several successful, failed, and
+blocked primitive calls. Assigning those local rewards to the whole authored block would violate
+the credit boundary. Atomic process RL remains unchanged.
+
 Process RL is the main research condition; result-only RL is only its matched baseline. Before the
 process condition is launched, both deterministic completeness and independent edge-precision
 audits must pass. Versioned reports and frozen configs live in `docs/reports/rl/` and
@@ -121,4 +128,5 @@ remaining task is to build and audit adequate BIRD suites. See
   terminal correctness comes from the cited evidence relation.
 - Correct process trajectories update only after their immutable counterfactual suite passes.
 - API transport retries are client events, not semantic actions.
-- SFT, evaluation, and RL share the same protocol renderer and harness semantics.
+- SFT, evaluation, and RL share harness semantics but use the renderer/parser belonging to their
+  explicitly recorded tool scheme.

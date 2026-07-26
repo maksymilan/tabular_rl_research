@@ -57,6 +57,7 @@ from executor import Harness  # noqa: E402
 from protocol import (  # noqa: E402
     POLICY_PROMPT_CANONICAL,
     POLICY_PROMPT_VARIANTS,
+    PROTOCOL_VERSION,
     ProtocolError,
     assistant_message,
     first_user_message,
@@ -69,6 +70,11 @@ from protocol import (  # noqa: E402
     rolling_system_prompt,
     state_context_message,
     tool_output_message,
+)
+from tool_schemes import (  # noqa: E402
+    ATOMIC_ASSISTANT_CARRIER,
+    ATOMIC_TOOL_SCHEME,
+    TOOL_SCHEME_REGISTRY_VERSION,
 )
 
 SPIDER = ROOT / "data" / "spider_data"
@@ -629,6 +635,11 @@ def run_rollout(
     usage = collections.Counter()
     started = time.time()
     rec = {
+        "tool_scheme": ATOMIC_TOOL_SCHEME,
+        "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+        "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
+        "protocol_version": PROTOCOL_VERSION,
+        "protocol_hash": protocol_hash(system_prompt),
         "example_index": example_index,
         "trajectory_id": trajectory_id(split, example_index, ex),
         "db_id": ex["db_id"],
@@ -899,6 +910,11 @@ def run_rollout(
     if rec["correct"]:
         adapter_turns = [turn.get("response_adapter") or {} for turn in turns]
         rec["trajectory"] = {
+            "tool_scheme": ATOMIC_TOOL_SCHEME,
+            "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+            "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
+            "protocol_version": PROTOCOL_VERSION,
+            "protocol_hash": protocol_hash(system_prompt),
             "trajectory_id": rec["trajectory_id"],
             "schema_version": "v4-external-rollout",
             "source": {
@@ -916,6 +932,10 @@ def run_rollout(
             "initial_state": {"dataset_overview": dataset_overview},
             "steps": steps,
             "rollout_generation": {
+                "tool_scheme": ATOMIC_TOOL_SCHEME,
+                "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+                "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
+                "protocol_version": PROTOCOL_VERSION,
                 "method": "external_llm_closed_loop",
                 "model": model,
                 "protocol_hash": protocol_hash(system_prompt),
@@ -1194,6 +1214,10 @@ def main() -> int:
     persisted = audit_summary(all_path)
     manifest = {
         "generator": "src/sft/generate_teacher_rollouts.py",
+        "tool_scheme": ATOMIC_TOOL_SCHEME,
+        "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+        "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
+        "protocol_version": PROTOCOL_VERSION,
         "method": "external_llm_closed_loop",
         "model": args.model,
         "split": args.split,

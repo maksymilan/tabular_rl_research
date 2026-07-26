@@ -28,6 +28,9 @@ sys.path.insert(0, str(ROOT / "src" / "harness"))
 sys.path.insert(0, str(ROOT / "src" / "sft"))
 
 from batch_plan_protocol import (  # noqa: E402
+    BATCH_CARRIERS,
+    BATCH_CARRIER_INLINE_THINK,
+    BATCH_CARRIER_PROVIDER_NATIVE,
     BATCH_PLAN_PROTOCOL_VERSION,
     LOCAL_COLUMN_REF_RE,
     LOCAL_REF_RE,
@@ -41,6 +44,7 @@ from batch_plan_protocol import (  # noqa: E402
     build_batch_plan_messages,
     build_batch_plan_system_prompt,
     local_reference_ids,
+    parse_batch_plan_assistant,
     parse_batch_plan_action,
     render_batch_observation,
     resolve_local_references,
@@ -65,6 +69,10 @@ from provider_adapter import (  # noqa: E402
 )
 from provider_client import load_api_config  # noqa: E402
 from protocol import ProtocolError  # noqa: E402
+from tool_schemes import (  # noqa: E402
+    ACTION_BLOCK_TOOL_SCHEME,
+    TOOL_SCHEME_REGISTRY_VERSION,
+)
 from rollout import (  # noqa: E402
     ContextOverflowError,
     execute_tool,
@@ -1254,6 +1262,7 @@ def run_episode(
     structured_error_feedback: bool = False,
     low_friction_interface: bool = False,
     safe_low_friction_interface: bool = False,
+    assistant_carrier: str = BATCH_CARRIER_PROVIDER_NATIVE,
 ) -> dict:
     low_friction_interface = (
         low_friction_interface or safe_low_friction_interface
@@ -1286,6 +1295,9 @@ def run_episode(
     started = time.time()
 
     rec = {
+        "tool_scheme": ACTION_BLOCK_TOOL_SCHEME,
+        "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+        "assistant_carrier": assistant_carrier,
         "example_index": example_index,
         "trajectory_id": trajectory_id(split, example_index, ex),
         "db_id": ex["db_id"],
@@ -1382,19 +1394,31 @@ def run_episode(
                 break
 
             turn["raw_model_output"] = raw_content
-            turn["provider_reasoning_content"] = reasoning
-            turn["canonical_model_output"] = _canonical_output(
-                reasoning, raw_content
-            )
             try:
-                if not reasoning.strip():
-                    raise BatchPlanProtocolError(
-                        "provider native reasoning field must be non-empty"
+                if assistant_carrier == BATCH_CARRIER_PROVIDER_NATIVE:
+                    if not reasoning.strip():
+                        raise BatchPlanProtocolError(
+                            "provider native reasoning field must be non-empty"
+                        )
+                    tool, arguments = parse_batch_plan_action(
+                        raw_content,
+                        max_batch_calls=max_batch_calls,
                     )
-                tool, arguments = parse_batch_plan_action(
-                    raw_content,
-                    max_batch_calls=max_batch_calls,
-                )
+                    authored_reasoning = reasoning.strip()
+                    canonical_output = _canonical_output(
+                        authored_reasoning,
+                        raw_content,
+                    )
+                else:
+                    authored_reasoning, tool, arguments = (
+                        parse_batch_plan_assistant(
+                            raw_content,
+                            max_batch_calls=max_batch_calls,
+                        )
+                    )
+                    canonical_output = raw_content.strip()
+                turn["provider_reasoning_content"] = authored_reasoning
+                turn["canonical_model_output"] = canonical_output
                 turn["parsed"] = {
                     "tool": tool,
                     "arguments": deepcopy(arguments),
@@ -1677,6 +1701,15 @@ def main() -> int:
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--assistant-carrier",
+        choices=BATCH_CARRIERS,
+        default=BATCH_CARRIER_PROVIDER_NATIVE,
+        help=(
+            "provider-native is the DeepSeek split response; inline-think-raw-json "
+            "lets a local/student model emit the complete canonical turn directly"
+        ),
+    )
     parser.add_argument("--out", required=True, help="all episode records JSONL")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument(
@@ -1735,8 +1768,22 @@ def main() -> int:
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
-    if not is_deepseek_split_model(args.model):
-        parser.error("this experiment currently requires deepseek-v4-flash or deepseek-v4-pro")
+    if (
+        args.assistant_carrier == BATCH_CARRIER_PROVIDER_NATIVE
+        and not is_deepseek_split_model(args.model)
+    ):
+        parser.error(
+            "provider-native action-block carrier requires deepseek-v4-flash or "
+            "deepseek-v4-pro; use --assistant-carrier inline-think-raw-json "
+            "for a local/student model"
+        )
+    if (
+        args.assistant_carrier == BATCH_CARRIER_INLINE_THINK
+        and is_deepseek_split_model(args.model)
+    ):
+        parser.error(
+            "DeepSeek split-response models must use the provider-native action-block carrier"
+        )
     if args.denotation_comparison != "bird-set":
         parser.error("new BIRD evaluations must use --denotation-comparison bird-set")
     if args.max_atomic_actions < 2:
@@ -1795,7 +1842,10 @@ def main() -> int:
         for index, ex in examples
         if trajectory_id(args.split, index, ex) not in completed
     ]
-    system_prompt = build_batch_plan_system_prompt(args.max_batch_calls)
+    system_prompt = build_batch_plan_system_prompt(
+        args.max_batch_calls,
+        assistant_carrier=args.assistant_carrier,
+    )
     protocol_version = (
         STRUCTURED_ERROR_FEEDBACK_PROTOCOL_VERSION
         if args.structured_error_feedback
@@ -1845,9 +1895,13 @@ def main() -> int:
                     or args.safe_low_friction_interface
                 ),
                 safe_low_friction_interface=args.safe_low_friction_interface,
+                assistant_carrier=args.assistant_carrier,
             )
         except Exception as exc:  # noqa: BLE001
             return {
+                "tool_scheme": ACTION_BLOCK_TOOL_SCHEME,
+                "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+                "assistant_carrier": args.assistant_carrier,
                 "example_index": index,
                 "trajectory_id": trajectory_id(args.split, index, ex),
                 "db_id": ex.get("db_id"),
@@ -1894,6 +1948,9 @@ def main() -> int:
     summary = summarize_records(out_path)
     manifest = {
         "generator": "src/eval/evaluate_batch_plan.py",
+        "tool_scheme": ACTION_BLOCK_TOOL_SCHEME,
+        "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+        "assistant_carrier": args.assistant_carrier,
         "method": (
             "hybrid_action_block_with_branch_local_recovery_terminal_column_selection_"
             + (
@@ -1924,6 +1981,7 @@ def main() -> int:
             system_prompt.encode("utf-8")
         ).hexdigest(),
         "system_prompt_characters": len(system_prompt),
+        "system_prompt": system_prompt,
         "max_atomic_actions": args.max_atomic_actions,
         "max_model_turns": args.max_model_turns,
         "max_batch_calls": args.max_batch_calls,
@@ -1936,9 +1994,21 @@ def main() -> int:
         "low_friction_interface": args.low_friction_interface,
         "safe_low_friction_interface": args.safe_low_friction_interface,
         "temperature": 0,
-        "thinking": "enabled",
-        "reasoning_effort": "high",
-        "deepseek_carrier": DEEPSEEK_CARRIER_JSON_OUTPUT,
+        "thinking": (
+            "enabled"
+            if args.assistant_carrier == BATCH_CARRIER_PROVIDER_NATIVE
+            else "inline"
+        ),
+        "reasoning_effort": (
+            "high"
+            if args.assistant_carrier == BATCH_CARRIER_PROVIDER_NATIVE
+            else None
+        ),
+        "deepseek_carrier": (
+            DEEPSEEK_CARRIER_JSON_OUTPUT
+            if args.assistant_carrier == BATCH_CARRIER_PROVIDER_NATIVE
+            else None
+        ),
         "provider_request_options": provider_request_options(
             args.model, carrier=DEEPSEEK_CARRIER_JSON_OUTPUT
         ),

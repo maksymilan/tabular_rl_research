@@ -50,6 +50,7 @@ def load_training_state(
     optimizer: Any,
     scheduler: Any,
     expected_metadata: dict[str, Any] | None = None,
+    legacy_metadata_defaults: dict[str, Any] | None = None,
     map_location: Any = "cpu",
 ) -> int:
     """Restore a checkpoint and return its completed training-loop step."""
@@ -65,7 +66,10 @@ def load_training_state(
         raise ValueError(f"unsupported trainer-state format: {payload.get('format_version')}")
     actual_metadata = payload.get("metadata") or {}
     for key, expected in (expected_metadata or {}).items():
-        actual = actual_metadata.get(key)
+        actual = actual_metadata.get(
+            key,
+            (legacy_metadata_defaults or {}).get(key),
+        )
         if actual != expected:
             raise ValueError(
                 f"resume metadata mismatch for {key}: {actual!r} != {expected!r}"

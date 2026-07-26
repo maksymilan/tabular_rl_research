@@ -90,6 +90,31 @@ class AccelerateTrainingStateTests(unittest.TestCase):
                     expected_metadata={"reward_mode": "result-only"},
                 )
 
+    def test_resume_can_bind_legacy_checkpoint_to_atomic_scheme(self):
+        model = torch.nn.Linear(1, 1)
+        optimizer = torch.optim.AdamW(model.parameters())
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            save_training_state(
+                checkpoint,
+                step=3,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                metadata={"reward_mode": "result-only"},
+            )
+            completed = load_training_state(
+                checkpoint,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                expected_metadata={
+                    "reward_mode": "result-only",
+                    "tool_scheme": "atomic",
+                },
+                legacy_metadata_defaults={"tool_scheme": "atomic"},
+            )
+        self.assertEqual(completed, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

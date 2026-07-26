@@ -18,11 +18,15 @@ sys.path.insert(0, str(ROOT / "src" / "harness"))
 sys.path.insert(0, str(ROOT / "src" / "sft"))
 
 from batch_plan_protocol import (  # noqa: E402
+    BATCH_CARRIER_INLINE_THINK,
+    BATCH_CARRIER_PROVIDER_NATIVE,
     BatchPlanProtocolError,
     LocalReferenceError,
     build_batch_plan_messages,
     build_batch_plan_system_prompt,
+    parse_batch_plan_assistant,
     parse_batch_plan_action,
+    render_batch_plan_assistant,
     render_batch_observation,
     resolve_local_references,
 )
@@ -76,6 +80,40 @@ class ActionBlockProtocolTests(unittest.TestCase):
                     }),
                     max_batch_calls=8,
                 )
+
+    def test_inline_student_carrier_round_trips_without_tool_call_tag(self):
+        arguments = {
+            "calls": [{
+                "id": "schema",
+                "tool": "describe_table",
+                "arguments": {"tables": ["items"]},
+            }],
+        }
+        rendered = render_batch_plan_assistant(
+            "Inspect the unresolved schema.",
+            "action_block",
+            arguments,
+        )
+        self.assertNotIn("<tool_call>", rendered)
+        reason, tool, parsed = parse_batch_plan_assistant(
+            rendered,
+            max_batch_calls=8,
+        )
+        self.assertEqual(reason, "Inspect the unresolved schema.")
+        self.assertEqual(tool, "action_block")
+        self.assertEqual(parsed, arguments)
+        inline_prompt = build_batch_plan_system_prompt(
+            8,
+            assistant_carrier=BATCH_CARRIER_INLINE_THINK,
+        )
+        self.assertIn("<think>brief reason</think>", inline_prompt)
+        self.assertIn("No <tool_call> tag", inline_prompt)
+
+        with self.assertRaises(BatchPlanProtocolError):
+            parse_batch_plan_assistant(
+                json.dumps({"tool": "action_block", "arguments": arguments}),
+                max_batch_calls=8,
+            )
 
     def test_terminal_remains_separate_and_grounded(self):
         tool, arguments = parse_batch_plan_action(
@@ -844,7 +882,13 @@ class ActionBlockExecutionTests(unittest.TestCase):
 
 
 class ActionBlockEpisodeTests(unittest.TestCase):
-    def run_with_responses(self, db_path: Path, responses: list[str]) -> dict:
+    def run_with_responses(
+        self,
+        db_path: Path,
+        responses: list[str],
+        *,
+        assistant_carrier: str = BATCH_CARRIER_PROVIDER_NATIVE,
+    ) -> dict:
         queued = list(responses)
 
         def fake_chat(**_kwargs):
@@ -869,7 +913,10 @@ class ActionBlockEpisodeTests(unittest.TestCase):
                 base_url="http://unused",
                 api_key="unused",
                 model="deepseek-v4-flash",
-                system_prompt=build_batch_plan_system_prompt(8),
+                system_prompt=build_batch_plan_system_prompt(
+                    8,
+                    assistant_carrier=assistant_carrier,
+                ),
                 protocol_hash="test",
                 max_atomic_actions=30,
                 max_model_turns=30,
@@ -881,6 +928,7 @@ class ActionBlockEpisodeTests(unittest.TestCase):
                 table_output_rows=0,
                 history_turns=4,
                 denotation_comparison="bird-set",
+                assistant_carrier=assistant_carrier,
             )
 
     def test_episode_answers_without_resident_plan_bookkeeping(self):
@@ -949,6 +997,60 @@ class ActionBlockEpisodeTests(unittest.TestCase):
         self.assertEqual(record["planned_nodes"], 3)
         self.assertEqual(record["blocked_nodes"], 0)
         self.assertEqual(record["final_environment_state"]["plan"], [])
+
+    def test_inline_student_carrier_runs_through_the_evaluator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp, "test.sqlite")
+            seed = sqlite3.connect(db_path)
+            seed.executescript(
+                "CREATE TABLE items(category TEXT, price INTEGER);"
+                "INSERT INTO items VALUES ('a', 0), ('b', 2);"
+            )
+            seed.close()
+            responses = [
+                render_batch_plan_assistant(
+                    "Create the exact result relation.",
+                    "action_block",
+                    {
+                        "calls": [
+                            {
+                                "id": "exact",
+                                "tool": "project",
+                                "arguments": {
+                                    "table": "items",
+                                    "expressions": ["category"],
+                                },
+                            },
+                            {
+                                "id": "rows",
+                                "tool": "read_subtable",
+                                "arguments": {"table": "$exact", "limit": 20},
+                            },
+                        ],
+                    },
+                ),
+                render_batch_plan_assistant(
+                    "The resident relation has exactly the requested column.",
+                    "answer_from_context",
+                    {
+                        "evidence": {
+                            "table": "project_001",
+                            "columns": ["category"],
+                        }
+                    },
+                ),
+            ]
+            record = self.run_with_responses(
+                db_path,
+                responses,
+                assistant_carrier=BATCH_CARRIER_INLINE_THINK,
+            )
+        self.assertTrue(record["correct"])
+        self.assertEqual(
+            record["assistant_carrier"],
+            BATCH_CARRIER_INLINE_THINK,
+        )
+        self.assertEqual(record["model_turns"], 2)
 
     def test_episode_recovers_from_root_error_with_blocked_descendant(self):
         with tempfile.TemporaryDirectory() as tmp:

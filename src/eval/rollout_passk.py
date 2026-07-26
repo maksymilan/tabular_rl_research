@@ -30,6 +30,7 @@ from denotation import add_denotation_comparison_argument  # noqa: E402
 from executor import Harness  # noqa: E402
 from passk import attach_passk_fields, parse_pass_k, write_passk_summary  # noqa: E402
 from protocol import (  # noqa: E402
+    PROTOCOL_VERSION,
     ProtocolError,
     assistant_message,
     first_user_message,
@@ -39,6 +40,7 @@ from protocol import (  # noqa: E402
     rolling_legal_history_messages,
     rolling_system_prompt,
     state_context_message,
+    protocol_hash,
     tool_error_message,
     tool_output_message,
 )
@@ -58,6 +60,11 @@ from rollout import (  # noqa: E402
     state_digest,
     task_db_path,
     task_gold_sql,
+)
+from tool_schemes import (  # noqa: E402
+    ATOMIC_ASSISTANT_CARRIER,
+    ATOMIC_TOOL_SCHEME,
+    TOOL_SCHEME_REGISTRY_VERSION,
 )
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
@@ -196,6 +203,11 @@ def run_sample(
     turns = []
     started = time.time()
     rec = {
+        "tool_scheme": ATOMIC_TOOL_SCHEME,
+        "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+        "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
+        "protocol_version": PROTOCOL_VERSION,
+        "protocol_hash": protocol_hash(system),
         "sample_index": sample_index,
         "denotation_comparison": denotation_comparison,
         "correct": False,
@@ -415,6 +427,11 @@ def run_one(
         )
     started = time.time()
     record = {
+        "tool_scheme": ATOMIC_TOOL_SCHEME,
+        "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+        "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
+        "protocol_version": PROTOCOL_VERSION,
+        "protocol_hash": protocol_hash(system),
         "example_index": example_index,
         "trajectory_id": ex.get("trajectory_id"),
         "dataset_split": ex.get("dataset_split") or ex.get("split"),
@@ -604,6 +621,11 @@ def main() -> int:
 
     manifest = {
         "runner": "tool_rollout_passk",
+        "tool_scheme": ATOMIC_TOOL_SCHEME,
+        "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
+        "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
+        "protocol_version": PROTOCOL_VERSION,
+        "protocol_hash": protocol_hash(system),
         "model": args.model,
         "base_url": args.base_url,
         "dataset": args.examples_json or "data/spider_data/dev.json",
