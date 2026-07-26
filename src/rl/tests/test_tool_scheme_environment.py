@@ -51,7 +51,10 @@ class ToolSchemeEnvironmentTests(unittest.TestCase):
             tool_scheme=ACTION_BLOCK_TOOL_SCHEME,
         )
         try:
-            self.assertIn("one call per turn", atomic.model_messages()[0]["content"])
+            self.assertIn(
+                "one typed tool action per turn",
+                atomic.model_messages()[0]["content"],
+            )
             self.assertNotIn(
                 "Emit only action_block",
                 atomic.model_messages()[0]["content"],

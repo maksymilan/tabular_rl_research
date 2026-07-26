@@ -32,6 +32,7 @@ from protocol import (  # noqa: E402
     ROLLING_SYSTEM_PROMPT_COMPACT,
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_COMPACT,
+    TEACHER_SYSTEM_PROMPT,
     parse_assistant_strict,
 )
 
@@ -345,7 +346,7 @@ class ProviderAdapterTests(unittest.TestCase):
     def test_deepseek_api_prompt_has_one_nonconflicting_response_contract(self):
         prompt = provider_system_prompt(
             "deepseek-v4-flash",
-            SYSTEM_PROMPT + DATA_GENERATION_SUFFIX,
+            TEACHER_SYSTEM_PROMPT + DATA_GENERATION_SUFFIX,
         )
         self.assertNotIn("output exactly: <think>brief reasoning</think>", prompt)
         self.assertNotIn("Emit exactly one non-empty <think> block", prompt)
@@ -371,7 +372,7 @@ class ProviderAdapterTests(unittest.TestCase):
     def test_deepseek_tool_call_prompt_has_one_nonconflicting_contract(self):
         prompt = provider_system_prompt(
             "deepseek-v4-flash",
-            SYSTEM_PROMPT + DATA_GENERATION_SUFFIX,
+            TEACHER_SYSTEM_PROMPT + DATA_GENERATION_SUFFIX,
             carrier=DEEPSEEK_CARRIER_TOOL_CALL,
         )
         self.assertNotIn("output exactly: <think>brief reasoning</think>", prompt)
@@ -399,7 +400,7 @@ class ProviderAdapterTests(unittest.TestCase):
         self.assertNotIn("tool_call block", message)
 
     def test_non_split_api_prompt_remains_canonical(self):
-        canonical = SYSTEM_PROMPT + DATA_GENERATION_SUFFIX
+        canonical = TEACHER_SYSTEM_PROMPT + DATA_GENERATION_SUFFIX
         self.assertEqual(provider_system_prompt("gpt-5.6-sol", canonical), canonical)
 
     def test_deepseek_prompt_supports_both_compact_semantic_variants(self):
@@ -422,7 +423,7 @@ class ProviderAdapterTests(unittest.TestCase):
     def test_deepseek_history_exposes_only_prior_tool_calls(self):
         canonical = (
             "<think>Inspect the schema before filtering.</think>\n"
-            '<tool_call>{"tool":"describe_table","arguments":{"tables":["Document"]}}</tool_call>'
+            '{"tool":"describe_table","arguments":{"tables":["Document"]}}'
         )
         messages = [
             {"role": "system", "content": "system"},

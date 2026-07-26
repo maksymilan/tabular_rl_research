@@ -66,7 +66,7 @@ class BirdTaskAdapterTests(unittest.TestCase):
         ):
             environment = ToolUseEnv(task, context_mode="rolling-legal-history", history_turns=1)
             environment.legal_history.append({
-                "assistant": '<think>Inspect.</think><tool_call>{"tool":"describe_table","arguments":{"tables":["T"]}}</tool_call>',
+                "assistant": '<think>Inspect.</think>{"tool":"describe_table","arguments":{"tables":["T"]}}',
                 "observation": '{"step_id":"step_1","status":"ok","output":{}}',
             })
             messages = environment.model_messages()
@@ -83,8 +83,8 @@ class BirdTaskAdapterTests(unittest.TestCase):
         }
         output = (
             '<think>Use the result.</think>'
-            '<tool_call>{"tool":"answer_from_context","arguments":'
-            '{"evidence":{"table":"missing"}}}</tool_call>'
+            '{"tool":"answer_from_context","arguments":'
+            '{"evidence":{"table":"missing"}}}'
         )
         with patch("tool_environment.Harness", FakeHarness), patch("tool_environment.overview", return_value={"tables": []}), patch(
             "tool_environment.new_ctx", return_value={"environment": FakeState()}

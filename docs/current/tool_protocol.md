@@ -1,4 +1,4 @@
-# Atomic Tool-Scheme Trajectory Protocol (version24)
+# Atomic Tool-Scheme Trajectory Protocol (version26)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -10,11 +10,13 @@ spaces are never merged in one prompt.
 
 ## Sources of Truth
 
-- Model-visible protocol: `src/sft/protocol.py`
+- Shared atomic prompt semantics: `src/sft/prompt_contract.py`
+- Public atomic tool structure: `src/sft/public_tool_contract.py`
+- Model-visible protocol and validation: `src/sft/protocol.py`
   - `PROTOCOL_VERSION`
-  - `SYSTEM_PROMPT`
+  - `STUDENT_SYSTEM_PROMPT` / `TEACHER_SYSTEM_PROMPT`
   - `TOOL_SPECS`
-  - per-tool argument schema
+  - `MODEL_ARG_SCHEMA`
   - message rendering/parsing
 - Harness provenance sidecars: `src/harness/provenance.py`
 - Scalar `value_ref` grounding: `src/harness/scalar_grounding.py`
@@ -42,7 +44,7 @@ user: DATASET OVERVIEW + QUESTION + optional EXTERNAL KNOWLEDGE
 [up to four successful assistant action + harness observation pairs]
 user: latest observation + CURRENT ENVIRONMENT STATE + optional LAST TOOL ERROR
 assistant: <think>...</think>
-           <tool_call>{"tool": "...", "arguments": {...}}</tool_call>
+           {"tool": "...", "arguments": {...}}
 ```
 
 The environment state is harness-managed resident context. It groups the current task plan and
@@ -60,8 +62,10 @@ gold-SQL-compilation and complete-trajectory-enrichment pipelines live under `ar
 
 The model emits only:
 
-- `<think>` text;
-- one `<tool_call>` JSON object.
+- one non-empty `<think>` block;
+- one raw JSON object containing exactly `tool` and `arguments`.
+
+The active carrier has no `tool_call` tags.
 
 The model does not emit provenance, references, produces, quality status, repair metadata, or reward
 fields.
@@ -131,16 +135,21 @@ Public version mapping:
   multiplicity and global totals are not per-entity totals, and unmatched left-join rows lack the
   right-side attribute. It remains an advice-heavy experiment and was not authorized for a
   fixed-200 run;
-- `version24`: current implementation; removes the advice-heavy feedback and global latest-feedback
+- `version24`: removes the advice-heavy feedback and global latest-feedback
   sidecar. Every table-producing operator now emits one validated, fact-only
   `relation-derivation-v1` record bound to its output handle. Derivation construction lives in the
   harness, is complete over the active table action space, and is separate from SQL execution,
   provenance, state storage, protocol rendering, and model policy. Its completed frozen-200
   DeepSeek v4 Flash evaluation is 145/200 under `bird-set`, versus the paired version20 143/200,
   but it fails the 150/200 gate and slightly regresses legal termination and process errors;
-- future changes increment only the integer (`version25`, `version26`, ...).
+- `version25`: separates the concise student runtime contract from teacher-only generation
+  guidance while keeping public tool semantics shared;
+- `version26`: current implementation; replaces the tagged action carrier with one non-empty
+  `<think>` block followed directly by the strict raw JSON action. Tagged actions are replay or
+  explicit offline-migration inputs only;
+- future changes increment only the integer (`version27`, `version28`, ...).
 
-The current version24 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
+The current version26 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
 - `plan`
@@ -296,10 +305,11 @@ SFT target. The first later legal step carries `feedback_recovery: true` and its
 A verifier-correct episode is `clean_success` only when it had no error events; otherwise it is
 `recovered_success`.
 
-Strict recovery parsing accepts exactly one complete `<tool_call>` JSON object with a non-empty
-`<think>` block and exact `tool`/`arguments` keys. Do not close tags, balance JSON, normalize
-arguments, or otherwise repair model output. Whole-episode restarts, when deliberately enabled for
-pass@k, are distinct attempts and must be reported as such.
+Strict recovery parsing accepts exactly one non-empty `<think>` block followed directly by one
+complete raw JSON object with exact `tool`/`arguments` keys. It rejects `tool_call` tags. Do not
+close tags, balance JSON, normalize arguments, or otherwise repair model output. Whole-episode
+restarts, when deliberately enabled for pass@k, are distinct attempts and must be reported as
+such.
 
 Recovery behavior is represented by ordinary first-person `<think>` text and existing tools:
 

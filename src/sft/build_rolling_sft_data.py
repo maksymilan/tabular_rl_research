@@ -26,11 +26,11 @@ from bird_sft1_teacher import replay_success_trajectory  # noqa: E402
 from protocol import (  # noqa: E402
     ROLLING_COMPACT_PROMPT_VERSION,
     ROLLING_CONTEXT_VERSION,
-    SYSTEM_PROMPT,
     assistant_message,
     protocol_hash,
     rolling_legal_history_messages,
-    rolling_system_prompt,
+    student_runtime_system_prompt,
+    tool_schema_hash,
     tool_output_message,
 )
 from tool_schemes import (  # noqa: E402
@@ -226,7 +226,10 @@ def build(
     if observation_style not in {"resident", "full"}:
         raise ValueError(f"unknown rolling observation style: {observation_style}")
     trajectories = read_jsonl(input_path)
-    system = rolling_system_prompt(SYSTEM_PROMPT, compact=prompt_variant == "compact")
+    system = student_runtime_system_prompt(
+        context_mode="rolling-legal-history",
+        compact=prompt_variant == "compact",
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_out = out_path.with_suffix(out_path.suffix + ".tmp")
@@ -307,9 +310,14 @@ def build(
         ),
         "history_turns": history_turns,
         "loss_policy": "last_assistant_turn_only",
+        "prompt_role": "student-runtime",
         "replay_denotation_comparison_override": denotation_comparison,
         "required_llamafactory_flag": "mask_history: true",
         "system_prompt_sha256": hashlib.sha256(system.encode("utf-8")).hexdigest(),
+        "student_runtime_prompt_sha256": hashlib.sha256(
+            system.encode("utf-8")
+        ).hexdigest(),
+        "tool_schema_sha256": tool_schema_hash(),
         "base_protocol_hash": protocol_hash(system),
         "source_episodes": len(trajectories),
         "replayed_episodes": replayed,

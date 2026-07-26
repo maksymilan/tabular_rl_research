@@ -40,7 +40,7 @@ def source_record() -> dict:
     system = build_batch_plan_system_prompt(8)
     return {
         "tool_scheme": ACTION_BLOCK_TOOL_SCHEME,
-        "tool_scheme_registry_version": "tool-scheme-registry-v1",
+        "tool_scheme_registry_version": "tool-scheme-registry-v2",
         "trajectory_id": "bird_train_00000",
         "example_index": 0,
         "db_id": "test",

@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Public registry for the two independently selectable table-tool schemes.
 
-The schemes share the harness-owned atomic relational semantics. They do not share a model action
-carrier, parser, prompt, trajectory identity, or training manifest. This module is deliberately a
-small adapter boundary so callers never infer a scheme from record shape or experimental flags.
+The schemes share the active think-plus-raw-JSON carrier and harness-owned atomic relational
+semantics. They do not share a model-visible tool schema, action validator, prompt, trajectory
+identity, or training manifest. This module is deliberately a small adapter boundary so callers
+never infer a scheme from record shape or experimental flags.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
+from action_carrier import ACTIVE_ACTION_CARRIER
 
-TOOL_SCHEME_REGISTRY_VERSION = "tool-scheme-registry-v1"
+
+TOOL_SCHEME_REGISTRY_VERSION = "tool-scheme-registry-v2"
 ATOMIC_TOOL_SCHEME = "atomic"
 ACTION_BLOCK_TOOL_SCHEME = "action-block"
 TOOL_SCHEME_NAMES = (
@@ -19,7 +22,7 @@ TOOL_SCHEME_NAMES = (
     ACTION_BLOCK_TOOL_SCHEME,
 )
 
-ATOMIC_ASSISTANT_CARRIER = "inline-think-tagged-tool-call"
+ATOMIC_ASSISTANT_CARRIER = ACTIVE_ACTION_CARRIER
 
 
 @dataclass(frozen=True)

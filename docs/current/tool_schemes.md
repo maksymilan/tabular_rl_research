@@ -6,18 +6,20 @@ The repository exposes two complete and independently selectable model action sc
 
 | Scheme id | Model turn | Top-level actions | Student carrier |
 |---|---|---|---|
-| `atomic` | exactly one primitive tool | the original planning, perception, relational, and terminal tools | `<think>` plus one tagged `<tool_call>` |
+| `atomic` | exactly one primitive tool | the original planning, perception, relational, and terminal tools | `<think>` followed directly by one raw JSON action |
 | `action-block` | one ordered block of 1..N primitive tools, or terminal | `action_block`, `answer_from_context` | `<think>` followed directly by one raw JSON action |
 
-The ids are defined in `src/sft/tool_schemes.py`. A model sees exactly one scheme. Do not combine
-both top-level schemas in one prompt and do not infer a scheme from trajectory shape.
+The ids are defined by `tool-scheme-registry-v2` in `src/sft/tool_schemes.py`. A model sees exactly
+one scheme. Do not combine both top-level schemas in one prompt and do not infer a scheme from
+trajectory shape. Registry v2 unifies both student schemes on the active `think-json-v1` carrier;
+registry v1's tagged atomic carrier is retired.
 
 Both schemes share the harness-owned primitive relational semantics and resident state. They do
 not share:
 
 - model-visible system prompts;
 - top-level argument schemas;
-- assistant carriers or strict parsers;
+- structured-action validators;
 - trajectory or manifest identities;
 - SFT targets;
 - model adapters/checkpoints or result directories.
@@ -28,8 +30,9 @@ not share:
 version/hash, carrier, top-level actions, primitive actions, and batch bound. It also provides
 strict render/parse round trips for local student models.
 
-The original DeepSeek action-block evaluator retains provider-native reasoning plus raw visible
-JSON. Local/SFT action-block models use the semantically equivalent inline carrier:
+Both local student schemes use the same `think-json-v1` carrier. Their structured JSON action
+schemas remain different. The DeepSeek action-block evaluator may transport reasoning in its
+provider-native field plus raw visible JSON, then records the same canonical carrier:
 
 ```text
 <think>one non-empty reason</think>
@@ -58,7 +61,7 @@ ablation flag is supplied. DeepSeek v4 uses the default provider-native carrier.
 student-model OpenAI-compatible endpoint uses:
 
 ```bash
---assistant-carrier inline-think-raw-json --model <student-model-name>
+--assistant-carrier think-json-v1 --model <student-model-name>
 ```
 
 The evaluator then parses the model's complete inline turn directly; it does not require a
@@ -109,7 +112,9 @@ provides the mandatory pre-export guard.
 
 `group_reinforce.py --tool-scheme ...` can therefore run matched result-only training for both
 schemes. Checkpoint metadata, rollout logs, and metrics include the scheme and scheme-specific
-budgets, so resume cannot silently switch protocols.
+budgets, carrier, protocol version, and protocol hash, so resume cannot silently switch protocols
+or continue a retired tagged-carrier checkpoint. Such a checkpoint requires an explicit offline
+carrier-repair/migration decision rather than metadata fallback.
 
 Atomic process credit remains available only for `atomic`. Action-block process optimization is
 rejected until a block-to-primitive credit objective is independently designed and audited.

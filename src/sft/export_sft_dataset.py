@@ -32,7 +32,8 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
 from protocol import (SYSTEM_PROMPT, PROTOCOL_VERSION, assistant_message,  # noqa: E402
-                      first_user_message, protocol_hash, state_context_message)
+                      first_user_message, protocol_hash, state_context_message,
+                      tool_schema_hash)
 from tool_schemes import (  # noqa: E402
     ATOMIC_TOOL_SCHEME,
     TOOL_SCHEME_REGISTRY_VERSION,
@@ -209,7 +210,12 @@ def build(
         "input_sha256": file_sha256(source),
         "protocol_version": PROTOCOL_VERSION,
         "protocol_hash": protocol_hash(),
+        "prompt_role": "student-runtime",
         "system_prompt_sha256": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
+        "student_runtime_prompt_sha256": hashlib.sha256(
+            SYSTEM_PROMPT.encode("utf-8")
+        ).hexdigest(),
+        "tool_schema_sha256": tool_schema_hash(),
         "source_trajectories": source_count,
         "kept": kept,
         "dropped_overlong": dropped,

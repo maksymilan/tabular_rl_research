@@ -69,6 +69,8 @@ from protocol import (  # noqa: E402
     rolling_legal_history_messages,
     rolling_system_prompt,
     state_context_message,
+    teacher_system_prompt,
+    tool_schema_hash,
     tool_output_message,
 )
 from tool_schemes import (  # noqa: E402
@@ -86,12 +88,13 @@ MIN_CONTEXT_RETRY_TOKENS = 256
 MAX_COMPLETION_RETRY_TOKENS = 8192
 DATA_GENERATION_SUFFIX = (
     "\n\nDATA GENERATION STRICTNESS\n"
-    "ONE REQUEST = ONE ACTION. Emit exactly one non-empty <think> block and exactly one "
-    "<tool_call> block. Immediately STOP after that closing </tool_call>: never emit a second "
-    "<think>, a second tool call, a numbered plan of calls, or a complete multi-step solution in "
-    "one response. The harness will execute only this one action and return a fresh state before "
-    "you choose the next action. Your <think> block must be non-empty on every turn. Put the reason inside <think> tags, "
-    "not as plain text before the tool call. The reason should be specific to the current question, "
+    "ONE REQUEST = ONE ACTION. Emit exactly one non-empty <think> block and exactly one raw JSON "
+    'object with only "tool" and "arguments". Immediately STOP after that JSON object: never emit '
+    "a second <think>, a second action, a numbered plan of calls, or a complete multi-step "
+    "solution in one response. The harness will execute only this one action and return a fresh "
+    "state before you choose the next action. Your <think> block must be non-empty on every turn. "
+    "Put the reason inside <think> tags and do not use tool_call tags. The reason should be specific "
+    "to the current question, "
     "visible schema/observations, and the next tool arguments. After the first turn, do not restate "
     "the original user question; continue from the current environment state or error feedback. "
     "Do not call read_subtable again for the same table, columns, and limit if that read is already "
@@ -1108,12 +1111,13 @@ def main() -> int:
         (i, ex) for i, ex in examples
         if trajectory_id(args.split, i, ex) not in completed
     ]
-    base_system_prompt = get_system_prompt()
+    student_prompt = get_system_prompt()
     if args.context_mode == "rolling-legal-history":
-        base_system_prompt = rolling_system_prompt(
-            base_system_prompt,
+        student_prompt = rolling_system_prompt(
+            student_prompt,
             compact=args.rolling_prompt_variant == "compact",
         )
+    base_system_prompt = teacher_system_prompt(student_prompt)
     base_system_prompt = policy_system_prompt(
         base_system_prompt,
         args.policy_prompt_variant,
@@ -1229,6 +1233,13 @@ def main() -> int:
         "failures_output": str(failure_path),
         "all_output": str(all_path),
         "protocol_hash": protocol_hash(system_prompt),
+        "student_runtime_prompt_sha256": hashlib.sha256(
+            student_prompt.encode("utf-8")
+        ).hexdigest(),
+        "teacher_provider_prompt_sha256": hashlib.sha256(
+            system_prompt.encode("utf-8")
+        ).hexdigest(),
+        "tool_schema_sha256": tool_schema_hash(),
         "max_steps": args.max_steps,
         "workers": max(1, args.workers),
         "max_errors_per_type": args.max_errors_per_type,

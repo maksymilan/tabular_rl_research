@@ -38,7 +38,7 @@ atomic 学生模型继续输出：
 
 ```text
 <think>...</think>
-<tool_call>{"tool":"describe_table","arguments":{...}}</tool_call>
+{"tool":"describe_table","arguments":{...}}
 ```
 
 action-block 学生模型输出：
@@ -48,14 +48,15 @@ action-block 学生模型输出：
 {"tool":"action_block","arguments":{"calls":[...]}}
 ```
 
-action-block 新增了严格的 inline renderer/parser；它与 DeepSeek 的 provider-native
-reasoning + raw JSON carrier只在传输层不同，结构化 action 完全一致。两种 carrier
-分别 hash，避免训练和推理 prompt 漂移。
+两套学生协议共用严格的 `think-json-v1` renderer/parser，但 JSON 内允许的顶层工具
+和参数 schema 不同。它与 DeepSeek 的 provider-native reasoning + raw JSON 只在
+传输层不同，结构化 action 完全一致。传输载体与工具 schema 分别记录，避免训练和
+推理漂移。
 
 本地或学生模型可以直接通过 action-block evaluator 运行：
 
 ```bash
-... --assistant-carrier inline-think-raw-json --model <student-model-name>
+... --assistant-carrier think-json-v1 --model <student-model-name>
 ```
 
 此路径直接解析模型生成的完整 inline action，不依赖 DeepSeek 的独立 reasoning 字段。
@@ -113,7 +114,7 @@ RL：
 因此不产生新的准确率结论。代码回归结果为：
 
 - active harness：81/81；
-- SFT tests：97/97；
+- SFT tests：99/99；
 - RL tests：80/80，另有 9 项因本地可选训练依赖未安装而跳过；
 - atomic eval tests：28/28；
 - action-block tests：29/29。
@@ -122,3 +123,20 @@ RL：
 两种 carrier 的严格 render/parse round trip、SFT fresh replay、scheme 数据防混用，
 以及 checkpoint 从 atomic 切换到 action-block 时的 metadata 拒绝。旧
 provider-native action-block prompt 哈希保持不变。
+
+## Action carrier 修正
+
+双方案解耦后的第一次提交错误地沿用了 atomic 的历史 tagged carrier 描述。当前实现已
+修正为与 coder 训练一致的唯一 active carrier：
+
+```text
+<think>...</think>
+{"tool":"...","arguments":{...}}
+```
+
+atomic 与 action-block 共用 `think-json-v1` 的 serializer/parser。它们的差异只存在于
+JSON 中允许的工具集合、参数 schema 和执行协议。`<tool_call>` 不再是新评测、SFT 或
+RL action 的一部分；旧 tagged action 只可由显式命名的离线迁移/replay 路径读取。
+registry 因此递增为 `tool-scheme-registry-v2`。RL checkpoint 现在同时绑定 carrier、
+protocol version/hash；旧 tagged-carrier checkpoint 不会被静默当作新 atomic
+checkpoint 继续训练。

@@ -1,7 +1,7 @@
 # Canonical Execution Contract
 
 Status: active contract for **new** SFT generation, evaluation, and RL episodes under
-`version24`. `src/sft/protocol.py` is executable authority; this document makes
+`version26`. `src/sft/protocol.py` is executable authority; this document makes
 the ownership boundaries explicit. Old trajectory artifacts remain replay inputs, not examples of
 the public action interface.
 
@@ -13,9 +13,10 @@ harness-managed resident state.
 1. The active renderer starts with the catalog, question, and optional external knowledge, then
    retains at most four successful assistant/observation pairs. The current user message contains
    resident environment state and, only after an error, `LAST TOOL ERROR`.
-2. The canonical action has exactly one non-empty `<think>` block and one complete `<tool_call>`
-   JSON object. An API with native reasoning transport receives one provider-specific prompt and
-   emits the same reason/tool action across its two fields.
+2. The canonical action has exactly one non-empty `<think>` block followed directly by one complete
+   raw JSON object with exact `tool` and `arguments` keys. An API with native reasoning transport
+   receives one provider-specific prompt and emits the same reason/tool action across its two
+   fields.
 3. The harness strictly parses, validates, executes, records the action, and updates resident state.
 4. The next model input is rebuilt from resident state and bounded rolling legal history. Rejected
    assistant text is excluded; full schemas, values, and rows remain present only once in resident
@@ -24,7 +25,7 @@ harness-managed resident state.
 
 ```text
 <think>brief reason for the next action</think>
-<tool_call>{"tool":"tool_name","arguments":{...}}</tool_call>
+{"tool":"tool_name","arguments":{...}}
 ```
 
 There is no parser repair for a new episode: no closing-tag insertion, JSON completion, shorthand

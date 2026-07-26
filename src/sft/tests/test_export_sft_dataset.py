@@ -107,7 +107,8 @@ class ExportSftDatasetTests(unittest.TestCase):
             [message["from"] for message in record["conversations"]],
             ["human", "gpt", "human", "gpt"],
         )
-        self.assertIn("<tool_call>", record["conversations"][1]["value"])
+        self.assertNotIn("<tool_call>", record["conversations"][1]["value"])
+        self.assertIn('{"tool":"group_aggregate"', record["conversations"][1]["value"])
         self.assertNotIn("observation", [message["from"] for message in record["conversations"]])
 
     def test_convert_renders_state_only_between_assistant_turns(self):

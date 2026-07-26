@@ -26,12 +26,12 @@ class RollingLegalHistoryTests(unittest.TestCase):
             {"tables": {"filter_001": {"row_count": 1}}, "plan": [], "values": {}},
             {"step_id": "step_3", "status": "error", "error": {"type": "protocol_error"}},
             None,
-            [{"assistant": "<think>legal</think><tool_call>{}</tool_call>",
+            [{"assistant": "<think>legal</think>{}",
               "observation": '{"step_id":"step_1","status":"success"}'}],
             4,
         )
         self.assertEqual([message["role"] for message in messages], ["system", "user", "assistant", "user"])
-        self.assertEqual(messages[2]["content"], "<think>legal</think><tool_call>{}</tool_call>")
+        self.assertEqual(messages[2]["content"], "<think>legal</think>{}")
         self.assertIn('"step_id":"step_1"', messages[3]["content"])
         self.assertIn("CURRENT ENVIRONMENT STATE", messages[3]["content"])
         self.assertIn("LAST TOOL ERROR", messages[3]["content"])
@@ -80,7 +80,7 @@ class RollingLegalHistoryTests(unittest.TestCase):
             None,
             None,
             [{
-                "assistant": "<think>read</think><tool_call>{}</tool_call>",
+                "assistant": "<think>read</think>{}",
                 "observation": (
                     '{"step_id":"step_1","status":"success","output":'
                     '{"table":"items","columns":["id","name"],"row_count":1,'

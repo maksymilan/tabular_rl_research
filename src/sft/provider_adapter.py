@@ -1,6 +1,6 @@
 """Provider-specific transport adapters before the shared strict protocol parser.
 
-Adapters map an API provider's *separate response fields* into the canonical assistant envelope.
+Adapters map an API provider's *separate response fields* into the active assistant envelope.
 They are deliberately narrower than parser repair: raw content is preserved, tool JSON is never
 changed, and malformed XML/JSON remains a protocol error after adaptation.
 """
@@ -21,8 +21,8 @@ DEEPSEEK_CARRIER_CHOICES = (
     DEEPSEEK_CARRIER_TOOL_CALL,
 )
 _CANONICAL_SYSTEM_RESPONSE_RULE = (
-    '1. Each turn, output exactly: <think>brief reasoning</think> then '
-    '<tool_call>{"tool": "<name>", "arguments": {...}}</tool_call>. Nothing else.'
+    '1. Each turn, output exactly: <think>brief reasoning</think> then one raw JSON object '
+    '{"tool": "<name>", "arguments": {...}}. Nothing else; do not use tool_call tags.'
 )
 _SPLIT_SYSTEM_RESPONSE_RULE = (
     "1. Produce exactly one tool action per turn using the provider-specific response envelope "
@@ -31,8 +31,8 @@ _SPLIT_SYSTEM_RESPONSE_RULE = (
 _CANONICAL_COMPACT_RESPONSE_RULE = (
     "Each turn output exactly:\n"
     "<think>brief reason for this action</think>\n"
-    '<tool_call>{"tool":"...","arguments":{...}}</tool_call>\n'
-    "No text outside these tags."
+    '{"tool":"...","arguments":{...}}\n'
+    "No other text and no tool_call tags."
 )
 _SPLIT_COMPACT_RESPONSE_RULE = (
     "Each turn produces exactly one tool action using the provider-specific response envelope at "
@@ -40,7 +40,7 @@ _SPLIT_COMPACT_RESPONSE_RULE = (
 )
 _CANONICAL_ROLLING_COMPACT_RESPONSE_RULE = (
     "Output only <think>specific reason for the next action</think> followed by one complete "
-    '<tool_call>{"tool":"name","arguments":{...}}</tool_call>. No prose outside the tags, no '
+    '{"tool":"name","arguments":{...}} JSON object. No other prose, no tool_call tags, no '
     "second action, no shorthand JSON, and no legacy tool fields."
 )
 _SPLIT_ROLLING_COMPACT_RESPONSE_RULE = (
@@ -48,12 +48,12 @@ _SPLIT_ROLLING_COMPACT_RESPONSE_RULE = (
     "this prompt. Do not emit a second action, shorthand JSON, or legacy tool fields."
 )
 _CANONICAL_GENERATION_RESPONSE_RULE = (
-    "ONE REQUEST = ONE ACTION. Emit exactly one non-empty <think> block and exactly one "
-    "<tool_call> block. Immediately STOP after that closing </tool_call>: never emit a second "
-    "<think>, a second tool call, a numbered plan of calls, or a complete multi-step solution in "
-    "one response. The harness will execute only this one action and return a fresh state before "
-    "you choose the next action. Your <think> block must be non-empty on every turn. Put the reason "
-    "inside <think> tags, not as plain text before the tool call."
+    "ONE REQUEST = ONE ACTION. Emit exactly one non-empty <think> block and exactly one raw JSON "
+    'object with only "tool" and "arguments". Immediately STOP after that JSON object: never emit '
+    "a second <think>, a second action, a numbered plan of calls, or a complete multi-step "
+    "solution in one response. The harness will execute only this one action and return a fresh "
+    "state before you choose the next action. Your <think> block must be non-empty on every turn. "
+    "Put the reason inside <think> tags and do not use tool_call tags."
 )
 _SPLIT_GENERATION_RESPONSE_RULE = (
     "ONE REQUEST = ONE ACTION. Produce one non-empty brief action reason in the provider's native "
@@ -65,8 +65,7 @@ _SPLIT_GENERATION_RESPONSE_RULE = (
     "provider-specific field placement at the end of this prompt."
 )
 _CANONICAL_ASSISTANT_HISTORY_RE = re.compile(
-    r"^\s*<think>(?P<reasoning>.*?)</think>\s*"
-    r"<tool_call>\s*(?P<call_json>\{.*\})\s*</tool_call>\s*$",
+    r"^\s*<think>(?P<reasoning>.*?)</think>\s*(?P<call_json>\{.*\})\s*$",
     re.DOTALL,
 )
 
@@ -106,7 +105,7 @@ def provider_system_prompt(
 ) -> str:
     """Return one unambiguous API-facing response contract for the selected provider.
 
-    The internal trajectory protocol remains canonical ``<think>`` + ``<tool_call>``. A provider
+    The internal trajectory protocol remains canonical ``<think>`` + raw JSON. A provider
     with native reasoning transport must not see that canonical envelope as a competing positive
     output instruction, so every known canonical response clause is replaced before the split-field
     contract is appended. Tool descriptions and interface-specific examples are left untouched.
@@ -245,8 +244,8 @@ def provider_instruction(
             "top-level key. "
             "Do not describe the response envelope, name its channels, repeat the reason, use "
             "Markdown or XML tags, add a second action, or put any text before or after the JSON. "
-            "The client preserves the separate reason and raw JSON for audit, wraps the unchanged "
-            "JSON in the internal canonical tool_call envelope, and rejects a missing reason or "
+            "The client preserves the separate reason and raw JSON for audit, renders the active "
+            "think-plus-JSON envelope, and rejects a missing reason or "
             "extra top-level keys."
         )
     return ""
@@ -336,8 +335,8 @@ def adapt_provider_response(
 
     record["applied"] = True
     if carrier == DEEPSEEK_CARRIER_TOOL_CALL:
-        return f"<think>{reasoning_text}</think>\n{content_text}", record
-    return f"<think>{reasoning_text}</think>\n<tool_call>{content_text}</tool_call>", record
+        content_text = content_text[len("<tool_call>"):-len("</tool_call>")].strip()
+    return f"<think>{reasoning_text}</think>\n{content_text}", record
 
 
 def provider_rejection_message(audit: dict[str, Any]) -> str | None:

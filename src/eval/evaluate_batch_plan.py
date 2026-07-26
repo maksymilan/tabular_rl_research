@@ -1706,7 +1706,7 @@ def main() -> int:
         choices=BATCH_CARRIERS,
         default=BATCH_CARRIER_PROVIDER_NATIVE,
         help=(
-            "provider-native is the DeepSeek split response; inline-think-raw-json "
+            "provider-native is the DeepSeek split response; think-json-v1 "
             "lets a local/student model emit the complete canonical turn directly"
         ),
     )
@@ -1774,7 +1774,7 @@ def main() -> int:
     ):
         parser.error(
             "provider-native action-block carrier requires deepseek-v4-flash or "
-            "deepseek-v4-pro; use --assistant-carrier inline-think-raw-json "
+            "deepseek-v4-pro; use --assistant-carrier think-json-v1 "
             "for a local/student model"
         )
     if (

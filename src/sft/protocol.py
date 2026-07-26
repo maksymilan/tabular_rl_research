@@ -7,7 +7,7 @@ the rollout format can never drift apart.
 Message protocol (chat roles):
   system   : agent role + tool specs + interaction rules            (SYSTEM_PROMPT)
   user #1  : dataset overview JSON + the question                   (first_user_message)
-  assistant: "<think>...</think>\n<tool_call>{...}</tool_call>"     (assistant_message)
+  assistant: "<think>...</think>\n{...}"                            (assistant_message)
   user     : CURRENT ENVIRONMENT STATE rendered from harness state  (state_context_message)
   ... repeats; the dialogue ends with the assistant's answer_from_context call.
 
@@ -23,10 +23,36 @@ import os
 import re
 from copy import deepcopy
 
-# v0 action space = exactly the tools present in the compiled Spider data. Perception / fuzzy tools
-# (inspect_column, semantic_match, ...) enter with the v1 data; exposing unlearned tools at eval
-# time only invites illegal calls.
-TOOL_SPECS: dict[str, str] = {
+from action_carrier import (
+    ACTIVE_ACTION_CARRIER,
+    ActionCarrierError,
+    parse_action_carrier,
+    parse_legacy_tagged_action_carrier,
+    render_action_carrier,
+)
+from prompt_contract import (
+    PUBLIC_TOOL_ARGUMENTS,
+    ROLLING_HISTORY_CONTRACT,
+    SHARED_TOOL_SPECS,
+    add_teacher_guidance,
+    build_student_system_prompt,
+)
+from public_tool_contract import (
+    AGGREGATION_LAYOUTS,
+    AGGREGATION_OPERATIONS,
+    AGGREGATION_OPTIONAL,
+    AGGREGATION_REQUIRED,
+    JOIN_EDGE_KEYS,
+    JOIN_ITEM_OPTIONAL,
+    JOIN_ITEM_REQUIRED,
+    JOIN_TYPES,
+    SCALAR_OPERAND_KEYSETS,
+    SCALAR_OPERATIONS,
+)
+
+# Teacher-only elaborations for the same public tools. These descriptions may explain edge cases
+# but cannot widen the tool names or argument schemas declared below.
+TEACHER_TOOL_GUIDANCE: dict[str, str] = {
     "plan":
         'plan(ops) -> update the task plan managed by the harness. For a multi-step task, call it '
         'early to split the question into subgoals, and later add/update/delete subgoals as '
@@ -127,6 +153,7 @@ TOOL_SPECS: dict[str, str] = {
         'when helper columns remain or column order is wrong; think/reason text cannot repair data.',
 }
 
+TOOL_SPECS = SHARED_TOOL_SPECS
 TOOLS = set(TOOL_SPECS)
 # ``aggregate`` and the parser repairs below exist only to read historical trajectory artifacts.
 # New model turns must use ``TOOLS`` through ``parse_assistant_strict``.  Keeping this distinction
@@ -135,7 +162,7 @@ LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version24"  # table-bound fact-only relation derivation metadata
+PROTOCOL_VERSION = "version26"  # raw-JSON model carrier; structured tool semantics unchanged
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 POLICY_PROMPT_CANONICAL = "canonical"
@@ -143,6 +170,12 @@ POLICY_PROMPT_RELATIONAL_INVARIANTS = "relational-invariants"
 POLICY_PROMPT_VARIANTS = (
     POLICY_PROMPT_CANONICAL,
     POLICY_PROMPT_RELATIONAL_INVARIANTS,
+)
+STUDENT_PROMPT_CANONICAL = "canonical"
+STUDENT_PROMPT_FORMAL = "formal"
+STUDENT_PROMPT_VARIANTS = (
+    STUDENT_PROMPT_CANONICAL,
+    STUDENT_PROMPT_FORMAL,
 )
 RELATIONAL_INVARIANTS_SUFFIX = (
     "\n\nRELATIONAL DECISION INVARIANTS — EXPERIMENTAL PROMPT VARIANT\n"
@@ -182,6 +215,13 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "read_subtable": ({"table"}, {"limit", "columns"}),
     "answer_from_context": (set(), {"answer", "evidence", "reason"}),
 }
+
+MODEL_ARG_SCHEMA: dict[str, tuple[set[str], set[str]]] = {
+    tool: (set(required), set(optional))
+    for tool, (required, optional) in PUBLIC_TOOL_ARGUMENTS.items()
+}
+if set(MODEL_ARG_SCHEMA) != TOOLS:
+    raise RuntimeError("public argument schema and model-visible tool contract have drifted")
 
 CANONICAL_CALL_COOKBOOK = (
     "CANONICAL CALLS (copy these argument shapes; replace names and values only)\n"
@@ -274,6 +314,21 @@ def validate_arguments(tool: str, args: dict) -> None:
             raise ProtocolError(f"join_tables: missing arguments {missing_shape}")
 
 
+def _validate_argument_keys(
+    tool: str,
+    args: dict,
+    schema: dict[str, tuple[set[str], set[str]]],
+) -> None:
+    required, optional = schema[tool]
+    keys = set(args)
+    missing = sorted(required - keys)
+    if missing:
+        raise ProtocolError(f"{tool}: missing arguments {missing}")
+    extra = sorted(keys - required - optional)
+    if extra:
+        raise ProtocolError(f"{tool}: unexpected arguments {extra}")
+
+
 def _validate_model_join(args: dict) -> None:
     base = args.get("base")
     joins = args.get("joins")
@@ -298,8 +353,8 @@ def _validate_model_join(args: dict) -> None:
         where = f"join_tables.joins[{index}]"
         if not isinstance(item, dict):
             raise ProtocolError(f"{where} must be an object")
-        extra = sorted(set(item) - {"table", "on", "type", "role"})
-        missing = sorted({"table", "on"} - set(item))
+        extra = sorted(set(item) - JOIN_ITEM_REQUIRED - JOIN_ITEM_OPTIONAL)
+        missing = sorted(JOIN_ITEM_REQUIRED - set(item))
         if missing:
             raise ProtocolError(f"{where}: missing fields {missing}")
         if extra:
@@ -308,7 +363,7 @@ def _validate_model_join(args: dict) -> None:
         if not isinstance(table, str) or not table.strip():
             raise ProtocolError(f"{where}.table must be a non-empty table or handle")
         join_type = item.get("type", "inner")
-        if join_type not in {"inner", "left", "cross"}:
+        if join_type not in JOIN_TYPES:
             raise ProtocolError(f"{where}.type must be inner, left, or cross")
         edges = item.get("on")
         if not isinstance(edges, list):
@@ -319,7 +374,7 @@ def _validate_model_join(args: dict) -> None:
             raise ProtocolError(f"{where}.on must be [] for a cross join")
         for edge_index, edge in enumerate(edges):
             edge_where = f"{where}.on[{edge_index}]"
-            if not isinstance(edge, dict) or set(edge) != {"left", "right"}:
+            if not isinstance(edge, dict) or set(edge) != JOIN_EDGE_KEYS:
                 raise ProtocolError(f"{edge_where} must contain exactly left and right")
             left, right = edge.get("left"), edge.get("right")
             if not isinstance(left, str) or "." not in left:
@@ -348,13 +403,15 @@ def _validate_model_group_aggregate(args: dict) -> None:
     aggregations = args.get("aggregations")
     if not isinstance(aggregations, list):
         raise ProtocolError("group_aggregate.aggregations must be a list")
-    allowed_ops = {"sum", "count", "count_distinct", "mean", "min", "max"}
+    allowed_ops = set(AGGREGATION_OPERATIONS)
     for index, aggregation in enumerate(aggregations):
         where = f"group_aggregate.aggregations[{index}]"
         if not isinstance(aggregation, dict):
             raise ProtocolError(f"{where} must be an object")
-        missing = sorted({"op", "column", "as"} - set(aggregation))
-        extra = sorted(set(aggregation) - {"op", "column", "as", "where"})
+        missing = sorted(AGGREGATION_REQUIRED - set(aggregation))
+        extra = sorted(
+            set(aggregation) - AGGREGATION_REQUIRED - AGGREGATION_OPTIONAL
+        )
         if missing:
             raise ProtocolError(f"{where}: missing fields {missing}")
         if extra:
@@ -380,7 +437,7 @@ def _validate_model_group_aggregate(args: dict) -> None:
         if column == "*" and op not in {"count", "count_distinct"}:
             raise ProtocolError(f"{where}: only count may aggregate column *")
     output_layout = args.get("output_layout", "rows")
-    if output_layout not in {"rows", "columns"}:
+    if output_layout not in AGGREGATION_LAYOUTS:
         raise ProtocolError("group_aggregate.output_layout must be rows or columns")
     category_values = args.get("category_values")
     output_columns = args.get("output_columns")
@@ -429,10 +486,7 @@ def _validate_model_group_aggregate(args: dict) -> None:
 
 def validate_model_arguments(tool: str, args: dict) -> None:
     """Validate the current public action API, excluding replay-only compatibility forms."""
-    validate_arguments(tool, args)
-    forbidden = sorted(set(args) & _MODEL_FORBIDDEN_ARGUMENTS.get(tool, set()))
-    if forbidden:
-        raise ProtocolError(f"{tool}: legacy arguments are not valid in new episodes: {forbidden}")
+    _validate_argument_keys(tool, args, MODEL_ARG_SCHEMA)
     if tool == "join_tables":
         _validate_model_join(args)
     if tool == "group_aggregate":
@@ -445,10 +499,7 @@ def validate_model_arguments(tool: str, args: dict) -> None:
         raise ProtocolError("project: distinct must be true or false")
     if tool == "scalar_compute":
         operation = args.get("operation")
-        allowed = {
-            "add", "subtract", "multiply", "divide", "percent",
-            "percent_change", "date_diff_days",
-        }
+        allowed = set(SCALAR_OPERATIONS)
         if operation not in allowed:
             raise ProtocolError(
                 f"scalar_compute: operation must be one of {sorted(allowed)}"
@@ -460,7 +511,7 @@ def validate_model_arguments(tool: str, args: dict) -> None:
             raise ProtocolError(f"scalar_compute: {operation} requires exactly two operands")
         for index, operand in enumerate(operands):
             keys = set(operand) if isinstance(operand, dict) else set()
-            if keys not in ({"value"}, {"value_ref"}, {"value_ref", "column"}):
+            if frozenset(keys) not in SCALAR_OPERAND_KEYSETS:
                 raise ProtocolError(
                     f"scalar_compute: operands[{index}] must be exactly value, value_ref, "
                     "or value_ref+column"
@@ -490,60 +541,47 @@ def validate_model_arguments(tool: str, args: dict) -> None:
             )
 
 
+def tool_schema_hash() -> str:
+    """Full hash of public tool names, argument keys, and concise semantics."""
+    arguments = {
+        tool: {
+            "required": sorted(required),
+            "optional": sorted(optional),
+        }
+        for tool, (required, optional) in sorted(MODEL_ARG_SCHEMA.items())
+    }
+    payload = json.dumps(
+        {"tools": TOOL_SPECS, "arguments": arguments},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def protocol_hash(system_prompt: str | None = None) -> str:
-    """Stable hash of the model<->harness contract (version + system prompt + tool specs). SFT
-    manifests and rollout runs record it so a train/eval protocol mismatch is detectable."""
-    payload = json.dumps({"version": PROTOCOL_VERSION, "system": system_prompt or SYSTEM_PROMPT, "tools": TOOL_SPECS},
-                         sort_keys=True, ensure_ascii=False)
+    """Stable hash of protocol version, selected prompt, and public tool schema."""
+    payload = json.dumps(
+        {
+            "version": PROTOCOL_VERSION,
+            "system": system_prompt or SYSTEM_PROMPT,
+            "tool_schema_sha256": tool_schema_hash(),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
-SYSTEM_PROMPT = (
-    "You are a table-reasoning agent. You answer questions over a relational dataset by calling "
-    "tools, one call per turn. The opening overview is a CATALOG: table names + row counts + "
-    "foreign-key relations only (no columns) — so it stays small on large databases. When the task "
-    "includes EXTERNAL KNOWLEDGE, treat it as part of the user-provided task context. Read the "
-    "columns of the tables you need with describe_table before operating. After each tool call, "
-    "the harness updates a CURRENT ENVIRONMENT STATE message. Treat that state as the authoritative "
-    "workspace: it contains the resident plan, known schemas, inspected values, table handles, row "
-    "reads, scalar values, and the step ids you may cite later (e.g. as a predicate's value_ref). "
-    "Each derived table handle also records a fact-only derivation object: the executed operator, "
-    "its inputs, and its formal row/column semantics. Derivation metadata describes the relation; "
-    "it is not a recommendation or an additional source of answer values. "
-    "You will not receive a full transcript of old tool observations; use the state instead of "
-    "repeating previous reads. A table-producing tool's state entry is only a HANDLE (table name, "
-    "columns, row_count) until you call read_subtable to see rows.\n\n"
-    "TOOLS\n" + "\n".join(TOOL_SPECS.values()) + "\n\n" + CANONICAL_CALL_COOKBOOK + "\n"
-    "RULES\n"
-    "1. Each turn, output exactly: <think>brief reasoning</think> then "
-    '<tool_call>{"tool": "<name>", "arguments": {...}}</tool_call>. Nothing else.\n'
-    "2. Use plan for multi-step tasks to break the question into subgoals; update it when a subgoal "
-    "starts, completes, or changes. Simple direct tasks may proceed without plan.\n"
-    "3. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
-    "4. To use a computed scalar as a threshold, set the predicate's "
-    '{"value_ref": step_id} to the step that produced that scalar. To answer with a scalar, cite '
-    "that producing 1x1 table as terminal evidence; never copy its value into the final call. "
-    "For arithmetic over a one-row table containing several named metrics, reuse the same producing "
-    'step with {"value_ref":step_id,"column":"metric"} for each operand.\n'
-    "5. For every answer, make the evidence table's rows, columns, and column order exactly match "
-    "the requested output. read_subtable only observes rows; it does not change table shape. If "
-    "extra/helper columns remain, project first, then cite that table. Never write answer data "
-    "inside answer_from_context.\n"
-    "6. If a derived handle exposes column_namespaces, form exact references as namespace.column. "
-    "The handle is the table argument, never a replacement column namespace.\n"
-    "7. In downstream filters, projections, grouping, and ordering, prefer namespace.column; a "
-    "bare column is valid only when exactly one available logical column has that suffix.\n"
-    "8. Preserve the database output slots exactly. Keep separate fields in separate columns; do "
-    "not concatenate names, replace an ID/code with a label, translate/case-normalize stored text, "
-    "or round a numeric result unless the question explicitly requests that transformation. Apply "
-    "distinct=true only when unique/distinct rows are requested or required by the task wording.\n"
-    "9. For top-k, order and limit before answering and use return_columns (or project) so helper "
-    "ranking columns are absent. For arithmetic over aggregate results, call scalar_compute and "
-    "cite its 1x1 result table instead of manually writing a terminal number. When several "
-    "conditional metrics must use the same population, compute them together with aggregation-level "
-    "where predicates so filtering one metric cannot change another metric's denominator or grain. "
-    "A group_by category produces one row per category; if the requested comparison instead needs "
-    "one row with one column per category, set output_layout=columns and give category_values in "
-    "the requested order.\n"
+# The concise student runtime prompt is shared by SFT export, evaluation, and RL. The detailed
+# descriptions and cookbook above are retained as teacher-only guidance.
+SYSTEM_PROMPT = build_student_system_prompt()
+STUDENT_SYSTEM_PROMPT = SYSTEM_PROMPT
+FORMAL_STUDENT_SYSTEM_PROMPT = build_student_system_prompt(
+    include_action_grammar=True
+)
+TEACHER_SYSTEM_PROMPT = add_teacher_guidance(
+    STUDENT_SYSTEM_PROMPT,
+    tool_guidance=TEACHER_TOOL_GUIDANCE,
+    call_cookbook=CANONICAL_CALL_COOKBOOK,
 )
 
 SYSTEM_PROMPT_COMPACT = (
@@ -551,8 +589,8 @@ SYSTEM_PROMPT_COMPACT = (
     "STRICT FORMAT\n"
     "Each turn output exactly:\n"
     "<think>brief reason for this action</think>\n"
-    '<tool_call>{"tool":"...","arguments":{...}}</tool_call>\n'
-    "No text outside these tags.\n\n"
+    '{"tool":"...","arguments":{...}}\n'
+    "No other text and no tool_call tags.\n\n"
     "CONTEXT\n"
     "The opening overview is only a catalog: table names, row counts, and relations. It has no "
     "columns. Use describe_table only for relevant unresolved tables. Tool-created tables return "
@@ -579,15 +617,7 @@ SYSTEM_PROMPT_COMPACT = (
     "read_subtable(table,limit?,columns?), answer_from_context(evidence,reason?).\n"
 )
 
-ROLLING_HISTORY_SYSTEM_SUFFIX = (
-    "\n\nROLLING LEGAL HISTORY\n"
-    "In this mode, the user may include a bounded transcript of earlier assistant actions that the "
-    "harness executed successfully, paired with their tool-result messages. Continue from that "
-    "legal history instead of restarting the task. The transcript is intentionally bounded, so do "
-    "not assume it contains every old observation. CURRENT ENVIRONMENT STATE remains the "
-    "authoritative factual workspace; LAST TOOL ERROR is the authoritative record of a rejected "
-    "action. Never treat a plan item or unexecuted text as factual evidence."
-)
+ROLLING_HISTORY_SYSTEM_SUFFIX = ROLLING_HISTORY_CONTRACT
 
 # This is a rolling-only ablation. It deliberately retains the public action contract and the
 # current join/value-reference rules that the generic compact prompt predates.
@@ -596,7 +626,7 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
     "per turn.\n\n"
     "FORMAT\n"
     "Output only <think>specific reason for the next action</think> followed by one complete "
-    '<tool_call>{"tool":"name","arguments":{...}}</tool_call>. No prose outside the tags, no '
+    '{"tool":"name","arguments":{...}} JSON object. No other prose, no tool_call tags, no '
     "second action, no shorthand JSON, and no legacy tool fields.\n\n"
     "CONTEXT\n"
     "The first user message is a catalog of table names, row counts, and relations, not schemas. "
@@ -641,15 +671,27 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
 
 
 def get_system_prompt() -> str:
-    """Return the default train/eval prompt, or a compact eval-only variant.
-
-    The default remains SYSTEM_PROMPT so SFT data and existing protocol hashes stay stable.
-    Set EVAL_SYSTEM_PROMPT_VARIANT=compact for prompt-ablation evaluations.
-    """
+    """Return the selected student runtime prompt."""
     variant = os.environ.get("EVAL_SYSTEM_PROMPT_VARIANT", "").strip().lower()
     if variant in {"compact", "short"}:
         return SYSTEM_PROMPT_COMPACT
+    if variant in {"formal", "structured"}:
+        return FORMAL_STUDENT_SYSTEM_PROMPT
     return SYSTEM_PROMPT
+
+
+def teacher_system_prompt(student_prompt: str) -> str:
+    """Add teacher-only guidance to an already selected student context contract."""
+    return add_teacher_guidance(
+        student_prompt,
+        tool_guidance=TEACHER_TOOL_GUIDANCE,
+        call_cookbook=CANONICAL_CALL_COOKBOOK,
+    )
+
+
+def get_teacher_system_prompt() -> str:
+    """Return teacher guidance over the same selected public semantics as the student."""
+    return teacher_system_prompt(get_system_prompt())
 
 
 def rolling_system_prompt(system_prompt: str, *, compact: bool = False) -> str:
@@ -659,6 +701,34 @@ def rolling_system_prompt(system_prompt: str, *, compact: bool = False) -> str:
     full-prompt rolling artifacts remain byte-for-byte stable.
     """
     return ROLLING_SYSTEM_PROMPT_COMPACT if compact else system_prompt + ROLLING_HISTORY_SYSTEM_SUFFIX
+
+
+def student_runtime_system_prompt(
+    *,
+    context_mode: str = "rolling-legal-history",
+    compact: bool = False,
+    student_prompt_variant: str = STUDENT_PROMPT_CANONICAL,
+) -> str:
+    """One prompt selector shared by SFT export, evaluation defaults, and RL."""
+    if student_prompt_variant not in STUDENT_PROMPT_VARIANTS:
+        raise ValueError(
+            f"unsupported student_prompt_variant: {student_prompt_variant!r}; "
+            f"expected one of {STUDENT_PROMPT_VARIANTS}"
+        )
+    if compact and student_prompt_variant != STUDENT_PROMPT_CANONICAL:
+        raise ValueError("compact and formal student prompt variants cannot be combined")
+    base = (
+        SYSTEM_PROMPT_COMPACT
+        if compact
+        else FORMAL_STUDENT_SYSTEM_PROMPT
+        if student_prompt_variant == STUDENT_PROMPT_FORMAL
+        else SYSTEM_PROMPT
+    )
+    if context_mode == "rolling-legal-history":
+        return rolling_system_prompt(base, compact=compact)
+    if context_mode == "state-only":
+        return base
+    raise ValueError(f"unsupported context_mode: {context_mode}")
 
 
 def policy_system_prompt(system_prompt: str, variant: str = POLICY_PROMPT_CANONICAL) -> str:
@@ -692,8 +762,7 @@ def first_user_message(
 
 
 def assistant_message(think: str, tool: str, arguments: dict) -> str:
-    return (f"<think>{think}</think>\n"
-            f"<tool_call>{_compact({'tool': tool, 'arguments': arguments})}</tool_call>")
+    return render_action_carrier(think, tool, arguments)
 
 
 def _compact_output_columns(output: dict) -> dict:
@@ -1036,15 +1105,31 @@ def _normalize_answer_args(args: dict) -> dict:
 
 
 def parse_assistant(text: str) -> tuple[str, str, dict]:
-    """Parse a model turn into (think, tool, arguments). Raises ProtocolError."""
+    """Replay-compatible parser for active and historical assistant artifacts."""
     m = _tool_call_payloads(text)
     if not m:
-        call = _repair_truncated_answer_call(text)
-        if call is None:
-            raise ProtocolError("no <tool_call>{...}</tool_call> block found")
+        try:
+            _, call = parse_action_carrier(text)
+        except ActionCarrierError:
+            start = text.rfind("</think>")
+            raw = _extract_balanced_json(
+                text,
+                start + len("</think>") if start >= 0 else 0,
+            )
+            if raw is not None:
+                try:
+                    call = _loads_tool_call(raw)
+                except json.JSONDecodeError:
+                    call = None
+            else:
+                call = None
+            if call is None:
+                call = _repair_truncated_answer_call(text)
+            if call is None:
+                raise ProtocolError("no complete JSON tool action found")
     else:
         try:
-            call = _loads_tool_call(m[-1])  # last block wins if the model quoted an example
+            call = _loads_tool_call(m[-1])  # last block wins for historical replay
         except json.JSONDecodeError as e:
             call = _repair_truncated_answer_call(text)
             if call is None:
@@ -1070,35 +1155,41 @@ def parse_assistant(text: str) -> tuple[str, str, dict]:
 
 
 def parse_assistant_strict(text: str) -> tuple[str, str, dict]:
-    """Parse one fully-formed teacher action without repair or argument normalization.
+    """Parse one active think + raw-JSON action without repair or normalization.
 
     External teacher generation may use this mode when protocol mistakes should become explicit
-    environment feedback. It intentionally rejects the legacy convenience repairs in
-    :func:`parse_assistant`: balanced JSON without a closing tag, shorthand tool-call objects,
-    truncated terminal answers, and omitted answer fields.
+    environment feedback. It intentionally rejects tagged carriers, shorthand objects, and
+    truncated terminal answers.
     """
-    payloads = _TOOL_CALL_RE.findall(text)
-    if len(payloads) != 1:
-        raise ProtocolError(
-            "expected exactly one complete <tool_call>{...}</tool_call> block; "
-            f"received {len(payloads)}"
-        )
     try:
-        call = json.loads(payloads[0])
-    except json.JSONDecodeError as exc:
-        raise ProtocolError(f"tool_call is not valid JSON: {exc}") from exc
-    if not isinstance(call, dict):
-        raise ProtocolError("tool_call JSON must be an object")
+        think, call = parse_action_carrier(text)
+    except ActionCarrierError as exc:
+        raise ProtocolError(str(exc)) from exc
     if set(call) != {"tool", "arguments"}:
-        raise ProtocolError('tool_call must contain exactly "tool" and "arguments" keys')
+        raise ProtocolError('action must contain exactly "tool" and "arguments" keys')
     tool = call.get("tool")
     args = call.get("arguments")
     if tool not in TOOLS:
         raise ProtocolError(f"unknown tool {tool!r}; legal tools: {sorted(TOOLS)}")
     if not isinstance(args, dict):
-        raise ProtocolError('tool_call must have an "arguments" object')
-    think_blocks = _THINK_RE.findall(text)
-    if len(think_blocks) != 1 or not think_blocks[0].strip():
-        raise ProtocolError("expected exactly one non-empty <think>...</think> block")
+        raise ProtocolError('action must have an "arguments" object')
     validate_model_arguments(tool, args)
-    return think_blocks[0].strip(), tool, args
+    return think, tool, args
+
+
+def parse_legacy_assistant_strict(text: str) -> tuple[str, str, dict]:
+    """Parse the retired tagged carrier only for deterministic artifact migration."""
+    try:
+        think, call = parse_legacy_tagged_action_carrier(text)
+    except ActionCarrierError as exc:
+        raise ProtocolError(str(exc)) from exc
+    if set(call) != {"tool", "arguments"}:
+        raise ProtocolError('legacy action must contain exactly "tool" and "arguments" keys')
+    tool = call.get("tool")
+    args = call.get("arguments")
+    if tool not in TOOLS:
+        raise ProtocolError(f"unknown tool {tool!r}; legal tools: {sorted(TOOLS)}")
+    if not isinstance(args, dict):
+        raise ProtocolError('legacy action must have an "arguments" object')
+    validate_model_arguments(tool, args)
+    return think, tool, args

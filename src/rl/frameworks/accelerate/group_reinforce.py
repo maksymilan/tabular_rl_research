@@ -29,8 +29,6 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    LogitsProcessor,
-    LogitsProcessorList,
     get_scheduler,
 )
 
@@ -42,6 +40,7 @@ from tool_schemes import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
     TOOL_SCHEME_NAMES,
+    build_tool_scheme,
 )
 from task_loader import load_rl_task_records  # noqa: E402
 from terminal_reward import terminal_result_reward  # noqa: E402
@@ -208,34 +207,6 @@ def _trim_generated_response(ids: list[int], *, eos_token_id: int | None, pad_to
     return ids
 
 
-class ForceEosAfterStop(LogitsProcessor):
-    """Force per-row EOS after a protocol stop string appears in generated tokens."""
-
-    def __init__(self, tokenizer, stop_ids: list[int], *, prompt_width: int, eos_token_id: int | None):
-        self.tokenizer = tokenizer
-        self.stop_ids = stop_ids
-        self.prompt_width = prompt_width
-        self.eos_token_id = eos_token_id
-
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-        if self.eos_token_id is None or not self.stop_ids:
-            return scores
-        stop_len = len(self.stop_ids)
-        for row_index in range(input_ids.shape[0]):
-            generated = input_ids[row_index, self.prompt_width:]
-            if generated.numel() < stop_len:
-                continue
-            should_stop = False
-            for end in range(stop_len, generated.numel() + 1):
-                if generated[end - stop_len: end].tolist() == self.stop_ids:
-                    should_stop = True
-                    break
-            if should_stop:
-                scores[row_index, :] = -torch.inf
-                scores[row_index, self.eos_token_id] = 0
-        return scores
-
-
 def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]], *,
                             device: torch.device, args: argparse.Namespace) -> list[tuple[int, list[int], list[int]]]:
     """Generate one batched assistant turn, splitting on OOM for 24GB cards."""
@@ -249,21 +220,6 @@ def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]]
     input_ids = torch.tensor(input_rows, device=device, dtype=torch.long)
     attention_mask = torch.tensor(mask_rows, device=device, dtype=torch.long)
     try:
-        stop_ids = (
-            tokenizer("</tool_call>", add_special_tokens=False).input_ids
-            if args.tool_scheme == ATOMIC_TOOL_SCHEME
-            else []
-        )
-        processors = LogitsProcessorList()
-        if stop_ids:
-            processors.append(
-                ForceEosAfterStop(
-                    tokenizer,
-                    stop_ids,
-                    prompt_width=max_prompt_len,
-                    eos_token_id=tokenizer.eos_token_id,
-                )
-            )
         generated = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -273,7 +229,6 @@ def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]]
             top_p=args.top_p,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
-            logits_processor=processors,
             use_cache=True,
         )
     except torch.OutOfMemoryError:
@@ -687,7 +642,12 @@ def checkpoint_metadata(args: argparse.Namespace) -> dict[str, Any]:
         digest = hashlib.sha256(resolved.read_bytes()).hexdigest() if resolved.is_file() else ""
         return {"path": str(resolved), "sha256": digest}
 
+    scheme = build_tool_scheme(
+        args.tool_scheme,
+        max_batch_calls=args.max_batch_calls,
+    )
     metadata = {
+        **scheme.manifest_fields(),
         "model_path": str(args.model_path.resolve()),
         "sft_adapter_path": str(args.adapter_path.resolve()),
         "examples_json": artifact_identity(args.examples_json),
@@ -703,7 +663,6 @@ def checkpoint_metadata(args: argparse.Namespace) -> dict[str, Any]:
             else None
         ),
         "reward_mode": args.reward_mode,
-        "tool_scheme": args.tool_scheme,
         "denotation_comparison": args.denotation_comparison,
         "steps": args.steps,
         "group_size": args.group_size,
@@ -832,7 +791,6 @@ def main() -> int:
             optimizer=optimizer,
             scheduler=scheduler,
             expected_metadata=checkpoint_metadata(args),
-            legacy_metadata_defaults={"tool_scheme": ATOMIC_TOOL_SCHEME},
             map_location=next(model.parameters()).device,
         )
         if completed_step >= args.steps:

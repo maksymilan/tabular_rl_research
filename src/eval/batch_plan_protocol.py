@@ -15,8 +15,15 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from action_carrier import (
+    ACTIVE_ACTION_CARRIER,
+    ActionCarrierError,
+    parse_action_carrier,
+    render_action_carrier,
+)
 from protocol import (
     ProtocolError,
+    TEACHER_TOOL_GUIDANCE,
     TOOL_SPECS,
     compact_resident_observation,
     first_user_message,
@@ -33,7 +40,7 @@ SAFE_LOW_FRICTION_INTERFACE_PROTOCOL_VERSION = "action-block-v11"
 BATCH_PLAN_TOOL = "action_block"
 TERMINAL_TOOL = "answer_from_context"
 BATCH_CARRIER_PROVIDER_NATIVE = "provider-native-reasoning-raw-json"
-BATCH_CARRIER_INLINE_THINK = "inline-think-raw-json"
+BATCH_CARRIER_INLINE_THINK = ACTIVE_ACTION_CARRIER
 BATCH_CARRIERS = (
     BATCH_CARRIER_PROVIDER_NATIVE,
     BATCH_CARRIER_INLINE_THINK,
@@ -62,7 +69,9 @@ def _compact(value: Any) -> str:
 
 
 def _atomic_specs() -> str:
-    return "\n".join(TOOL_SPECS[tool] for tool in EXECUTABLE_TOOLS)
+    # Keep the historical DeepSeek action-block prompt byte-stable for artifact reproduction.
+    # The local student carrier differs only at the response-envelope clause.
+    return "\n".join(TEACHER_TOOL_GUIDANCE[tool] for tool in EXECUTABLE_TOOLS)
 
 
 def build_batch_plan_system_prompt(
@@ -252,10 +261,7 @@ def render_batch_plan_assistant(
     arguments: dict,
 ) -> str:
     """Render the strict inline carrier used by local student models and SFT."""
-    if not isinstance(reasoning, str) or not reasoning.strip():
-        raise BatchPlanProtocolError("inline action-block reasoning must be non-empty")
-    raw_action = _compact({"tool": tool, "arguments": arguments})
-    return f"<think>{reasoning.strip()}</think>\n{raw_action}"
+    return render_action_carrier(reasoning, tool, arguments)
 
 
 def parse_batch_plan_assistant(
@@ -264,23 +270,15 @@ def parse_batch_plan_assistant(
     max_batch_calls: int,
 ) -> tuple[str, str, dict]:
     """Parse one inline-think action-block turn without provider-specific fields."""
-    if not isinstance(text, str) or not text.strip():
-        raise BatchPlanProtocolError("inline action-block response is empty")
-    match = re.fullmatch(
-        r"\s*<think>(?P<reason>.*?)</think>\s*(?P<action>\{.*\})\s*",
-        text,
-        re.S,
-    )
-    if match is None or not match.group("reason").strip():
-        raise BatchPlanProtocolError(
-            "inline action-block response must contain one non-empty <think> block "
-            "followed directly by one raw JSON action"
-        )
+    try:
+        reasoning, action = parse_action_carrier(text)
+    except ActionCarrierError as exc:
+        raise BatchPlanProtocolError(str(exc)) from exc
     tool, arguments = parse_batch_plan_action(
-        match.group("action"),
+        _compact(action),
         max_batch_calls=max_batch_calls,
     )
-    return match.group("reason").strip(), tool, arguments
+    return reasoning, tool, arguments
 
 
 def _validate_terminal_arguments(arguments: dict) -> None:

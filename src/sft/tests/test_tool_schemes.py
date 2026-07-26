@@ -34,7 +34,7 @@ class ToolSchemeRegistryTests(unittest.TestCase):
             ("action_block", "answer_from_context"),
         )
         self.assertNotEqual(atomic.protocol_hash, block.protocol_hash)
-        self.assertNotEqual(atomic.assistant_carrier, block.assistant_carrier)
+        self.assertEqual(atomic.assistant_carrier, block.assistant_carrier)
 
     def test_each_scheme_round_trips_its_native_student_action(self):
         atomic = build_atomic_tool_scheme()
@@ -48,6 +48,7 @@ class ToolSchemeRegistryTests(unittest.TestCase):
             parse_scheme_action(atomic, atomic_text),
             ("Inspect the schema.", "describe_table", {"tables": ["items"]}),
         )
+        self.assertNotIn("<tool_call>", atomic_text)
 
         block = build_action_block_tool_scheme()
         block_args = {

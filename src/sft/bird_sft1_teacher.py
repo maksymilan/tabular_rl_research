@@ -33,6 +33,7 @@ from protocol import (  # noqa: E402
     model_context_messages,
     parse_assistant_strict,
     protocol_hash,
+    teacher_system_prompt,
 )
 from generate_teacher_rollouts import add_usage, chat_with_retries  # noqa: E402
 
@@ -47,8 +48,9 @@ MAX_ERRORS_PER_TYPE = 3
 DATA_GENERATION_SUFFIX = (
     "\n\nTEACHER DEMONSTRATION STRICTNESS\n"
     "Produce exactly one legal tool call per turn. Every turn must contain a non-empty <think> "
-    "block followed by one <tool_call> block. Use only the current task context, CURRENT "
-    "ENVIRONMENT STATE, and any LAST TOOL ERROR; do not invent prior observations or results."
+    'block followed by one raw JSON object with only "tool" and "arguments"; do not use tool_call '
+    "tags. Use only the current task context, CURRENT ENVIRONMENT STATE, and any LAST TOOL ERROR; "
+    "do not invent prior observations or results."
 )
 STEP_REF = re.compile(r"^step_(\d+)$")
 
@@ -207,7 +209,7 @@ def run_episode(
     last_error: dict | None = None
     error_counts: collections.Counter[str] = collections.Counter()
     started = time.monotonic()
-    system_prompt = get_system_prompt() + DATA_GENERATION_SUFFIX
+    system_prompt = teacher_system_prompt(get_system_prompt()) + DATA_GENERATION_SUFFIX
     try:
         for step_index in range(1, max_steps + 1):
             state_before = ctx["environment"].snapshot()
