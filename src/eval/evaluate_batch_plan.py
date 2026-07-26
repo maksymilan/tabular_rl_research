@@ -1690,6 +1690,15 @@ def main() -> int:
     )
     parser.add_argument("--history-turns", type=int, default=DEFAULT_HISTORY_TURNS)
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument(
+        "--trajectory-id",
+        action="append",
+        default=[],
+        help=(
+            "evaluate only this exact trajectory id; repeat for a frozen "
+            "targeted gate (exact ids override --start/--limit)"
+        ),
+    )
     parser.add_argument("--api-timeout", type=int, default=300)
     parser.add_argument("--api-retries", type=int, default=3)
     parser.add_argument(
@@ -1755,7 +1764,31 @@ def main() -> int:
     if out_path.exists() and not args.resume:
         parser.error(f"{out_path} already exists; use a new path or --resume")
 
-    examples = load_examples(args)
+    requested_ids = list(dict.fromkeys(args.trajectory_id))
+    if requested_ids:
+        load_args = deepcopy(args)
+        load_args.start = 0
+        load_args.limit = None
+        examples = load_examples(load_args)
+    else:
+        examples = load_examples(args)
+    if requested_ids:
+        requested_id_set = set(requested_ids)
+        available_ids = {
+            trajectory_id(args.split, index, ex)
+            for index, ex in examples
+        }
+        missing_ids = sorted(requested_id_set - available_ids)
+        if missing_ids:
+            parser.error(
+                "requested trajectory ids are absent from the selected examples: "
+                + ", ".join(missing_ids)
+            )
+        examples = [
+            (index, ex)
+            for index, ex in examples
+            if trajectory_id(args.split, index, ex) in requested_id_set
+        ]
     completed = read_completed(out_path) if args.resume else set()
     work = [
         (index, ex)
@@ -1881,6 +1914,7 @@ def main() -> int:
         "split": args.split,
         "examples_file": args.examples_file,
         "source_count": len(examples),
+        "requested_trajectory_ids": requested_ids,
         "attempted_this_run": len(work),
         "resume": args.resume,
         "output": str(out_path),
