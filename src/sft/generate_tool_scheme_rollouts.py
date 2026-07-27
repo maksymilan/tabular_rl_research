@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stable causal-rollout launcher for either public table-tool scheme."""
+"""Stable causal-rollout launcher for one explicitly selected table-tool scheme."""
 from __future__ import annotations
 
 import argparse
@@ -16,6 +16,7 @@ sys.path[:0] = [str(ROOT / "src" / "eval"), str(HERE)]
 from tool_schemes import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
+    RELATIONAL_PROGRAM_TOOL_SCHEME,
     TOOL_SCHEME_NAMES,
 )
 
@@ -33,6 +34,12 @@ def generator_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
         return [
             sys.executable,
             str(ROOT / "src" / "eval" / "evaluate_batch_plan.py"),
+            *forwarded,
+        ]
+    if tool_scheme == RELATIONAL_PROGRAM_TOOL_SCHEME:
+        return [
+            sys.executable,
+            str(ROOT / "src" / "eval" / "evaluate_relational_program.py"),
             *forwarded,
         ]
     raise ValueError(f"unsupported tool scheme: {tool_scheme}")

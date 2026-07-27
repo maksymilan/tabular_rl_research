@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Public registry for the two independently selectable table-tool schemes.
+"""Public registry for the independently selectable table-tool schemes.
 
 The schemes share the active think-plus-raw-JSON carrier and harness-owned atomic relational
 semantics. They do not share a model-visible tool schema, action validator, prompt, trajectory
@@ -14,12 +14,14 @@ from typing import Any
 from action_carrier import ACTIVE_ACTION_CARRIER
 
 
-TOOL_SCHEME_REGISTRY_VERSION = "tool-scheme-registry-v2"
+TOOL_SCHEME_REGISTRY_VERSION = "tool-scheme-registry-v3"
 ATOMIC_TOOL_SCHEME = "atomic"
 ACTION_BLOCK_TOOL_SCHEME = "action-block"
+RELATIONAL_PROGRAM_TOOL_SCHEME = "relational-program"
 TOOL_SCHEME_NAMES = (
     ATOMIC_TOOL_SCHEME,
     ACTION_BLOCK_TOOL_SCHEME,
+    RELATIONAL_PROGRAM_TOOL_SCHEME,
 )
 
 ATOMIC_ASSISTANT_CARRIER = ACTIVE_ACTION_CARRIER
@@ -128,11 +130,55 @@ def build_action_block_tool_scheme(
     )
 
 
+def build_relational_program_tool_scheme(
+    *,
+    max_program_calls: int = 8,
+    assistant_carrier: str | None = None,
+    protocol_version: str | None = None,
+) -> ToolScheme:
+    """Build the separate declarative-program scheme."""
+    from relational_program_protocol import (
+        ACTION_CARRIER,
+        MAX_RELATIONAL_PROGRAM_CALLS,
+        RELATIONAL_PRIMITIVE_TOOLS,
+        RELATIONAL_PROGRAM_PROTOCOL_VERSION,
+        TOP_LEVEL_TOOLS,
+        build_relational_program_system_prompt,
+        relational_program_protocol_hash,
+    )
+
+    if not 1 <= max_program_calls <= MAX_RELATIONAL_PROGRAM_CALLS:
+        raise ValueError(
+            "active relational-program max_program_calls must be in "
+            f"1..{MAX_RELATIONAL_PROGRAM_CALLS}"
+        )
+    carrier = assistant_carrier or ACTION_CARRIER
+    version = protocol_version or RELATIONAL_PROGRAM_PROTOCOL_VERSION
+    prompt = build_relational_program_system_prompt(
+        max_program_calls,
+        assistant_carrier=carrier,
+    )
+    return ToolScheme(
+        name=RELATIONAL_PROGRAM_TOOL_SCHEME,
+        protocol_version=version,
+        protocol_hash=relational_program_protocol_hash(
+            prompt,
+            max_program_calls,
+            protocol_version=version,
+        ),
+        system_prompt=prompt,
+        assistant_carrier=carrier,
+        top_level_tools=tuple(TOP_LEVEL_TOOLS),
+        atomic_tools=tuple(RELATIONAL_PRIMITIVE_TOOLS),
+        max_batch_calls=max_program_calls,
+    )
+
+
 def build_tool_scheme(
     name: str,
     *,
     system_prompt: str | None = None,
-    max_batch_calls: int = 5,
+    max_batch_calls: int | None = None,
     assistant_carrier: str | None = None,
     protocol_version: str | None = None,
 ) -> ToolScheme:
@@ -145,10 +191,16 @@ def build_tool_scheme(
         return build_atomic_tool_scheme(system_prompt=system_prompt)
     if system_prompt is not None:
         raise ValueError(
-            "action-block system prompt is derived from its carrier and batch bound"
+            "non-atomic system prompts are derived from their carrier and call bound"
         )
-    return build_action_block_tool_scheme(
-        max_batch_calls=max_batch_calls,
+    if name == ACTION_BLOCK_TOOL_SCHEME:
+        return build_action_block_tool_scheme(
+            max_batch_calls=max_batch_calls or 5,
+            assistant_carrier=assistant_carrier,
+            protocol_version=protocol_version,
+        )
+    return build_relational_program_tool_scheme(
+        max_program_calls=max_batch_calls or 8,
         assistant_carrier=assistant_carrier,
         protocol_version=protocol_version,
     )
@@ -169,6 +221,10 @@ def render_scheme_action(
         from batch_plan_protocol import render_batch_plan_assistant
 
         return render_batch_plan_assistant(reasoning, tool, arguments)
+    if scheme.name == RELATIONAL_PROGRAM_TOOL_SCHEME:
+        from relational_program_protocol import render_relational_program_assistant
+
+        return render_relational_program_assistant(reasoning, tool, arguments)
     raise ValueError(f"unsupported tool scheme: {scheme.name}")
 
 
@@ -185,6 +241,13 @@ def parse_scheme_action(
         from batch_plan_protocol import parse_batch_plan_assistant
 
         return parse_batch_plan_assistant(
+            text,
+            max_batch_calls=int(scheme.max_batch_calls or 0),
+        )
+    if scheme.name == RELATIONAL_PROGRAM_TOOL_SCHEME:
+        from relational_program_protocol import parse_relational_program_assistant
+
+        return parse_relational_program_assistant(
             text,
             max_batch_calls=int(scheme.max_batch_calls or 0),
         )

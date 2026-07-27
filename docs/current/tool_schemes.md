@@ -2,19 +2,22 @@
 
 ## Contract
 
-The repository exposes two complete and independently selectable model action schemes:
+The repository exposes three complete and independently selectable model action schemes:
 
 | Scheme id | Model turn | Top-level actions | Student carrier |
 |---|---|---|---|
 | `atomic` | exactly one primitive tool | the original planning, perception, relational, and terminal tools | `<think>` followed directly by one raw JSON action |
 | `action-block` | one ordered work block of 1..5 primitive calls, or one terminal action | `action_block` for work; `answer_from_context` for termination | `<think>` followed directly by one raw JSON action |
+| `relational-program` | one interactive observation, one declarative relation program of 1..8 nodes, or one terminal action | `observe`; `relational_program`; `answer_from_context` | `<think>` followed directly by one raw JSON action |
 
-The ids are defined by `tool-scheme-registry-v2` in `src/sft/tool_schemes.py`. A model sees exactly
-one scheme. Do not combine both top-level schemas in one prompt and do not infer a scheme from
-trajectory shape. Registry v2 unifies both student schemes on the active `think-json-v1` carrier;
-registry v1's tagged atomic carrier is retired.
+The ids are defined by `tool-scheme-registry-v3` in `src/sft/tool_schemes.py`. A model sees exactly
+one scheme. Do not combine top-level schemas from different schemes in one prompt and do not infer
+a scheme from trajectory shape. Registry v2 unifies both prior student schemes on the active
+`think-json-v1` carrier;
+registry v3 adds `relational-program` without changing either prior scheme. Registry v1's tagged
+atomic carrier is retired.
 
-Both schemes share the harness-owned primitive relational semantics and resident facts. They do
+All three schemes share the harness-owned primitive relational semantics and resident facts. They do
 not share:
 
 - model-visible system prompts;
@@ -54,6 +57,10 @@ PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
 PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
   .venv/bin/python src/eval/run_tool_scheme.py \
   --tool-scheme action-block -- <action-block evaluator arguments>
+
+PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
+  .venv/bin/python src/eval/run_tool_scheme.py \
+  --tool-scheme relational-program -- <relational-program evaluator arguments>
 ```
 
 The active action-block protocol is `action-block-v32`. It uses the strict ordered
@@ -70,7 +77,8 @@ provider-native reasoning field.
 
 The matching causal generation entry is
 `src/sft/generate_tool_scheme_rollouts.py`. It dispatches to the original external-teacher loop for
-`atomic` and the real model↔harness action-block loop for `action-block`.
+`atomic`, the real model↔harness action-block loop for `action-block`, and the separate
+model↔harness relational-program loop for `relational-program`.
 
 Every new episode and manifest records:
 
@@ -147,6 +155,52 @@ terminal. Primitive counts remain audit metrics and do not terminate an episode.
 
 Result directories must remain isolated by scheme.
 
+## Relational-program boundary
+
+`relational-program-v3` is a separate diagnostic scheme implemented by
+`src/eval/relational_program_protocol.py` and `src/eval/evaluate_relational_program.py`. It does
+not add raw SQL or merge the atomic and action-block prompts.
+
+The model-visible prompt is exclusive to three top-level tools: `observe`,
+`relational_program`, and `answer_from_context`. It does not include the atomic or action-block
+tool definitions. `observe` exposes the `schema`, `column`, and `rows` variants, so a model can
+inspect an intermediate result and then submit another program. A deterministic work turn has:
+
+```json
+{"tool":"relational_program","arguments":{
+  "calls":[
+    {"id":"filtered","operation":"filter","arguments":{"table":"orders","conditions":{"column":"amount","op":">","value":100}}},
+    {"id":"exact","operation":"select","arguments":{"table":"$filtered","expressions":["order_id"],"distinct":true}}
+  ],
+  "result":"exact",
+  "exports":[]
+}}
+```
+
+The model supplies only node ids, program operations, exact `$id`/`$id.column` parameter references,
+one primary result, and optional exported roots. The harness derives dependency edges, validates
+undefined references, cycles, result/export roots, and disconnected nodes, and computes a stable
+topological order. It then maps each operation to an existing internal relational primitive and
+executes the primitives one by one. A failed node is
+one root error; transitive descendants are blocked without execution, while independent nodes
+continue. Primitive calls—not the program envelope—remain the unit of execution audit and future
+process credit.
+
+Only deterministic program operations may appear inside a program:
+`filter`, `select`, `scalar`, `join`, `aggregate`, `rank`, and `combine`. Observation, planning,
+and termination cannot be nested.
+`answer_from_context` stays a separate terminal action citing an already resident exact result.
+
+Version 1 established the graph boundary. Version 2 keeps execution unchanged and makes local
+reference lifetime plus the exact local-result join argument shape explicit after the frozen
+20-task v1 diagnostic exposed repeated join-shape errors. Version 3 removes all atomic tool names
+and definitions from the model-visible prompt and feedback, replacing them with one observation
+tool and named program-operation variants while retaining the same internal atomic execution and
+credit boundary. The scheme is evaluation/causal-rollout plumbing only. It has no SFT exporter and
+no RL environment; all outputs are
+`diagnostic_only_pending_protocol_scale_gate` until a frozen scale gate explicitly promotes the
+protocol.
+
 ## SFT
 
 Atomic bounded-history SFT continues through `src/sft/build_rolling_sft_data.py`.
@@ -170,6 +224,10 @@ promoted protocol, not an authorization to train on current or historical diagno
 Datasets and adapters from different schemes must not be mixed. `assert_record_tool_scheme`
 provides the mandatory pre-export guard.
 
+Relational-program diagnostics are never SFT sources. A future exporter would require its own
+fresh replay, graph/grounding audit, last-turn-only causal rendering, and a separate accuracy
+promotion; it must not reuse the action-block exporter by relabeling records.
+
 ## RL
 
 `src/rl/tool_environment.py::create_tool_use_env` constructs either:
@@ -177,8 +235,12 @@ provides the mandatory pre-export guard.
 - `ToolUseEnv` for `atomic`; or
 - `ActionBlockToolUseEnv` for `action-block`.
 
-`group_reinforce.py --tool-scheme ...` can therefore run matched result-only training for both
-schemes. Checkpoint metadata, rollout logs, and metrics include the scheme and scheme-specific
+There is no `relational-program` RL environment in v3. This is deliberate: tool usability and the
+primitive-local graph credit boundary must pass evaluation before result-only or process RL is
+enabled.
+
+`group_reinforce.py --tool-scheme ...` can therefore run matched result-only training for the two
+RL-enabled schemes. Checkpoint metadata, rollout logs, and metrics include the scheme and scheme-specific
 budgets, carrier, protocol version, and protocol hash, so resume cannot silently switch protocols
 or continue a retired tagged-carrier checkpoint. Such a checkpoint requires an explicit offline
 carrier-repair/migration decision rather than metadata fallback.

@@ -1365,6 +1365,7 @@ def _execute_action_block(
     low_friction_interface: bool = False,
     safe_low_friction_interface: bool = False,
     interface_resolution_events: list[dict] | None = None,
+    validate_call=validate_atomic_call,
 ) -> tuple[int, list[dict], list[dict], bool]:
     """Execute one block and isolate root errors from blocked descendants."""
     low_friction_interface = (
@@ -1538,7 +1539,7 @@ def _execute_action_block(
                 }
                 table = None
             else:
-                validate_atomic_call(tool, resolved_args)
+                validate_call(tool, resolved_args)
                 output, table = execute_tool(
                     h,
                     tool,
@@ -1723,6 +1724,13 @@ def run_episode(
     low_friction_interface: bool = False,
     safe_low_friction_interface: bool = False,
     assistant_carrier: str = BATCH_CARRIER_PROVIDER_NATIVE,
+    tool_scheme: str = ACTION_BLOCK_TOOL_SCHEME,
+    build_messages=build_batch_plan_messages,
+    parse_provider_action=parse_batch_plan_action,
+    parse_inline_action=parse_batch_plan_assistant,
+    prepare_work_action=None,
+    render_work_observation=render_batch_observation,
+    validate_call=validate_atomic_call,
 ) -> dict:
     low_friction_interface = (
         low_friction_interface or safe_low_friction_interface
@@ -1756,7 +1764,7 @@ def run_episode(
     started = time.time()
 
     rec = {
-        "tool_scheme": ACTION_BLOCK_TOOL_SCHEME,
+        "tool_scheme": tool_scheme,
         "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
         "assistant_carrier": assistant_carrier,
         "example_index": example_index,
@@ -1787,14 +1795,15 @@ def run_episode(
         "sft_export_eligible": False,
     }
     legacy_action_shape = (
-        protocol_version != UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION
+        tool_scheme == ACTION_BLOCK_TOOL_SCHEME
+        and protocol_version != UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION
     )
 
     try:
         while model_turn_count < max_action_blocks:
             model_turn_count += 1
             state_before = ctx["environment"].snapshot()
-            model_input = build_batch_plan_messages(
+            model_input = build_messages(
                 system_prompt=system_prompt,
                 overview=dataset_overview,
                 question=ex["question"],
@@ -1866,7 +1875,7 @@ def run_episode(
                     parser = (
                         parse_legacy_batch_plan_action
                         if legacy_action_shape
-                        else parse_batch_plan_action
+                        else parse_provider_action
                     )
                     tool, arguments = parser(
                         raw_content,
@@ -1881,7 +1890,7 @@ def run_episode(
                     parser = (
                         parse_legacy_batch_plan_assistant
                         if legacy_action_shape
-                        else parse_batch_plan_assistant
+                        else parse_inline_action
                     )
                     authored_reasoning, tool, arguments = (
                         parser(
@@ -1956,12 +1965,19 @@ def run_episode(
                     turns.append(turn)
                     break
 
+                executable_arguments = arguments
+                if prepare_work_action is not None:
+                    executable_arguments, work_graph = prepare_work_action(
+                        tool,
+                        arguments,
+                    )
+                    turn["work_graph"] = deepcopy(work_graph)
                 batch_count += 1
-                submitted_call_count += len(arguments["calls"])
+                submitted_call_count += len(executable_arguments["calls"])
                 atomic_count, results, events, nonrecoverable = _execute_action_block(
                     h=h,
                     ctx=ctx,
-                    arguments=arguments,
+                    arguments=executable_arguments,
                     created=created,
                     atomic_count=atomic_count,
                     model_turn=model_turn_count,
@@ -1974,6 +1990,7 @@ def run_episode(
                     low_friction_interface=low_friction_interface,
                     safe_low_friction_interface=safe_low_friction_interface,
                     interface_resolution_events=interface_resolution_events,
+                    validate_call=validate_call,
                 )
                 terminal_result = next(
                     (
@@ -2028,7 +2045,7 @@ def run_episode(
                     result.get("status") == "error" for result in results
                 )
                 blocked_node_count += blocked_in_block
-                observation = render_batch_observation(
+                observation = render_work_observation(
                     batch_count,
                     results,
                     structured_error_feedback=structured_error_feedback,
@@ -2120,6 +2137,7 @@ def run_episode(
 
     rec["model_turns"] = model_turn_count
     rec["action_blocks"] = model_turn_count
+    rec["work_actions"] = batch_count
     rec["executed_action_blocks"] = batch_count
     rec["atomic_actions"] = atomic_count
     rec["submitted_calls"] = submitted_call_count

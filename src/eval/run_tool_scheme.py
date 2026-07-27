@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stable evaluation launcher for either public table-tool scheme.
+"""Stable evaluation launcher for one explicitly selected table-tool scheme.
 
 The selected scheme is exclusive: a model sees either the atomic top-level tools or the
 action-block top-level tools, never a merged action space. Existing runner CLIs remain available
@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "src" / "sft"))
 from tool_schemes import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
+    RELATIONAL_PROGRAM_TOOL_SCHEME,
     TOOL_SCHEME_NAMES,
 )
 
@@ -33,6 +34,9 @@ def runner_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
         return [sys.executable, str(script), *forwarded]
     if tool_scheme == ACTION_BLOCK_TOOL_SCHEME:
         script = HERE / "evaluate_batch_plan.py"
+        return [sys.executable, str(script), *forwarded]
+    if tool_scheme == RELATIONAL_PROGRAM_TOOL_SCHEME:
+        script = HERE / "evaluate_relational_program.py"
         return [sys.executable, str(script), *forwarded]
     raise ValueError(f"unsupported tool scheme: {tool_scheme}")
 

@@ -18,9 +18,11 @@ from batch_plan_protocol import (  # noqa: E402
 from tool_schemes import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
+    RELATIONAL_PROGRAM_TOOL_SCHEME,
     assert_record_tool_scheme,
     build_action_block_tool_scheme,
     build_atomic_tool_scheme,
+    build_relational_program_tool_scheme,
     parse_scheme_action,
     render_scheme_action,
 )
@@ -52,6 +54,29 @@ class ToolSchemeRegistryTests(unittest.TestCase):
         self.assertNotIn("partition_by", block.system_prompt)
         self.assertIn("offset", atomic.system_prompt)
         self.assertNotIn("offset", block.system_prompt)
+
+        relational_program = build_relational_program_tool_scheme()
+        self.assertEqual(
+            relational_program.name,
+            RELATIONAL_PROGRAM_TOOL_SCHEME,
+        )
+        self.assertIn(
+            "relational_program",
+            relational_program.top_level_tools,
+        )
+        self.assertIn(
+            "observe",
+            relational_program.top_level_tools,
+        )
+        self.assertNotIn(
+            "describe_table",
+            relational_program.top_level_tools,
+        )
+        self.assertEqual(relational_program.max_batch_calls, 8)
+        self.assertNotEqual(
+            relational_program.protocol_hash,
+            block.protocol_hash,
+        )
 
     def test_each_scheme_round_trips_its_native_student_action(self):
         atomic = build_atomic_tool_scheme()
@@ -96,6 +121,33 @@ class ToolSchemeRegistryTests(unittest.TestCase):
                 {"table": "items", "offset": 20},
             )
 
+        relational_program = build_relational_program_tool_scheme()
+        program_args = {
+            "calls": [{
+                "id": "exact",
+                "operation": "select",
+                "arguments": {
+                    "table": "items",
+                    "expressions": ["category"],
+                },
+            }],
+            "result": "exact",
+        }
+        program_text = render_scheme_action(
+            relational_program,
+            "Derive the exact result.",
+            "relational_program",
+            program_args,
+        )
+        self.assertEqual(
+            parse_scheme_action(relational_program, program_text),
+            (
+                "Derive the exact result.",
+                "relational_program",
+                program_args,
+            ),
+        )
+
     def test_record_scheme_guard_prevents_dataset_mixing(self):
         assert_record_tool_scheme(
             {"tool_scheme": ATOMIC_TOOL_SCHEME},
@@ -113,10 +165,19 @@ class ToolSchemeRegistryTests(unittest.TestCase):
             ACTION_BLOCK_TOOL_SCHEME,
             ["--", "--limit", "1"],
         )
+        relational_program = runner_argv(
+            RELATIONAL_PROGRAM_TOOL_SCHEME,
+            ["--", "--limit", "1"],
+        )
         self.assertTrue(atomic[1].endswith("/rollout.py"))
         self.assertNotIn("--safe-low-friction-interface", atomic)
         self.assertTrue(block[1].endswith("/evaluate_batch_plan.py"))
         self.assertNotIn("--safe-low-friction-interface", block)
+        self.assertTrue(
+            relational_program[1].endswith(
+                "/evaluate_relational_program.py"
+            )
+        )
 
 
 if __name__ == "__main__":

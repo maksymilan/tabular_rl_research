@@ -146,6 +146,16 @@ Start at `docs/current/README.md`.
   The active adapter performs no spelling, schema, column, predicate, order, handle, or argument
   shape rewrite. Provider-specific carrier constraints are API-facing only. Its completed frozen
   200-task gate scored 144/200 and remains ineligible for SFT.
+- The separate experimental `relational-program-v3` scheme exposes only `observe`,
+  `relational_program`, and `answer_from_context`; its prompt contains no atomic or action-block
+  tool definitions. A program contains up to eight deterministic `filter`, `select`, `scalar`,
+  `join`, `aggregate`, `rank`, or `combine` nodes. The model emits exact `$id`/`$id.column`
+  parameter references plus a primary result and optional exports; the harness maps operations to
+  internal atomic executors, derives and validates the DAG, topologically schedules execution, and
+  propagates root errors to blocked descendants. Primitive nodes remain the execution/audit unit.
+  The scheme has evaluation and causal-rollout plumbing only, uses
+  `tool-scheme-registry-v3`, and remains
+  `diagnostic_only_pending_protocol_scale_gate`; it has no SFT exporter or RL environment.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id
   `value_ref`.

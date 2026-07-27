@@ -6,7 +6,7 @@ sources of truth.
 
 - `overview.md`: research objective and non-negotiable method boundary.
 - `architecture.md`: active code layout and ownership.
-- `tool_schemes.md`: the two exclusive model action schemes and their train/eval boundaries.
+- `tool_schemes.md`: the three exclusive model action schemes and their train/eval boundaries.
 - `tool_protocol.md`: model-visible action and context protocol.
 - `relation_derivation.md`: fact-only semantics attached to every derived table handle.
 - `execution_contract.md`: harness semantics and error handling.
