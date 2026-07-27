@@ -157,7 +157,7 @@ Result directories must remain isolated by scheme.
 
 ## Relational-program boundary
 
-`relational-program-v4` is a separate diagnostic scheme implemented by
+`relational-program-v5` is a separate diagnostic scheme implemented by
 `src/eval/relational_program_protocol.py` and `src/eval/evaluate_relational_program.py`. It does
 not add raw SQL or merge the atomic and action-block prompts.
 
@@ -206,6 +206,11 @@ ambiguous sigiled strings with `typed-relational-reference-v1`. The deterministi
 the typed public syntax into the private executor carrier while recording every authored reference
 and deriving edges only from current-program node references. It also makes the existing
 `observe.rows` no-filter contract explicit when a model incorrectly supplies conditions.
+Version 5 changes only scalar-value ergonomics: scalar operands directly use typed `node` or
+`resident_step` references with an optional named `column`, while computed predicate values use
+`value_from` with the same typed source. The compiler lowers both to the unchanged grounded atomic
+value-reference semantics. Model-visible errors map private executor names and sigiled references
+back to public operations and typed references.
 The scheme is evaluation/causal-rollout plumbing only. It has no SFT exporter and
 no RL environment; all outputs are
 `diagnostic_only_pending_protocol_scale_gate` until a frozen scale gate explicitly promotes the

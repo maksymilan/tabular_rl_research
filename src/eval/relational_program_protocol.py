@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -35,11 +36,11 @@ from batch_plan_protocol import (
 from protocol import ProtocolError, validate_model_arguments
 
 
-RELATIONAL_PROGRAM_PROTOCOL_VERSION = "relational-program-v4"
+RELATIONAL_PROGRAM_PROTOCOL_VERSION = "relational-program-v5"
 OBSERVE_TOOL = "observe"
 RELATIONAL_PROGRAM_TOOL = "relational_program"
 MAX_RELATIONAL_PROGRAM_CALLS = 8
-TYPED_REFERENCE_SCHEMA = "typed-relational-reference-v1"
+TYPED_REFERENCE_SCHEMA = "typed-relational-reference-v2"
 
 OBSERVE_OPERATIONS = {
     "schema": "describe_table",
@@ -83,7 +84,7 @@ def build_relational_program_system_prompt(
     *,
     assistant_carrier: str = BATCH_CARRIER_PROVIDER_NATIVE,
 ) -> str:
-    """Build the exclusive model-facing contract for relational-program v4."""
+    """Build the exclusive model-facing contract for relational-program v5."""
     if not 1 <= max_program_calls <= MAX_RELATIONAL_PROGRAM_CALLS:
         raise ValueError(
             "active relational programs require max_program_calls in "
@@ -134,13 +135,15 @@ Submit one declarative program:
 Each node operation is one of the following variants. These are node operations, not top-level
 tools, and they can appear only inside relational_program.calls:
 - filter(table, conditions, return_columns?): retain matching rows. A predicate uses column plus
-  op =|!=|>|>=|<|<= and value or column_value; op in uses values or in_table; between uses low/high;
-  like or contains uses value; is_null needs no value. Compose with and/or/not.
+  op =|!=|>|>=|<|<= and exactly one of value, column_value, or value_from; op in uses values or
+  in_table; between uses low/high; like or contains uses value; is_null needs no value. Compose with
+  and/or/not. value_from is a typed node or resident_step reference to a grounded 1x1 result.
 - select(table, expressions, distinct?): derive exactly the listed output expressions and order;
   expressions may use "expr AS alias". distinct defaults false.
 - scalar(operation, operands, result_name?): derive one grounded 1x1 table. operation is
-  add|subtract|multiply|divide|percent|percent_change|date_diff_days. Each operand is exactly value,
-  value_ref, or value_ref+column; operand order is semantic.
+  add|subtract|multiply|divide|percent|percent_change|date_diff_days. Each operand is exactly
+  {{"value":scalar}}, one typed {{"node":"..."}} / {{"resident_step":"..."}} reference, or that
+  typed reference plus "column" for a named cell; operand order is semantic.
 - join(base, joins, base_role?): derive one connected join component. joins is an ordered non-empty
   list. Each item has table, on, optional type inner|left|cross, and optional role. Each on pair has
   left as an exact logical relation.column already present and right as a bare column of the newly
@@ -161,14 +164,15 @@ PROGRAM RULES
 1. calls contains 1 to {max_program_calls} deterministic relational calls. Every call has exactly
    id, operation, arguments. ids are unique and begin with a letter.
 2. Every relation or step reference is one typed JSON object. Never use a bare string in table,
-   base, joins[].table, combine left/right, in_table, or value_ref:
+   base, joins[].table, combine left/right, in_table, value_from, or a scalar operand:
    - {{"source_table":"orders"}} means one immutable catalog table.
    - {{"resident_table":"filter_002"}} means one exact table handle returned before this program.
    - {{"node":"filtered"}} means the table produced by one node in this program.
-   - {{"resident_step":"step_7"}} means one producing step id returned before this program; it is
-     valid only as value_ref.
-   - {{"node":"metrics"}} as value_ref means that node's producing step. Add the ordinary sibling
-     field "column":"metric" when selecting one named cell from a one-row multi-metric result.
+   - {{"resident_step":"step_7"}} means one producing step id returned before this program.
+   - In scalar operands, {{"node":"metrics","column":"metric"}} and
+     {{"resident_step":"step_7","column":"metric"}} select one named cell from a one-row result.
+   - In a filter/aggregate predicate, use "value_from":{{"node":"scalar_node"}} or
+     "value_from":{{"resident_step":"step_7"}} for one grounded 1x1 comparison value.
    - {{"node":"filtered","column":"customer_id"}} is valid only as join on.left and means one exact
      output column of that current-program node.
    List order is not execution order: the harness derives the DAG only from node references,
@@ -193,6 +197,8 @@ PROGRAM RULES
    the newly attached table. If base is a source table or a resident table from an earlier turn,
    on.left remains the exact visible logical namespace string such as "orders.customer_id" or
    "filter_002.customer_id".
+   Scalar operands use typed references directly. For example:
+   "operands":[{{"node":"metrics","column":"part"}},{{"node":"metrics","column":"total"}}].
 7. answer_from_context is never nested. Its cited table must already have exactly the requested
    rows and columns. Observing a table does not reshape it; use select for the exact result before
    terminating.
@@ -272,6 +278,7 @@ _REFERENCE_KEYSETS = frozenset({
     frozenset({"source_table"}),
     frozenset({"resident_table"}),
     frozenset({"resident_step"}),
+    frozenset({"resident_step", "column"}),
     frozenset({"node"}),
     frozenset({"node", "column"}),
 })
@@ -320,8 +327,8 @@ def _compile_typed_references(
                 raise RelationalProgramProtocolError(
                     f"typed reference at {_path_text(path)} must be exactly one of "
                     '{"source_table":...}, {"resident_table":...}, '
-                    '{"resident_step":...}, {"node":...}, or '
-                    '{"node":...,"column":...}'
+                    '{"resident_step":...}, {"resident_step":...,"column":...}, '
+                    '{"node":...}, or {"node":...,"column":...}'
                 )
             reference_key = next(key for key in _REFERENCE_KEYS if key in value)
             target = value.get(reference_key)
@@ -336,7 +343,13 @@ def _compile_typed_references(
                 )
 
             table_position = _is_table_reference_path(operation, path)
-            value_ref_position = bool(path and path[-1] == "value_ref")
+            value_from_position = bool(path and path[-1] == "value_from")
+            scalar_operand_position = (
+                operation == "scalar"
+                and len(path) >= 2
+                and path[-2] == "operands"
+                and path[-1].isdigit()
+            )
             join_left_position = (
                 operation == "join"
                 and len(path) >= 3
@@ -359,24 +372,50 @@ def _compile_typed_references(
                     )
                 lowered: Any = target
             elif reference_key == "resident_step":
-                if not value_ref_position:
+                if column is not None and not scalar_operand_position:
                     raise RelationalProgramProtocolError(
-                        f"resident_step at {_path_text(path)} is valid only as value_ref"
+                        f"resident_step+column at {_path_text(path)} is valid only as one "
+                        "scalar operand"
                     )
-                lowered = target
+                if not (value_from_position or scalar_operand_position):
+                    raise RelationalProgramProtocolError(
+                        f"resident_step at {_path_text(path)} is valid only as value_from "
+                        "or one scalar operand"
+                    )
+                lowered = (
+                    {
+                        "value_ref": target,
+                        **({"column": column} if column is not None else {}),
+                    }
+                    if scalar_operand_position
+                    else target
+                )
             elif column is not None:
-                if not join_left_position:
+                if not (join_left_position or scalar_operand_position):
                     raise RelationalProgramProtocolError(
-                        f"node+column at {_path_text(path)} is valid only as join on.left"
+                        f"node+column at {_path_text(path)} is valid only as join on.left "
+                        "or one scalar operand"
                     )
-                lowered = f"${target}.{column}"
+                lowered = (
+                    {"value_ref": f"${target}", "column": column}
+                    if scalar_operand_position
+                    else f"${target}.{column}"
+                )
             else:
-                if not (table_position or value_ref_position):
+                if not (
+                    table_position
+                    or value_from_position
+                    or scalar_operand_position
+                ):
                     raise RelationalProgramProtocolError(
                         f"node reference at {_path_text(path)} is valid only in a table "
-                        "or value_ref position"
+                        "position, value_from, or one scalar operand"
                     )
-                lowered = f"${target}"
+                lowered = (
+                    {"value_ref": f"${target}"}
+                    if scalar_operand_position
+                    else f"${target}"
+                )
 
             return lowered, [{
                 "path": _path_text(path),
@@ -384,6 +423,13 @@ def _compile_typed_references(
                 "target": target,
                 **({"column": column} if column is not None else {}),
             }]
+
+        if "value_ref" in value:
+            raise RelationalProgramProtocolError(
+                f"value_ref at {_path_text((*path, 'value_ref'))} is not public in "
+                f"{RELATIONAL_PROGRAM_PROTOCOL_VERSION}; use a direct typed scalar operand "
+                "or predicate value_from"
+            )
 
         lowered_dict = {}
         references = []
@@ -393,7 +439,8 @@ def _compile_typed_references(
                 operation=operation,
                 path=(*path, str(key)),
             )
-            lowered_dict[key] = compiled
+            lowered_key = "value_ref" if key == "value_from" else key
+            lowered_dict[lowered_key] = compiled
             references.extend(child_references)
         return lowered_dict, references
 
@@ -408,7 +455,7 @@ def _compile_typed_references(
             )
         if (
             _is_table_reference_path(operation, path)
-            or (path and path[-1] == "value_ref")
+            or (path and path[-1] in {"value_ref", "value_from"})
         ):
             raise RelationalProgramProtocolError(
                 f"reference at {_path_text(path)} must be a typed object distinguishing "
@@ -620,11 +667,11 @@ def _prepare_observe(arguments: dict) -> tuple[str, dict]:
     unexpected = sorted(set(arguments) - allowed_by_operation[operation])
     if unexpected:
         if operation == "rows" and any(
-            key in {"condition", "conditions", "where"}
+            key in {"condition", "conditions", "filter", "where"}
             for key in unexpected
         ):
             raise RelationalProgramProtocolError(
-                "observe.rows has no condition, conditions, or where argument. It reads rows "
+                "observe.rows has no condition, conditions, filter, or where argument. It reads rows "
                 "from exactly one supplied table without filtering. Legal keys are operation, "
                 "table, optional columns, and optional limit; filter is the program operation "
                 "that applies row conditions."
@@ -764,13 +811,65 @@ def _publicize_exact_operation_names(value: Any) -> Any:
     return deepcopy(value)
 
 
+def _publicize_relational_error(value: Any) -> Any:
+    """Render private executor names/references back into the public relational scheme."""
+    if isinstance(value, dict):
+        return {
+            key: _publicize_relational_error(child)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _publicize_relational_error(child)
+            for child in value
+        ]
+    if not isinstance(value, str):
+        return deepcopy(value)
+
+    column_match = LOCAL_COLUMN_REF_RE.fullmatch(value)
+    if column_match:
+        return {
+            "node": column_match.group(1),
+            "column": column_match.group(2),
+        }
+    local_match = LOCAL_REF_RE.fullmatch(value)
+    if local_match:
+        return {"node": local_match.group(1)}
+
+    rendered = value
+    for private_name, public_name in UNDERLYING_TO_PUBLIC_OPERATION.items():
+        rendered = re.sub(
+            rf"\b{re.escape(private_name)}\b",
+            public_name,
+            rendered,
+        )
+    rendered = re.sub(
+        r"'\$([A-Za-z][A-Za-z0-9_]{0,31})\.([^']+)'",
+        lambda match: "'" + _compact({
+            "node": match.group(1),
+            "column": match.group(2),
+        }) + "'",
+        rendered,
+    )
+    rendered = re.sub(
+        r"'\$([A-Za-z][A-Za-z0-9_]{0,31})'",
+        lambda match: "'" + _compact({"node": match.group(1)}) + "'",
+        rendered,
+    )
+    return rendered
+
+
 def build_relational_program_messages(**kwargs: Any) -> list[dict]:
     public_kwargs = deepcopy(kwargs)
-    for key in ("state", "last_error", "legal_history"):
+    for key in ("state", "legal_history"):
         if key in public_kwargs:
             public_kwargs[key] = _publicize_exact_operation_names(
                 public_kwargs[key]
             )
+    if "last_error" in public_kwargs:
+        public_kwargs["last_error"] = _publicize_relational_error(
+            public_kwargs["last_error"]
+        )
     return build_batch_plan_messages(**public_kwargs)
 
 
@@ -798,7 +897,9 @@ def render_relational_program_observation(
                 )
             )
         elif result.get("status") == "error":
-            item["error"] = deepcopy(result.get("error") or {})
+            item["error"] = _publicize_relational_error(
+                result.get("error") or {}
+            )
         else:
             item["blocked_by"] = deepcopy(result.get("blocked_by") or [])
             item["root_causes"] = deepcopy(result.get("root_causes") or [])

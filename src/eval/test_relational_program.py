@@ -100,7 +100,7 @@ class RelationalProgramProtocolTests(unittest.TestCase):
         )
         self.assertEqual(graph["dependencies"]["exact"], ["filtered"])
         self.assertEqual(graph["result"], "exact")
-        self.assertEqual(graph["reference_schema"], "typed-relational-reference-v1")
+        self.assertEqual(graph["reference_schema"], "typed-relational-reference-v2")
         self.assertEqual(
             executable["calls"][1]["arguments"]["table"],
             "$filtered",
@@ -131,8 +131,8 @@ class RelationalProgramProtocolTests(unittest.TestCase):
                 "arguments": {
                     "operation": "percent",
                     "operands": [
-                        {"value_ref": {"node": "combined"}},
-                        {"value_ref": {"resident_step": "step_7"}},
+                        {"node": "combined"},
+                        {"resident_step": "step_7"},
                     ],
                 },
             },
@@ -152,6 +152,69 @@ class RelationalProgramProtocolTests(unittest.TestCase):
             [
                 {"value_ref": "$combined"},
                 {"value_ref": "step_7"},
+            ],
+        )
+
+    def test_scalar_named_cells_and_predicate_value_from_lower_canonically(self):
+        executable, graph = compile_relational_program(program([
+            {
+                "id": "latest",
+                "operation": "filter",
+                "arguments": {
+                    "table": {"source_table": "papers"},
+                    "conditions": {
+                        "column": "year",
+                        "op": "=",
+                        "value_from": {"node": "metrics"},
+                    },
+                },
+            },
+            {
+                "id": "metrics",
+                "operation": "aggregate",
+                "arguments": {
+                    "table": {"source_table": "papers"},
+                    "group_by": [],
+                    "aggregations": [{
+                        "op": "max",
+                        "column": "year",
+                        "as": "max_year",
+                    }],
+                },
+            },
+            {
+                "id": "ratio",
+                "operation": "scalar",
+                "arguments": {
+                    "operation": "percent",
+                    "operands": [
+                        {"node": "metrics", "column": "max_year"},
+                        {"resident_step": "step_7", "column": "baseline"},
+                    ],
+                },
+            },
+        ], "latest", exports=["ratio"]))
+        self.assertEqual(
+            graph["dependencies"],
+            {
+                "metrics": [],
+                "latest": ["metrics"],
+                "ratio": ["metrics"],
+            },
+        )
+        by_id = {
+            call["id"]: call["arguments"]
+            for call in executable["calls"]
+        }
+        self.assertEqual(
+            by_id["latest"]["conditions"]["value_ref"],
+            "$metrics",
+        )
+        self.assertEqual(
+            by_id["ratio"]["operands"],
+            [
+                {"value_ref": "$metrics", "column": "max_year"},
+                {"value_ref": "step_7", "column": "baseline"},
             ],
         )
 
@@ -228,6 +291,23 @@ class RelationalProgramProtocolTests(unittest.TestCase):
             "legacy local reference",
         ):
             compile_relational_program(legacy_node)
+
+        nested_value_ref = program([{
+            "id": "metric",
+            "operation": "scalar",
+            "arguments": {
+                "operation": "add",
+                "operands": [
+                    {"value_ref": {"resident_step": "step_7"}},
+                    {"value": 1},
+                ],
+            },
+        }], "metric")
+        with self.assertRaisesRegex(
+            RelationalProgramProtocolError,
+            "value_ref .* is not public",
+        ):
+            compile_relational_program(nested_value_ref)
 
     def test_static_gate_rejects_undefined_cycles_and_disconnected_nodes(self):
         with self.assertRaisesRegex(
@@ -380,6 +460,37 @@ class RelationalProgramProtocolTests(unittest.TestCase):
         )
         self.assertIn('"operation":"observe.schema"', rendered)
         self.assertNotIn("describe_table", rendered)
+
+    def test_private_executor_names_and_refs_do_not_leak_in_error_feedback(self):
+        rendered = render_relational_program_observation(
+            2,
+            [{
+                "call_id": "joined",
+                "step_id": "step_4",
+                "tool": "join_tables",
+                "status": "error",
+                "error": {
+                    "type": "argument_validation_error",
+                    "message": (
+                        "join_tables on local reference "
+                        "'$filtered.customer_id' failed"
+                    ),
+                    "facts": {
+                        "reference": "$filtered",
+                        "resident": "project_001",
+                    },
+                },
+            }],
+        )
+        self.assertIn('"operation":"join"', rendered)
+        self.assertIn('"reference":{"node":"filtered"}', rendered)
+        self.assertIn(
+            '{\\"node\\":\\"filtered\\",\\"column\\":\\"customer_id\\"}',
+            rendered,
+        )
+        self.assertIn("project_001", rendered)
+        self.assertNotIn("join_tables", rendered)
+        self.assertNotIn("$filtered", rendered)
 
 
 class RelationalProgramExecutionTests(unittest.TestCase):

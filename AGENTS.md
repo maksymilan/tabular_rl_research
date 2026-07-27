@@ -146,11 +146,11 @@ Start at `docs/current/README.md`.
   The active adapter performs no spelling, schema, column, predicate, order, handle, or argument
   shape rewrite. Provider-specific carrier constraints are API-facing only. Its completed frozen
   200-task gate scored 144/200 and remains ineligible for SFT.
-- The separate experimental `relational-program-v4` scheme exposes only `observe`,
+- The separate experimental `relational-program-v5` scheme exposes only `observe`,
   `relational_program`, and `answer_from_context`; its prompt contains no atomic or action-block
   tool definitions. A program contains up to eight deterministic `filter`, `select`, `scalar`,
   `join`, `aggregate`, `rank`, or `combine` nodes. Source tables, prior resident tables/steps, and
-  current-program nodes use disjoint `typed-relational-reference-v1` objects. Only current-program
+  current-program nodes use disjoint `typed-relational-reference-v2` objects. Only current-program
   node references create DAG edges; the harness deterministically lowers the public references to
   internal atomic executors, derives and validates the DAG, topologically schedules execution, and
   propagates root errors to blocked descendants. Primitive nodes remain the execution/audit unit.
@@ -159,6 +159,12 @@ Start at `docs/current/README.md`.
   12/20 on the same cohort; v4 halved process errors and reduced tokens 9.5% but lost two net
   correct tasks. Do not expand v4 or use it as an SFT/RL source; see
   `docs/reports/evaluation/BIRD_RELATIONAL_PROGRAM_V4_TYPED_REFERENCES_PILOT20_20260727_ZH.md`.
+  V5 changes only typed scalar sources: scalar operands directly use `node`/`resident_step`
+  objects with optional named columns, and predicates use `value_from`; private executor names and
+  sigiled references are removed from model-visible errors. Its frozen two-target/four-control
+  micro-gate scored 3/6: 0/2 target recoveries and 3/4 controls retained, with seven process errors
+  and two blocked nodes. It failed its expansion gate. Do not expand or train on v5; see
+  `docs/reports/evaluation/BIRD_RELATIONAL_PROGRAM_V5_TYPED_SCALAR_GATE6_20260727_ZH.md`.
   The scheme has evaluation and causal-rollout plumbing only, uses `tool-scheme-registry-v3`, and remains
   `diagnostic_only_pending_protocol_scale_gate`; it has no SFT exporter or RL environment.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
