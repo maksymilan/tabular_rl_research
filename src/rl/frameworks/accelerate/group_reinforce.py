@@ -63,6 +63,10 @@ from frameworks.accelerate.training_state import (  # noqa: E402
     load_training_state,
     save_training_state,
 )
+from protocol import (  # noqa: E402
+    student_runtime_system_prompt,
+    tool_schema_hash,
+)
 
 
 @dataclass
@@ -122,8 +126,7 @@ def parse_args() -> argparse.Namespace:
         default="bird-set",
     )
     parser.add_argument("--max-steps", type=int, default=20)
-    parser.add_argument("--max-atomic-actions", type=int, default=30)
-    parser.add_argument("--max-batch-calls", type=int, default=8)
+    parser.add_argument("--max-batch-calls", type=int, default=5)
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--max-context-tokens", type=int, default=8192)
     parser.add_argument("--context-mode", choices=("rolling-legal-history",),
@@ -285,7 +288,6 @@ def sample_group(
             tool_scheme=args.tool_scheme,
             example_index=int(metadata["example_index"]),
             max_steps=args.max_steps,
-            max_atomic_actions=args.max_atomic_actions,
             max_batch_calls=args.max_batch_calls,
             context_mode=args.context_mode,
             history_turns=args.history_turns,
@@ -642,10 +644,24 @@ def checkpoint_metadata(args: argparse.Namespace) -> dict[str, Any]:
         digest = hashlib.sha256(resolved.read_bytes()).hexdigest() if resolved.is_file() else ""
         return {"path": str(resolved), "sha256": digest}
 
-    scheme = build_tool_scheme(
-        args.tool_scheme,
-        max_batch_calls=args.max_batch_calls,
-    )
+    if args.tool_scheme == ATOMIC_TOOL_SCHEME:
+        runtime_prompt = student_runtime_system_prompt(
+            context_mode=args.context_mode,
+            compact=False,
+        )
+        scheme = build_tool_scheme(
+            args.tool_scheme,
+            system_prompt=runtime_prompt,
+            max_batch_calls=args.max_batch_calls,
+        )
+        selected_tool_schema_hash = tool_schema_hash()
+    else:
+        scheme = build_tool_scheme(
+            args.tool_scheme,
+            max_batch_calls=args.max_batch_calls,
+        )
+        runtime_prompt = scheme.system_prompt
+        selected_tool_schema_hash = None
     metadata = {
         **scheme.manifest_fields(),
         "model_path": str(args.model_path.resolve()),
@@ -664,6 +680,11 @@ def checkpoint_metadata(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "reward_mode": args.reward_mode,
         "denotation_comparison": args.denotation_comparison,
+        "prompt_role": "student-runtime",
+        "student_runtime_prompt_sha256": hashlib.sha256(
+            runtime_prompt.encode("utf-8")
+        ).hexdigest(),
+        "tool_schema_sha256": selected_tool_schema_hash,
         "steps": args.steps,
         "group_size": args.group_size,
         "rollout_batch_size": args.rollout_batch_size,
@@ -683,7 +704,7 @@ def checkpoint_metadata(args: argparse.Namespace) -> dict[str, Any]:
     }
     if args.tool_scheme == ACTION_BLOCK_TOOL_SCHEME:
         metadata.update({
-            "max_atomic_actions": args.max_atomic_actions,
+            "action_block_budget": args.max_steps,
             "max_batch_calls": args.max_batch_calls,
         })
     return metadata
@@ -735,10 +756,13 @@ def main() -> int:
             "--counterfactual-suite-manifest is required for process RL; "
             "single-database correctness cannot pass the dependency-completeness gate"
         )
-    if args.max_atomic_actions < 2:
-        raise SystemExit("--max-atomic-actions must be at least 2")
     if args.max_batch_calls < 1:
         raise SystemExit("--max-batch-calls must be positive")
+    if (
+        args.tool_scheme == ACTION_BLOCK_TOOL_SCHEME
+        and args.max_batch_calls > 5
+    ):
+        raise SystemExit("active action-block supports at most 5 calls per block")
     accelerator = Accelerator()
     if accelerator.num_processes != 1:
         raise SystemExit("this baseline is intentionally single-GPU; launch without accelerate multi-process")
@@ -746,7 +770,7 @@ def main() -> int:
     torch.manual_seed(args.seed)
     records = load_rl_task_records(
         ROOT, split="train", selection=args.selection, examples_json=args.examples_json,
-        limit=args.limit, seed=args.seed,
+        limit=args.limit, seed=args.seed, context_mode=args.context_mode,
     )
     if not records:
         raise SystemExit("no training records selected")

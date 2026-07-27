@@ -9,6 +9,16 @@ ignoring row order and duplicate multiplicity. All current/new evaluation, SFT r
 gates, and RL reward audits use this same `bird-set` contract. `strict-multiset` remains available
 only through low-level compatibility code for immutable historical artifacts; active launchers
 accept only `bird-set`.
+Tuple position remains significant in BIRD EX, so column order is not interchangeable. Active tool
+evaluation therefore uses terminal-answer contract `exact-cited-table-v1`: the exact rows and column
+order of the table cited by `answer_from_context` are graded. Historical tool artifacts without
+that manifest field were produced by a compatibility scorer that could accept a same-width column
+permutation; they must be replayed under the exact contract before being compared with released
+BIRD EX numbers. Retired trajectories that explicitly authored an `answer` field retain a
+replay-only compatibility path, but current model-visible terminals do not expose authored values.
+Use `src/eval/rescore_tool_artifact_bird_ex.py` to audit an atomic historical artifact without
+regenerating model outputs; write its results to a separate directory rather than modifying the
+source artifact.
 Arctic-Text2SQL-R1-7B's headline BIRD-dev result uses greedy decoding (`n=1`,
 `temperature=0`) with this `bird-set` contract. The existing direct-SQL greedy launcher uses those
 decoding and denotation settings; set the generated-query timeout to 10 seconds when matching the

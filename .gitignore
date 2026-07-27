@@ -15,6 +15,7 @@ api.md
 # Local workspace artifacts
 .DS_Store
 draw/
+tmp/
 
 # Experiment dashboard frontend dependencies/build output
 experiment_dashboard/frontend/node_modules/

@@ -39,6 +39,10 @@ from tool_schemes import (  # noqa: E402
     TOOL_SCHEME_REGISTRY_VERSION,
     assert_record_tool_scheme,
 )
+from sft_dataset_registry import (  # noqa: E402
+    sharegpt_dataset_entry,
+    write_sharegpt_dataset_info,
+)
 
 CHARS_PER_TOKEN = 3.5  # rough for English+JSON; manifest reports char counts too
 DEFAULT_INPUT_PATTERN = "data/trajectories/spider_{split}.jsonl"
@@ -238,27 +242,14 @@ def build(
 
 
 def dataset_info_entry(dataset_name: str, output_prefix: str) -> dict:
-    return {
-        dataset_name: {
-            "file_name": f"{output_prefix}_train.jsonl",
-            "formatting": "sharegpt",
-            "columns": {"messages": "conversations", "system": "system"},
-            "tags": {"role_tag": "from", "content_tag": "value",
-                     "user_tag": "human", "assistant_tag": "gpt"},
-        }
-    }
+    return sharegpt_dataset_entry(dataset_name, f"{output_prefix}_train.jsonl")
 
 
 def write_dataset_info(out_dir: Path, dataset_name: str, output_prefix: str) -> tuple[Path, Path]:
-    entry = dataset_info_entry(dataset_name, output_prefix)
-    snippet_path = out_dir / f"dataset_info.{dataset_name}.snippet.json"
-    snippet_path.write_text(json.dumps(entry, indent=2) + "\n", encoding="utf-8")
-
-    registry_path = out_dir / "dataset_info.json"
-    registry = json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.exists() else {}
-    registry.update(entry)
-    registry_path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
-    return snippet_path, registry_path
+    return write_sharegpt_dataset_info(
+        out_dir / f"{output_prefix}_train.jsonl",
+        dataset_name,
+    )
 
 
 def validate_name(value: str, flag: str) -> str:

@@ -67,17 +67,20 @@ def has_current_or_future_reference(value: Any, current_step_index: int) -> bool
 def quality_reason(
     episode: dict[str, Any],
     *,
-    max_steps: int,
-    max_think_words: int,
+    max_steps: int | None,
+    max_think_words: int | None,
 ) -> str | None:
     if episode.get("label_status") != "verified":
         return "not_verified"
     steps = episode.get("steps") or []
-    if not steps or len(steps) > max_steps:
+    if not steps or (max_steps is not None and len(steps) > max_steps):
         return "step_limit"
     if has_repeated_call(episode):
         return "repeated_call"
-    if any(len(str(step.get("think") or "").split()) > max_think_words for step in steps):
+    if max_think_words is not None and any(
+        len(str(step.get("think") or "").split()) > max_think_words
+        for step in steps
+    ):
         return "think_limit"
     try:
         for step in steps:

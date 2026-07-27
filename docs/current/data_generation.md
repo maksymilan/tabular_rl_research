@@ -42,7 +42,8 @@ success, not duplicated records.  Sampling weights may expose them more often.
 
 External generation is restricted to tasks with no correct student sample after the declared K.
 The teacher starts from the same task and current protocol, receives no gold SQL, and runs in the
-real harness.  A teacher-success trajectory may provide fallback demonstrations.  A Decision
+real harness. It sees the shared student tool/state contract plus teacher-only generation
+guidance and examples. A teacher-success trajectory may provide fallback demonstrations. A Decision
 Correction target is the teacher action at the first divergence after an exactly matching legal
 student/teacher prefix.  The state-before must match, the teacher action must differ from the
 student action, and the complete teacher branch must replay to the correct denotation.  The bad
@@ -54,11 +55,13 @@ exported.
 
 ## Training shape
 
-The current SFT-1 checkpoint, evaluation, and rollout use bounded rolling legal history.  SFT-2
-must keep the same `rolling-legal-history`, `history_turns=4`, full prompt, resident observation
-contract.  Each ShareGPT record uses `mask_history: true`; only the final assistant action receives
-loss.  Rejected actions are absent from legal history, while their structured error is present in
-the current user state when applicable.
+The current SFT checkpoint, evaluation, and RL use one bounded-rolling **student runtime prompt**.
+SFT export re-renders the teacher's canonical executed trajectory with that prompt; it does not
+copy teacher-only examples or edge-case guidance into training records. SFT-2 must keep the same
+`rolling-legal-history`, `history_turns=4`, student prompt, and resident-observation contract. Each
+ShareGPT record uses `mask_history: true`; only the final assistant action receives loss. Rejected
+actions are absent from legal history, while their structured error is present in the current user
+state when applicable.
 
 ## Admission gates
 
@@ -68,7 +71,8 @@ the current user state when applicable.
 - Correct final denotation for every accepted source branch.
 - No gold SQL, current output, or future factual step reference in model input.
 - Error actions excluded from labels.
-- Exact source/protocol/context metadata and state hashes retained.
+- Exact source/protocol/context metadata, teacher/student prompt hashes, public tool-schema hash,
+  and state hashes retained.
 - Repeated identical calls, overlong trajectories, overlong reasoning, and target truncation are
   rejected or reported, never silently repaired.
 - Deduplicate by task and canonical tool-action sequence; keep origin and transition type in a
@@ -82,4 +86,3 @@ carrier failures, replay failures, correction-pair yield, token lengths, and acc
 Do not switch to Pro merely because individual tasks are hard.  Switch only if Flash's verified
 branch/correction yield or protocol compliance is too low for economical scaling, and rerun the
 same frozen pilot ids for a fair comparison.
-

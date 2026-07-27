@@ -44,6 +44,10 @@ from rollout import (  # noqa: E402
 )
 from executor import Harness  # noqa: E402
 from relation_derivation import SUPPORTED_TABLE_OPERATORS  # noqa: E402
+from rollout_passk import (  # noqa: E402
+    ToolExecutionTimeoutError,
+    bounded_harness_execution,
+)
 from text2sql import extract_sql  # noqa: E402
 from text2sql_passk import chat_n, run_one as run_direct_sql_passk, score_sample  # noqa: E402
 
@@ -62,6 +66,24 @@ class FakeHarness:
 
 
 class EvalTests(unittest.TestCase):
+    def test_bounded_harness_execution_interrupts_and_restores_handles(self):
+        harness = Harness()
+        harness.views["infinite"] = (
+            "WITH RECURSIVE counter(value) AS "
+            "(VALUES(0) UNION ALL SELECT value + 1 FROM counter) "
+            "SELECT value FROM counter"
+        )
+        views_before = dict(harness.views)
+        sequence_before = harness._n
+
+        with self.assertRaisesRegex(ToolExecutionTimeoutError, "exceeded"):
+            with bounded_harness_execution(harness, 0.01):
+                harness._new("project", harness.views["infinite"])
+
+        self.assertEqual(harness.views, views_before)
+        self.assertEqual(harness._n, sequence_before)
+        self.assertEqual(harness.conn.execute("SELECT 1").fetchone(), (1,))
+
     def test_derivation_schema_covers_complete_live_table_action_space(self):
         from protocol import TOOLS
 
@@ -103,7 +125,7 @@ class EvalTests(unittest.TestCase):
     def test_provider_transport_error_is_not_argument_validation(self):
         error = ProtocolError(
             'DeepSeek split-response transport error: visible content must contain only '
-            '<tool_call>{"tool":"...","arguments":{...}}</tool_call>'
+            '{"tool":"...","arguments":{...}}'
         )
         self.assertEqual(protocol_failure_type(error), "protocol_error")
 
@@ -281,6 +303,46 @@ class EvalTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "manifest differs"):
                 ArtifactWriter(tmp, {"runner": "b"}, resume=True)
 
+    def test_artifact_operational_resume_allows_only_named_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            writer = ArtifactWriter(
+                tmp,
+                {"runner": "test", "max_inflight_requests": 2},
+                resume=False,
+            )
+            writer.append({"example_index": 0, "correct": True})
+
+            resumed = ArtifactWriter(
+                tmp,
+                {"runner": "test", "max_inflight_requests": 8},
+                resume=True,
+                operational_resume_fields={"max_inflight_requests"},
+                operational_resume_metadata={"workers": 8},
+            )
+            self.assertEqual(resumed.completed, {0})
+            event = json.loads(
+                Path(tmp, "operational_resume_events.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()[0]
+            )
+            self.assertEqual(event["completed_before_resume"], 1)
+            self.assertEqual(
+                event["differences"]["max_inflight_requests"],
+                {"previous": 2, "requested": 8},
+            )
+            self.assertEqual(event["metadata"]["workers"], 8)
+
+            with self.assertRaisesRegex(ValueError, "manifest differs"):
+                ArtifactWriter(
+                    tmp,
+                    {
+                        "runner": "different",
+                        "max_inflight_requests": 8,
+                    },
+                    resume=True,
+                    operational_resume_fields={"max_inflight_requests"},
+                )
+
     def test_answer_row_candidates_normalize_scalar_shapes(self):
         self.assertIn([[151]], answer_row_candidates([151], [[151]]))
         self.assertIn([["Village"]], answer_row_candidates("Village", [["Village"]]))
@@ -361,7 +423,7 @@ class EvalTests(unittest.TestCase):
         self.assertIn([["Town", 1], ["Village", 4]], projected_row_candidates(rows, [["Town", 1], ["Village", 4]]))
         self.assertEqual(projected_row_candidates(rows, [["Town"], ["Village"]]), [])
 
-    def test_score_accepts_evidence_columns_in_different_order(self):
+    def test_score_rejects_evidence_columns_in_different_order(self):
         harness = FakeHarness(
             [["2017-08-03", 571], ["2017-10-21", 801]],
             {"setop_001": [[571, "2017-08-03"], [801, "2017-10-21"]]},
@@ -372,8 +434,8 @@ class EvalTests(unittest.TestCase):
             {"evidence": {"table": "setop_001"}, "answer": []},
             {"setop_001"},
         )
-        self.assertTrue(ok)
-        self.assertEqual(pred, [["2017-08-03", 571], ["2017-10-21", 801]])
+        self.assertFalse(ok)
+        self.assertEqual(pred, [[571, "2017-08-03"], [801, "2017-10-21"]])
         self.assertEqual(gold, [["2017-08-03", 571], ["2017-10-21", 801]])
 
     def test_normalize_step_id_table_refs(self):

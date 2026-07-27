@@ -1,8 +1,10 @@
 """Public structural contract for model-authored table-tool actions.
 
-This module contains only callable syntax and operator-local semantics. It is shared by the
-student-prompt renderer and strict protocol validator so nested field names and enum values cannot
-drift between what the model sees and what the harness accepts.
+This module contains only callable syntax and operator-local semantics.  It is shared by the
+student-prompt renderer and the strict protocol validator so that nested field names and enum
+values cannot drift between what the model sees and what the harness accepts.
+
+Concrete task examples and policy advice do not belong here.
 """
 from __future__ import annotations
 
@@ -34,6 +36,20 @@ SCALAR_OPERAND_KEYSETS = (
     frozenset({"value_ref"}),
     frozenset({"value_ref", "column"}),
 )
+ROW_EXPRESSION_OPERATIONS = (
+    "add",
+    "subtract",
+    "multiply",
+    "divide",
+    "percent",
+    "percent_change",
+    "date_diff_days",
+    "extract_year",
+)
+ROW_EXPRESSION_OPERAND_KEYSETS = (
+    frozenset({"column"}),
+    frozenset({"value"}),
+)
 JOIN_ITEM_REQUIRED = frozenset({"table", "on"})
 JOIN_ITEM_OPTIONAL = frozenset({"type", "role"})
 JOIN_EDGE_KEYS = frozenset({"left", "right"})
@@ -62,73 +78,111 @@ PUBLIC_TOOL_CONTRACTS: dict[str, ToolContract] = {
     "inspect_column": ToolContract(
         ("table", "column"),
         ("top_k",),
-        "reveal distinct-count, frequent values, and NULL presence for one column.",
+        "reveal distinct-count, frequent values, and NULL "
+        "presence for one column.",
     ),
     "read_subtable": ToolContract(
         ("table",),
         ("limit", "columns"),
-        "observe up to 20 rows (limit 1..20). This does not derive or reshape a table; omitted "
-        "columns means all columns.",
+        "observe up to 20 rows (limit 1..20). This does "
+        "not derive or reshape a table; omitted columns means all columns.",
     ),
     "condition_filter": ToolContract(
         ("table", "conditions"),
         ("return_columns",),
-        "derive matching rows. A predicate uses column with op =|!=|>|>=|<|<= and value or "
-        "column_value; op in uses values or in_table; between uses low/high; like or contains "
-        "uses value; is_null needs no value. A computed scalar uses value_ref to its producing "
-        "step. Compose predicates with and/or/not.",
+        "derive matching rows. A predicate "
+        "uses column with op =|!=|>|>=|<|<= and value or column_value; op in uses values or "
+        "in_table; between uses low/high; like or contains uses value; is_null needs no value. "
+        "A computed scalar uses value_ref to its producing step. Compose predicates with and/or/not.",
     ),
     "project": ToolContract(
         ("table", "expressions"),
         ("distinct",),
-        "derive exactly the listed output expressions and order; expressions may use "
-        "'expr AS alias'. distinct defaults false. Projection selects columns/expressions but "
-        "does not turn category rows into columns.",
+        "derive exactly the listed output expressions "
+        "and order; expressions may use 'expr AS alias'. distinct defaults false. Projection "
+        "selects columns/expressions but does not turn category rows into columns.",
     ),
     "scalar_compute": ToolContract(
         ("operation", "operands"),
         ("result_name",),
-        "derive a grounded 1x1 table. operation is add|subtract|multiply|divide|percent|"
-        "percent_change|date_diff_days. Each operand is exactly value, value_ref, or "
-        "value_ref+column; value_ref cites the step that produced the resident one-row table. "
-        "Operand order is semantic.",
+        "derive a grounded 1x1 table. operation "
+        "is add|subtract|multiply|divide|percent|percent_change|date_diff_days. Each operand is "
+        "exactly value, value_ref, or value_ref+column; value_ref cites the step that produced the "
+        "resident one-row table. Operand order is semantic.",
     ),
     "join_tables": ToolContract(
         ("base", "joins"),
         ("base_role",),
-        "derive one connected join component. joins is an ordered non-empty list; each item has "
-        "table, on, optional type (inner|left|cross), and optional role. Each on pair has left as "
-        "an exact logical relation.column already present and right as a bare column of the newly "
-        "attached table; cross uses on=[]. Output logical columns remain flat relation.column "
-        "names. Use roles only to disambiguate repeated relations.",
+        "derive one connected join component. joins is an "
+        "ordered non-empty list; each item has table, on, optional type (inner|left|cross), and "
+        "optional role. Each on pair has left as an exact logical relation.column already present "
+        "and right as a bare column of the newly attached table; cross uses on=[]. Output logical "
+        "columns remain flat relation.column names. Use roles only to disambiguate repeated relations.",
     ),
     "group_aggregate": ToolContract(
         ("table", "group_by", "aggregations"),
         ("passthrough", "output_layout", "category_values", "output_columns"),
-        "derive grouped results. group_by=[] is one global group. Each aggregation has op "
-        "sum|count|count_distinct|mean|min|max, column, as, and optional where predicate. "
-        "output_layout defaults rows. columns layout requires one group column, one aggregation, "
-        "ordered category_values, and optional equally sized output_columns.",
+        "derive grouped results. group_by=[] is one global "
+        "group. Each aggregation has op sum|count|count_distinct|mean|min|max, column, as, and "
+        "optional where predicate. output_layout defaults rows. columns layout requires one group "
+        "column, one aggregation, ordered category_values, and optional equally sized output_columns.",
     ),
     "extreme_value_select": ToolContract(
         ("table", "order_by"),
         ("top_k", "return_columns"),
-        "derive rows ordered by a list of columns optionally ending in DESC, retaining top_k "
-        "when supplied.",
+        "derive rows ordered by a "
+        "list of columns optionally ending in DESC, retaining top_k when supplied.",
     ),
     "set_op": ToolContract(
         ("left", "right", "op"),
         (),
-        "derive union|union_all|intersect|except over two column-compatible tables.",
+        "derive union|union_all|intersect|except over two "
+        "column-compatible tables.",
     ),
     "answer_from_context": ToolContract(
         ("evidence",),
         ("reason",),
-        'terminal. evidence is exactly {"table": handle} and must cite the grounded table whose '
-        "rows, columns, and column order are the answer. Scalar answers cite their grounded 1x1 "
-        "table; the call contains no authored answer values.",
+        'terminal. evidence is exactly {"table": handle} '
+        "and must cite the grounded table whose rows, columns, and column order are the answer. "
+        "Scalar answers cite their grounded 1x1 table; the call contains no authored answer values.",
     ),
 }
+
+# Action-block v32 is a frozen diagnostic protocol.  Keep its exact primitive
+# surface even when the independently selectable atomic scheme evolves.
+ACTION_BLOCK_PUBLIC_TOOL_CONTRACTS = dict(PUBLIC_TOOL_CONTRACTS)
+ACTION_BLOCK_PUBLIC_TOOL_ARGUMENTS: dict[
+    str, tuple[tuple[str, ...], tuple[str, ...]]
+] = {
+    tool: (contract.required, contract.optional)
+    for tool, contract in ACTION_BLOCK_PUBLIC_TOOL_CONTRACTS.items()
+}
+
+# Atomic version29 closes three observed expression/selection gaps without
+# adding another top-level tool name.
+PUBLIC_TOOL_CONTRACTS = dict(PUBLIC_TOOL_CONTRACTS)
+PUBLIC_TOOL_CONTRACTS["read_subtable"] = ToolContract(
+    ("table",),
+    ("limit", "columns", "offset"),
+    "observe up to 20 rows (limit 1..20) beginning at zero-based offset "
+    "(default 0). This does not derive or reshape a table; omitted columns means all columns.",
+)
+PUBLIC_TOOL_CONTRACTS["project"] = ToolContract(
+    ("table", "expressions"),
+    ("distinct",),
+    "derive exactly the listed outputs and order. Each expression is either an exact column/"
+    "'expr AS alias' string or a typed row expression {op,operands,as}. Typed op is "
+    "add|subtract|multiply|divide|percent|percent_change|date_diff_days|extract_year; each "
+    "operand is exactly {column} or {value}. distinct defaults false. Projection does not turn "
+    "category rows into columns.",
+)
+PUBLIC_TOOL_CONTRACTS["extreme_value_select"] = ToolContract(
+    ("table", "order_by"),
+    ("top_k", "return_columns", "offset", "partition_by"),
+    "derive rows ordered by columns optionally ending in DESC. offset is a zero-based global "
+    "rank offset. partition_by selects the ordered top_k rows independently inside each group; "
+    "top_k is required with partition_by and offset then applies inside every group.",
+)
 
 PUBLIC_TOOL_ARGUMENTS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     tool: (contract.required, contract.optional)
@@ -141,7 +195,11 @@ def _choices(values: tuple[str, ...]) -> str:
 
 
 def render_action_grammar() -> str:
-    """Render only high-entropy nested shapes, not task examples or solution recipes."""
+    """Render only high-entropy nested shapes, not task examples or solution recipes.
+
+    Simple top-level tools remain fully specified by ``PUBLIC_TOOL_CONTRACTS``. Repeating their
+    low-entropy call shapes here would make a syntax reference look like a tool-selection policy.
+    """
     return "\n".join(
         (
             "HIGH-ENTROPY ACTION GRAMMAR",
@@ -157,7 +215,9 @@ def render_action_grammar() -> str:
             + '","value":scalar} | {"column":"str","op":"is_null"} '
             '| {"and":[condition,...]} | {"or":[condition,...]} | {"not":condition}',
             'project.expressions: ["exact_column", "scalar expression AS output_name", ...]; '
-            "an exact dotted logical column, including spaces, is one whole JSON string",
+            "an exact dotted logical column, including spaces, is one whole JSON string; a typed "
+            'row expression is {"op":"' + _choices(ROW_EXPRESSION_OPERATIONS)
+            + '","operands":[{"column":"str"}|{"value":scalar},...],"as":"output_name"}',
             'scalar_compute.operands: [{"value":scalar} | {"value_ref":"step_k"} | '
             '{"value_ref":"step_k","column":"metric"}, ...]; operation: '
             + _choices(SCALAR_OPERATIONS),
@@ -171,7 +231,8 @@ def render_action_grammar() -> str:
             "Right is always a bare column of the newly attached table",
             'group_aggregate.aggregations: [{"op":"' + _choices(AGGREGATION_OPERATIONS)
             + '","column":"column_or_*","as":"output_name"},...]; an aggregation may add '
-            '"where":condition. output_layout is "' + _choices(AGGREGATION_LAYOUTS)
+            '"where":condition. '
+            'output_layout is "' + _choices(AGGREGATION_LAYOUTS)
             + '"; columns layout requires one group_by column, one aggregation, ordered '
             "category_values, and equally ordered optional output_columns",
             'answer_from_context.evidence: {"table":"exact_result_handle"}; scalar answers cite '

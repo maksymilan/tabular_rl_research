@@ -20,7 +20,15 @@ def canonical_hash(obj) -> str:
 
 
 class ArtifactWriter:
-    def __init__(self, result_dir: str, manifest: dict, resume: bool):
+    def __init__(
+        self,
+        result_dir: str,
+        manifest: dict,
+        resume: bool,
+        *,
+        operational_resume_fields: set[str] | None = None,
+        operational_resume_metadata: dict | None = None,
+    ):
         self.path = Path(result_dir)
         self.path.mkdir(parents=True, exist_ok=True)
         self.all_path = self.path / "all.jsonl"
@@ -36,13 +44,56 @@ class ArtifactWriter:
         self.success_cases.mkdir(exist_ok=True)
         self.failure_cases.mkdir(exist_ok=True)
 
+        requested_manifest = dict(manifest)
         manifest = {**manifest, "config_sha256": canonical_hash(manifest)}
         if self.manifest_path.exists():
             existing = json.loads(self.manifest_path.read_text(encoding="utf-8"))
             if existing.get("config_sha256") != manifest["config_sha256"]:
-                raise ValueError(
-                    f"existing manifest differs from this run: {self.manifest_path}"
-                )
+                allowed = operational_resume_fields or set()
+                existing_config = {
+                    key: value
+                    for key, value in existing.items()
+                    if key not in {"config_sha256", "created_at_utc"}
+                }
+                differences = {
+                    key: {
+                        "previous": existing_config.get(key),
+                        "requested": requested_manifest.get(key),
+                    }
+                    for key in sorted(set(existing_config) | set(requested_manifest))
+                    if existing_config.get(key) != requested_manifest.get(key)
+                }
+                if (
+                    not resume
+                    or not differences
+                    or not set(differences).issubset(allowed)
+                ):
+                    raise ValueError(
+                        f"existing manifest differs from this run: {self.manifest_path}"
+                    )
+                completed_before_resume = 0
+                if self.all_path.exists():
+                    with self.all_path.open(encoding="utf-8") as handle:
+                        completed_before_resume = sum(
+                            1 for line in handle if line.strip()
+                        )
+                event = {
+                    "recorded_at_utc": utc_now(),
+                    "event": "operational_resume",
+                    "manifest_config_sha256": existing.get("config_sha256"),
+                    "requested_config_sha256": manifest.get("config_sha256"),
+                    "allowed_fields": sorted(allowed),
+                    "differences": differences,
+                    "completed_before_resume": completed_before_resume,
+                    "metadata": operational_resume_metadata or {},
+                }
+                event_path = self.path / "operational_resume_events.jsonl"
+                with event_path.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n"
+                    )
+                    handle.flush()
+                    os.fsync(handle.fileno())
             if not resume:
                 raise ValueError(f"result directory already exists; use --resume: {self.path}")
         else:

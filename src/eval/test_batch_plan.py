@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
@@ -32,7 +33,6 @@ from batch_plan_protocol import (  # noqa: E402
 )
 from evaluate_batch_plan import (  # noqa: E402
     _execute_plan_action,
-    _materialize_terminal_evidence,
     run_episode,
 )
 from executor import Harness  # noqa: E402
@@ -43,15 +43,50 @@ def block(calls: list[dict]) -> dict:
     return {"calls": calls}
 
 
+def terminal_action(
+    table: str,
+    columns: list[str] | None = None,
+    reason: str | None = None,
+) -> dict:
+    arguments = {
+        "evidence": {"table": table},
+    }
+    if reason is not None:
+        arguments["reason"] = reason
+    return {
+        "tool": "answer_from_context",
+        "arguments": arguments,
+    }
+
+
 class ActionBlockProtocolTests(unittest.TestCase):
-    def test_prompt_declares_hybrid_blocks_and_branch_local_recovery(self):
+    def test_prompt_declares_unified_harness_owned_blocks(self):
         prompt = build_batch_plan_system_prompt(5)
-        self.assertIn("action_block arguments are exactly", prompt)
+        self.assertIn("TOP-LEVEL ACTION CONTRACT", prompt)
+        self.assertIn("WORK ACTION", prompt)
+        self.assertIn("TERMINAL ACTION", prompt)
+        self.assertIn("must already be resident", prompt)
         self.assertIn("calls contains 1 to 5", prompt)
-        self.assertIn("A block may mix schema/value inspection", prompt)
-        self.assertIn("A blocked\n  call is not attempted", prompt)
-        self.assertIn('without "$"', prompt)
-        self.assertNotIn("ONE global resident task plan", prompt)
+        self.assertIn("list order is both execution order and feedback order", prompt)
+        self.assertIn("performs no", prompt)
+        self.assertIn('"$id" is block-local', prompt)
+        self.assertIn("Forward and cross-block", prompt)
+        self.assertIn("one semantic action", prompt)
+        self.assertIn("never nested in action_block.calls", prompt)
+        self.assertIn('{"evidence":{"table":"exact_result_handle"}', prompt)
+        self.assertIn("writes values or reshapes terminal evidence", prompt)
+        self.assertIn('"filter_001.column"', prompt)
+        self.assertIn('base_role "orders"', prompt)
+        self.assertIn("on is always a list of pair objects", prompt)
+        self.assertIn("merely inferable", prompt)
+        self.assertIn("reason cannot drop rows/columns", prompt)
+        self.assertIn("native reasoning is not the visible response", prompt)
+        self.assertIn("one complete JSON action object", prompt)
+        self.assertIn("under 120 words", prompt)
+        self.assertIn("reserve output budget", prompt)
+        self.assertNotIn("<think>", prompt)
+        self.assertNotIn("update_plan", prompt)
+        self.assertNotIn("plan(ops)", prompt)
 
     def test_action_block_requires_nonempty_calls_and_no_plan_ops(self):
         valid = json.dumps({
@@ -64,7 +99,7 @@ class ActionBlockProtocolTests(unittest.TestCase):
                 }],
             },
         })
-        tool, arguments = parse_batch_plan_action(valid, max_batch_calls=8)
+        tool, arguments = parse_batch_plan_action(valid, max_batch_calls=5)
         self.assertEqual(tool, "action_block")
         self.assertEqual(arguments["calls"][0]["id"], "schema")
 
@@ -78,8 +113,37 @@ class ActionBlockProtocolTests(unittest.TestCase):
                         "tool": "action_block",
                         "arguments": invalid_arguments,
                     }),
-                    max_batch_calls=8,
+                    max_batch_calls=5,
                 )
+        with self.assertRaisesRegex(BatchPlanProtocolError, "cannot manage plans"):
+            parse_batch_plan_action(
+                json.dumps({
+                    "tool": "action_block",
+                    "arguments": {
+                        "calls": [{
+                            "id": "planning",
+                            "tool": "plan",
+                            "arguments": {"ops": []},
+                        }],
+                    },
+                }),
+                max_batch_calls=5,
+            )
+        too_wide = {
+            "calls": [
+                {
+                    "id": f"call_{index}",
+                    "tool": "describe_table",
+                    "arguments": {"tables": ["items"]},
+                }
+                for index in range(6)
+            ]
+        }
+        with self.assertRaisesRegex(BatchPlanProtocolError, "1 to 5"):
+            parse_batch_plan_action(
+                json.dumps({"tool": "action_block", "arguments": too_wide}),
+                max_batch_calls=5,
+            )
 
     def test_inline_student_carrier_round_trips_without_tool_call_tag(self):
         arguments = {
@@ -97,13 +161,13 @@ class ActionBlockProtocolTests(unittest.TestCase):
         self.assertNotIn("<tool_call>", rendered)
         reason, tool, parsed = parse_batch_plan_assistant(
             rendered,
-            max_batch_calls=8,
+            max_batch_calls=5,
         )
         self.assertEqual(reason, "Inspect the unresolved schema.")
         self.assertEqual(tool, "action_block")
         self.assertEqual(parsed, arguments)
         inline_prompt = build_batch_plan_system_prompt(
-            8,
+            5,
             assistant_carrier=BATCH_CARRIER_INLINE_THINK,
         )
         self.assertIn("<think>brief reason</think>", inline_prompt)
@@ -112,36 +176,59 @@ class ActionBlockProtocolTests(unittest.TestCase):
         with self.assertRaises(BatchPlanProtocolError):
             parse_batch_plan_assistant(
                 json.dumps({"tool": "action_block", "arguments": arguments}),
-                max_batch_calls=8,
+                max_batch_calls=5,
             )
 
-    def test_terminal_remains_separate_and_grounded(self):
+    def test_terminal_is_a_standalone_top_level_action(self):
         tool, arguments = parse_batch_plan_action(
             json.dumps({
                 "tool": "answer_from_context",
                 "arguments": {
                     "evidence": {
                         "table": "project_001",
-                        "columns": ["category"],
                     },
                     "reason": "Exact answer relation.",
                 },
             }),
-            max_batch_calls=8,
+            max_batch_calls=5,
         )
         self.assertEqual(tool, "answer_from_context")
-        self.assertEqual(arguments["evidence"]["table"], "project_001")
-        self.assertEqual(arguments["evidence"]["columns"], ["category"])
+        self.assertEqual(
+            arguments["evidence"]["table"],
+            "project_001",
+        )
 
-        with self.assertRaises(BatchPlanProtocolError):
-            parse_batch_plan_action(
-                json.dumps({
-                    "tool": "answer_from_context",
-                    "arguments": {
-                        "evidence": {"table": "project_001"},
+        mixed_terminal = {
+            "tool": "action_block",
+            "arguments": {
+                "calls": [
+                    {
+                        "id": "exact",
+                        "tool": "project",
+                        "arguments": {
+                            "table": "items",
+                            "expressions": ["category"],
+                        },
                     },
-                }),
-                max_batch_calls=8,
+                    {
+                        "id": "final",
+                        "tool": "answer_from_context",
+                        "arguments": {
+                            "evidence": {
+                                "table": "$exact",
+                            },
+                        },
+                    },
+                ],
+            },
+        }
+        with self.assertRaisesRegex(
+            BatchPlanProtocolError,
+            "standalone top-level terminal",
+        ):
+            parse_batch_plan_action(
+                json.dumps(mixed_terminal),
+                max_batch_calls=5,
             )
 
     def test_local_references_resolve_table_column_and_value_step(self):
@@ -166,7 +253,7 @@ class ActionBlockProtocolTests(unittest.TestCase):
         self.assertEqual(resolved["operands"][0]["value_ref"], "step_4")
         self.assertEqual(
             resolve_local_references(
-                {"column": "$metric.count"}, bindings, declared
+                {"column": "$metric.group_001.count"}, bindings, declared
             )["column"],
             "group_001.count",
         )
@@ -179,6 +266,33 @@ class ActionBlockProtocolTests(unittest.TestCase):
                 {"table": "$filter_001"}, bindings, declared
             )
 
+    def test_observation_only_reference_names_producer_relation(self):
+        bindings = {
+            "rows": {
+                "status": "success",
+                "tool": "read_subtable",
+                "step_id": "step_2",
+                "table": None,
+                "columns": None,
+                "source_reference": "$exact",
+            }
+        }
+        with self.assertRaisesRegex(
+            LocalReferenceError,
+            r"observation-only read_subtable.*observed input was '\$exact'.*"
+            r"cite the producer relation",
+        ):
+            resolve_local_references(
+                {
+                    "evidence": {
+                        "table": "$rows",
+                        "columns": ["category"],
+                    }
+                },
+                bindings,
+                {"rows"},
+            )
+
     def test_current_state_is_rendered_after_prior_block(self):
         messages = build_batch_plan_messages(
             system_prompt="system",
@@ -186,7 +300,11 @@ class ActionBlockProtocolTests(unittest.TestCase):
             question="question",
             external_knowledge=None,
             state={
-                "plan": [],
+                "plan": [{
+                    "id": "hidden",
+                    "goal": "model must not manage this",
+                    "status": "pending",
+                }],
                 "tables": {
                     "project_001": {
                         "columns": ["category"],
@@ -206,6 +324,54 @@ class ActionBlockProtocolTests(unittest.TestCase):
             history_turns=4,
         )
         self.assertIn('"project_001"', messages[-1]["content"])
+        self.assertIn("AVAILABLE TOOL CONTEXT", messages[-1]["content"])
+        self.assertNotIn('"plan"', messages[-1]["content"])
+        self.assertNotIn("model must not manage this", messages[-1]["content"])
+
+    def test_history_bound_counts_four_blocks_not_primitive_calls(self):
+        history = [
+            {
+                "assistant": json.dumps({
+                    "tool": "action_block",
+                    "arguments": {
+                        "calls": [
+                            {
+                                "id": f"block{index}_a",
+                                "tool": "describe_table",
+                                "arguments": {"tables": ["items"]},
+                            },
+                            {
+                                "id": f"block{index}_b",
+                                "tool": "inspect_column",
+                                "arguments": {
+                                    "table": "items",
+                                    "column": "category",
+                                },
+                            },
+                        ],
+                    },
+                }),
+                "observation": f'ACTION BLOCK RESULTS\n{{"block_index":{index}}}',
+            }
+            for index in range(6)
+        ]
+        messages = build_batch_plan_messages(
+            system_prompt="system",
+            overview={"tables": ["items"]},
+            question="question",
+            external_knowledge=None,
+            state={"plan": [], "tables": {}, "values": {}},
+            last_error=None,
+            legal_history=history,
+            history_turns=4,
+        )
+        assistant_messages = [
+            message for message in messages
+            if message["role"] == "assistant"
+        ]
+        self.assertEqual(len(assistant_messages), 4)
+        self.assertIn("block2_a", assistant_messages[0]["content"])
+        self.assertIn("block5_b", assistant_messages[-1]["content"])
 
 
 class ActionBlockExecutionTests(unittest.TestCase):
@@ -218,6 +384,8 @@ class ActionBlockExecutionTests(unittest.TestCase):
             "INSERT INTO items VALUES ('a', 0), ('b', 2), ('c', 3);"
             "CREATE TABLE categories(category TEXT, label TEXT);"
             "INSERT INTO categories VALUES ('a', 'A'), ('b', 'B'), ('c', 'C');"
+            "CREATE TABLE periods(start_date TEXT, stop_date TEXT);"
+            "INSERT INTO periods VALUES ('2008-02-15', '2008-02-26');"
         )
         seed.close()
         self.harness = Harness(str(db_path))
@@ -297,6 +465,497 @@ class ActionBlockExecutionTests(unittest.TestCase):
         )
         self.assertEqual(self.ctx["environment"].snapshot()["plan"], [])
 
+    def test_forward_references_fail_in_model_order(self):
+        arguments = block([
+            {
+                "id": "rows",
+                "tool": "read_subtable",
+                "arguments": {"table": "$exact", "limit": 20},
+            },
+            {
+                "id": "exact",
+                "tool": "project",
+                "arguments": {
+                    "table": "$positive",
+                    "expressions": ["category"],
+                },
+            },
+            {
+                "id": "positive",
+                "tool": "condition_filter",
+                "arguments": {
+                    "table": "items",
+                    "conditions": {"column": "price", "op": ">", "value": 0},
+                },
+            },
+        ])
+        atomic_count, results, _, nonrecoverable = self.execute(arguments)
+        self.assertEqual(atomic_count, 3)
+        self.assertFalse(nonrecoverable)
+        self.assertEqual(
+            [item["call_id"] for item in results],
+            ["rows", "exact", "positive"],
+        )
+        self.assertEqual(
+            [item["status"] for item in results],
+            ["error", "error", "success"],
+        )
+        visible = render_batch_observation(1, results)
+        self.assertNotIn('"dependencies"', visible)
+        payload = json.loads(visible.split("\n", 1)[1])
+        self.assertEqual(len(payload["results"]), 3)
+        self.assertEqual(
+            [item["call_id"] for item in payload["results"]],
+            ["rows", "exact", "positive"],
+        )
+
+    def test_terminal_sink_cannot_run_with_same_block_result(self):
+        arguments = block([
+            {
+                "id": "final",
+                "tool": "answer_from_context",
+                "arguments": {
+                    "evidence": {
+                        "table": "$exact",
+                    },
+                },
+            },
+            {
+                "id": "exact",
+                "tool": "project",
+                "arguments": {
+                    "table": "items",
+                    "expressions": ["category"],
+                },
+            },
+        ])
+        with self.assertRaisesRegex(
+            BatchPlanProtocolError,
+            "standalone top-level terminal",
+        ):
+            parse_batch_plan_action(
+                json.dumps({"tool": "action_block", "arguments": arguments}),
+                max_batch_calls=5,
+            )
+        with self.assertRaisesRegex(
+            BatchPlanProtocolError,
+            "one and only call",
+        ):
+            self.execute(arguments)
+
+    def test_terminal_requires_resident_handle_not_prior_block_local_id(self):
+        _, first_results, _, _ = self.execute(
+            block([{
+                "id": "exact",
+                "tool": "project",
+                "arguments": {
+                    "table": "items",
+                    "expressions": ["category"],
+                },
+            }]),
+        )
+        atomic_count, results, _, _ = self.execute(
+            block([{
+                "id": "final",
+                "tool": "answer_from_context",
+                "arguments": {
+                    "evidence": {
+                        "table": "$exact",
+                    },
+                },
+            }]),
+            atomic_count=1,
+            batch_index=2,
+        )
+        self.assertEqual(atomic_count, 2)
+        self.assertEqual(results[0]["status"], "error")
+        resident = first_results[0]["table"]
+        atomic_count, results, _, _ = self.execute(
+            block([{
+                "id": "final",
+                "tool": "answer_from_context",
+                "arguments": {"evidence": {"table": resident}},
+            }]),
+            atomic_count=2,
+            batch_index=3,
+        )
+        self.assertEqual(atomic_count, 3)
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(
+            results[0]["resolved_evidence_arguments"]["evidence"]["table"],
+            resident,
+        )
+
+    def test_value_ref_accepts_resident_one_row_handle(self):
+        _, first_results, _, _ = self.execute(
+            block([{
+                "id": "period",
+                "tool": "project",
+                "arguments": {
+                    "table": "periods",
+                    "expressions": ["start_date", "stop_date"],
+                },
+            }]),
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+        )
+        period_table = first_results[0]["table"]
+        resolutions: list[dict] = []
+        _, results, _, _ = self.execute(
+            block([{
+                "id": "duration",
+                "tool": "scalar_compute",
+                "arguments": {
+                    "operation": "date_diff_days",
+                    "operands": [
+                        {
+                            "value_ref": period_table,
+                            "column": "start_date",
+                        },
+                        {
+                            "value_ref": period_table,
+                            "column": "stop_date",
+                        },
+                    ],
+                    "result_name": "days",
+                },
+            }]),
+            atomic_count=1,
+            batch_index=2,
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+            interface_resolution_events=resolutions,
+        )
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(
+            [item["rule"] for item in resolutions],
+            [
+                "resident_handle_to_producing_step",
+                "resident_handle_to_producing_step",
+            ],
+        )
+        self.assertEqual(
+            [list(row) for row in self.harness.rows(results[0]["table"])],
+            [[11]],
+        )
+
+    def test_value_ref_accepts_sigiled_resident_handle_dot_column(self):
+        _, first_results, _, _ = self.execute(
+            block([{
+                "id": "period",
+                "tool": "project",
+                "arguments": {
+                    "table": "periods",
+                    "expressions": ["start_date", "stop_date"],
+                },
+            }]),
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+        )
+        period_table = first_results[0]["table"]
+        resolutions: list[dict] = []
+        _, results, _, _ = self.execute(
+            block([{
+                "id": "duration",
+                "tool": "scalar_compute",
+                "arguments": {
+                    "operation": "date_diff_days",
+                    "operands": [
+                        {"value_ref": f"${period_table}.start_date"},
+                        {"value_ref": f"${period_table}.stop_date"},
+                    ],
+                    "result_name": "days",
+                },
+            }]),
+            atomic_count=1,
+            batch_index=2,
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+            interface_resolution_events=resolutions,
+        )
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(
+            [item["rule"] for item in resolutions],
+            [
+                "sigiled_resident_handle_column_to_producing_step",
+                "sigiled_resident_handle_column_to_producing_step",
+            ],
+        )
+        self.assertEqual(
+            [list(row) for row in self.harness.rows(results[0]["table"])],
+            [[11]],
+        )
+
+    def test_uniform_infix_boolean_predicate_is_normalized(self):
+        resolutions: list[dict] = []
+        _, results, _, _ = self.execute(
+            block([{
+                "id": "exact",
+                "tool": "condition_filter",
+                "arguments": {
+                    "table": "items",
+                    "conditions": [
+                        {"column": "price", "op": ">=", "value": 2},
+                        {"op": "and"},
+                        {"column": "price", "op": "<=", "value": 2},
+                    ],
+                    "return_columns": ["category"],
+                },
+            }]),
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+            interface_resolution_events=resolutions,
+        )
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(
+            [item["rule"] for item in resolutions],
+            ["uniform_infix_boolean_predicate"],
+        )
+        self.assertEqual(
+            [list(row) for row in self.harness.rows(results[0]["table"])],
+            [["b"]],
+        )
+
+    def test_named_same_block_predicate_scalar_is_normalized(self):
+        resolutions: list[dict] = []
+        _, results, _, _ = self.execute(
+            block([
+                {
+                    "id": "max_price",
+                    "tool": "group_aggregate",
+                    "arguments": {
+                        "table": "items",
+                        "group_by": [],
+                        "aggregations": [{
+                            "op": "max",
+                            "column": "price",
+                            "as": "max_price",
+                        }],
+                    },
+                },
+                {
+                    "id": "most_expensive",
+                    "tool": "condition_filter",
+                    "arguments": {
+                        "table": "items",
+                        "conditions": {
+                            "column": "price",
+                            "op": "=",
+                            "value_ref": "$max_price.max_price",
+                        },
+                        "return_columns": ["category"],
+                    },
+                },
+            ]),
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+            interface_resolution_events=resolutions,
+        )
+        self.assertEqual([result["status"] for result in results], ["success", "success"])
+        self.assertEqual(
+            [list(row) for row in self.harness.rows(results[1]["table"])],
+            [["c"]],
+        )
+        self.assertIn(
+            "named_one_cell_predicate_value_ref",
+            [item["rule"] for item in resolutions],
+        )
+
+    def test_one_cell_cross_result_column_value_is_normalized(self):
+        resolutions: list[dict] = []
+        _, results, _, _ = self.execute(
+            block([
+                {
+                    "id": "max_price",
+                    "tool": "group_aggregate",
+                    "arguments": {
+                        "table": "items",
+                        "group_by": [],
+                        "aggregations": [{
+                            "op": "max",
+                            "column": "price",
+                            "as": "max_price",
+                        }],
+                    },
+                },
+                {
+                    "id": "most_expensive",
+                    "tool": "condition_filter",
+                    "arguments": {
+                        "table": "items",
+                        "conditions": {
+                            "column": "price",
+                            "op": "=",
+                            "column_value": "$max_price.max_price",
+                        },
+                        "return_columns": ["category"],
+                    },
+                },
+            ]),
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+            interface_resolution_events=resolutions,
+        )
+        self.assertEqual([result["status"] for result in results], ["success", "success"])
+        self.assertEqual(
+            [list(row) for row in self.harness.rows(results[1]["table"])],
+            [["c"]],
+        )
+        self.assertIn(
+            "one_cell_column_value_to_value_ref",
+            [item["rule"] for item in resolutions],
+        )
+
+    def test_multirow_cross_result_column_value_is_rejected(self):
+        _, results, _, _ = self.execute(
+            block([
+                {
+                    "id": "prices",
+                    "tool": "project",
+                    "arguments": {
+                        "table": "items",
+                        "expressions": ["price"],
+                    },
+                },
+                {
+                    "id": "ambiguous",
+                    "tool": "condition_filter",
+                    "arguments": {
+                        "table": "items",
+                        "conditions": {
+                            "column": "price",
+                            "op": "=",
+                            "column_value": "$prices.price",
+                        },
+                    },
+                },
+            ]),
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+        )
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(results[1]["status"], "error")
+        self.assertIn(
+            "cannot be used as column_value",
+            results[1]["error"]["message"],
+        )
+
+    def test_nested_resident_predicate_scalar_is_normalized(self):
+        _, first_results, _, _ = self.execute(
+            block([{
+                "id": "max_price",
+                "tool": "group_aggregate",
+                "arguments": {
+                    "table": "items",
+                    "group_by": [],
+                    "aggregations": [{
+                        "op": "max",
+                        "column": "price",
+                        "as": "max_price",
+                    }],
+                },
+            }]),
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+        )
+        metric_table = first_results[0]["table"]
+        resolutions: list[dict] = []
+        _, results, _, _ = self.execute(
+            block([{
+                "id": "most_expensive",
+                "tool": "condition_filter",
+                "arguments": {
+                    "table": "items",
+                    "conditions": {
+                        "column": "price",
+                        "op": "=",
+                        "value_ref": {
+                            "value_ref": metric_table,
+                            "column": "max_price",
+                        },
+                    },
+                    "return_columns": ["category"],
+                },
+            }]),
+            atomic_count=1,
+            batch_index=2,
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+            interface_resolution_events=resolutions,
+        )
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(
+            [list(row) for row in self.harness.rows(results[0]["table"])],
+            [["c"]],
+        )
+        self.assertIn(
+            "named_one_cell_predicate_value_ref",
+            [item["rule"] for item in resolutions],
+        )
+
+    def test_structured_order_by_is_normalized(self):
+        resolutions: list[dict] = []
+        _, results, _, _ = self.execute(
+            block([{
+                "id": "highest",
+                "tool": "extreme_value_select",
+                "arguments": {
+                    "table": "items",
+                    "order_by": [{"column": "price", "direction": "desc"}],
+                    "top_k": 1,
+                    "return_columns": ["category"],
+                },
+            }]),
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+            interface_resolution_events=resolutions,
+        )
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(
+            [list(row) for row in self.harness.rows(results[0]["table"])],
+            [["c"]],
+        )
+        self.assertEqual(
+            [item["rule"] for item in resolutions],
+            ["structured_order_by_to_string"],
+        )
+
+    def test_low_friction_removes_sigil_from_resident_handle(self):
+        _, first_results, _, _ = self.execute(
+            block([{
+                "id": "exact",
+                "tool": "project",
+                "arguments": {
+                    "table": "items",
+                    "expressions": ["category"],
+                },
+            }]),
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+        )
+        resident = first_results[0]["table"]
+        resolutions: list[dict] = []
+        _, results, _, _ = self.execute(
+            block([{
+                "id": "rows",
+                "tool": "read_subtable",
+                "arguments": {
+                    "table": f"${resident}",
+                    "limit": 20,
+                },
+            }]),
+            atomic_count=1,
+            batch_index=2,
+            low_friction_interface=True,
+            safe_low_friction_interface=True,
+            interface_resolution_events=resolutions,
+        )
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(
+            [item["rule"] for item in resolutions],
+            ["remove_sigil_from_resident_handle"],
+        )
+
     def test_root_failure_does_not_block_independent_later_call(self):
         arguments = block([
             {"id": "bad", "tool": "not_a_tool", "arguments": {}},
@@ -375,9 +1034,9 @@ class ActionBlockExecutionTests(unittest.TestCase):
                 structured_error_feedback=True,
             ).split("\n", 1)[1]
         )
-        reusable = visible["reusable_outputs"]["positive"]
-        self.assertRegex(reusable["table"], r"^filter_\d+$")
-        self.assertEqual(reusable["columns"], ["category", "price"])
+        success = visible["results"][0]
+        self.assertRegex(success["output"]["table"], r"^filter_\d+$")
+        self.assertEqual(success["output"]["columns"], ["category", "price"])
 
     def test_multiedge_join_facts_use_progressively_introduced_namespaces(self):
         arguments = block([
@@ -437,7 +1096,7 @@ class ActionBlockExecutionTests(unittest.TestCase):
         visible = json.loads(
             render_batch_observation(1, results).split("\n", 1)[1]
         )
-        self.assertIsInstance(visible["reusable_outputs"], list)
+        self.assertNotIn("reusable_outputs", visible)
 
     def test_low_friction_resolves_unique_stale_join_namespace(self):
         events = []
@@ -849,7 +1508,7 @@ class ActionBlockExecutionTests(unittest.TestCase):
         )
         self.assertRegex(resolved_left, r"^filter_\d+\.category$")
 
-    def test_terminal_projection_drops_helper_columns_without_changing_rows(self):
+    def test_terminal_does_not_project_or_change_evidence(self):
         _, results, _, _ = self.execute(block([{
             "id": "all_rows",
             "tool": "condition_filter",
@@ -859,25 +1518,20 @@ class ActionBlockExecutionTests(unittest.TestCase):
             },
         }]))
         source_table = results[0]["table"]
-        score_arguments, projection = _materialize_terminal_evidence(
-            h=self.harness,
-            ctx=self.ctx,
-            arguments={
-                "evidence": {
-                    "table": source_table,
-                    "columns": ["category"],
-                },
-            },
-            created=self.created,
-            step_id="step_2",
+        created_before = set(self.created)
+        _, terminal_results, _, _ = self.execute(
+            block([{
+                "id": "final",
+                "tool": "answer_from_context",
+                "arguments": {"evidence": {"table": source_table}},
+            }]),
+            atomic_count=1,
+            batch_index=2,
         )
-        projected = score_arguments["evidence"]["table"]
-        self.assertEqual(projection["source_columns"], ["category", "price"])
-        self.assertEqual(projection["selected_columns"], ["category"])
-        self.assertEqual(self.harness.table_columns(projected), ["category"])
+        self.assertEqual(self.created, created_before)
         self.assertEqual(
-            [list(row) for row in self.harness.rows(projected)],
-            [["a"], ["b"], ["c"]],
+            terminal_results[0]["terminal_score_arguments"],
+            {"evidence": {"table": source_table}},
         )
 
 
@@ -914,13 +1568,12 @@ class ActionBlockEpisodeTests(unittest.TestCase):
                 api_key="unused",
                 model="deepseek-v4-flash",
                 system_prompt=build_batch_plan_system_prompt(
-                    8,
+                    5,
                     assistant_carrier=assistant_carrier,
                 ),
                 protocol_hash="test",
-                max_atomic_actions=30,
-                max_model_turns=30,
-                max_batch_calls=8,
+                max_action_blocks=30,
+                max_batch_calls=5,
                 max_tokens=2048,
                 api_retries=1,
                 api_timeout=10,
@@ -971,16 +1624,11 @@ class ActionBlockEpisodeTests(unittest.TestCase):
                         ],
                     },
                 }),
-                json.dumps({
-                    "tool": "answer_from_context",
-                    "arguments": {
-                        "evidence": {
-                            "table": "project_001",
-                            "columns": ["category"],
-                        },
-                        "reason": "Exact category relation.",
-                    },
-                }),
+                json.dumps(terminal_action(
+                    "project_001",
+                    ["category"],
+                    "Exact category relation.",
+                )),
             ])
         self.assertTrue(
             record["correct"],
@@ -992,11 +1640,73 @@ class ActionBlockEpisodeTests(unittest.TestCase):
             }, default=str),
         )
         self.assertEqual(record["model_turns"], 3)
-        self.assertEqual(record["action_blocks"], 2)
+        self.assertEqual(record["action_blocks"], 3)
         self.assertEqual(record["atomic_actions"], 4)
-        self.assertEqual(record["planned_nodes"], 3)
+        self.assertEqual(record["submitted_calls"], 4)
         self.assertEqual(record["blocked_nodes"], 0)
         self.assertEqual(record["final_environment_state"]["plan"], [])
+
+    def test_episode_rejects_mixed_terminal_then_recovers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp, "test.sqlite")
+            seed = sqlite3.connect(db_path)
+            seed.executescript(
+                "CREATE TABLE items(category TEXT, price INTEGER);"
+                "INSERT INTO items VALUES ('a', 0), ('b', 2);"
+            )
+            seed.close()
+            record = self.run_with_responses(db_path, [
+                json.dumps({
+                    "tool": "action_block",
+                    "arguments": {
+                        "calls": [
+                            {
+                                "id": "final",
+                                "tool": "answer_from_context",
+                                "arguments": {
+                                    "evidence": {
+                                        "table": "$exact",
+                                    },
+                                },
+                            },
+                            {
+                                "id": "exact",
+                                "tool": "project",
+                                "arguments": {
+                                    "table": "items",
+                                    "expressions": ["category"],
+                                },
+                            },
+                        ],
+                    },
+                }),
+                json.dumps({
+                    "tool": "action_block",
+                    "arguments": {
+                        "calls": [{
+                            "id": "exact",
+                            "tool": "project",
+                            "arguments": {
+                                "table": "items",
+                                "expressions": ["category"],
+                            },
+                        }],
+                    },
+                }),
+                json.dumps(terminal_action("project_001", ["category"])),
+            ])
+        self.assertTrue(record["correct"])
+        self.assertTrue(record["legal"])
+        self.assertEqual(record["model_turns"], 3)
+        self.assertEqual(record["action_blocks"], 3)
+        self.assertEqual(record["executed_action_blocks"], 1)
+        self.assertEqual(record["atomic_actions"], 2)
+        self.assertEqual(record["submitted_calls"], 2)
+        self.assertEqual(record["errors"], 1)
+        self.assertEqual(
+            [event["tool"] for event in record["atomic_events"]],
+            ["project", "answer_from_context"],
+        )
 
     def test_inline_student_carrier_runs_through_the_evaluator(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1032,12 +1742,7 @@ class ActionBlockEpisodeTests(unittest.TestCase):
                 render_batch_plan_assistant(
                     "The resident relation has exactly the requested column.",
                     "answer_from_context",
-                    {
-                        "evidence": {
-                            "table": "project_001",
-                            "columns": ["category"],
-                        }
-                    },
+                    terminal_action("project_001", ["category"])["arguments"],
                 ),
             ]
             record = self.run_with_responses(
@@ -1111,16 +1816,11 @@ class ActionBlockEpisodeTests(unittest.TestCase):
                         ],
                     },
                 }),
-                json.dumps({
-                    "tool": "answer_from_context",
-                    "arguments": {
-                        "evidence": {
-                            "table": "project_002",
-                            "columns": ["category"],
-                        },
-                        "reason": "Corrected from the schema feedback.",
-                    },
-                }),
+                json.dumps(terminal_action(
+                    "project_002",
+                    ["category"],
+                    "Corrected from the schema feedback.",
+                )),
             ])
         self.assertTrue(
             record["correct"],
@@ -1140,7 +1840,7 @@ class ActionBlockEpisodeTests(unittest.TestCase):
         self.assertIn('"root_error_calls":["wrong"]', first["observation"])
         self.assertIn('"root_causes":["wrong"]', first["observation"])
 
-    def test_episode_recovers_from_invalid_terminal_column(self):
+    def test_episode_recovers_from_non_atomic_terminal_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp, "test.sqlite")
             seed = sqlite3.connect(db_path)
@@ -1168,35 +1868,40 @@ class ActionBlockEpisodeTests(unittest.TestCase):
                     "arguments": {
                         "evidence": {
                             "table": "project_001",
-                            "columns": ["missing"],
-                        },
-                    },
-                }),
-                json.dumps({
-                    "tool": "answer_from_context",
-                    "arguments": {
-                        "evidence": {
-                            "table": "project_001",
                             "columns": ["category"],
                         },
                     },
                 }),
+                json.dumps({
+                    "tool": "action_block",
+                    "arguments": {
+                        "calls": [{
+                            "id": "exact",
+                            "tool": "project",
+                            "arguments": {
+                                "table": "project_001",
+                                "expressions": ["category"],
+                            },
+                        }],
+                    },
+                }),
+                json.dumps(terminal_action("project_002")),
             ])
         self.assertTrue(record["correct"])
         self.assertEqual(record["errors"], 1)
         self.assertEqual(
             record["error_events"][0]["error_type"],
-            "argument_validation_error",
+            "protocol_error",
         )
         self.assertIn(
-            "available columns",
+            "evidence must be exactly",
             record["error_events"][0]["message"],
         )
         self.assertEqual(record["atomic_actions"], 3)
         terminal = record["atomic_events"][-1]
         self.assertEqual(
-            terminal["terminal_projection"]["selected_columns"],
-            ["category"],
+            terminal["resolved_evidence_arguments"],
+            {"evidence": {"table": "project_002"}},
         )
 
 

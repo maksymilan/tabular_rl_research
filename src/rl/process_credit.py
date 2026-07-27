@@ -32,11 +32,11 @@ sys.path[:0] = [
 ]
 
 from executor import Harness  # noqa: E402
+from observation_binding import action_literal_slots, same_scalar  # noqa: E402
 from provenance import (  # noqa: E402
     PERCEPTION_TOOLS,
     backward_slice,
     build_grounding_references,
-    condition_literal_targets,
 )
 from target_support import (  # noqa: E402
     TargetSupport,
@@ -418,34 +418,25 @@ def _tool_columns(tool: str, arguments: dict[str, Any], output: dict[str, Any]) 
 
 
 def _action_literal_targets(tool: str, arguments: dict[str, Any]) -> list[tuple[str | None, Any]]:
-    if tool == "condition_filter":
-        return condition_literal_targets(arguments.get("conditions"))
+    targets = [
+        (slot.column, slot.value)
+        for slot in action_literal_slots(tool, arguments)
+    ]
     if tool == "group_aggregate":
-        targets = [
-            pair
-            for aggregation in arguments.get("aggregations") or []
-            for pair in condition_literal_targets(aggregation.get("where"))
-        ]
         targets.extend(
             pair
             for aggregation in arguments.get("aggregations") or []
-            if isinstance(aggregation.get("column"), str)
+            if isinstance(aggregation, dict)
+            and isinstance(aggregation.get("column"), str)
             for pair in _expression_predicate_literals(aggregation["column"])
         )
-        group_by = arguments.get("group_by") or []
-        category_column = group_by[0] if len(group_by) == 1 else None
+    elif tool == "scalar_compute":
         targets.extend(
-            (category_column, value)
-            for value in arguments.get("category_values") or []
-        )
-        return targets
-    if tool == "scalar_compute":
-        return [
             (operand.get("column"), operand["value"])
             for operand in arguments.get("operands") or []
             if isinstance(operand, dict) and "value" in operand
-        ]
-    return []
+        )
+    return targets
 
 
 def _visible_output_values(output: dict[str, Any]) -> list[Any]:
@@ -577,15 +568,6 @@ def _automatic_final_table(
     return "automatic_last_table", handle, step_id, role
 
 
-def _same_grounded_value(left: Any, right: Any) -> bool:
-    if isinstance(left, bool) or isinstance(right, bool):
-        return type(left) is type(right) and left == right
-    try:
-        return left == right
-    except Exception:
-        return False
-
-
 def _history_value_support(
     handle: str,
     history: dict[str, dict[str, Any]],
@@ -607,7 +589,7 @@ def _history_value_support(
             latest_observation = step_id
         cells = _flatten_values(rows)
         for index, value in enumerate(values):
-            if any(_same_grounded_value(value, cell) for cell in cells):
+            if any(same_scalar(value, cell) for cell in cells):
                 supported.add(index)
     return supported, latest_observation
 
@@ -773,7 +755,7 @@ def replay_step_features(
                     if task_text_supports_literal(literal, task_text, column=column):
                         continue
                     if any(
-                        _same_grounded_value(literal, value)
+                        same_scalar(literal, value)
                         for value in visible_observation_values
                     ):
                         continue

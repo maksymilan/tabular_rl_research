@@ -22,6 +22,12 @@ actions remain auditable but do not become training targets.
 from the state immediately before that action. The input must exclude the current tool output,
 future actions or observations, hidden gold SQL, and future factual provenance.
 
+The exporter always uses the concise student runtime prompt from
+`src/sft/prompt_contract.py`. External-teacher guidance and worked examples affect generation only;
+they are neither copied into the ShareGPT `system` field nor treated as learned factual context.
+The exported manifest binds the student prompt SHA-256 and public tool-schema SHA-256; source
+teacher prompt hashes remain audit metadata.
+
 Recovered trajectories retain erroneous turns in the audit record, but rejected actions are not SFT
 targets. The first later legal action can be labeled as feedback recovery when it causally uses the
 structured error.

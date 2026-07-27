@@ -184,6 +184,82 @@ class FilterSftByTokenAuditTest(unittest.TestCase):
                     "pilot",
                 )
 
+    def test_complete_only_policy_rejects_entire_affected_episode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            records_path = root / "source.jsonl"
+            index_path = root / "source.index.jsonl"
+            audit_path = root / "source.token_audit.json"
+            output_path = root / "ready.jsonl"
+            output_index_path = root / "ready.index.jsonl"
+            records = [
+                {
+                    "metadata": {
+                        "record_id": "episode_1_step_1",
+                        "source_episode_id": "episode_1",
+                    }
+                },
+                {
+                    "metadata": {
+                        "record_id": "episode_1_step_2",
+                        "source_episode_id": "episode_1",
+                    }
+                },
+                {
+                    "metadata": {
+                        "record_id": "episode_2_step_1",
+                        "source_episode_id": "episode_2",
+                    }
+                },
+            ]
+            indexes = [
+                {
+                    "record_id": row["metadata"]["record_id"],
+                    "source_episode_id": row["metadata"]["source_episode_id"],
+                    "tool_name": "describe_table",
+                }
+                for row in records
+            ]
+            audit = {
+                "records": 3,
+                "details": [
+                    {
+                        "record_id": "episode_1_step_2",
+                        "target_status": "complete",
+                        "current_source_tokens_original": 10,
+                        "current_source_tokens_kept": 5,
+                        "history_pairs_original": 0,
+                        "first_pair_complete": True,
+                    }
+                ],
+            }
+            write_jsonl(records_path, records)
+            write_jsonl(index_path, indexes)
+            audit_path.write_text(json.dumps(audit), encoding="utf-8")
+
+            manifest = build(
+                [records_path],
+                [index_path],
+                [audit_path],
+                output_path,
+                output_index_path,
+                "pilot",
+                episode_policy="keep-complete-only",
+            )
+
+            kept = [
+                json.loads(line)["metadata"]["record_id"]
+                for line in output_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(["episode_2_step_1"], kept)
+            self.assertEqual(1, manifest["directly_rejected_records"])
+            self.assertEqual(1, manifest["cascade_rejected_records"])
+            self.assertEqual(1, manifest["complete_episodes"])
+            self.assertEqual(
+                "keep-complete-only",
+                manifest["selection_policy"]["episode_admission"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

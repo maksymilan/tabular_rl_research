@@ -14,8 +14,12 @@ from rollout import execute_tool, new_ctx  # noqa: E402
 
 
 class ConditionalAggregateExecutionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.harness = Harness(":memory:")
+        self.addCleanup(self.harness.conn.close)
+
     def test_online_execution_resolves_where_value_ref_and_keeps_model_arguments(self):
-        harness = Harness(":memory:")
+        harness = self.harness
         harness.conn.executescript(
             """
             CREATE TABLE scores(name TEXT, score INT);
@@ -72,7 +76,7 @@ class ConditionalAggregateExecutionTests(unittest.TestCase):
         )
 
     def test_scalar_compute_reuses_named_cells_from_one_multi_metric_row(self):
-        harness = Harness(":memory:")
+        harness = self.harness
         harness.conn.executescript(
             """
             CREATE TABLE nominees(country TEXT);

@@ -9,6 +9,7 @@ from unittest.mock import patch
 from tool_environment import ToolUseEnv
 from build_sft_task_set import numeric_example_index
 from task_loader import load_rl_task_records
+from protocol import student_runtime_system_prompt
 
 
 class FakeState:
@@ -73,6 +74,53 @@ class BirdTaskAdapterTests(unittest.TestCase):
         self.assertEqual([message["role"] for message in messages], ["system", "user", "assistant", "user"])
         self.assertIn("describe_table", messages[2]["content"])
 
+    def test_tool_env_rejects_only_an_identical_adjacent_action_without_execution(self):
+        task = {
+            "example_index": 7,
+            "db_id": "bird_db",
+            "db_path": "/tmp/bird.sqlite",
+            "question": "Inspect the relevant table.",
+            "gold_sql": "SELECT 1",
+        }
+        first = (
+            "<think>Inspect the schema.</think>"
+            '{"tool":"describe_table","arguments":{"tables":["items"]}}'
+        )
+        repeated = (
+            "<think>Use a different reason but the same call.</think>"
+            '{"arguments":{"tables":["items"]},"tool":"describe_table"}'
+        )
+        with patch("tool_environment.Harness", FakeHarness), patch(
+            "tool_environment.overview", return_value={"tables": []}
+        ), patch(
+            "tool_environment.new_ctx", return_value={"environment": FakeState()}
+        ), patch(
+            "tool_environment.execute_tool",
+            return_value=({"tables": [{"table": "items"}]}, None),
+        ) as execute:
+            environment = ToolUseEnv(task)
+            first_transition = environment.apply_model_output(first)
+            repeated_transition = environment.apply_model_output(repeated)
+
+        self.assertIsNone(first_transition.failure_type)
+        self.assertFalse(repeated_transition.done)
+        self.assertEqual(repeated_transition.failure_type, "no_progress_error")
+        self.assertEqual(execute.call_count, 1)
+        self.assertEqual(
+            repeated_transition.turn["execution_error_type"],
+            "no_progress_error",
+        )
+        feedback = json.loads(repeated_transition.observation)
+        self.assertEqual(feedback["error"]["code"], "adjacent_identical_action")
+        self.assertEqual(
+            feedback["attempted_action"],
+            {"tool": "describe_table", "arguments": {"tables": ["items"]}},
+        )
+        self.assertEqual(
+            repeated_transition.turn["error_event"]["state_before_hash"],
+            repeated_transition.turn["error_event"]["state_after_hash"],
+        )
+
     def test_failed_answer_scoring_does_not_mark_episode_legal(self):
         task = {
             "example_index": 7,
@@ -120,6 +168,32 @@ class BirdTaskAdapterTests(unittest.TestCase):
         prompt = records[0]["prompt"][1]["content"]
         self.assertIn(task["external_knowledge"], prompt)
         self.assertNotIn(task["gold_sql"], prompt)
+        expected_system = student_runtime_system_prompt(
+            context_mode="rolling-legal-history",
+            compact=False,
+        )
+        self.assertEqual(records[0]["prompt"][0]["content"], expected_system)
+        self.assertNotIn("CANONICAL CALLS", expected_system)
+
+    def test_tool_env_default_matches_sft_eval_rl_student_runtime_prompt(self):
+        task = {
+            "example_index": 7,
+            "db_id": "bird_db",
+            "db_path": "/tmp/bird.sqlite",
+            "question": "Compute the eligible rate.",
+            "gold_sql": "SELECT 1",
+        }
+        with patch("tool_environment.Harness", FakeHarness), patch(
+            "tool_environment.overview", return_value={"tables": []}
+        ), patch("tool_environment.new_ctx", return_value={"environment": FakeState()}):
+            environment = ToolUseEnv(task)
+        self.assertEqual(
+            environment.system_prompt,
+            student_runtime_system_prompt(
+                context_mode="rolling-legal-history",
+                compact=False,
+            ),
+        )
 
     def test_cached_catalog_does_not_leak_another_database_path(self):
         tasks = [

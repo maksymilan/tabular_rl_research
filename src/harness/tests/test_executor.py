@@ -321,8 +321,78 @@ def run():
     t.check("extreme_value_select (projection)",
             h.rows(e["table_name"]) == h.gold("SELECT name FROM employees ORDER BY salary DESC LIMIT 2"))
 
+    second = h.extreme_value_select(
+        "employees", ["salary DESC"], top_k=1, return_columns=["name"], offset=1
+    )
+    t.check(
+        "extreme_value_select supports a global rank offset",
+        h.rows(second["table_name"]) ==
+        h.gold("SELECT name FROM employees ORDER BY salary DESC LIMIT 1 OFFSET 1"),
+        str(second),
+    )
+
+    per_department = h.extreme_value_select(
+        "employees",
+        ["salary DESC"],
+        top_k=1,
+        return_columns=["dept", "name"],
+        partition_by=["dept"],
+    )
+    t.check(
+        "extreme_value_select supports top-k inside each partition",
+        norm(h.rows(per_department["table_name"])) == norm(h.gold(
+            "SELECT dept,name FROM ("
+            "SELECT dept,name,ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn "
+            "FROM employees) WHERE rn=1"
+        )),
+        str(per_department),
+    )
+
     p = h.project("employees", ["name", "salary"])
     t.check("project", norm(h.rows(p["table_name"])) == norm(h.gold("SELECT name,salary FROM employees")))
+
+    typed = h.project(
+        "employees",
+        [
+            "name",
+            {
+                "op": "subtract",
+                "operands": [{"column": "salary"}, {"column": "age"}],
+                "as": "salary_minus_age",
+            },
+        ],
+    )
+    t.check(
+        "project supports typed row-wise arithmetic",
+        h.rows(typed["table_name"]) ==
+        h.gold("SELECT name,salary-age AS salary_minus_age FROM employees"),
+        str(typed),
+    )
+
+    dates = h._new(
+        "dates",
+        "SELECT '2008-02-15' AS started, '2008-02-26' AS stopped",
+    )
+    typed_dates = h.project(
+        dates["table_name"],
+        [
+            {
+                "op": "date_diff_days",
+                "operands": [{"column": "started"}, {"column": "stopped"}],
+                "as": "duration_days",
+            },
+            {
+                "op": "extract_year",
+                "operands": [{"column": "started"}],
+                "as": "start_year",
+            },
+        ],
+    )
+    t.check(
+        "project supports typed row-wise date operations",
+        h.rows(typed_dates["table_name"]) == [(11.0, 2008)],
+        str(typed_dates),
+    )
 
     distinct_project = h.project("employees", ["dept"], distinct=True)
     t.check(
@@ -379,6 +449,13 @@ def run():
     o = h.extreme_value_select("employees", ["salary DESC"], 2)
     t.check("extreme_value_select (no projection)",
             h.rows(o["table_name"]) == h.gold("SELECT * FROM employees ORDER BY salary DESC LIMIT 2"))
+
+    second_page = h.read_subtable("employees", columns=["id"], limit=2, offset=2)
+    t.check(
+        "read_subtable supports explicit pagination offset",
+        [tuple(row) for row in second_page] == [(3,), (4,)],
+        str(second_page),
+    )
 
     pv = h.preview(f["table_name"])
     t.check("preview inlines small table",

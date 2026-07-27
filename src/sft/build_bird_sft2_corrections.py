@@ -21,7 +21,7 @@ from build_bird_sft2_dataset import (  # noqa: E402
     tasks_by_index,
     write_jsonl,
 )
-from protocol import SYSTEM_PROMPT, rolling_system_prompt  # noqa: E402
+from protocol import student_runtime_system_prompt, tool_schema_hash  # noqa: E402
 
 
 def compact(value: Any) -> str:
@@ -118,7 +118,10 @@ def main() -> int:
     task_map = tasks_by_index(read_jsonl(args.tasks))
     student_records = passk_records(args.passk_all)
     teacher_rows = read_jsonl(args.teacher_success)
-    system = rolling_system_prompt(SYSTEM_PROMPT, compact=False)
+    system = student_runtime_system_prompt(
+        context_mode="rolling-legal-history",
+        compact=False,
+    )
     records: list[dict[str, Any]] = []
     indices: list[dict[str, Any]] = []
     audits: list[dict[str, Any]] = []
@@ -259,6 +262,11 @@ def main() -> int:
         "rolling_prompt_variant": "full",
         "rolling_observation_style": "resident",
         "loss_policy": "last_assistant_turn_only",
+        "prompt_role": "student-runtime",
+        "student_runtime_prompt_sha256": hashlib.sha256(
+            system.encode("utf-8")
+        ).hexdigest(),
+        "tool_schema_sha256": tool_schema_hash(),
         "error_or_bad_actions_are_sft_targets": False,
         "validation": {
             "teacher_full_branch_replay": True,

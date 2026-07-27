@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Filter rolling SFT records using an exact LLaMA-Factory token audit.
+"""Admit rolling SFT records using an exact LLaMA-Factory token audit.
 
-The source episodes and rendered records remain immutable. This module removes only
-single-action records whose final target, current source, or oldest rolling-history
-pair is incomplete under the audited tokenizer/template/cutoff configuration.
+The source episodes and rendered records remain immutable. A caller may either omit
+only records with an incomplete causal prefix, or require episode-complete admission
+so one rejected record excludes its entire source episode.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from build_rolling_sft_data import write_dataset_info
+from sft_dataset_registry import write_sharegpt_dataset_info
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -91,6 +91,7 @@ def build(
     out_path: Path,
     index_out_path: Path,
     dataset_name: str,
+    episode_policy: str = "allow-partial",
 ) -> dict[str, Any]:
     if len(input_paths) != len(index_paths):
         raise ValueError("each SFT input must have one matching index input")
@@ -98,6 +99,10 @@ def build(
         raise ValueError("each SFT input must have one matching exact token audit")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", dataset_name):
         raise ValueError("dataset_name must contain only letters, digits, '.', '_' or '-'")
+    if episode_policy not in {"allow-partial", "keep-complete-only"}:
+        raise ValueError(
+            "episode_policy must be 'allow-partial' or 'keep-complete-only'"
+        )
 
     records = [row for path in input_paths for row in read_jsonl(path)]
     indexes = [row for path in index_paths for row in read_jsonl(path)]
@@ -125,29 +130,44 @@ def build(
                 f"{audit_path} covers {audit.get('records')} records, but matching input "
                 f"{input_path} contains {len(input_rows)}"
             )
-    rejected: set[str] = set()
+    directly_rejected: set[str] = set()
     rejection_reasons: Counter[str] = Counter()
     for audit in audits:
         audit_rejected, audit_reasons = rejected_records(audit)
-        overlap = rejected & audit_rejected
+        overlap = directly_rejected & audit_rejected
         if overlap:
             raise ValueError(f"token audits overlap record ids: {sorted(overlap)[:5]}")
-        rejected.update(audit_rejected)
+        directly_rejected.update(audit_rejected)
         rejection_reasons.update(audit_reasons)
-    unknown_rejections = sorted(rejected - set(record_ids))
+    unknown_rejections = sorted(directly_rejected - set(record_ids))
     if unknown_rejections:
         raise ValueError(f"token audit references unknown records: {unknown_rejections[:5]}")
+
+    all_by_episode: defaultdict[str, int] = defaultdict(int)
+    record_ids_by_episode: defaultdict[str, list[str]] = defaultdict(list)
+    episode_by_record_id: dict[str, str] = {}
+    for row in indexes:
+        episode_id = row["source_episode_id"]
+        item_id = row["record_id"]
+        all_by_episode[episode_id] += 1
+        record_ids_by_episode[episode_id].append(item_id)
+        episode_by_record_id[item_id] = episode_id
+    directly_rejected_episodes = {
+        episode_by_record_id[item_id] for item_id in directly_rejected
+    }
+    rejected = set(directly_rejected)
+    if episode_policy == "keep-complete-only":
+        for episode_id in directly_rejected_episodes:
+            rejected.update(record_ids_by_episode[episode_id])
+    cascade_rejected = rejected - directly_rejected
 
     kept_records = [row for row in records if record_id(row) not in rejected]
     kept_indexes = [row for row in indexes if row["record_id"] not in rejected]
     write_jsonl_atomic(out_path, kept_records)
     write_jsonl_atomic(index_out_path, kept_indexes)
-    snippet, registry = write_dataset_info(out_path, dataset_name)
+    snippet, registry = write_sharegpt_dataset_info(out_path, dataset_name)
 
-    all_by_episode: defaultdict[str, int] = defaultdict(int)
     kept_by_episode: defaultdict[str, int] = defaultdict(int)
-    for row in indexes:
-        all_by_episode[row["source_episode_id"]] += 1
     for row in kept_indexes:
         kept_by_episode[row["source_episode_id"]] += 1
     episodes_with_dropped_records = sorted(
@@ -163,6 +183,7 @@ def build(
             "final_target": "complete",
             "current_source": "complete",
             "oldest_rolling_history_pair": "complete_when_present",
+            "episode_admission": episode_policy,
             "reasoning_word_limit": None,
             "mutation": "none; rejected records are omitted without rewriting source episodes",
         },
@@ -195,6 +216,8 @@ def build(
         "input_records": len(records),
         "kept_records": len(kept_records),
         "dropped_records": len(rejected),
+        "directly_rejected_records": len(directly_rejected),
+        "cascade_rejected_records": len(cascade_rejected),
         "rejection_reasons": dict(sorted(rejection_reasons.items())),
         "source_episodes": len(all_by_episode),
         "contributing_episodes": len(kept_by_episode),
@@ -207,6 +230,8 @@ def build(
         ),
         "tool_hist": dict(Counter(row.get("tool_name", "unknown") for row in kept_indexes).most_common()),
         "dropped_record_ids": sorted(rejected),
+        "directly_rejected_record_ids": sorted(directly_rejected),
+        "cascade_rejected_record_ids": sorted(cascade_rejected),
     }
     manifest_path = out_path.with_suffix(".manifest.json")
     manifest_path.write_text(
@@ -224,6 +249,11 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--index-out", type=Path, required=True)
     parser.add_argument("--dataset-name", required=True)
+    parser.add_argument(
+        "--episode-policy",
+        choices=["allow-partial", "keep-complete-only"],
+        default="allow-partial",
+    )
     args = parser.parse_args()
     manifest = build(
         [path.resolve() for path in args.input],
@@ -232,6 +262,7 @@ def main() -> int:
         args.out.resolve(),
         args.index_out.resolve(),
         args.dataset_name,
+        args.episode_policy,
     )
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
     return 0

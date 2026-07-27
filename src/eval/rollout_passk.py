@@ -10,10 +10,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import BoundedSemaphore
@@ -30,6 +32,7 @@ from denotation import add_denotation_comparison_argument  # noqa: E402
 from executor import Harness  # noqa: E402
 from passk import attach_passk_fields, parse_pass_k, write_passk_summary  # noqa: E402
 from protocol import (  # noqa: E402
+    AdjacentActionGuard,
     PROTOCOL_VERSION,
     ProtocolError,
     assistant_message,
@@ -42,17 +45,21 @@ from protocol import (  # noqa: E402
     state_context_message,
     protocol_hash,
     tool_error_message,
+    tool_schema_hash,
     tool_output_message,
 )
+from prompt_contract import prompt_sha256  # noqa: E402
 from rollout import (  # noqa: E402
     ChatAPIError,
     ContextOverflowError,
     DEFAULT_MAX_TOKENS,
     MAX_ERRORS_PER_TYPE,
     MIN_CONTEXT_RETRY_TOKENS,
+    TERMINAL_ANSWER_CONTRACT,
     execute_tool,
     format_tool_error,
     is_context_overflow,
+    load_indices_file,
     new_ctx,
     overview,
     score,
@@ -70,7 +77,43 @@ from tool_schemes import (  # noqa: E402
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 
 
-def load_indexed_examples(path: str | None, n: int | None) -> tuple[list[tuple[int, dict]], str]:
+class ToolExecutionTimeoutError(RuntimeError):
+    """A bounded SQLite tool/scoring operation exceeded its operational deadline."""
+
+
+@contextmanager
+def bounded_harness_execution(h: Harness, timeout_seconds: float):
+    """Interrupt pathological SQLite work without retaining a half-created relation handle."""
+    if timeout_seconds <= 0:
+        yield
+        return
+
+    deadline = time.monotonic() + timeout_seconds
+    views_before = dict(h.views)
+    sequence_before = h._n
+    h.conn.set_progress_handler(
+        lambda: 1 if time.monotonic() >= deadline else 0,
+        10_000,
+    )
+    try:
+        yield
+    except sqlite3.OperationalError as exc:
+        if "interrupted" not in str(exc).lower():
+            raise
+        h.views = views_before
+        h._n = sequence_before
+        raise ToolExecutionTimeoutError(
+            f"SQLite execution exceeded {timeout_seconds:g}s"
+        ) from exc
+    finally:
+        h.conn.set_progress_handler(None, 0)
+
+
+def load_indexed_examples(
+    path: str | None,
+    n: int | None,
+    selected_indices: set[int] | None = None,
+) -> tuple[list[tuple[int, dict]], str]:
     """Load eval examples.
 
     Default is Spider dev for held-out evaluation. For training-set recovery data generation, pass
@@ -93,11 +136,15 @@ def load_indexed_examples(path: str | None, n: int | None) -> tuple[list[tuple[i
             if not isinstance(ex, dict):
                 raise ValueError(f"--examples-json item {local_index} is not an object")
             example_index = int(ex.get("example_index", local_index))
-            out.append((example_index, ex))
+            if not selected_indices or example_index in selected_indices:
+                out.append((example_index, ex))
         return out, path
     dev = json.load(open(os.path.join(SPIDER, "dev.json"), encoding="utf-8"))
     examples = dev[: n if n is not None else len(dev)]
-    return list(enumerate(examples)), "data/spider_data/dev.json"
+    indexed = list(enumerate(examples))
+    if selected_indices:
+        indexed = [(index, example) for index, example in indexed if index in selected_indices]
+    return indexed, "data/spider_data/dev.json"
 
 
 def chat_sample(
@@ -182,6 +229,7 @@ def run_sample(
     temperature: float,
     top_p: float,
     api_retries: int,
+    tool_execution_timeout_seconds: float,
     context_mode: str,
     history_turns: int,
     compact_history_observations: bool,
@@ -200,6 +248,7 @@ def run_sample(
     action_count = errors = 0
     error_counts: dict[str, int] = {}
     error_events: list[dict] = []
+    adjacent_guard = AdjacentActionGuard()
     turns = []
     started = time.time()
     rec = {
@@ -210,6 +259,7 @@ def run_sample(
         "protocol_hash": protocol_hash(system),
         "sample_index": sample_index,
         "denotation_comparison": denotation_comparison,
+        "terminal_answer_contract": TERMINAL_ANSWER_CONTRACT,
         "correct": False,
         "legal": False,
         "steps": 0,
@@ -280,7 +330,12 @@ def run_sample(
         rec["api_transport_retries"] += retry_stats["api_transport_retries"]
         rec["api_context_retries"] += retry_stats["api_context_retries"]
         try:
-            think, tool, args = parse_assistant_strict(text)
+            step_id = f"step_{action_count}"
+            think, tool, args = parse_assistant_strict(
+                text,
+                adjacent_guard=adjacent_guard,
+                step_id=step_id,
+            )
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
             turn["feedback_recovery"] = bool(last_error)
             turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
@@ -288,9 +343,10 @@ def run_sample(
                 rec["legal"] = True
                 rec["steps"] = action_count
                 rec["errors"] = errors
-                rec["correct"], rec["pred_sample"], rec["gold_sample"] = score(
-                    h, gold_sql, args, created, denotation_comparison
-                )
+                with bounded_harness_execution(h, tool_execution_timeout_seconds):
+                    rec["correct"], rec["pred_sample"], rec["gold_sample"] = score(
+                        h, gold_sql, args, created, denotation_comparison
+                    )
                 if not rec["correct"]:
                     rec["failure_type"] = "wrong_answer"
                 else:
@@ -299,15 +355,22 @@ def run_sample(
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
 
-            step_id = f"step_{action_count}"
-            out, table_name = execute_tool(h, tool, args, ctx, step_id)
+            with bounded_harness_execution(h, tool_execution_timeout_seconds):
+                out, table_name = execute_tool(h, tool, args, ctx, step_id)
             turn["tool_output"] = out
         except (ProtocolError, Exception) as exc:  # noqa: BLE001
             errors += 1
             parsed = turn.get("parsed") or {}
-            error = format_tool_error(exc, h, parsed.get("tool"), parsed.get("arguments"))
+            attempted_tool = parsed.get("tool") or getattr(exc, "attempted_tool", None)
+            attempted_arguments = (
+                parsed.get("arguments")
+                if parsed.get("tool")
+                else getattr(exc, "attempted_arguments", None)
+            )
+            error = format_tool_error(exc, h, attempted_tool, attempted_arguments)
             state_after = ctx["environment"].snapshot()
             error_type = protocol_failure_type(exc) if isinstance(exc, ProtocolError) else "execution_error"
+            adjacent_guard.mark_last("rejected")
             if error_type == "execution_error" and state_digest(state_after) != state_digest(state_before):
                 error_type = "nonrecoverable_execution_error"
             turn["execution_error"] = error
@@ -317,12 +380,16 @@ def run_sample(
                 "step_id": f"step_{action_count}",
                 "error_type": error_type,
                 "message": error,
+                "error_code": getattr(exc, "code", type(exc).__name__),
                 "state_before_hash": state_digest(state_before),
                 "state_after_hash": state_digest(state_after),
             }
-            if parsed.get("tool"):
-                event["attempted_tool"] = parsed["tool"]
-                event["attempted_arguments"] = parsed.get("arguments") or {}
+            details = getattr(exc, "details", None)
+            if details:
+                event["details"] = deepcopy(details)
+            if attempted_tool:
+                event["attempted_tool"] = attempted_tool
+                event["attempted_arguments"] = attempted_arguments or {}
             turn["error_event"] = event
             error_events.append(event)
             turns.append(turn)
@@ -341,14 +408,20 @@ def run_sample(
                 rec["steps"] = action_count
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
-            last_error = {
-                "step_id": f"step_{action_count}",
-                "status": "error",
-                "error": {"type": error_type, "message": error},
-            }
+            last_error = json.loads(tool_error_message(
+                f"step_{action_count}",
+                error_type,
+                error,
+                error_code=getattr(exc, "code", type(exc).__name__),
+                details=details,
+                attempted_tool=attempted_tool,
+                attempted_arguments=attempted_arguments,
+            ))
+            adjacent_guard.mark_last("rejected", last_error["error"])
             continue
 
         turns.append(turn)
+        adjacent_guard.mark_last("success")
         last_error = None
         if table_name:
             created.add(table_name)
@@ -403,6 +476,7 @@ def run_one(
     temperature: float,
     top_p: float,
     api_retries: int,
+    tool_execution_timeout_seconds: float,
     context_mode: str,
     history_turns: int,
     compact_history_observations: bool,
@@ -448,6 +522,7 @@ def run_one(
         "max_steps": max_steps,
         "max_tokens": max_tokens,
         "denotation_comparison": denotation_comparison,
+        "terminal_answer_contract": TERMINAL_ANSWER_CONTRACT,
         "samples": [],
         "correct": False,
         "failure_type": None,
@@ -459,6 +534,7 @@ def run_one(
         "temperature": temperature,
         "top_p": top_p,
         "api_retries": api_retries,
+        "tool_execution_timeout_seconds": tool_execution_timeout_seconds,
         "context_mode": context_mode,
         "history_turns": history_turns,
         "compact_history_observations": compact_history_observations,
@@ -544,11 +620,24 @@ def main() -> int:
     parser.add_argument("--examples-json", default=None,
                         help=("explicit JSON examples to run instead of Spider dev; use this for "
                               "training-subset recovery rollouts"))
+    parser.add_argument(
+        "--indices-file",
+        default="",
+        help="optional JSON/text example-index selection for a frozen evaluation cohort",
+    )
     parser.add_argument("--allow-eval-tasks", action="store_true",
                         help="explicitly allow dev/eval DatasetTask inputs; outputs are evaluation-only")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--result-dir", required=True)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--allow-operational-concurrency-resume",
+        action="store_true",
+        help=(
+            "allow a resumed artifact to change only max_inflight_requests; "
+            "the immutable manifest is preserved and the change is audited separately"
+        ),
+    )
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument("--n-samples", type=int, default=32)
@@ -569,6 +658,28 @@ def main() -> int:
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--api-retries", type=int, default=3)
+    parser.add_argument(
+        "--tool-execution-timeout-seconds",
+        type=float,
+        default=0.0,
+        help=(
+            "per-tool/per-terminal SQLite deadline; an overrun becomes a recoverable "
+            "execution error, while 0 preserves historical unbounded behavior"
+        ),
+    )
+    parser.add_argument(
+        "--allow-operational-tool-timeout-resume",
+        action="store_true",
+        help=(
+            "allow only tool_execution_timeout_seconds to differ when resuming an existing "
+            "artifact; preserve the immutable manifest and audit the override"
+        ),
+    )
+    parser.add_argument(
+        "--server-config-id",
+        default="unspecified",
+        help="stable identity for model-server decoding/configuration outside request arguments",
+    )
     parser.add_argument("--few-shot", type=int, default=0)
     parser.add_argument(
         "--context-mode",
@@ -597,6 +708,12 @@ def main() -> int:
         parser.error("--first-sample-workers must be <= --sample-workers")
     if args.max_inflight_requests < 0:
         parser.error("--max-inflight-requests must be non-negative")
+    if args.tool_execution_timeout_seconds < 0:
+        parser.error("--tool-execution-timeout-seconds must be non-negative")
+    if args.allow_operational_concurrency_resume and not args.resume:
+        parser.error("--allow-operational-concurrency-resume requires --resume")
+    if args.allow_operational_tool_timeout_resume and not args.resume:
+        parser.error("--allow-operational-tool-timeout-resume requires --resume")
     if args.summary_every < 0:
         parser.error("--summary-every must be non-negative")
     if args.history_turns < 0:
@@ -619,6 +736,7 @@ def main() -> int:
 
         system += fewshot_text(DEFAULT_FEWSHOT_IDS[:args.few_shot])
 
+    selected_indices = load_indices_file(args.indices_file)
     manifest = {
         "runner": "tool_rollout_passk",
         "tool_scheme": ATOMIC_TOOL_SCHEME,
@@ -629,6 +747,8 @@ def main() -> int:
         "model": args.model,
         "base_url": args.base_url,
         "dataset": args.examples_json or "data/spider_data/dev.json",
+        "indices_file": args.indices_file or None,
+        "selected_indices": sorted(selected_indices) if selected_indices else None,
         "requested_size": args.n,
         "n_samples": args.n_samples,
         "sample_workers": args.sample_workers,
@@ -643,21 +763,66 @@ def main() -> int:
         "max_tokens": args.max_tokens,
         "max_steps": args.max_steps,
         "api_retries": args.api_retries,
+        "tool_execution_timeout_seconds": args.tool_execution_timeout_seconds,
+        "server_config_id": args.server_config_id,
         "few_shot": args.few_shot,
         "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
         "system_prompt_variant": prompt_variant,
         "system_prompt": system,
+        "prompt_role": "student-runtime",
+        "student_runtime_prompt_sha256": prompt_sha256(system),
+        "tool_schema_sha256": tool_schema_hash(),
+        "protocol_hash": protocol_hash(system),
         "context_mode": args.context_mode,
         "history_turns": args.history_turns,
         "rolling_prompt_variant": args.rolling_prompt_variant,
         "rolling_observation_style": args.rolling_observation_style,
         "denotation_comparison": args.denotation_comparison,
+        "terminal_answer_contract": TERMINAL_ANSWER_CONTRACT,
     }
     if is_eval_tasks:
         manifest.update({"dataset_purpose": "evaluation", "sft_export_eligible": False})
-    writer = ArtifactWriter(args.result_dir, manifest, args.resume)
+    writer = ArtifactWriter(
+        args.result_dir,
+        manifest,
+        args.resume,
+        operational_resume_fields=(
+            (
+                ({"max_inflight_requests"} if args.allow_operational_concurrency_resume else set())
+                | (
+                    {"tool_execution_timeout_seconds"}
+                    if args.allow_operational_tool_timeout_resume
+                    else set()
+                )
+            )
+            or None
+        ),
+        operational_resume_metadata=(
+            {
+                "workers": args.workers,
+                "sample_workers": args.sample_workers,
+                "reason": (
+                    "bounded operational recovery and/or serving concurrency change; "
+                    "completed examples remain immutable"
+                ),
+            }
+            if (
+                args.allow_operational_concurrency_resume
+                or args.allow_operational_tool_timeout_resume
+            )
+            else None
+        ),
+    )
 
-    indexed_examples, source_name = load_indexed_examples(args.examples_json, args.n)
+    indexed_examples, source_name = load_indexed_examples(
+        args.examples_json,
+        args.n,
+        selected_indices,
+    )
+    if selected_indices and len(indexed_examples) != len(selected_indices):
+        found = {index for index, _ in indexed_examples}
+        missing = sorted(selected_indices - found)
+        parser.error(f"--indices-file contains unavailable example indices: {missing}")
     pending = [(index, example) for index, example in indexed_examples if index not in writer.completed]
     print(f"loaded {len(indexed_examples)} examples from {source_name}; pending {len(pending)}")
 
@@ -690,6 +855,7 @@ def main() -> int:
                 temperature=args.temperature,
                 top_p=args.top_p,
                 api_retries=args.api_retries,
+                tool_execution_timeout_seconds=args.tool_execution_timeout_seconds,
                 denotation_comparison=args.denotation_comparison,
             )
             for index, example in pending

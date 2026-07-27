@@ -25,12 +25,13 @@ sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 
 from executor import Harness  # noqa: E402
 from protocol import (  # noqa: E402
+    AdjacentActionGuard,
     ProtocolError,
-    SYSTEM_PROMPT,
     first_user_message,
     model_context_messages,
     parse_assistant_strict,
     rolling_legal_history_messages,
+    student_runtime_system_prompt,
     tool_error_message,
     tool_output_message,
 )
@@ -55,8 +56,7 @@ from batch_plan_protocol import (  # noqa: E402
 from evaluate_batch_plan import (  # noqa: E402
     _error_event as batch_error_event,
     _error_type as batch_error_type,
-    _execute_plan_action,
-    _materialize_terminal_evidence,
+    _execute_action_block,
     _top_level_error_message,
 )
 from tool_schemes import (  # noqa: E402
@@ -89,7 +89,7 @@ class ToolUseEnv:
         example: dict,
         *,
         example_index: int | None = None,
-        system_prompt: str = SYSTEM_PROMPT,
+        system_prompt: str | None = None,
         max_steps: int = 20,
         max_errors_per_type: int = MAX_ERRORS_PER_TYPE,
         context_mode: str = "rolling-legal-history",
@@ -99,8 +99,12 @@ class ToolUseEnv:
     ):
         self.example = example
         self.example_index = example_index
-        self.system_prompt = system_prompt
-        self.scheme = build_atomic_tool_scheme(system_prompt=system_prompt)
+        runtime_prompt = system_prompt or student_runtime_system_prompt(
+            context_mode=context_mode,
+            compact=False,
+        )
+        self.scheme = build_atomic_tool_scheme(system_prompt=runtime_prompt)
+        self.system_prompt = self.scheme.system_prompt
         self.max_steps = max_steps
         self.max_errors_per_type = max_errors_per_type
         self.context_mode = context_mode
@@ -137,6 +141,7 @@ class ToolUseEnv:
         self.errors = 0
         self.error_counts: dict[str, int] = {}
         self.error_events: list[dict[str, Any]] = []
+        self.adjacent_action_guard = AdjacentActionGuard()
         self.legal_history: list[dict[str, str]] = []
         self.turns: list[dict] = []
         self.done = False
@@ -219,7 +224,11 @@ class ToolUseEnv:
         self.messages.append({"role": "assistant", "content": text})
 
         try:
-            think, tool, args = parse_assistant_strict(text)
+            think, tool, args = parse_assistant_strict(
+                text,
+                adjacent_guard=self.adjacent_action_guard,
+                step_id=step_id,
+            )
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
             if tool == "answer_from_context":
                 self.correct, turn["pred_sample"], turn["gold_sample"] = score(
@@ -245,6 +254,7 @@ class ToolUseEnv:
 
             output, table_name = execute_tool(self.harness, tool, args, self.ctx, step_id)
             turn["tool_output"] = output
+            self.adjacent_action_guard.mark_last("success")
             self.turns.append(turn)
             self.last_error = None
             if table_name:
@@ -263,9 +273,16 @@ class ToolUseEnv:
         except Exception as exc:  # noqa: BLE001 - every model action becomes an audited transition
             self.errors += 1
             parsed = turn.get("parsed") or {}
+            attempted_tool = parsed.get("tool") or getattr(exc, "attempted_tool", None)
+            attempted_arguments = (
+                parsed.get("arguments")
+                if parsed.get("tool")
+                else getattr(exc, "attempted_arguments", None)
+            )
             error_type = protocol_failure_type(exc) if isinstance(exc, ProtocolError) else "execution_error"
             error = f"{type(exc).__name__}: {exc}"
             state_after = self.ctx["environment"].snapshot()
+            self.adjacent_action_guard.mark_last("rejected")
             if error_type == "execution_error" and state_digest(state_after) != state_digest(state_before):
                 error_type = "nonrecoverable_execution_error"
             turn["execution_error"] = error
@@ -275,17 +292,33 @@ class ToolUseEnv:
                 "step_id": step_id,
                 "error_type": error_type,
                 "message": error,
+                "error_code": getattr(exc, "code", type(exc).__name__),
                 "state_before_hash": state_digest(state_before),
                 "state_after_hash": state_digest(state_after),
             }
-            if parsed.get("tool"):
-                event["attempted_tool"] = parsed["tool"]
-                event["attempted_arguments"] = parsed.get("arguments") or {}
+            details = getattr(exc, "details", None)
+            if details:
+                event["details"] = deepcopy(details)
+            if attempted_tool:
+                event["attempted_tool"] = attempted_tool
+                event["attempted_arguments"] = attempted_arguments or {}
             turn["error_event"] = event
             self.error_events.append(event)
             self.turns.append(turn)
-            observation = tool_error_message(step_id, error_type, error)
+            observation = tool_error_message(
+                step_id,
+                error_type,
+                error,
+                error_code=getattr(exc, "code", type(exc).__name__),
+                details=details,
+                attempted_tool=attempted_tool,
+                attempted_arguments=attempted_arguments,
+            )
             self.last_error = json.loads(observation)
+            self.adjacent_action_guard.mark_last(
+                "rejected",
+                self.last_error["error"],
+            )
             if error_type == "nonrecoverable_execution_error":
                 self.done = True
                 self.failure_type = error_type
@@ -328,8 +361,7 @@ class ActionBlockToolUseEnv:
         example_index: int | None = None,
         system_prompt: str | None = None,
         max_steps: int = 20,
-        max_atomic_actions: int = 30,
-        max_batch_calls: int = 8,
+        max_batch_calls: int = 5,
         max_errors_per_type: int = MAX_ERRORS_PER_TYPE,
         context_mode: str = "rolling-legal-history",
         history_turns: int = 4,
@@ -340,9 +372,9 @@ class ActionBlockToolUseEnv:
             raise ValueError(
                 "action-block RL currently requires rolling-legal-history"
             )
-        if not compact_observations:
+        if history_turns != 4:
             raise ValueError(
-                "action-block observations are resident-state compact by contract"
+                "active action-block context retains exactly four action blocks"
             )
         if denotation_comparison != "bird-set":
             raise ValueError(
@@ -354,8 +386,7 @@ class ActionBlockToolUseEnv:
         self.example = example
         self.example_index = example_index
         self.system_prompt = system_prompt or self.scheme.system_prompt
-        self.max_model_turns = max_steps
-        self.max_atomic_actions = max_atomic_actions
+        self.max_action_blocks = max_steps
         self.max_batch_calls = max_batch_calls
         self.max_errors_per_type = max_errors_per_type
         self.context_mode = context_mode
@@ -379,12 +410,12 @@ class ActionBlockToolUseEnv:
         self.atomic_events: list[dict] = []
         self.error_events: list[dict] = []
         self.interface_resolution_events: list[dict] = []
-        self.prior_call_bindings: dict[str, dict] = {}
         self.error_counts: collections.Counter = collections.Counter()
+        self.pending_feedback_recovery = False
         self.model_turns = 0
         self.atomic_actions = 0
         self.action_blocks = 0
-        self.planned_nodes = 0
+        self.submitted_calls = 0
         self.blocked_nodes = 0
         self.done = False
         self.correct = False
@@ -438,15 +469,16 @@ class ActionBlockToolUseEnv:
             "steps": self.model_turns,
             "model_turns": self.model_turns,
             "atomic_actions": self.atomic_actions,
-            "action_blocks": self.action_blocks,
-            "planned_nodes": self.planned_nodes,
+            "action_blocks": self.model_turns,
+            "executed_action_blocks": self.action_blocks,
+            "submitted_calls": self.submitted_calls,
             "blocked_nodes": self.blocked_nodes,
             "errors": self.errors,
             "failure_type": self.failure_type,
             "denotation_comparison": self.denotation_comparison,
             "context_mode": self.context_mode,
             "history_turns": self.history_turns,
-            "rolling_observation_style": "resident",
+            "rolling_observation_style": "full-atomic-results-plus-resident-state",
             "final_environment_state": self.ctx["environment"].snapshot(),
             "elapsed_seconds": round(time.time() - self.started, 3),
         }
@@ -459,12 +491,9 @@ class ActionBlockToolUseEnv:
     def _finish_if_budget_exhausted(self) -> None:
         if self.done:
             return
-        if self.atomic_actions >= self.max_atomic_actions:
+        if self.model_turns >= self.max_action_blocks:
             self.done = True
-            self.failure_type = "max_atomic_actions"
-        elif self.model_turns >= self.max_model_turns:
-            self.done = True
-            self.failure_type = "max_model_turns"
+            self.failure_type = "max_action_blocks"
 
     def apply_model_output(self, text: str) -> EnvStep:
         if self.done:
@@ -475,7 +504,7 @@ class ActionBlockToolUseEnv:
             "turn_index": len(self.turns),
             "model_input": self.model_messages(),
             "model_output": text,
-            "feedback_recovery": bool(self.last_error),
+            "feedback_recovery": self.pending_feedback_recovery,
             "recovered_from_error_type": (
                 (self.last_error or {}).get("error") or {}
             ).get("type"),
@@ -491,40 +520,38 @@ class ActionBlockToolUseEnv:
                 "arguments": deepcopy(arguments),
             }
             if tool == TERMINAL_TOOL:
-                if self.atomic_actions >= self.max_atomic_actions:
-                    raise RuntimeError("no atomic budget remains for terminal action")
-                step_id = f"step_{self.atomic_actions + 1}"
-                score_arguments, terminal_projection = _materialize_terminal_evidence(
-                    h=self.harness,
-                    ctx=self.ctx,
-                    arguments=arguments,
-                    created=self.created,
-                    step_id=step_id,
-                )
                 self.atomic_actions += 1
+                self.submitted_calls += 1
+                step_id = f"step_{self.atomic_actions}"
                 self.correct, turn["pred_sample"], turn["gold_sample"] = score(
                     self.harness,
                     task_gold_sql(self.example),
-                    score_arguments,
+                    arguments,
                     self.created,
                     denotation_comparison=self.denotation_comparison,
                 )
                 self.legal = True
                 self.done = True
                 self.failure_type = None if self.correct else "wrong_answer"
-                event = {
+                scored_output = {
+                    "correct": self.correct,
+                    "pred_sample": turn["pred_sample"],
+                    "gold_sample": turn["gold_sample"],
+                }
+                terminal_event = {
                     "call_id": "__answer__",
                     "step_id": step_id,
-                    "tool": tool,
+                    "tool": TERMINAL_TOOL,
                     "status": "success",
                     "arguments": deepcopy(arguments),
-                    "resolved_arguments": deepcopy(score_arguments),
-                    "terminal_projection": deepcopy(terminal_projection),
+                    "resolved_arguments": deepcopy(arguments),
+                    "resolved_evidence_arguments": deepcopy(arguments),
+                    "output": deepcopy(scored_output),
                     "environment_state_before": state_before,
                     "environment_state": self.ctx["environment"].snapshot(),
                 }
-                self.atomic_events.append(event)
-                turn["terminal_projection"] = terminal_projection
+                self.atomic_events.append(terminal_event)
+                turn["terminal_result"] = deepcopy(scored_output)
                 self.turns.append(turn)
                 return EnvStep(
                     done=True,
@@ -534,24 +561,17 @@ class ActionBlockToolUseEnv:
                     legal=True,
                     failure_type=self.failure_type,
                 )
-
             if tool != BATCH_PLAN_TOOL:
                 raise RuntimeError(f"unexpected action-block tool: {tool}")
             proposed = len(arguments["calls"])
-            remaining = self.max_atomic_actions - self.atomic_actions
-            if proposed > remaining:
-                raise RuntimeError(
-                    f"action_block plans {proposed} calls but only {remaining} "
-                    "atomic budget slots remain"
-                )
             self.action_blocks += 1
-            self.planned_nodes += proposed
+            self.submitted_calls += proposed
             (
                 self.atomic_actions,
                 results,
                 events,
                 nonrecoverable,
-            ) = _execute_plan_action(
+            ) = _execute_action_block(
                 h=self.harness,
                 ctx=self.ctx,
                 arguments=arguments,
@@ -562,21 +582,71 @@ class ActionBlockToolUseEnv:
                 table_output_rows=0,
                 error_counts=self.error_counts,
                 error_events=self.error_events,
-                prior_bindings=self.prior_call_bindings,
+                prior_bindings=None,
                 structured_error_feedback=False,
-                low_friction_interface=True,
-                safe_low_friction_interface=True,
+                low_friction_interface=False,
+                safe_low_friction_interface=False,
                 interface_resolution_events=self.interface_resolution_events,
             )
+            terminal_result = next(
+                (
+                    result
+                    for result in results
+                    if result.get("tool") == TERMINAL_TOOL
+                ),
+                None,
+            )
+            if (
+                terminal_result is not None
+                and terminal_result.get("status") == "success"
+            ):
+                score_arguments = terminal_result["terminal_score_arguments"]
+                self.correct, turn["pred_sample"], turn["gold_sample"] = score(
+                    self.harness,
+                    task_gold_sql(self.example),
+                    score_arguments,
+                    self.created,
+                    denotation_comparison=self.denotation_comparison,
+                )
+                self.legal = True
+                self.done = True
+                self.failure_type = None if self.correct else "wrong_answer"
+                scored_output = {
+                    "correct": self.correct,
+                    "pred_sample": turn["pred_sample"],
+                    "gold_sample": turn["gold_sample"],
+                }
+                terminal_result["output"] = deepcopy(scored_output)
+                for event in events:
+                    if event.get("call_id") == terminal_result.get("call_id"):
+                        event["output"] = deepcopy(scored_output)
+                        event["resolved_evidence_arguments"] = deepcopy(
+                            terminal_result["resolved_evidence_arguments"]
+                        )
+                        break
+                self.atomic_events.extend(events)
+                turn["batch_index"] = self.action_blocks
+                turn["batch_results"] = deepcopy(results)
+                self.turns.append(turn)
+                return EnvStep(
+                    done=True,
+                    observation=None,
+                    turn=turn,
+                    correct=self.correct,
+                    legal=True,
+                    failure_type=self.failure_type,
+                )
+
             self.atomic_events.extend(events)
             blocked = sum(result.get("status") == "blocked" for result in results)
+            root_errors = sum(
+                result.get("status") == "error" for result in results
+            )
             self.blocked_nodes += blocked
             observation = render_batch_observation(self.action_blocks, results)
             turn["batch_index"] = self.action_blocks
             turn["batch_results"] = deepcopy(results)
-            turn["root_error_count"] = sum(
-                result.get("status") == "error" for result in results
-            )
+            turn["root_error_count"] = root_errors
             turn["blocked_count"] = blocked
             turn["observation"] = observation
             self.turns.append(turn)
@@ -585,6 +655,7 @@ class ActionBlockToolUseEnv:
                 "observation": observation,
             })
             self.last_error = None
+            self.pending_feedback_recovery = bool(root_errors or blocked)
             if nonrecoverable:
                 self.done = True
                 self.failure_type = "nonrecoverable_execution_error"
@@ -605,7 +676,6 @@ class ActionBlockToolUseEnv:
                 failure_type=self.failure_type,
             )
         except Exception as exc:  # noqa: BLE001
-            self.atomic_actions += 1
             state_after = self.ctx["environment"].snapshot()
             error_type = batch_error_type(exc)
             if (
@@ -617,7 +687,7 @@ class ActionBlockToolUseEnv:
             self.error_counts[error_type] += 1
             parsed = turn.get("parsed") or {}
             event = batch_error_event(
-                atomic_index=self.atomic_actions,
+                atomic_index=None,
                 model_turn=self.model_turns,
                 batch_index=None,
                 call_id=None,
@@ -634,10 +704,11 @@ class ActionBlockToolUseEnv:
             turn["error_event"] = event
             self.turns.append(turn)
             self.last_error = _top_level_error_message(
-                atomic_index=self.atomic_actions,
+                block_action_index=self.model_turns,
                 error_type=error_type,
                 message=message,
             )
+            self.pending_feedback_recovery = True
             if (
                 error_type == "nonrecoverable_execution_error"
                 or self.error_counts[error_type] >= self.max_errors_per_type
@@ -662,8 +733,7 @@ def create_tool_use_env(
     example: dict,
     *,
     tool_scheme: str = ATOMIC_TOOL_SCHEME,
-    max_atomic_actions: int = 30,
-    max_batch_calls: int = 8,
+    max_batch_calls: int = 5,
     **kwargs,
 ) -> ToolUseEnv | ActionBlockToolUseEnv:
     """Construct one environment without exposing both action spaces to the model."""
@@ -672,7 +742,6 @@ def create_tool_use_env(
         return ToolUseEnv(example, **kwargs)
     return ActionBlockToolUseEnv(
         example,
-        max_atomic_actions=max_atomic_actions,
         max_batch_calls=max_batch_calls,
         **kwargs,
     )

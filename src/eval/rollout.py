@@ -13,10 +13,9 @@ Modes
            No model: re-executes recorded dev trajectories through the same loop machinery.
            Verified data must score ~100% — this validates executor wiring + scoring.
 
-Scoring: prefer the rows of the evidence table the model cites when that table already matches
-the gold answer. If the cited table is broader than the final answer, fall back to the explicit
-`answer` field so a correct scalar/projection is not marked wrong just because the evidence table
-contains extra columns.
+Scoring: the active protocol grades the exact rows and column order of the cited evidence table
+under the selected denotation comparator. Historical trajectories that explicitly contain an
+`answer` field retain a replay-only compatibility fallback; active prompts do not expose that field.
 """
 from __future__ import annotations
 
@@ -45,18 +44,19 @@ from relation_derivation import build_relation_derivation           # noqa: E402
 from catalog import build_catalog                             # noqa: E402
 from artifacts import ArtifactWriter                           # noqa: E402
 from denotation import add_denotation_comparison_argument, compare_denotations  # noqa: E402
-from protocol import (ACCEPTED_TOOLS, ProtocolError, get_system_prompt,  # noqa: E402
+from protocol import (ACCEPTED_TOOLS, AdjacentActionGuard, ProtocolError, get_system_prompt,  # noqa: E402
                       POLICY_PROMPT_CANONICAL, POLICY_PROMPT_VARIANTS,
                       PROTOCOL_VERSION,
                       assistant_message, first_user_message, parse_assistant_strict,
                       model_context_messages, policy_system_prompt, protocol_hash, tool_error_message,
                       rolling_legal_history_messages, rolling_system_prompt,
-                      state_context_message, tool_output_message)
+                      state_context_message, tool_output_message, tool_schema_hash)
 from tool_schemes import (  # noqa: E402
     ATOMIC_ASSISTANT_CARRIER,
     ATOMIC_TOOL_SCHEME,
     TOOL_SCHEME_REGISTRY_VERSION,
 )
+from prompt_contract import prompt_sha256  # noqa: E402
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
 MAX_ERRORS_PER_TYPE = 3
@@ -64,6 +64,7 @@ MAX_CONSECUTIVE_ERRORS = 3
 DEFAULT_FEWSHOT_IDS = ["spider_train_0", "spider_train_1"]
 DEFAULT_MAX_TOKENS = 768
 MIN_CONTEXT_RETRY_TOKENS = 128
+TERMINAL_ANSWER_CONTRACT = "exact-cited-table-v1"
 
 
 class ChatAPIError(RuntimeError):
@@ -102,6 +103,8 @@ def task_gold_sql(ex: dict) -> str | None:
 
 
 def protocol_failure_type(exc: ProtocolError) -> str:
+    if exc.failure_type:
+        return exc.failure_type
     text = str(exc).lower()
     if "split-response transport error" in text:
         return "protocol_error"
@@ -396,6 +399,13 @@ def score(
     created: set,
     denotation_comparison: str = "bird-set",
 ) -> tuple[bool, list, list]:
+    """Grade the active terminal relation without relaxing its column order.
+
+    BIRD EX compares ``set(fetchall())`` values. It ignores row order and duplicate-row
+    multiplicity, but tuple position remains significant. The active answer contract therefore
+    grades the cited evidence table exactly. The explicit-answer branch below exists only for
+    replaying retired protocols whose terminal call actually authored an ``answer`` field.
+    """
     gold = h.gold(gold_sql)
     ev = _evidence_table(answer_args.get("evidence"))
     evidence_rows = None
@@ -422,11 +432,6 @@ def score(
     for candidate in answer_candidates:
         if _rows_equal_safe(candidate, gold, denotation_comparison):
             return True, candidate[:5], gold[:5]
-
-    if evidence_rows is not None:
-        for candidate in projected_row_candidates(evidence_rows, gold):
-            if _rows_equal_safe(candidate, gold, denotation_comparison):
-                return True, candidate[:5], gold[:5]
 
     pred = evidence_rows if evidence_rows is not None else (answer_candidates[0] if answer_candidates else [])
     return False, pred[:5], gold[:5]
@@ -695,6 +700,7 @@ def run_live(
     action_count = errors = 0
     error_counts: dict[str, int] = {}
     error_events: list[dict] = []
+    adjacent_guard = AdjacentActionGuard()
     text = ""
     turns = []
     started = time.time()
@@ -709,6 +715,7 @@ def run_live(
         "question": ex["question"],
         "gold_sql": gold_sql,
         "denotation_comparison": denotation_comparison,
+        "terminal_answer_contract": TERMINAL_ANSWER_CONTRACT,
         "initial_model_input": initial_messages,
         "turns": turns,
         "correct": False,
@@ -769,7 +776,12 @@ def run_live(
         rec["api_context_retries"] += turn["api_retry_stats"]["api_context_retries"]
         messages.append({"role": "assistant", "content": text})
         try:
-            think, tool, args = parse_assistant_strict(text)
+            step_id = f"step_{action_count}"
+            think, tool, args = parse_assistant_strict(
+                text,
+                adjacent_guard=adjacent_guard,
+                step_id=step_id,
+            )
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
             turn["feedback_recovery"] = bool(last_error)
             turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
@@ -788,15 +800,21 @@ def run_live(
                 rec["final_messages"] = messages
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
-            step_id = f"step_{action_count}"
             out, tname = execute_tool(h, tool, args, ctx, step_id, table_output_rows=table_output_rows)
             turn["tool_output"] = out
         except (ProtocolError, Exception) as e:  # noqa: BLE001 — every failure becomes feedback
             errors += 1
             parsed = turn.get("parsed") or {}
-            error = format_tool_error(e, h, parsed.get("tool"), parsed.get("arguments"))
+            attempted_tool = parsed.get("tool") or getattr(e, "attempted_tool", None)
+            attempted_arguments = (
+                parsed.get("arguments")
+                if parsed.get("tool")
+                else getattr(e, "attempted_arguments", None)
+            )
+            error = format_tool_error(e, h, attempted_tool, attempted_arguments)
             state_after = ctx["environment"].snapshot()
             error_type = protocol_failure_type(e) if isinstance(e, ProtocolError) else "execution_error"
+            adjacent_guard.mark_last("rejected")
             if error_type == "execution_error" and state_digest(state_after) != state_digest(state_before):
                 error_type = "nonrecoverable_execution_error"
             turn["execution_error"] = error
@@ -806,12 +824,16 @@ def run_live(
                 "step_id": f"step_{action_count}",
                 "error_type": error_type,
                 "message": error,
+                "error_code": getattr(e, "code", type(e).__name__),
                 "state_before_hash": state_digest(state_before),
                 "state_after_hash": state_digest(state_after),
             }
-            if parsed.get("tool"):
-                event["attempted_tool"] = parsed["tool"]
-                event["attempted_arguments"] = parsed.get("arguments") or {}
+            details = getattr(e, "details", None)
+            if details:
+                event["details"] = deepcopy(details)
+            if attempted_tool:
+                event["attempted_tool"] = attempted_tool
+                event["attempted_arguments"] = attempted_arguments or {}
             turn["error_event"] = event
             error_events.append(event)
             turns.append(turn)
@@ -832,18 +854,21 @@ def run_live(
                 rec["final_messages"] = messages
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
-            last_error = {
-                "step_id": f"step_{action_count}",
-                "status": "error",
-                "error": {"type": turn["execution_error_type"], "message": error},
-            }
-            messages.append({"role": "user", "content": tool_error_message(
-                last_error["step_id"],
+            error_observation = tool_error_message(
+                f"step_{action_count}",
                 turn["execution_error_type"],
                 error,
-            )})
+                error_code=getattr(e, "code", type(e).__name__),
+                details=details,
+                attempted_tool=attempted_tool,
+                attempted_arguments=attempted_arguments,
+            )
+            last_error = json.loads(error_observation)
+            adjacent_guard.mark_last("rejected", last_error["error"])
+            messages.append({"role": "user", "content": error_observation})
             continue
         turns.append(turn)
+        adjacent_guard.mark_last("success")
         last_error = None
         if tname:
             created.add(tname)
@@ -1057,8 +1082,14 @@ def main() -> int:
             "min_context_retry_tokens": MIN_CONTEXT_RETRY_TOKENS,
             "system_prompt_variant": prompt_variant,
             "system_prompt": system,
+            "prompt_role": (
+                "external-override" if args.system_prompt_manifest else "student-runtime"
+            ),
+            "student_runtime_prompt_sha256": prompt_sha256(system),
+            "tool_schema_sha256": tool_schema_hash(),
             "protocol_hash": protocol_hash(system),
             "denotation_comparison": args.denotation_comparison,
+            "terminal_answer_contract": TERMINAL_ANSWER_CONTRACT,
         }, args.resume)
         indexed_dev = [(i, ex) for i, ex in indexed_dev if i not in writer.completed]
     results = []

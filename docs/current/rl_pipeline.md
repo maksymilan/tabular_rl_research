@@ -6,6 +6,11 @@ The active RL system trains a policy over typed table tools in the same closed-l
 used for rollout and evaluation. Gold SQL is hidden from the actor and is used only by the harness
 to score terminal denotation on training tasks.
 
+RL uses the same concise rolling student runtime prompt as SFT export and tool evaluation. It never
+loads the external teacher's generation guidance or worked examples. Checkpoint metadata binds the
+protocol version/hash, student prompt SHA-256, and public tool-schema SHA-256 so resume cannot
+silently cross a prompt contract.
+
 ## Active modules
 
 - `src/rl/tool_environment.py`: one causal model↔harness episode, selected exclusively as
@@ -14,6 +19,8 @@ to score terminal denotation on training tasks.
 - `src/rl/terminal_reward.py`: the binary result-only control.
 - `src/rl/target_support.py`: bounded hidden gold T/C/R support used only on the reward side.
 - `src/rl/task_support.py`: deterministic model-visible literal support and canonical rewrites.
+- `src/harness/observation_binding.py`: canonical literal-slot parsing and conservative
+  visible-singleton binding semantics shared by provenance and replay.
 - `src/rl/process_credit.py`: replay-derived, step-local process credit.
 - `src/rl/process_objective.py`: per-step policy objective.
 - `src/rl/trajectory_replay.py`: path-independent replay of the same authored tool program on
@@ -105,17 +112,27 @@ process condition is launched, both deterministic completeness and independent e
 audits must pass. Versioned reports and frozen configs live in `docs/reports/rl/` and
 `src/rl/configs/` respectively.
 
-Current gate status (2026-07-24): deterministic replay coverage and independent grounding-edge
-precision pass, but independent dependency completeness fails on confirmed denotation-shortcut
-trajectories. This is a blocker to the process launch, not a change in research priority.
-Path-independent counterfactual replay is now implemented: it executes the actor's fixed legal
-tool program on schema-compatible databases, scores only the mandatory terminal evidence table,
-requires at least one changed/non-vacuous gold denotation, and excludes a correct trajectory from
-process optimization when any database distinguishes it. Process mode therefore requires a
-content-hashed counterfactual-suite manifest whose independent quality gate is marked passed and
-bound to an audit SHA-256; stochastic database generation is never run inside the optimizer. The
-remaining task is to build and audit adequate BIRD suites. See
-`docs/reports/rl/ATOMIC_PROCESS_REWARD_PRECISION_SENSITIVITY_AUDIT_20260724.md`.
+Current gate status (2026-07-24): deterministic replay coverage passes. A trajectory-level re-audit
+found three confirmed denotation shortcuts, six valid observation-to-literal dependencies omitted
+by the former edge extractor, and five annotation/reviewer conflicts. The six dependencies are now
+represented by exact visible-cell locators, but this changed grounding inference and therefore
+requires a fresh independent edge-precision audit before process optimization is enabled.
+
+Path-independent counterfactual replay uses `process-counterfactual-suite-v2`. It keeps the actor's
+operator structure fixed while rebinding only literal slots that the source harness proves were
+copied from an unambiguous singleton observation. Question/external-knowledge literals remain
+constant. Ambiguous repeated cells and selections from multi-row observations are not rebound,
+because choosing one row may itself encode an unexecuted relation. Replay scores only the mandatory
+terminal evidence table, requires at least one changed/non-vacuous gold denotation, and excludes a
+correct trajectory from process optimization when any database distinguishes it. This preserves
+an interactive policy's causal observation use while still exposing omitted predicates and
+unexecuted relations such as an argmax performed only in model reasoning.
+
+Process mode requires a content-hashed v2 counterfactual-suite manifest whose independent quality
+gate is marked passed and bound to an audit SHA-256; stochastic database generation is never run
+inside the optimizer. The remaining release work is to re-audit the changed edge extractor and
+build adequate BIRD suites for the three confirmed shortcut classes. See
+`docs/reports/rl/GROUNDING_SHORTCUT_REAUDIT_20260724.md`.
 
 ## Invariants
 

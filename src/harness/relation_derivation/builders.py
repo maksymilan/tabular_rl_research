@@ -60,6 +60,24 @@ def _project(
     output_index = 0
     authored_expressions = expressions or ["*"]
     for expression in authored_expressions:
+        if isinstance(expression, dict):
+            sources = [
+                operand["column"]
+                for operand in expression.get("operands") or []
+                if isinstance(operand, dict) and isinstance(operand.get("column"), str)
+            ]
+            lineage.append({
+                "output": (
+                    output_columns[output_index]
+                    if output_index < len(output_columns)
+                    else f"column_{output_index + 1}"
+                ),
+                "sources": sources,
+                "kind": "computed",
+                "expression": deepcopy(expression),
+            })
+            output_index += 1
+            continue
         core = expression_core(str(expression))
         if core == "*":
             for source in input_columns:
@@ -313,15 +331,20 @@ def _extreme_value_select(
     _output_table: str,
 ) -> dict:
     return_columns = list(args.get("return_columns") or [])
+    semantics = {
+        "row_operation": "ordered_prefix" if args.get("top_k") is not None else "order",
+        "order_by": list(args.get("order_by") or []),
+        "top_k": args.get("top_k"),
+        "column_operation": "project" if return_columns else "preserve",
+        "projected_columns": return_columns or list(_columns),
+    }
+    if args.get("offset"):
+        semantics["offset"] = args["offset"]
+    if args.get("partition_by"):
+        semantics["partition_by"] = list(args["partition_by"])
     return {
         "inputs": [_table_input("input", args.get("table"))],
-        "semantics": {
-            "row_operation": "ordered_prefix" if args.get("top_k") is not None else "order",
-            "order_by": list(args.get("order_by") or []),
-            "top_k": args.get("top_k"),
-            "column_operation": "project" if return_columns else "preserve",
-            "projected_columns": return_columns or list(_columns),
-        },
+        "semantics": semantics,
     }
 
 

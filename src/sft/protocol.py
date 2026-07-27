@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Model<->harness interaction protocol — the single source of truth shared by
-export_sft_dataset.py (renders training messages) and src/eval/rollout.py (renders live
-messages and parses model output). One module for both guarantees the SFT data format and
-the rollout format can never drift apart.
+"""Model<->harness interaction protocol shared by SFT export, evaluation, and RL.
+
+``prompt_contract.py`` owns role-separated prompt text; this module binds its shared student
+semantics to public argument validation, message rendering, parsing, and replay compatibility.
+Using these same functions in every runtime prevents train/eval/RL carrier drift.
 
 Message protocol (chat roles):
   system   : agent role + tool specs + interaction rules            (SYSTEM_PROMPT)
@@ -38,6 +39,7 @@ from prompt_contract import (
     build_student_system_prompt,
 )
 from public_tool_contract import (
+    ACTION_BLOCK_PUBLIC_TOOL_ARGUMENTS,
     AGGREGATION_LAYOUTS,
     AGGREGATION_OPERATIONS,
     AGGREGATION_OPTIONAL,
@@ -46,6 +48,8 @@ from public_tool_contract import (
     JOIN_ITEM_OPTIONAL,
     JOIN_ITEM_REQUIRED,
     JOIN_TYPES,
+    ROW_EXPRESSION_OPERAND_KEYSETS,
+    ROW_EXPRESSION_OPERATIONS,
     SCALAR_OPERAND_KEYSETS,
     SCALAR_OPERATIONS,
 )
@@ -75,8 +79,12 @@ TEACHER_TOOL_GUIDANCE: dict[str, str] = {
         'combine with {"and":[..]}, {"or":[..]}, {"not": ..}.',
     "project":
         'project(table, expressions, distinct=false) -> new table with exactly the given columns. '
-        '`expressions` is a list of column names or SQL scalar expressions, optionally with '
-        '"expr AS alias"; distinct=true removes duplicate projected rows. Exact '
+        '`expressions` is a list of column names, SQL scalar expressions optionally with '
+        '"expr AS alias", or typed row expressions '
+        '{"op":op,"operands":[{"column":c}|{"value":v},...],"as":"name"}. Typed op is '
+        'add|subtract|multiply|divide|percent|percent_change|date_diff_days|extract_year. '
+        'For date_diff_days the operands are start,end; extract_year has one operand. '
+        'distinct=true removes duplicate projected rows. Exact '
         'namespace.column identifiers remain valid inside expressions; a bare downstream column '
         'name is accepted only when it identifies exactly one available column. Project preserves '
         'the input row orientation: it cannot turn category rows into separate columns; use '
@@ -125,9 +133,11 @@ TEACHER_TOOL_GUIDANCE: dict[str, str] = {
         'output_layout/category_values/output_columns. Put where only inside the aggregation it '
         'conditions; top-level where, conditions, and result_name are invalid.',
     "extreme_value_select":
-        'extreme_value_select(table, order_by, top_k=None, return_columns=None) -> new table with '
-        'the rows ordered by `order_by` (list of "col" or "col DESC") keeping the top `top_k` '
-        '(None = all rows, just ordered). return_columns optionally projects.',
+        'extreme_value_select(table, order_by, top_k=None, return_columns=None, offset=0, '
+        'partition_by=None) -> ordered rows. order_by is a list of "col" or "col DESC". '
+        'Without partition_by, offset skips that many globally ordered rows and top_k keeps the '
+        'next rows. With partition_by, top_k is required and selection is performed independently '
+        'inside each partition; offset skips ranks inside every partition. return_columns projects.',
     "set_op":
         'set_op(left, right, op) -> new table combining two tables with op: '
         'union|union_all|intersect|except (their columns must align).',
@@ -140,11 +150,12 @@ TEACHER_TOOL_GUIDANCE: dict[str, str] = {
         'column. Use it to ground a filter literal (does "France" exist? what is the exact spelling?) '
         'before condition_filter.',
     "read_subtable":
-        'read_subtable(table, limit=20, columns=None) -> up to 20 actual rows of a table '
-        '(limit must be 1..20); columns optionally limits which columns are observed. Tool results otherwise '
+        'read_subtable(table, limit=20, columns=None, offset=0) -> up to 20 actual rows of a table '
+        '(limit must be 1..20; offset is a non-negative zero-based row offset); columns optionally '
+        'limits which columns are observed. Tool results otherwise '
         'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
         'the evidence rows before answering. Reading columns does not project or change the table. '
-        'Arguments are only table, optional limit, and optional columns; there is no offset.',
+        'Pagination changes offset; repeating the same arguments reads the same page.',
     "answer_from_context":
         'answer_from_context(evidence, reason="") -> TERMINAL. evidence must be {"table": name} '
         'for a grounded table holding the exact answer rows, columns, and column order. This same '
@@ -162,7 +173,7 @@ LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version26"  # raw-JSON model carrier; structured tool semantics unchanged
+PROTOCOL_VERSION = "version29"  # atomic typed row expressions plus explicit rank/read offsets
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 POLICY_PROMPT_CANONICAL = "canonical"
@@ -190,9 +201,9 @@ RELATIONAL_INVARIANTS_SUFFIX = (
     "that aggregation."
 )
 
-# Strict per-tool argument schema (required, optional). Unlisted keys are rejected so the SFT data
-# and the live rollout can never silently drift. V2b: a predicate's `value_ref` cites the producing
-# step_id directly; there is no add_to_memory tool and no model-authored value.
+# Replay-compatible argument schema for historical artifacts. New model actions use the public
+# schema derived from ``PUBLIC_TOOL_ARGUMENTS`` below; compatibility fields never enter its prompt
+# or hash.
 _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "plan": ({"ops"}, set()),
     "condition_filter": ({"table", "conditions"}, {"return_columns", "preview_k"}),
@@ -208,17 +219,27 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     ),
     "pivot": ({"table", "key_column", "value_column", "key_values"}, {"output_columns"}),
     "aggregate": ({"table", "column", "op"}, set()),
-    "extreme_value_select": ({"table", "order_by"}, {"top_k", "return_columns"}),
+    "extreme_value_select": (
+        {"table", "order_by"},
+        {"top_k", "return_columns", "offset", "partition_by"},
+    ),
     "set_op": ({"left", "right", "op"}, set()),
     "describe_table": ({"tables"}, set()),
     "inspect_column": ({"table", "column"}, {"top_k"}),
-    "read_subtable": ({"table"}, {"limit", "columns"}),
+    "read_subtable": ({"table"}, {"limit", "columns", "offset"}),
     "answer_from_context": (set(), {"answer", "evidence", "reason"}),
 }
 
+# Public atomic action schema. Replay accepts older shapes through ``_ARG_SCHEMA`` above, while
+# every newly authored model action is checked only against this schema. Keeping the two maps
+# separate prevents historical compatibility fields from leaking into prompts, hashes, or RL.
 MODEL_ARG_SCHEMA: dict[str, tuple[set[str], set[str]]] = {
     tool: (set(required), set(optional))
     for tool, (required, optional) in PUBLIC_TOOL_ARGUMENTS.items()
+}
+ACTION_BLOCK_MODEL_ARG_SCHEMA: dict[str, tuple[set[str], set[str]]] = {
+    tool: (set(required), set(optional))
+    for tool, (required, optional) in ACTION_BLOCK_PUBLIC_TOOL_ARGUMENTS.items()
 }
 if set(MODEL_ARG_SCHEMA) != TOOLS:
     raise RuntimeError("public argument schema and model-visible tool contract have drifted")
@@ -233,6 +254,9 @@ CANONICAL_CALL_COOKBOOK = (
     '"expressions":["first_name","middle_name","last_name"],"distinct":true}}\n'
     'Compute a column with project: {"tool":"project","arguments":{"table":"sales",'
     '"expressions":["product","price * quantity AS revenue"]}}\n'
+    'Typed row-wise date difference: {"tool":"project","arguments":{"table":"courses",'
+    '"expressions":["person",{"op":"date_diff_days","operands":'
+    '[{"column":"start_date"},{"column":"end_date"}],"as":"duration_days"}]}}\n'
     'Join a three-table path: {"tool":"join_tables","arguments":'
     '{"base":"orders","joins":['
     '{"table":"customers","on":[{"left":"orders.customer_id","right":"id"}]},'
@@ -262,23 +286,17 @@ CANONICAL_CALL_COOKBOOK = (
     '{"value_ref":"step_7","column":"total_nominees"}],"result_name":"percentage"}}\n'
     'Top 3 with exact output: {"tool":"extreme_value_select","arguments":{"table":"employees",'
     '"order_by":["sick_leave_hours DESC"],"top_k":3,"return_columns":["job_title"]}}\n'
+    'Second ranked row: {"tool":"extreme_value_select","arguments":{"table":"teams",'
+    '"order_by":["margin"],"offset":1,"top_k":1,"return_columns":["team_name"]}}\n'
+    'Top row per group: {"tool":"extreme_value_select","arguments":{"table":"films",'
+    '"partition_by":["genre"],"order_by":["budget DESC"],"top_k":1,'
+    '"return_columns":["genre","title"]}}\n'
     'Set operation after aligning both inputs with project: {"tool":"set_op","arguments":'
     '{"left":"project_001","right":"project_002","op":"union"}}\n'
     'Any final answer, including a scalar: {"tool":"answer_from_context","arguments":'
     '{"evidence":{"table":"project_003"},'
     '"reason":"The evidence table has exactly the requested rows and columns."}}\n'
 )
-
-# Historical version1-version4 join fields remain valid only when replaying old artifacts.
-_MODEL_FORBIDDEN_ARGUMENTS: dict[str, set[str]] = {
-    "condition_filter": {"preview_k"},
-    "answer_from_context": {"answer"},
-    "join_tables": {
-        "tables", "on", "join_types", "prefixes", "return_columns",
-        "left", "right", "join_type", "left_prefix", "right_prefix",
-    },
-}
-
 
 def validate_arguments(tool: str, args: dict) -> None:
     """Strict per-tool argument schema; raises ProtocolError on any missing/unexpected key."""
@@ -319,6 +337,7 @@ def _validate_argument_keys(
     args: dict,
     schema: dict[str, tuple[set[str], set[str]]],
 ) -> None:
+    """Validate required/optional keys for one explicitly selected schema."""
     required, optional = schema[tool]
     keys = set(args)
     missing = sorted(required - keys)
@@ -484,19 +503,154 @@ def _validate_model_group_aggregate(args: dict) -> None:
             raise ProtocolError("group_aggregate.output_columns must be unique")
 
 
-def validate_model_arguments(tool: str, args: dict) -> None:
-    """Validate the current public action API, excluding replay-only compatibility forms."""
-    _validate_argument_keys(tool, args, MODEL_ARG_SCHEMA)
+def _validate_read_subtable(args: dict) -> None:
+    limit = args.get("limit", 20)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+        raise ProtocolError("read_subtable: limit must be an integer from 1 to 20")
+    offset = args.get("offset", 0)
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ProtocolError("read_subtable: offset must be a non-negative integer")
+    columns = args.get("columns")
+    if columns is not None and (
+        not isinstance(columns, list)
+        or not all(isinstance(item, str) and item.strip() for item in columns)
+    ):
+        raise ProtocolError("read_subtable: columns must be a list of non-empty column names")
+
+
+def _validate_project(args: dict, *, allow_typed_rows: bool) -> None:
+    if not isinstance(args.get("distinct", False), bool):
+        raise ProtocolError("project: distinct must be true or false")
+    expressions = args.get("expressions")
+    if not isinstance(expressions, list) or not expressions:
+        raise ProtocolError("project: expressions must be a non-empty list")
+    arity = {
+        "add": (2, None),
+        "subtract": (2, None),
+        "multiply": (2, None),
+        "divide": (2, 2),
+        "percent": (2, 2),
+        "percent_change": (2, 2),
+        "date_diff_days": (2, 2),
+        "extract_year": (1, 1),
+    }
+    for index, expression in enumerate(expressions):
+        if isinstance(expression, str) and expression.strip():
+            continue
+        if not allow_typed_rows or not isinstance(expression, dict):
+            expected = "strings" if not allow_typed_rows else "non-empty strings or typed objects"
+            raise ProtocolError(f"project: expressions[{index}] must contain {expected}")
+        if set(expression) != {"op", "operands", "as"}:
+            raise ProtocolError(
+                f"project: expressions[{index}] typed object must contain exactly op, operands, as"
+            )
+        operation = expression.get("op")
+        if operation not in ROW_EXPRESSION_OPERATIONS:
+            raise ProtocolError(
+                f"project: expressions[{index}].op must be one of "
+                f"{sorted(ROW_EXPRESSION_OPERATIONS)}"
+            )
+        alias = expression.get("as")
+        if not isinstance(alias, str) or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*", alias
+        ):
+            raise ProtocolError(
+                f"project: expressions[{index}].as must be an identifier"
+            )
+        operands = expression.get("operands")
+        minimum, maximum = arity[operation]
+        if (
+            not isinstance(operands, list)
+            or len(operands) < minimum
+            or maximum is not None and len(operands) > maximum
+        ):
+            expected = str(minimum) if minimum == maximum else f"at least {minimum}"
+            raise ProtocolError(
+                f"project: expressions[{index}] {operation} requires {expected} operands"
+            )
+        for operand_index, operand in enumerate(operands):
+            keys = set(operand) if isinstance(operand, dict) else set()
+            if frozenset(keys) not in ROW_EXPRESSION_OPERAND_KEYSETS:
+                raise ProtocolError(
+                    f"project: expressions[{index}].operands[{operand_index}] must be "
+                    "exactly column or value"
+                )
+            if "column" in keys and (
+                not isinstance(operand["column"], str) or not operand["column"].strip()
+            ):
+                raise ProtocolError(
+                    f"project: expressions[{index}].operands[{operand_index}].column "
+                    "must be a non-empty column name"
+                )
+            if "value" in keys and (
+                operand["value"] is None
+                or isinstance(operand["value"], (dict, list))
+            ):
+                raise ProtocolError(
+                    f"project: expressions[{index}].operands[{operand_index}].value "
+                    "must be a non-null scalar"
+                )
+
+
+def _validate_extreme_value_select(args: dict) -> None:
+    order_by = args.get("order_by")
+    if (
+        not isinstance(order_by, list)
+        or not order_by
+        or not all(isinstance(item, str) and item.strip() for item in order_by)
+    ):
+        raise ProtocolError(
+            "extreme_value_select: order_by must be a non-empty list of column strings"
+        )
+    top_k = args.get("top_k")
+    if top_k is not None and (
+        isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1
+    ):
+        raise ProtocolError("extreme_value_select: top_k must be a positive integer")
+    offset = args.get("offset", 0)
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ProtocolError("extreme_value_select: offset must be a non-negative integer")
+    partition_by = args.get("partition_by")
+    if partition_by is not None:
+        if (
+            not isinstance(partition_by, list)
+            or not partition_by
+            or not all(isinstance(item, str) and item.strip() for item in partition_by)
+        ):
+            raise ProtocolError(
+                "extreme_value_select: partition_by must be a non-empty list of columns"
+            )
+        if top_k is None:
+            raise ProtocolError(
+                "extreme_value_select: top_k is required when partition_by is used"
+            )
+    return_columns = args.get("return_columns")
+    if return_columns is not None and (
+        not isinstance(return_columns, list)
+        or not return_columns
+        or not all(isinstance(item, str) and item.strip() for item in return_columns)
+    ):
+        raise ProtocolError(
+            "extreme_value_select: return_columns must be a non-empty list of columns"
+        )
+
+
+def _validate_common_model_arguments(
+    tool: str,
+    args: dict,
+    *,
+    allow_typed_rows: bool,
+) -> None:
     if tool == "join_tables":
         _validate_model_join(args)
     if tool == "group_aggregate":
         _validate_model_group_aggregate(args)
     if tool == "read_subtable":
-        limit = args.get("limit", 20)
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
-            raise ProtocolError("read_subtable: limit must be an integer from 1 to 20")
-    if tool == "project" and not isinstance(args.get("distinct", False), bool):
-        raise ProtocolError("project: distinct must be true or false")
+        _validate_read_subtable(args)
+    if tool == "project":
+        _validate_project(args, allow_typed_rows=allow_typed_rows)
+    if tool == "extreme_value_select":
+        _validate_extreme_value_select(args)
     if tool == "scalar_compute":
         operation = args.get("operation")
         allowed = set(SCALAR_OPERATIONS)
@@ -539,6 +693,18 @@ def validate_model_arguments(tool: str, args: dict) -> None:
                 'answer_from_context: evidence must be exactly {"table":"result_handle"}; '
                 "scalar answers also cite a grounded 1x1 table"
             )
+
+
+def validate_model_arguments(tool: str, args: dict) -> None:
+    """Validate the current atomic action API, excluding replay compatibility."""
+    _validate_argument_keys(tool, args, MODEL_ARG_SCHEMA)
+    _validate_common_model_arguments(tool, args, allow_typed_rows=True)
+
+
+def validate_action_block_arguments(tool: str, args: dict) -> None:
+    """Validate the frozen action-block-v32 primitive API."""
+    _validate_argument_keys(tool, args, ACTION_BLOCK_MODEL_ARG_SCHEMA)
+    _validate_common_model_arguments(tool, args, allow_typed_rows=False)
 
 
 def tool_schema_hash() -> str:
@@ -681,7 +847,7 @@ def get_system_prompt() -> str:
 
 
 def teacher_system_prompt(student_prompt: str) -> str:
-    """Add teacher-only guidance to an already selected student context contract."""
+    """Add teacher-only quality guidance to an already selected student context contract."""
     return add_teacher_guidance(
         student_prompt,
         tool_guidance=TEACHER_TOOL_GUIDANCE,
@@ -697,8 +863,8 @@ def get_teacher_system_prompt() -> str:
 def rolling_system_prompt(system_prompt: str, *, compact: bool = False) -> str:
     """Return the full or safe-compact bounded-history contract.
 
-    ``compact`` is intentionally rolling-only and opt-in. The state-only protocol and existing
-    full-prompt rolling artifacts remain byte-for-byte stable.
+    ``compact`` is intentionally rolling-only and opt-in. Historical artifacts retain their
+    stored prompts; new version26 episodes use the role-selected prompt passed here.
     """
     return ROLLING_SYSTEM_PROMPT_COMPACT if compact else system_prompt + ROLLING_HISTORY_SYSTEM_SUFFIX
 
@@ -732,7 +898,7 @@ def student_runtime_system_prompt(
 
 
 def policy_system_prompt(system_prompt: str, variant: str = POLICY_PROMPT_CANONICAL) -> str:
-    """Apply an auditable policy-prompt ablation without changing the canonical version19 prompt."""
+    """Apply an auditable policy-prompt ablation without changing shared tool semantics."""
     if variant == POLICY_PROMPT_CANONICAL:
         return system_prompt
     if variant == POLICY_PROMPT_RELATIONAL_INVARIANTS:
@@ -744,6 +910,146 @@ def policy_system_prompt(system_prompt: str, variant: str = POLICY_PROMPT_CANONI
 
 class ProtocolError(Exception):
     """Model output does not parse into a legal tool call."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "protocol_error",
+        details: dict | None = None,
+        failure_type: str | None = None,
+        attempted_tool: str | None = None,
+        attempted_arguments: dict | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = deepcopy(details or {})
+        self.failure_type = failure_type
+        self.attempted_tool = attempted_tool
+        self.attempted_arguments = deepcopy(attempted_arguments)
+
+
+class AdjacentDuplicateActionError(ProtocolError):
+    """Two consecutive parsed model turns contain the same tool and arguments."""
+
+    def __init__(
+        self,
+        *,
+        step_id: str,
+        previous_step_id: str,
+        previous_status: str,
+        previous_error: dict | None,
+        tool: str,
+        arguments: dict,
+    ) -> None:
+        previous_rejection = deepcopy(previous_error or {})
+        retained_error = ""
+        if previous_rejection:
+            retained_error = (
+                " The preceding rejection remains authoritative: "
+                f"{previous_rejection.get('type', 'error')}: "
+                f"{previous_rejection.get('message', '')}."
+            )
+        tool_semantics = ""
+        if tool == "read_subtable":
+            tool_semantics = (
+                " an identical read_subtable call uses the same offset and reads the same page; "
+                "change offset to inspect a later page."
+            )
+        super().__init__(
+            (
+                "the parsed tool and arguments exactly match the immediately preceding "
+                f"action at {previous_step_id}; this call was not executed and the current "
+                f"environment state is unchanged.{retained_error}{tool_semantics} "
+                "The next action must change the tool or at least one argument"
+            ),
+            code="adjacent_identical_action",
+            details={
+                "comparison": "canonical_tool_and_arguments",
+                "current_step_id": step_id,
+                "previous_step_id": previous_step_id,
+                "previous_status": previous_status,
+                "state_changed_by_rejected_call": False,
+                **(
+                    {"previous_rejection": previous_rejection}
+                    if previous_rejection
+                    else {}
+                ),
+            },
+            failure_type="no_progress_error",
+            attempted_tool=tool,
+            attempted_arguments=arguments,
+        )
+
+
+class AdjacentActionGuard:
+    """Reject only exactly equal parsed actions on consecutive model turns."""
+
+    def __init__(self) -> None:
+        self._previous: dict | None = None
+
+    @staticmethod
+    def canonical_key(tool: str, arguments: dict) -> str:
+        return json.dumps(
+            {"tool": tool, "arguments": arguments},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def clear(self) -> None:
+        """Break adjacency after a turn that did not contain one parseable action."""
+        self._previous = None
+
+    def prime(
+        self,
+        tool: str,
+        arguments: dict,
+        *,
+        step_id: str,
+        status: str,
+        error_context: dict | None = None,
+    ) -> None:
+        """Seed the immediately preceding parsed action when resuming a real episode prefix."""
+        self._previous = {
+            "key": self.canonical_key(tool, arguments),
+            "step_id": step_id,
+            "status": status,
+            "error_context": deepcopy(error_context),
+        }
+
+    def observe(self, tool: str, arguments: dict, *, step_id: str) -> None:
+        key = self.canonical_key(tool, arguments)
+        previous = self._previous
+        self._previous = {
+            "key": key,
+            "step_id": step_id,
+            "status": "parsed",
+            "error_context": None,
+        }
+        if previous is not None and previous["key"] == key:
+            self._previous["status"] = "rejected"
+            raise AdjacentDuplicateActionError(
+                step_id=step_id,
+                previous_step_id=previous["step_id"],
+                previous_status=previous["status"],
+                previous_error=previous.get("error_context"),
+                tool=tool,
+                arguments=arguments,
+            )
+
+    def mark_last(self, status: str, error_context: dict | None = None) -> None:
+        if self._previous is not None:
+            self._previous["status"] = status
+            retained = deepcopy(error_context)
+            if (
+                isinstance(retained, dict)
+                and retained.get("code") == "adjacent_identical_action"
+            ):
+                previous = (retained.get("details") or {}).get("previous_rejection")
+                if isinstance(previous, dict):
+                    retained = deepcopy(previous)
+            self._previous["error_context"] = retained
 
 
 def _compact(obj) -> str:
@@ -866,12 +1172,32 @@ def compact_resident_observation(observation: str) -> str:
     return _compact(envelope)
 
 
-def tool_error_message(step_id: str, error_type: str, message: str) -> str:
-    return _compact({
+def tool_error_message(
+    step_id: str,
+    error_type: str,
+    message: str,
+    *,
+    error_code: str | None = None,
+    details: dict | None = None,
+    attempted_tool: str | None = None,
+    attempted_arguments: dict | None = None,
+) -> str:
+    error = {"type": error_type, "message": message}
+    if error_code:
+        error["code"] = error_code
+    if details:
+        error["details"] = deepcopy(details)
+    envelope = {
         "step_id": step_id,
         "status": "error",
-        "error": {"type": error_type, "message": message},
-    })
+        "error": error,
+    }
+    if attempted_tool is not None:
+        envelope["attempted_action"] = {
+            "tool": attempted_tool,
+            "arguments": deepcopy(attempted_arguments or {}),
+        }
+    return _compact(envelope)
 
 
 def _compact_state_columns(state: dict | None) -> dict:
@@ -1154,26 +1480,105 @@ def parse_assistant(text: str) -> tuple[str, str, dict]:
     return (tm.group(1).strip() if tm else ""), tool, args
 
 
-def parse_assistant_strict(text: str) -> tuple[str, str, dict]:
-    """Parse one active think + raw-JSON action without repair or normalization.
-
-    External teacher generation may use this mode when protocol mistakes should become explicit
-    environment feedback. It intentionally rejects tagged carriers, shorthand objects, and
-    truncated terminal answers.
-    """
+def parse_assistant_structure_strict(text: str) -> tuple[str, str, dict]:
+    """Parse the carrier and action object before tool-specific argument validation."""
     try:
         think, call = parse_action_carrier(text)
     except ActionCarrierError as exc:
-        raise ProtocolError(str(exc)) from exc
+        raise ProtocolError(
+            str(exc),
+            code=exc.code,
+            details=exc.details,
+        ) from exc
+    if not isinstance(call, dict):
+        raise ProtocolError(
+            "action JSON must be an object",
+            code="action_json_not_object",
+            details={"received_type": type(call).__name__},
+        )
     if set(call) != {"tool", "arguments"}:
-        raise ProtocolError('action must contain exactly "tool" and "arguments" keys')
+        raise ProtocolError(
+            'action must contain exactly "tool" and "arguments" keys',
+            code="invalid_action_keys",
+            details={
+                "required_keys": ["arguments", "tool"],
+                "received_keys": sorted(str(key) for key in call),
+            },
+        )
     tool = call.get("tool")
     args = call.get("arguments")
-    if tool not in TOOLS:
-        raise ProtocolError(f"unknown tool {tool!r}; legal tools: {sorted(TOOLS)}")
+    if not isinstance(tool, str) or not tool:
+        raise ProtocolError(
+            "action.tool must be one non-empty tool name",
+            code="invalid_tool_name",
+            details={"received_type": type(tool).__name__},
+        )
     if not isinstance(args, dict):
-        raise ProtocolError('action must have an "arguments" object')
-    validate_model_arguments(tool, args)
+        raise ProtocolError(
+            'action must have an "arguments" object',
+            code="arguments_not_object",
+            details={"received_type": type(args).__name__},
+            attempted_tool=tool,
+        )
+    return think, tool, args
+
+
+def validate_model_action(tool: str, args: dict) -> None:
+    """Validate one structurally parsed action and attach its public argument contract."""
+    if tool not in TOOLS:
+        raise ProtocolError(
+            f"unknown tool {tool!r}; legal tools: {sorted(TOOLS)}",
+            code="unknown_tool",
+            details={"legal_tools": sorted(TOOLS)},
+            attempted_tool=tool,
+            attempted_arguments=args,
+        )
+    try:
+        validate_model_arguments(tool, args)
+    except ProtocolError as exc:
+        if exc.code == "protocol_error":
+            exc.code = "argument_validation_error"
+        exc.failure_type = exc.failure_type or "argument_validation_error"
+        exc.attempted_tool = tool
+        exc.attempted_arguments = deepcopy(args)
+        required, optional = MODEL_ARG_SCHEMA[tool]
+        exc.details = {
+            **exc.details,
+            "expected_arguments": {
+                "required": sorted(required),
+                "optional": sorted(optional),
+            },
+        }
+        raise
+
+
+def parse_assistant_strict(
+    text: str,
+    *,
+    adjacent_guard: AdjacentActionGuard | None = None,
+    step_id: str | None = None,
+) -> tuple[str, str, dict]:
+    """Parse one active action and optionally enforce exact adjacent-action progress.
+
+    The guard compares only the parsed ``tool`` and ``arguments`` of two consecutive model
+    turns. It ignores reasoning text and JSON key order, and it never searches farther back.
+    """
+    try:
+        think, tool, args = parse_assistant_structure_strict(text)
+    except ProtocolError:
+        if adjacent_guard is not None:
+            adjacent_guard.clear()
+        raise
+    if adjacent_guard is not None:
+        if not step_id:
+            raise ValueError("step_id is required when adjacent_guard is provided")
+        adjacent_guard.observe(tool, args, step_id=step_id)
+    try:
+        validate_model_action(tool, args)
+    except ProtocolError:
+        if adjacent_guard is not None:
+            adjacent_guard.mark_last("rejected")
+        raise
     return think, tool, args
 
 

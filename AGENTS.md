@@ -34,9 +34,13 @@ Start at `docs/current/README.md`.
 
 ### Model-visible protocol
 
-- Source of truth: `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current experimental implementation: `version24`. Its fixed-200 run is complete but did not pass
-  the 75% tool-usability gate. The former
+- Shared prompt semantics: `src/sft/prompt_contract.py`; protocol/validation:
+  `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
+- Current local diagnostic implementation: `version28`. The production checkpoint-560 evaluation
+  chain remains frozen on `version26`; version28 has not received an accuracy promotion and must
+  not be mixed into its result directories. Version26 retains version25's prompt-role and
+  public-contract refactor, but replaces the model-visible tagged action carrier with one
+  non-empty `<think>` block followed directly by a strict raw JSON action object. The former
   `v2i-state-only-join-feedback-r2` contract is `version1`;
   `version2` added canonical calls/final shape, `version3` added precise provider feedback and
   stable projected join columns, and `version4` counted provider-carrier failures precisely.
@@ -95,10 +99,36 @@ Start at `docs/current/README.md`.
   39/50, then the full result was 145/200 versus 143/200. The +2 is not significant (10 gains,
   8 regressions); legal termination fell from 199 to 197, process errors rose from 24 to 29, and
   total tokens rose 5.8%. It remains an engineering boundary, not a 75%-validated SFT protocol.
+  `version25` keeps the version24 tools, state, execution, and relation-derivation semantics, but
+  separates prompt roles: one concise student runtime contract is shared by SFT export, evaluation,
+  and RL, while an external teacher receives that same contract plus generation-only guidance and
+  examples. `MODEL_ARG_SCHEMA` is the public model-call schema; replay-only compatibility remains
+  separate. Manifests record teacher/student prompt hashes and the public tool-schema hash. A
+  matched 400-episode causal pilot rejected adding formal JSON grammar to the student prompt:
+  full grammar induced 154 plan calls at checkpoint 10, while restricting grammar to high-entropy
+  tools removed that loop but reached 0/10 legal termination at checkpoint 20 with 10/10 joins
+  invalid. Keep the 1,050-token canonical student prompt; test action coverage through causal
+  supervision rather than more prompt prose. See
+  `docs/reports/sft/BIRD_STUDENT_FORMAL_PROMPT_CAUSAL_GATE_20260725.md`.
+  `version26` preserves all version25 tools, arguments, execution, state, grounding, and
+  relation-derivation semantics. The active strict parser accepts only `<think>...</think>` plus
+  one direct `{"tool":...,"arguments":...}` object; retired tagged actions are parsed only by a
+  named offline migration path and re-rendered without changing structured actions or reasoning.
+  `version27` added stable structured carrier/argument error details and rejected only two
+  consecutive parsed actions whose canonical `tool + arguments` were exactly equal. Its fresh
+  48-task checkpoint-560 gate scored 12/48 versus a matched fresh version26 control at 13/48;
+  legal termination rose from 21 to 24 and mean steps fell from 11.00 to 7.58, but accuracy did
+  not improve. `version28` retains the original rejection root cause across an identical retry
+  and states that identical `read_subtable` calls cannot paginate because the tool has no
+  offset/cursor. It scored 12/48 with 25 legal terminations and 8.06 mean steps on the same gate.
+  Do not expand either version to 120/240 or full greedy, and do not use them as SFT sources.
+  See
+  `docs/reports/evaluation/BIRD_CP560_ADJACENT_REPEAT_FEEDBACK_GATE_20260727_ZH.md`.
   Future versions increment numerically.
-- The canonical model action contains exactly one `<think>` block and one strict `<tool_call>` JSON
-  object. A provider-native reasoning adapter may carry the same authored reason in a separate API
-  field, but its API-facing prompt and history must describe only that one carrier.
+- The canonical model action contains exactly one non-empty `<think>` block followed by one strict
+  raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may
+  carry the same authored reason in a separate API field, but its API-facing prompt and history
+  must describe only that one carrier.
 - The active context contract is bounded rolling legal history with `history_turns=4`: catalog,
   question, and optional external knowledge are followed by at most four successful
   assistant/observation pairs, and the latest observation carries rebuilt resident state plus
@@ -106,10 +136,20 @@ Start at `docs/current/README.md`.
 - Current tools: `plan`, `describe_table`, `inspect_column`, `read_subtable`,
   `condition_filter`, `project`, `scalar_compute`, `join_tables`, `group_aggregate`,
   `extreme_value_select`, `set_op`, and `answer_from_context`.
+- The separate experimental `action-block-v32` scheme does not change that atomic contract. A
+  work turn is one top-level `action_block` with one to five ordered nonterminal primitive calls;
+  termination is one separate top-level `answer_from_context`. Terminal calls cannot be nested or
+  mixed with work. The model does not see `plan`, `update_plan`, dependency fields, handles before
+  execution, or mutable environment state. The harness executes in list order, resolves only
+  strict same-block backward `$id` references, maintains resident factual context and handles, and
+  reports one full atomic output/error/blocked result per submitted call in model list order.
+  The active adapter performs no spelling, schema, column, predicate, order, handle, or argument
+  shape rewrite. Provider-specific carrier constraints are API-facing only. Its completed frozen
+  200-task gate scored 144/200 and remains ineligible for SFT.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id
   `value_ref`.
-- Do not construct new version12-version24 SFT data until the frozen 200-task tool-usability gate
+- Do not construct new version12-version26 SFT data until the frozen 200-task tool-usability gate
   is explicitly passed. Small pilots are diagnostic only and are not SFT sources.
 
 ### Recovery and provenance
@@ -169,6 +209,38 @@ Start at `docs/current/README.md`.
   and tokens by 18.5%. Keep `required-resident` experimental; do not expand it or make it default
   without a new small-pilot signal. See
   `docs/reports/evaluation/BIRD_VERSION11_FAILURE_TRAJECTORY_AND_RESIDENT_PLAN_AUDIT.md`.
+- The separate `action-block-v18` fixed-20 diagnostic scored 17/20 `bird-set`, with 19/20 legal
+  termination, five process errors, and one provider-carrier failure. It was +1 versus both the
+  paired action-block v4 and atomic version24 controls, but the paired differences were not
+  significant. v16/v17 prompt ablations on the multi-row date task increased loops without
+  recovering the target and were rejected. Keep v18 diagnostic-only and ineligible for SFT; see
+  `docs/reports/evaluation/BIRD_ACTION_BLOCK_V18_OPTIMIZATION_PILOT20_20260726_ZH.md`.
+- The historical action-block v21 fixed-40 diagnostic scored 31/40 `bird-set`, with 40/40 legal
+  termination, seven process errors, one blocked descendant, 181 model turns, and 734,815 total
+  tokens. Atomic version24 scored 33/40 on the same cohort but used 240 turns and 1,301,937 tokens.
+  A v19 final-check prompt ablation also scored 31/40 and produced no paired gain, so it was
+  rejected. v21 instead fixes an action-block-only silent semantic hazard: a cross-result
+  `column_value` is converted to `value_ref` only for a harness-verified one-row/one-column source
+  and is otherwise rejected. Keep v21 diagnostic-only and ineligible for SFT; see
+  `docs/reports/evaluation/BIRD_ACTION_BLOCK_V21_FIXED40_SEMANTIC_AUDIT_20260726_ZH.md`.
+- The completed action-block v21 fixed-200 gate scored **136/200 `bird-set`**, with 194/200 legal
+  termination, 63 process errors, 25 blocked descendants, 1,092 model turns, and 4,982,816 total
+  tokens. Paired atomic version24 scored 145/200 with 197/200 legal termination, 29 process errors,
+  1,490 turns, and 8,420,861 tokens. V21 had 10 paired gains and 19 regressions (net -9,
+  exact two-sided `p=0.1360`): it reduced turns 26.7% and tokens 40.8% but failed the 150/200 gate.
+  Of its 58 legal wrong answers, 42 had no process error, so further interface normalization cannot
+  recover the semantic gap. Do not construct action-block v21 SFT data; see
+  `docs/reports/evaluation/BIRD_ACTION_BLOCK_V21_FIXED200_20260726_ZH.md`.
+- The active action-block v32 fixed-40 diagnostic scored 31/40 `bird-set`, with 40/40 legal
+  termination, 10 process errors, two blocked descendants, 182 model turns, and 792,488 total
+  tokens. Its completed frozen 200-task gate scored **144/200**, with 197/200 legal termination,
+  112 process errors, 51 blocked descendants, 1,115 model turns, and 5,031,851 total tokens.
+  Paired atomic version24 scored 145/200 with the same legal rate; v32 had 13 gains and 14
+  regressions (`p=1.0`). It reduced model turns 25.2% and tokens 40.2%, while increasing attempted
+  primitive actions from 1,490 to 1,756. It fully removed nested/mixed terminal errors and
+  single-object join-`on` errors, but failed the 150/200 gate. Do not construct action-block v32
+  SFT data; see
+  `docs/reports/evaluation/BIRD_ACTION_BLOCK_V32_FIXED200_20260726_ZH.md`.
 
 ## Current BIRD reference points (2026-07-24)
 

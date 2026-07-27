@@ -705,7 +705,15 @@ class Harness:
             f"SELECT {_AGG[op]}({d}{column if column != '*' else '*'}) FROM {self._src(table)}"
         ).fetchone()[0]
 
-    def extreme_value_select(self, table, order_by, top_k=None, return_columns=None) -> dict:
+    def extreme_value_select(
+        self,
+        table,
+        order_by,
+        top_k=None,
+        return_columns=None,
+        offset=0,
+        partition_by=None,
+    ) -> dict:
         """Table-producing ORDER BY [... LIMIT k]: keep the extreme rows under an ordering.
         Merged from the old `order_limit` — one tool now covers a plain ORDER BY/LIMIT, a top-k
         pick, and multi-column ordering. `order_by`: list of 'col' or 'col DESC'.
@@ -718,10 +726,37 @@ class Harness:
                 return f"{self._col_sql(cols, parts[0])} {parts[1].upper()}"
             return self._col_sql(cols, item)
 
-        order = f" ORDER BY {', '.join(render_order(item) for item in order_by)}" if order_by else ""
-        lim = f" LIMIT {int(top_k)}" if top_k is not None else ""
+        rendered_order = ", ".join(render_order(item) for item in order_by)
         sel = ", ".join(self._col_sql(cols, col) for col in return_columns) if return_columns else "*"
-        return self._new("top", f"SELECT {sel} FROM {self._src(table)}{order}{lim}")
+        if partition_by:
+            partitions = [self._resolve_col(cols, column) for column in partition_by]
+            partition_sql = ", ".join(self._col_sql(cols, column) for column in partitions)
+            rank_column = "__atomic_partition_rank"
+            ranked = (
+                f"SELECT *, ROW_NUMBER() OVER (PARTITION BY {partition_sql} "
+                f"ORDER BY {rendered_order}) AS {_qid(rank_column)} "
+                f"FROM {self._src(table)}"
+            )
+            lower = int(offset) + 1
+            upper = int(offset) + int(top_k)
+            stable_order = ", ".join(
+                [*(_qid(column) for column in partitions), _qid(rank_column)]
+            )
+            sql = (
+                f"SELECT {sel} FROM ({ranked}) "
+                f"WHERE {_qid(rank_column)} BETWEEN {lower} AND {upper} "
+                f"ORDER BY {stable_order}"
+            )
+            return self._new("top", sql)
+
+        order = f" ORDER BY {rendered_order}"
+        if top_k is not None:
+            limit = f" LIMIT {int(top_k)} OFFSET {int(offset)}"
+        elif offset:
+            limit = f" LIMIT -1 OFFSET {int(offset)}"
+        else:
+            limit = ""
+        return self._new("top", f"SELECT {sel} FROM {self._src(table)}{order}{limit}")
 
     def project(self, table, expressions, distinct: bool = False) -> dict:
         """Realize a SELECT projection: SELECT <expressions> FROM (src). Table-producing.
@@ -758,7 +793,42 @@ class Harness:
                 segments[index] = segment
             return "".join(segments)
 
-        def render(expr: str) -> str:
+        def render_typed(expr: dict) -> str:
+            operation = expr["op"]
+            operands = []
+            for operand in expr["operands"]:
+                if "column" in operand:
+                    operands.append(self._col_sql(cols, operand["column"]))
+                else:
+                    operands.append(_lit(operand["value"]))
+            if operation == "add":
+                sql = " + ".join(f"({operand})" for operand in operands)
+            elif operation == "subtract":
+                sql = f"({operands[0]})"
+                for operand in operands[1:]:
+                    sql = f"({sql} - ({operand}))"
+            elif operation == "multiply":
+                sql = " * ".join(f"({operand})" for operand in operands)
+            elif operation == "divide":
+                sql = f"(CAST(({operands[0]}) AS REAL) / ({operands[1]}))"
+            elif operation == "percent":
+                sql = f"(CAST(({operands[0]}) AS REAL) * 100 / ({operands[1]}))"
+            elif operation == "percent_change":
+                sql = (
+                    f"((CAST(({operands[0]}) AS REAL) - ({operands[1]})) "
+                    f"* 100 / ({operands[1]}))"
+                )
+            elif operation == "date_diff_days":
+                sql = f"(julianday({operands[1]}) - julianday({operands[0]}))"
+            elif operation == "extract_year":
+                sql = f"CAST(strftime('%Y', {operands[0]}) AS INTEGER)"
+            else:
+                raise ValueError(f"unsupported typed project operation: {operation}")
+            return f"{sql} AS {_qid(expr['as'])}"
+
+        def render(expr: str | dict) -> str:
+            if isinstance(expr, dict):
+                return render_typed(expr)
             raw = str(expr).strip()
             resolved_raw = self._resolve_col(cols, raw)
             if resolved_raw in cols:
@@ -912,14 +982,15 @@ class Harness:
             out["note"] = f"showing first {len(rows)} of {total} rows (exceeds {cell_limit}-cell preview budget)"
         return out
 
-    def read_subtable(self, table, columns=None, limit=20):
+    def read_subtable(self, table, columns=None, limit=20, offset=0):
         if columns:
             available = self._cols(table)
             cols = ", ".join(self._col_sql(available, col) for col in columns)
         else:
             cols = "*"
         return self.conn.execute(
-            f"SELECT {cols} FROM {self._src(table)} LIMIT {int(limit)}"
+            f"SELECT {cols} FROM {self._src(table)} "
+            f"LIMIT {int(limit)} OFFSET {int(offset)}"
         ).fetchall()
 
     # ---- resident perception (context-management layer: structure + value-domain, no row dump) ----

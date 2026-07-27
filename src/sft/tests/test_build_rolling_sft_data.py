@@ -8,7 +8,7 @@ from pathlib import Path
 SFT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SFT_DIR))
 
-from build_rolling_sft_data import convert_step  # noqa: E402
+from build_rolling_sft_data import convert_step, is_sft_target_step  # noqa: E402
 from select_verified_rollouts import quality_reason  # noqa: E402
 
 
@@ -41,6 +41,14 @@ def trajectory() -> dict:
 
 
 class BuildRollingSftTests(unittest.TestCase):
+    def test_recovery_prefix_can_be_context_only(self):
+        item = trajectory()
+        item["steps"][0]["sft_target_eligible"] = False
+        self.assertFalse(is_sft_target_step(item["steps"][0]))
+        self.assertTrue(is_sft_target_step(item["steps"][1]))
+        record, _ = convert_step(item, 1, 4, "rolling system")
+        self.assertIn("Inspect items.", record["conversations"][1]["value"])
+
     def test_second_target_keeps_prior_legal_pair_and_current_error(self):
         record, index = convert_step(trajectory(), 1, 4, "rolling system")
         roles = [message["from"] for message in record["conversations"]]
@@ -128,6 +136,26 @@ class BuildRollingSftTests(unittest.TestCase):
         self.assertEqual(
             quality_reason(item, max_steps=12, max_think_words=300),
             "current_or_future_reference",
+        )
+
+    def test_sft2_quality_gate_can_disable_length_limits(self):
+        item = trajectory()
+        item["label_status"] = "verified"
+        item["steps"][0]["think"] = "reason " * 500
+        item["steps"][1]["tool_call"]["arguments"] = {
+            "evidence": {"table": "items"},
+        }
+        self.assertIsNone(
+            quality_reason(item, max_steps=None, max_think_words=None),
+        )
+
+    def test_sft2_quality_gate_still_rejects_identical_calls(self):
+        item = trajectory()
+        item["label_status"] = "verified"
+        item["steps"][1]["tool_call"] = item["steps"][0]["tool_call"]
+        self.assertEqual(
+            quality_reason(item, max_steps=None, max_think_words=None),
+            "repeated_call",
         )
 
 

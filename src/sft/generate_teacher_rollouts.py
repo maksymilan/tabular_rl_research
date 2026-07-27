@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import json
 import os
 import re
@@ -29,6 +30,7 @@ sys.path.insert(0, str(ROOT / "src" / "sft"))
 
 from denotation import add_denotation_comparison_argument  # noqa: E402
 from provider_client import load_api_config  # noqa: E402
+from prompt_contract import TEACHER_ONE_ACTION_RULE  # noqa: E402
 from provider_adapter import (  # noqa: E402
     DEEPSEEK_CARRIER_CHOICES,
     DEEPSEEK_CARRIER_JSON_OUTPUT,
@@ -55,6 +57,7 @@ from rollout import (  # noqa: E402
 )
 from executor import Harness  # noqa: E402
 from protocol import (  # noqa: E402
+    AdjacentActionGuard,
     POLICY_PROMPT_CANONICAL,
     POLICY_PROMPT_VARIANTS,
     PROTOCOL_VERSION,
@@ -70,6 +73,7 @@ from protocol import (  # noqa: E402
     rolling_system_prompt,
     state_context_message,
     teacher_system_prompt,
+    tool_error_message,
     tool_schema_hash,
     tool_output_message,
 )
@@ -88,13 +92,8 @@ MIN_CONTEXT_RETRY_TOKENS = 256
 MAX_COMPLETION_RETRY_TOKENS = 8192
 DATA_GENERATION_SUFFIX = (
     "\n\nDATA GENERATION STRICTNESS\n"
-    "ONE REQUEST = ONE ACTION. Emit exactly one non-empty <think> block and exactly one raw JSON "
-    'object with only "tool" and "arguments". Immediately STOP after that JSON object: never emit '
-    "a second <think>, a second action, a numbered plan of calls, or a complete multi-step "
-    "solution in one response. The harness will execute only this one action and return a fresh "
-    "state before you choose the next action. Your <think> block must be non-empty on every turn. "
-    "Put the reason inside <think> tags and do not use tool_call tags. The reason should be specific "
-    "to the current question, "
+    + TEACHER_ONE_ACTION_RULE
+    + " The reason should be specific to the current question, "
     "visible schema/observations, and the next tool arguments. After the first turn, do not restate "
     "the original user question; continue from the current environment state or error feedback. "
     "Do not call read_subtable again for the same table, columns, and limit if that read is already "
@@ -241,6 +240,8 @@ def compact_json(obj) -> str:
 
 
 def protocol_failure_type(exc: ProtocolError) -> str:
+    if exc.failure_type:
+        return exc.failure_type
     text = str(exc).lower()
     # Provider carrier violations are response-format failures.  Their actionable retry message
     # includes a canonical JSON example containing the word ``arguments``; keyword classification
@@ -257,7 +258,9 @@ def protocol_failure_type(exc: ProtocolError) -> str:
 def error_event(action_index: int, error_type: str, message: str,
                 state_before: dict, state_after: dict | None = None,
                 attempted_tool: str | None = None,
-                attempted_arguments: dict | None = None) -> dict:
+                attempted_arguments: dict | None = None,
+                error_code: str | None = None,
+                details: dict | None = None) -> dict:
     """Audit a rejected model action without making it an SFT supervision target."""
     state_after = state_before if state_after is None else state_after
     event = {
@@ -268,6 +271,10 @@ def error_event(action_index: int, error_type: str, message: str,
         "state_before_hash": __import__("hashlib").sha256(compact_json(state_before).encode()).hexdigest(),
         "state_after_hash": __import__("hashlib").sha256(compact_json(state_after).encode()).hexdigest(),
     }
+    if error_code:
+        event["error_code"] = error_code
+    if details:
+        event["details"] = deepcopy(details)
     if attempted_tool:
         event["attempted_tool"] = attempted_tool
         event["attempted_arguments"] = attempted_arguments or {}
@@ -484,11 +491,7 @@ def trajectory_id(split: str, example_index: int, ex: dict) -> str:
 
 
 def observation_for_error(step_id: str, error_type: str, message: str) -> str:
-    return compact_json({
-        "step_id": step_id,
-        "status": "error",
-        "error": {"type": error_type, "message": message},
-    })
+    return tool_error_message(step_id, error_type, message)
 
 
 def split_sentences(text: str) -> list[str]:
@@ -608,6 +611,7 @@ def run_rollout(
     context_mode: str,
     history_turns: int,
     rolling_prompt_variant: str,
+    prompt_audit: dict[str, str] | None = None,
     policy_prompt_variant: str = POLICY_PROMPT_CANONICAL,
     plan_policy: str = PLAN_POLICY_OPTIONAL,
     deepseek_carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
@@ -633,6 +637,7 @@ def run_rollout(
     error_counts = collections.Counter()
     error_events: list[dict] = []
     legal_history: list[dict] = []
+    adjacent_guard = AdjacentActionGuard()
     plan_tracker = ResidentPlanPolicyTracker(plan_policy)
     successful_tool_steps = 0
     usage = collections.Counter()
@@ -776,8 +781,14 @@ def run_rollout(
         try:
             rejection = provider_rejection_message(adapter_record)
             if rejection:
+                adjacent_guard.clear()
                 raise ProtocolError(rejection)
-            think, tool, args = parse_assistant_strict(text)
+            step_id = f"step_{action_count}"
+            think, tool, args = parse_assistant_strict(
+                text,
+                adjacent_guard=adjacent_guard,
+                step_id=step_id,
+            )
             think_source = "model"
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
             turn["think_source"] = think_source
@@ -817,7 +828,6 @@ def run_rollout(
                 })
                 break
 
-            step_id = f"step_{action_count}"
             out, table_name = execute_tool(
                 h,
                 tool,
@@ -840,6 +850,7 @@ def run_rollout(
                 "recovered_from_error_type": (last_error or {}).get("error", {}).get("type"),
             })
             turns.append(turn)
+            adjacent_guard.mark_last("success")
             last_error = None
             successful_tool_steps += 1
             plan_tracker.record_success(tool, args)
@@ -854,11 +865,18 @@ def run_rollout(
         except (ProtocolError, Exception) as exc:  # noqa: BLE001
             errors += 1
             parsed = turn.get("parsed") or {}
+            attempted_tool = parsed.get("tool") or getattr(exc, "attempted_tool", None)
+            attempted_arguments = (
+                parsed.get("arguments")
+                if parsed.get("tool")
+                else getattr(exc, "attempted_arguments", None)
+            )
             state_after = ctx["environment"].snapshot()
             error_type = protocol_failure_type(exc) if isinstance(exc, ProtocolError) else "execution_error"
+            adjacent_guard.mark_last("rejected")
             if error_type == "execution_error" and compact_json(state_after) != compact_json(state_before):
                 error_type = "nonrecoverable_execution_error"
-            message = format_tool_error(exc, h, parsed.get("tool"), parsed.get("arguments"))
+            message = format_tool_error(exc, h, attempted_tool, attempted_arguments)
             turn["execution_error"] = message
             turn["execution_error_type"] = error_type
             event = error_event(
@@ -867,8 +885,10 @@ def run_rollout(
                 message,
                 state_before,
                 state_after,
-                parsed.get("tool"),
-                parsed.get("arguments"),
+                attempted_tool,
+                attempted_arguments,
+                getattr(exc, "code", type(exc).__name__),
+                getattr(exc, "details", None),
             )
             turn["error_event"] = event
             error_events.append(event)
@@ -892,12 +912,18 @@ def run_rollout(
                     "errors": errors,
                 })
                 break
-            last_error = {
-                "step_id": step_id,
-                "status": "error",
-                "error": {"type": error_type, "message": message},
-            }
-            messages.append({"role": "user", "content": observation_for_error(step_id, error_type, message)})
+            error_observation = tool_error_message(
+                step_id,
+                error_type,
+                message,
+                error_code=getattr(exc, "code", type(exc).__name__),
+                details=getattr(exc, "details", None),
+                attempted_tool=attempted_tool,
+                attempted_arguments=attempted_arguments,
+            )
+            last_error = json.loads(error_observation)
+            adjacent_guard.mark_last("rejected", last_error["error"])
+            messages.append({"role": "user", "content": error_observation})
             continue
     else:
         rec.update({
@@ -942,6 +968,7 @@ def run_rollout(
                 "method": "external_llm_closed_loop",
                 "model": model,
                 "protocol_hash": protocol_hash(system_prompt),
+                "prompt_contract": dict(prompt_audit or {}),
                 "context_mode": context_mode,
                 "history_turns": history_turns,
                 "rolling_prompt_variant": rolling_prompt_variant,
@@ -1125,11 +1152,25 @@ def main() -> int:
     prompt_suffix = DATA_GENERATION_SUFFIX
     if args.plan_policy == PLAN_POLICY_REQUIRED_RESIDENT:
         prompt_suffix += REQUIRED_RESIDENT_PLAN_SUFFIX
+    canonical_teacher_prompt = base_system_prompt + prompt_suffix
     system_prompt = provider_system_prompt(
         args.model,
-        base_system_prompt + prompt_suffix,
+        canonical_teacher_prompt,
         carrier=args.deepseek_carrier,
     )
+    prompt_audit = {
+        "teacher_prompt_role": "teacher-generation",
+        "teacher_canonical_prompt_sha256": hashlib.sha256(
+            canonical_teacher_prompt.encode("utf-8")
+        ).hexdigest(),
+        "teacher_provider_prompt_sha256": hashlib.sha256(
+            system_prompt.encode("utf-8")
+        ).hexdigest(),
+        "student_runtime_prompt_sha256": hashlib.sha256(
+            student_prompt.encode("utf-8")
+        ).hexdigest(),
+        "tool_schema_sha256": tool_schema_hash(),
+    }
     started = time.time()
     counts = collections.Counter()
     tool_hist = collections.Counter()
@@ -1155,6 +1196,7 @@ def main() -> int:
             context_mode=args.context_mode,
             history_turns=args.history_turns,
             rolling_prompt_variant=args.rolling_prompt_variant,
+            prompt_audit=prompt_audit,
             policy_prompt_variant=args.policy_prompt_variant,
             plan_policy=args.plan_policy,
             deepseek_carrier=args.deepseek_carrier,
@@ -1233,13 +1275,7 @@ def main() -> int:
         "failures_output": str(failure_path),
         "all_output": str(all_path),
         "protocol_hash": protocol_hash(system_prompt),
-        "student_runtime_prompt_sha256": hashlib.sha256(
-            student_prompt.encode("utf-8")
-        ).hexdigest(),
-        "teacher_provider_prompt_sha256": hashlib.sha256(
-            system_prompt.encode("utf-8")
-        ).hexdigest(),
-        "tool_schema_sha256": tool_schema_hash(),
+        **prompt_audit,
         "max_steps": args.max_steps,
         "workers": max(1, args.workers),
         "max_errors_per_type": args.max_errors_per_type,

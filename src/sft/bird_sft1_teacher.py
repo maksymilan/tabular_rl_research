@@ -34,6 +34,7 @@ from protocol import (  # noqa: E402
     parse_assistant_strict,
     protocol_hash,
     teacher_system_prompt,
+    tool_schema_hash,
 )
 from generate_teacher_rollouts import add_usage, chat_with_retries  # noqa: E402
 
@@ -209,7 +210,18 @@ def run_episode(
     last_error: dict | None = None
     error_counts: collections.Counter[str] = collections.Counter()
     started = time.monotonic()
-    system_prompt = teacher_system_prompt(get_system_prompt()) + DATA_GENERATION_SUFFIX
+    student_prompt = get_system_prompt()
+    system_prompt = teacher_system_prompt(student_prompt) + DATA_GENERATION_SUFFIX
+    prompt_contract = {
+        "teacher_prompt_role": "teacher-generation",
+        "teacher_canonical_prompt_sha256": hashlib.sha256(
+            system_prompt.encode("utf-8")
+        ).hexdigest(),
+        "student_runtime_prompt_sha256": hashlib.sha256(
+            student_prompt.encode("utf-8")
+        ).hexdigest(),
+        "tool_schema_sha256": tool_schema_hash(),
+    }
     try:
         for step_index in range(1, max_steps + 1):
             state_before = ctx["environment"].snapshot()
@@ -358,7 +370,8 @@ def run_episode(
                 "method": "external_teacher_closed_loop",
                 "model": model,
                 "semantic_attempts": 1,
-                "protocol_hash": protocol_hash(),
+                "protocol_hash": protocol_hash(system_prompt),
+                "prompt_contract": prompt_contract,
                 "elapsed_seconds": record["elapsed_seconds"],
                 "usage": record["usage"],
                 "first_error_type": record["first_error_type"],
@@ -566,6 +579,8 @@ def main() -> int:
                   f"{record['episode_id']} type={record.get('failure_type')} steps={len(record['steps'])}")
 
     report = summary(records)
+    student_prompt = get_system_prompt()
+    teacher_prompt = teacher_system_prompt(student_prompt) + DATA_GENERATION_SUFFIX
     report.update({
         "generator": "src/sft/bird_sft1_teacher.py",
         "selection": str(args.selection),
@@ -581,7 +596,15 @@ def main() -> int:
         },
         "reused_first_model_outputs": bool(args.reuse_first_turns_from),
         "reused_first_turns_from": str(args.reuse_first_turns_from) if args.reuse_first_turns_from else None,
-        "protocol_hash": protocol_hash(),
+        "protocol_hash": protocol_hash(teacher_prompt),
+        "teacher_prompt_role": "teacher-generation",
+        "teacher_canonical_prompt_sha256": hashlib.sha256(
+            teacher_prompt.encode("utf-8")
+        ).hexdigest(),
+        "student_runtime_prompt_sha256": hashlib.sha256(
+            student_prompt.encode("utf-8")
+        ).hexdigest(),
+        "tool_schema_sha256": tool_schema_hash(),
         "all_output": str(args.all_out),
         "success_output": str(args.success_out),
         "failures_output": str(args.failures_out),

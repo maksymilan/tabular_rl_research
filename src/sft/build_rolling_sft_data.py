@@ -38,6 +38,7 @@ from tool_schemes import (  # noqa: E402
     TOOL_SCHEME_REGISTRY_VERSION,
     assert_record_tool_scheme,
 )
+from sft_dataset_registry import write_sharegpt_dataset_info  # noqa: E402
 
 ROLE_MAP = {"user": "human", "assistant": "gpt"}
 STEP_REF = re.compile(r"\bstep_(\d+)\b")
@@ -82,6 +83,11 @@ def legal_history(steps: list[dict]) -> list[dict]:
             "observation": tool_output_message(step["step_id"], step["tool_output"]),
         })
     return history
+
+
+def is_sft_target_step(step: dict) -> bool:
+    """Context-only recovery prefixes remain replayable history but do not contribute loss."""
+    return step.get("sft_target_eligible", True) is not False
 
 
 def factual_step_refs(value: Any, parent_key: str | None = None):
@@ -191,24 +197,6 @@ def convert_step(
     return record, index
 
 
-def write_dataset_info(out_path: Path, dataset_name: str) -> tuple[Path, Path]:
-    entry = {
-        dataset_name: {
-            "file_name": out_path.name,
-            "formatting": "sharegpt",
-            "columns": {"messages": "conversations", "system": "system"},
-            "tags": {"role_tag": "from", "content_tag": "value", "user_tag": "human", "assistant_tag": "gpt"},
-        }
-    }
-    snippet = out_path.parent / f"dataset_info.{dataset_name}.snippet.json"
-    snippet.write_text(json.dumps(entry, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    registry = out_path.parent / "dataset_info.json"
-    existing = json.loads(registry.read_text(encoding="utf-8")) if registry.exists() else {}
-    existing.update(entry)
-    registry.write_text(json.dumps(existing, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return snippet, registry
-
-
 def build(
     input_path: Path,
     out_path: Path,
@@ -218,6 +206,7 @@ def build(
     prompt_variant: str = "full",
     observation_style: str = "resident",
     denotation_comparison: str = "bird-set",
+    replay_attestation_manifest: Path | None = None,
 ) -> dict:
     if history_turns <= 0:
         raise ValueError("history_turns must be positive for the bounded rolling training protocol")
@@ -226,6 +215,28 @@ def build(
     if observation_style not in {"resident", "full"}:
         raise ValueError(f"unknown rolling observation style: {observation_style}")
     trajectories = read_jsonl(input_path)
+    replay_attestation: dict[str, Any] | None = None
+    if replay_attestation_manifest is not None:
+        replay_attestation = json.loads(
+            replay_attestation_manifest.read_text(encoding="utf-8")
+        )
+        attested_output = (
+            (replay_attestation.get("outputs") or {}).get("accepted")
+            or replay_attestation.get("output")
+        )
+        if Path(str(attested_output)).resolve() != input_path.resolve():
+            raise ValueError("replay attestation does not name the trajectory input")
+        attested_sha = (
+            (replay_attestation.get("outputs") or {}).get("accepted_sha256")
+            or replay_attestation.get("output_sha256")
+        )
+        actual_sha = hashlib.sha256(input_path.read_bytes()).hexdigest()
+        if attested_sha != actual_sha:
+            raise ValueError("replay attestation hash does not match the trajectory input")
+        if replay_attestation.get("denotation_comparison") != denotation_comparison:
+            raise ValueError("replay attestation uses a different denotation comparison")
+        if replay_attestation.get("accepted_trajectories") != len(trajectories):
+            raise ValueError("replay attestation trajectory count mismatch")
     system = student_runtime_system_prompt(
         context_mode="rolling-legal-history",
         compact=prompt_variant == "compact",
@@ -238,7 +249,7 @@ def build(
     prefix_lengths: list[int] = []
     tool_hist: Counter = Counter()
     difficulty_hist: Counter = Counter()
-    recovery_count = replayed = record_count = 0
+    recovery_count = replayed = record_count = context_only_prefix_steps = 0
 
     try:
         with tmp_out.open("w", encoding="utf-8") as out, tmp_index.open("w", encoding="utf-8") as index:
@@ -257,14 +268,20 @@ def build(
                     raise ValueError(
                         f"{trajectory['trajectory_id']}: history window {generation.get('history_turns')} != {history_turns}"
                     )
-                replay_ok, replay_error = replay_success_trajectory(
-                    trajectory,
-                    denotation_comparison=denotation_comparison,
-                )
-                if not replay_ok:
-                    raise ValueError(f"{trajectory['trajectory_id']}: replay failed: {replay_error}")
-                replayed += 1
+                if replay_attestation is None:
+                    replay_ok, replay_error = replay_success_trajectory(
+                        trajectory,
+                        denotation_comparison=denotation_comparison,
+                    )
+                    if not replay_ok:
+                        raise ValueError(
+                            f"{trajectory['trajectory_id']}: replay failed: {replay_error}"
+                        )
+                    replayed += 1
                 for step_index, step in enumerate(trajectory["steps"]):
+                    if not is_sft_target_step(step):
+                        context_only_prefix_steps += 1
+                        continue
                     record, index_row = convert_step(
                         trajectory,
                         step_index,
@@ -318,10 +335,33 @@ def build(
             system.encode("utf-8")
         ).hexdigest(),
         "tool_schema_sha256": tool_schema_hash(),
+        "source_teacher_prompt_sha256s": sorted({
+            str((trajectory.get("rollout_generation") or {}).get("prompt_contract", {}).get(
+                "teacher_provider_prompt_sha256"
+            ))
+            for trajectory in trajectories
+            if (trajectory.get("rollout_generation") or {}).get("prompt_contract", {}).get(
+                "teacher_provider_prompt_sha256"
+            )
+        }),
         "base_protocol_hash": protocol_hash(system),
         "source_episodes": len(trajectories),
         "replayed_episodes": replayed,
+        "source_replay_attested_episodes": (
+            len(trajectories) if replay_attestation is not None else 0
+        ),
+        "replay_attestation_manifest": (
+            str(replay_attestation_manifest)
+            if replay_attestation_manifest is not None
+            else None
+        ),
+        "replay_attestation_manifest_sha256": (
+            hashlib.sha256(replay_attestation_manifest.read_bytes()).hexdigest()
+            if replay_attestation_manifest is not None
+            else None
+        ),
         "records": record_count,
+        "context_only_prefix_steps": context_only_prefix_steps,
         "feedback_recovery_targets": recovery_count,
         "difficulty_targets": dict(sorted(difficulty_hist.items())),
         "tool_hist": dict(tool_hist.most_common()),
@@ -358,6 +398,14 @@ def main() -> int:
         default="bird-set",
         help="replay metric for current SFT construction; fixed to BIRD reference EX",
     )
+    parser.add_argument(
+        "--replay-attestation-manifest",
+        type=Path,
+        help=(
+            "Reuse an immutable assembly manifest that binds source-time replay-verified "
+            "trajectories, avoiding a redundant third execution pass."
+        ),
+    )
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", args.dataset_name):
         parser.error("--dataset-name must contain only letters, digits, '.', '_' or '-'")
@@ -372,8 +420,13 @@ def main() -> int:
         prompt_variant=args.rolling_prompt_variant,
         observation_style=args.rolling_observation_style,
         denotation_comparison=args.denotation_comparison,
+        replay_attestation_manifest=(
+            args.replay_attestation_manifest.resolve()
+            if args.replay_attestation_manifest
+            else None
+        ),
     )
-    snippet, registry = write_dataset_info(out_path, args.dataset_name)
+    snippet, registry = write_sharegpt_dataset_info(out_path, args.dataset_name)
     manifest["dataset_name"] = args.dataset_name
     manifest["dataset_info_snippet"] = str(snippet)
     manifest["dataset_info_registry"] = str(registry)

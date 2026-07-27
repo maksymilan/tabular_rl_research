@@ -13,7 +13,7 @@ from typing import Any
 
 from catalog import build_catalog
 from executor import Harness
-from protocol import SYSTEM_PROMPT, first_user_message
+from protocol import first_user_message, student_runtime_system_prompt
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -59,6 +59,7 @@ def load_rl_task_records(
     examples_json: Path | None = None,
     limit: int = 0,
     seed: int = 20260710,
+    context_mode: str = "rolling-legal-history",
 ) -> list[dict[str, Any]]:
     """Create generic hidden-label task records shared by both RL reward conditions."""
     if selection is not None and examples_json is not None:
@@ -91,6 +92,10 @@ def load_rl_task_records(
         indexed = indexed[:limit]
 
     records: list[dict[str, Any]] = []
+    system_prompt = student_runtime_system_prompt(
+        context_mode=context_mode,
+        compact=False,
+    )
     catalogs: dict[str, dict[str, Any]] = {}
     for index, example in indexed:
         db_id = example["db_id"]
@@ -109,7 +114,7 @@ def load_rl_task_records(
             {
                 "data_source": f"{example.get('dataset', 'spider')}_table_rl",
                 "prompt": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": first_user_message(
                         catalog, example["question"], example.get("external_knowledge"),
                     )},

@@ -1,6 +1,7 @@
 # Relation Derivation Contract
 
-Status: active model-visible metadata contract for protocol `version24`.
+Status: active model-visible metadata contract introduced in `version24` and unchanged in the
+current `version25` prompt-role split.
 
 Source of truth: `src/harness/relation_derivation/`.
 

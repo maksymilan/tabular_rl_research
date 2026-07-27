@@ -30,13 +30,6 @@ def generator_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
             *forwarded,
         ]
     if tool_scheme == ACTION_BLOCK_TOOL_SCHEME:
-        interface_flags = {
-            "--structured-error-feedback",
-            "--low-friction-interface",
-            "--safe-low-friction-interface",
-        }
-        if not any(flag in forwarded for flag in interface_flags):
-            forwarded = [*forwarded, "--safe-low-friction-interface"]
         return [
             sys.executable,
             str(ROOT / "src" / "eval" / "evaluate_batch_plan.py"),

@@ -38,8 +38,9 @@ model-authored action across separate fields. For example, the DS Flash adapter 
 `reasoning_content` plus the one visible action shape selected for that experiment: either one raw
 JSON action under JSON Output or one complete tool-call block without that constraint. It preserves
 both raw fields in the audit record and carries that existing reasoning into the canonical
-`<think>` field. It never invents reasoning, edits JSON/arguments, balances tags, or accepts partial
-tags. All other shapes still go to the strict parser unchanged and fail normally. The selected
+`<think>` field. It never invents reasoning, edits JSON/arguments, balances JSON, or accepts
+partial provider envelopes. All other shapes still go to the strict parser unchanged and fail
+normally. The selected
 carrier, request controls, adapter use, and raw provider identity are recorded in turns and
 manifests.
 
@@ -272,8 +273,9 @@ whose resident state hash is unchanged.
 Whole episode restarts, when used for pass@k, are separate attempts and retain separate logs.
 
 The shared relational semantics live in `src/harness/executor.py`,
-`src/harness/relation_derivation/`, `src/harness/provenance.py`, and
-`src/harness/environment_state.py`. `src/eval/rollout.py`,
+`src/harness/relation_derivation/`, `src/harness/provenance.py`,
+`src/harness/observation_binding.py`, and `src/harness/environment_state.py`.
+`src/eval/rollout.py`,
 `src/sft/generate_teacher_rollouts.py`, and `src/rl/tool_environment.py` invoke that same layer.
 The historical Verl token-concatenating adapter is not a current training entry point, because
 state rebuilding needs per-turn loss accounting rather than one appended transcript.
@@ -281,8 +283,10 @@ state rebuilding needs per-turn loss accounting rather than one appended transcr
 ## Migration Rule
 
 Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use
-`version24`, but new SFT construction remains gated on the frozen 200-task accuracy requirement.
+`version25`, but new SFT construction remains gated on the frozen 200-task accuracy requirement.
 Historical artifacts retain their original model-visible contracts and may only enter
-replay-compatible paths. Every teacher/eval result directory and manifest must record its exact
-protocol version/hash and provider request controls; historical data is not relabeled or mutated
-in place.
+replay-compatible paths. SFT, evaluation, and RL use the same student runtime prompt; the external
+teacher receives a strict superset whose extra guidance is not exported into student records.
+Every generation/train/eval/RL manifest must record its applicable teacher/student prompt hash,
+public tool-schema hash, protocol version/hash, and provider request controls; historical data is
+not relabeled or mutated in place.

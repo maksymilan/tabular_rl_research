@@ -21,21 +21,27 @@ table. The emitter and rollout each supply their own resolver over the same arg 
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
+from observation_binding import (
+    action_literal_slots,
+    base_column,
+    same_scalar,
+    singleton_visible_cell,
+)
 from plan import TABLE_REF_ARGS
 
 
 PERCEPTION_TOOLS = frozenset({"describe_table", "inspect_column", "read_subtable"})
 
 
-def _base_col(col):
-    """Reduce a model-facing join column to its source-column name for grounding comparisons."""
-    if not isinstance(col, str):
-        return col
-    if "__" in col:
-        return col.split("__", 1)[-1]
-    if "." in col:
-        return col.rsplit(".", 1)[-1]
-    return col
+@dataclass(frozen=True)
+class _RowGroundingCandidate:
+    score: int
+    step_id: str
+    source_table: str
+    detail: dict[str, Any]
 
 
 def _cond_value_refs(cond):
@@ -96,7 +102,7 @@ def build_references(tool: str, args: dict, resolve_step) -> list[dict]:
                 continue
             if kind == "value_ref":
                 refs.append({"type": "value", "step": sid, "role": "value_ref",
-                             "target": {"column": _base_col(col)}})
+                             "target": {"column": base_column(col)}})
             else:  # an IN-subquery's set membership is a data input
                 refs.append({"type": "data", "step": sid, "role": "in_table",
                              "target": {"handle": ref}})
@@ -115,7 +121,7 @@ def build_references(tool: str, args: dict, resolve_step) -> list[dict]:
                         "role": "aggregate_where",
                         "target": {
                             "aggregation_index": aggregation_index,
-                            "column": _base_col(col),
+                            "column": base_column(col),
                         },
                     })
                 else:
@@ -177,7 +183,7 @@ def _columns(value, parent: str | None = None) -> set[str]:
         return out
     if not isinstance(value, dict):
         if parent in column_keys and isinstance(value, str):
-            return {_base_col(value)}
+            return {base_column(value)}
         return set()
     out: set[str] = set()
     for key, item in value.items():
@@ -185,89 +191,11 @@ def _columns(value, parent: str | None = None) -> set[str]:
     return out
 
 
-def _flatten_values(value) -> list:
-    if isinstance(value, dict):
-        out = []
-        for item in value.values():
-            out.extend(_flatten_values(item))
-        return out
-    if isinstance(value, (list, tuple)):
-        out = []
-        for item in value:
-            out.extend(_flatten_values(item))
-        return out
-    return [value]
-
-
-def _condition_literals(condition) -> list:
-    if isinstance(condition, list):
-        return [value for item in condition for value in _condition_literals(item)]
-    if not isinstance(condition, dict):
-        return []
-    out = []
-    for key in ("and", "or"):
-        for item in condition.get(key, []) or []:
-            out.extend(_condition_literals(item))
-    if "not" in condition:
-        out.extend(_condition_literals(condition["not"]))
-    if "value" in condition and not isinstance(condition["value"], dict):
-        out.extend(_flatten_values(condition["value"]))
-    if "values" in condition:
-        out.extend(_flatten_values(condition["values"]))
-    return out
-
-
-def condition_literal_targets(condition) -> list[tuple[str | None, object]]:
-    """Keep each literal attached to the column whose predicate consumes it."""
-    if isinstance(condition, list):
-        return [pair for item in condition for pair in condition_literal_targets(item)]
-    if not isinstance(condition, dict):
-        return []
-    out: list[tuple[str | None, object]] = []
-    for key in ("and", "or"):
-        for item in condition.get(key, []) or []:
-            out.extend(condition_literal_targets(item))
-    if "not" in condition:
-        out.extend(condition_literal_targets(condition["not"]))
-    column = _base_col(condition.get("column"))
-    if "value" in condition and not isinstance(condition["value"], dict):
-        out.extend((column, value) for value in _flatten_values(condition["value"]))
-    if "values" in condition:
-        out.extend((column, value) for value in _flatten_values(condition["values"]))
-    return out
-
-
-def _action_literals(tool: str, args: dict) -> list:
-    if tool == "condition_filter":
-        return _condition_literals(args.get("conditions"))
-    if tool == "group_aggregate":
-        return list(args.get("category_values") or []) + [
-            value
-            for aggregation in args.get("aggregations") or []
-            if isinstance(aggregation, dict)
-            for value in _condition_literals(aggregation.get("where"))
-        ]
-    if tool == "pivot":
-        return list(args.get("key_values") or [])
-    return []
-
-
-def _same_value(left, right) -> bool:
-    if left is None or right is None:
-        return left is right
-    if isinstance(left, bool) or isinstance(right, bool):
-        return type(left) is type(right) and left == right
-    try:
-        return left == right
-    except Exception:
-        return False
-
-
 def _matching_values(left: list, right: list) -> list:
     matches = []
     for value in left:
-        if any(_same_value(value, candidate) for candidate in right):
-            if not any(_same_value(value, existing) for existing in matches):
+        if any(same_scalar(value, candidate) for candidate in right):
+            if not any(same_scalar(value, existing) for existing in matches):
                 matches.append(value)
     return matches
 
@@ -337,7 +265,7 @@ def _foreign_key_graph(history: dict[str, dict]) -> dict[tuple[str, str], set[tu
         described_tables.extend((record.get("output") or {}).get("tables", []) or [])
     primary_keys = {
         described.get("table_name"): [
-            _base_col(column.get("name"))
+            base_column(column.get("name"))
             for column in described.get("columns", []) or []
             if isinstance(column, dict) and column.get("pk") and isinstance(column.get("name"), str)
         ]
@@ -351,7 +279,7 @@ def _foreign_key_graph(history: dict[str, dict]) -> dict[tuple[str, str], set[tu
         if not isinstance(table, str):
             continue
         for foreign_key in described.get("foreign_keys", []) or []:
-            column = _base_col(foreign_key.get("column"))
+            column = base_column(foreign_key.get("column"))
             reference = foreign_key.get("references")
             if not isinstance(column, str) or not isinstance(reference, str) or "." not in reference:
                 continue
@@ -362,7 +290,7 @@ def _foreign_key_graph(history: dict[str, dict]) -> dict[tuple[str, str], set[tu
                     continue
                 target_column = candidates[0]
             left = (table, column)
-            right = (target_table, _base_col(target_column))
+            right = (target_table, base_column(target_column))
             graph.setdefault(left, set()).add(right)
             graph.setdefault(right, set()).add(left)
     return graph
@@ -375,12 +303,12 @@ def _columns_equivalent(
     target_column: str,
     foreign_keys: dict[tuple[str, str], set[tuple[str, str]]],
 ) -> bool:
-    source_nodes = {(table, _base_col(source_column)) for table in source_tables}
-    target_nodes = {(table, _base_col(target_column)) for table in target_tables}
+    source_nodes = {(table, base_column(source_column)) for table in source_tables}
+    target_nodes = {(table, base_column(target_column)) for table in target_tables}
     if source_nodes & target_nodes:
         return True
-    source_base = _base_col(source_column)
-    target_base = _base_col(target_column)
+    source_base = base_column(source_column)
+    target_base = base_column(target_column)
     if source_base == target_base:
         if source_tables & target_tables:
             return True
@@ -405,37 +333,22 @@ def build_grounding_references(tool: str, args: dict, history: dict[str, dict]) 
     """Infer perception dependencies from legal actions and harness-owned observations.
 
     This is intentionally model-independent: it never reads think/reason text and does not require
-    the model to cite an evidence id. The latest matching observation wins for domain/row values,
-    avoiding broad credit for every earlier observation containing a common scalar.
+    the model to cite an evidence id. Structurally grounded row observations outrank untyped visible
+    copies, and recency breaks ties, avoiding broad credit for every earlier matching scalar.
     """
     table_refs = _table_refs(tool, args)
     action_columns = _columns(args)
-    literals = _action_literals(tool, args)
-    if tool == "condition_filter":
-        literal_targets = condition_literal_targets(args.get("conditions"))
-    elif tool == "group_aggregate":
-        literal_targets = [
-            target
-            for aggregation in args.get("aggregations") or []
-            if isinstance(aggregation, dict)
-            for target in condition_literal_targets(aggregation.get("where"))
-        ]
-        if args.get("output_layout") == "columns" and len(args.get("group_by") or []) == 1:
-            literal_targets.extend(
-                (_base_col(args["group_by"][0]), value)
-                for value in args.get("category_values") or []
-            )
-    elif tool == "pivot":
-        literal_targets = [
-            (_base_col(args.get("key_column")), value)
-            for value in args.get("key_values") or []
-        ]
-    else:
-        literal_targets = []
+    literal_slots = action_literal_slots(tool, args)
+    literals = [slot.value for slot in literal_slots]
     refs: list[dict] = []
     schema_linked: set[str] = set()
     domain_linked: set[tuple[str, str]] = set()
-    linked_row_literals: set[tuple[str, str, str]] = set()
+    # One best source per consumed literal slot.  Structural column/FK matches outrank a newer
+    # pure visible copy; recency breaks ties within the same evidence class.
+    row_candidates: dict[
+        tuple[str, tuple[str | int, ...], str, str],
+        _RowGroundingCandidate,
+    ] = {}
     producers = _history_handle_producers(history)
     root_memo: dict[str, set[str]] = {}
     foreign_keys = _foreign_key_graph(history)
@@ -455,7 +368,7 @@ def build_grounding_references(tool: str, args: dict, history: dict[str, dict]) 
                 if table not in table_refs or table in schema_linked:
                     continue
                 available = {
-                    _base_col(column.get("name"))
+                    base_column(column.get("name"))
                     for column in described.get("columns", []) or []
                     if isinstance(column, dict) and isinstance(column.get("name"), str)
                 }
@@ -470,7 +383,7 @@ def build_grounding_references(tool: str, args: dict, history: dict[str, dict]) 
 
         elif prior_tool == "inspect_column":
             table = prior_args.get("table")
-            column = _base_col(output.get("column") or prior_args.get("column"))
+            column = base_column(output.get("column") or prior_args.get("column"))
             key = (str(table), str(column))
             if key in domain_linked or table not in table_refs or column not in action_columns:
                 continue
@@ -486,7 +399,7 @@ def build_grounding_references(tool: str, args: dict, history: dict[str, dict]) 
                 "target": {"table": table, "column": column, "values": matched},
             })
 
-        elif literal_targets:
+        elif literal_slots:
             columns = record.get("observed_columns") or output.get("columns")
             rows = output.get("rows")
             if not isinstance(columns, list) or not isinstance(rows, list):
@@ -495,74 +408,126 @@ def build_grounding_references(tool: str, args: dict, history: dict[str, dict]) 
             # bounded previews emitted by relation-producing tools, not only an explicit
             # read_subtable.  Prefer the produced handle so its recorded lineage is preserved.
             source_table = output.get("table") or prior_args.get("table")
+            if not isinstance(source_table, str):
+                continue
             source_roots = _root_tables_for_handle(source_table, history, producers, root_memo)
             computed_columns: set[str] = set()
             if prior_tool == "scalar_compute":
                 computed_columns.update(
-                    _base_col(column)
+                    base_column(column)
                     for column in columns
                     if isinstance(column, str)
                 )
             elif prior_tool == "group_aggregate":
                 computed_columns.update(
-                    _base_col(aggregation.get("as"))
+                    base_column(aggregation.get("as"))
                     for aggregation in prior_args.get("aggregations") or []
                     if isinstance(aggregation, dict)
                     and isinstance(aggregation.get("as"), str)
                 )
-            matched_details: list[dict] = []
-            for target_column, literal in literal_targets:
+            for slot in literal_slots:
+                target_column = slot.column
+                literal = slot.value
+                argument_path = slot.argument_path
                 if not isinstance(target_column, str):
                     continue
-                literal_key = (target_column, type(literal).__name__, repr(literal))
-                if literal_key in linked_row_literals:
-                    continue
+                literal_key = (
+                    target_column,
+                    argument_path,
+                    type(literal).__name__,
+                    repr(literal),
+                )
+                exact_cells: list[tuple[int, int, str, bool]] = []
+                structural_cells: list[tuple[int, int, str, bool]] = []
                 for column_index, source_column in enumerate(columns):
-                    source_column = _base_col(source_column)
+                    source_column = base_column(source_column)
                     if not isinstance(source_column, str):
                         continue
                     computed_result = source_column in computed_columns
-                    if not computed_result and not _columns_equivalent(
-                            source_roots,
-                            source_column,
-                            target_roots,
-                            target_column,
-                            foreign_keys,
-                    ):
-                        continue
-                    if any(
-                        column_index < len(row) and _same_value(row[column_index], literal)
-                        for row in rows
-                        if isinstance(row, (list, tuple))
-                    ):
-                        matched_details.append({
-                            "value": literal,
-                            "source_tables": sorted(source_roots),
-                            "source_column": source_column,
-                            "target_tables": sorted(target_roots),
-                            "target_column": target_column,
-                            "match_kind": (
-                                "computed_result" if computed_result else "column_equivalent"
-                            ),
-                        })
-                        linked_row_literals.add(literal_key)
-                        break
-            if not matched_details:
-                continue
-            matched = []
-            for detail in matched_details:
-                if not any(_same_value(detail["value"], value) for value in matched):
-                    matched.append(detail["value"])
-            refs.append({
-                "type": "grounding",
-                "step": step_id,
-                "role": "row_observation",
-                "target": {
-                    "table": source_table,
-                    "values": matched,
-                    "column_matches": matched_details,
-                },
-            })
+                    structurally_compatible = computed_result or _columns_equivalent(
+                        source_roots,
+                        source_column,
+                        target_roots,
+                        target_column,
+                        foreign_keys,
+                    )
+                    for row_index, row in enumerate(rows):
+                        if (
+                            not isinstance(row, (list, tuple))
+                            or column_index >= len(row)
+                            or not same_scalar(row[column_index], literal)
+                        ):
+                            continue
+                        cell = (row_index, column_index, source_column, computed_result)
+                        exact_cells.append(cell)
+                        if structurally_compatible:
+                            structural_cells.append(cell)
+
+                if structural_cells:
+                    score = 2
+                    cells = structural_cells
+                elif len(exact_cells) == 1:
+                    # BIRD omits many FK declarations.  An exact scalar copied from one unique
+                    # visible cell is still causal evidence even when source/target names differ.
+                    score = 1
+                    cells = exact_cells
+                else:
+                    continue
+
+                existing = row_candidates.get(literal_key)
+                if existing is not None and existing.score >= score:
+                    continue
+                row_index, column_index, source_column, computed_result = cells[0]
+                detail = {
+                    "value": literal,
+                    "source_tables": sorted(source_roots),
+                    "source_column": source_column,
+                    "target_tables": sorted(target_roots),
+                    "target_column": target_column,
+                    "argument_path": list(argument_path),
+                    "match_kind": (
+                        "computed_result"
+                        if computed_result
+                        else "column_equivalent"
+                        if score == 2
+                        else "visible_literal_copy"
+                    ),
+                    "binding_ambiguous": len(cells) != 1,
+                }
+                if len(cells) == 1:
+                    detail["source_row_index"] = row_index
+                    detail["source_column_index"] = column_index
+                replay_source = singleton_visible_cell(step_id, record, literal)
+                if replay_source is not None:
+                    detail["replay_binding"] = replay_source.replay_target()
+                row_candidates[literal_key] = _RowGroundingCandidate(
+                    score=score,
+                    step_id=step_id,
+                    source_table=source_table,
+                    detail=detail,
+                )
+
+    details_by_step: dict[tuple[str, str], list[dict]] = {}
+    for candidate in row_candidates.values():
+        details_by_step.setdefault(
+            (candidate.step_id, candidate.source_table),
+            [],
+        ).append(candidate.detail)
+    for (step_id, source_table), matched_details in details_by_step.items():
+        matched = []
+        for detail in matched_details:
+            if not any(same_scalar(detail["value"], value) for value in matched):
+                matched.append(detail["value"])
+        refs.append({
+            "type": "grounding",
+            "step": step_id,
+            "role": "row_observation",
+            "target": {
+                "table": source_table,
+                "values": matched,
+                "column_matches": matched_details,
+            },
+        })
 
     return refs
 

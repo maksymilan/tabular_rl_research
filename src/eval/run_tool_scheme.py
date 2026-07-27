@@ -33,13 +33,6 @@ def runner_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
         return [sys.executable, str(script), *forwarded]
     if tool_scheme == ACTION_BLOCK_TOOL_SCHEME:
         script = HERE / "evaluate_batch_plan.py"
-        interface_flags = {
-            "--structured-error-feedback",
-            "--low-friction-interface",
-            "--safe-low-friction-interface",
-        }
-        if not any(flag in forwarded for flag in interface_flags):
-            forwarded = [*forwarded, "--safe-low-friction-interface"]
         return [sys.executable, str(script), *forwarded]
     raise ValueError(f"unsupported tool scheme: {tool_scheme}")
 

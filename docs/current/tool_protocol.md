@@ -1,4 +1,4 @@
-# Atomic Tool-Scheme Trajectory Protocol (version26)
+# Atomic Tool-Scheme Trajectory Protocol (version28 diagnostic)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -19,6 +19,7 @@ spaces are never merged in one prompt.
   - `MODEL_ARG_SCHEMA`
   - message rendering/parsing
 - Harness provenance sidecars: `src/harness/provenance.py`
+- Visible-cell binding semantics: `src/harness/observation_binding.py`
 - Scalar `value_ref` grounding: `src/harness/scalar_grounding.py`
 - Provenance redesign decision record: `docs/decisions/provenance_redesign.md`
 - SFT export rendering: `src/sft/export_sft_dataset.py`
@@ -60,12 +61,25 @@ chooses perception, relational, planning, and terminal actions itself. Gold SQL 
 outputs, plans, or observations are never visible to the model or teacher. The retired
 gold-SQL-compilation and complete-trajectory-enrichment pipelines live under `archive/` only.
 
-The model emits only:
+### Prompt roles
 
-- one non-empty `<think>` block;
-- one raw JSON object containing exactly `tool` and `arguments`.
+The tool semantics, public argument schema, resident-state authority, grounding rules, and terminal
+contract are shared. Prompt roles differ only in generation guidance:
 
-The active carrier has no `tool_call` tags.
+- the student runtime prompt is used by SFT export, evaluation, and RL. It contains the shared
+  typed-tool contract, canonical action envelope, and concise runtime invariants, but no call
+  cookbook or case-specific repair advice;
+- the external teacher receives that same student contract plus teacher-only elaborations,
+  edge-condition guidance, canonical examples, and causal-generation quality controls;
+- SFT export stores the canonical executed trajectory, then re-renders each legal prefix with the
+  student runtime prompt. It never copies the teacher prompt into student records.
+
+Teacher-rollout, SFT, evaluation, and RL manifests record the applicable teacher/student prompt
+SHA-256 values and the public tool-schema SHA-256. A teacher addition cannot introduce a tool,
+argument, state field, or execution behavior absent from the shared contract.
+
+The model emits only one non-empty `<think>` block followed by one raw JSON object containing
+exactly `tool` and `arguments`. The active carrier has no `tool_call` tags.
 
 The model does not emit provenance, references, produces, quality status, repair metadata, or reward
 fields.
@@ -142,14 +156,30 @@ Public version mapping:
   provenance, state storage, protocol rendering, and model policy. Its completed frozen-200
   DeepSeek v4 Flash evaluation is 145/200 under `bird-set`, versus the paired version20 143/200,
   but it fails the 150/200 gate and slightly regresses legal termination and process errors;
-- `version25`: separates the concise student runtime contract from teacher-only generation
-  guidance while keeping public tool semantics shared;
-- `version26`: current implementation; replaces the tagged action carrier with one non-empty
-  `<think>` block followed directly by the strict raw JSON action. Tagged actions are replay or
-  explicit offline-migration inputs only;
-- future changes increment only the integer (`version27`, `version28`, ...).
+- `version25`: preserves the version24 tools, execution, state, and
+  relation-derivation semantics while separating prompt roles. The student runtime prompt is the
+  concise shared tool contract used identically by SFT export, evaluation, and RL. External
+  teachers receive a strict superset containing generation guidance and examples. Public model
+  argument validation is now isolated in `MODEL_ARG_SCHEMA`, separate from replay-only legacy
+  schemas. This is a contract/engineering change and has no accuracy promotion yet;
+- `version26`: preserves all version25 tools, arguments, execution, state, grounding, and
+  relation-derivation semantics, but replaces the model-visible tagged action carrier with one
+  non-empty `<think>` block followed directly by the raw `{"tool":...,"arguments":...}` object.
+  The strict runtime accepts only this carrier. Retired tagged actions are parsed only by an
+  explicitly named offline migration function, then re-rendered without changing their structured
+  action or reasoning;
+- `version27`: adds structured carrier/argument error codes and rejects only two consecutive
+  parsed actions whose canonical `tool + arguments` are exactly equal. It ignores `<think>` and
+  JSON key order, and never searches farther back;
+- `version28`: retains the original rejection details when the same rejected action is retried and
+  makes the existing `read_subtable` no-pagination boundary explicit: without an offset/cursor,
+  an identical call reads the same prefix. Its frozen 48-task checkpoint-560 diagnostic improved
+  legal termination and mean steps but scored 12/48 versus fresh version26 at 13/48, so it is not
+  accuracy-promoted and must not be expanded to full greedy or used for SFT;
+- future changes increment only the integer (`version29`, `version30`, ...).
 
-The current version26 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
+The current version28 diagnostic tool set is unchanged and remains the one in
+`src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
 - `plan`
@@ -167,9 +197,9 @@ The current version26 tool set is the one in `src/sft/protocol.py::TOOL_SPECS`:
 The model-visible relation derivation schema is indexed separately in
 `docs/current/relation_derivation.md`.
 
-The full system prompt includes one concise canonical JSON call for each complex operation family:
-filter, projection/computed column, join, grouped/scalar aggregation, set operation, table answer,
-and scalar answer. These examples use only the current public fields.
+Only the teacher-generation prompt includes canonical JSON examples for complex operation families.
+The student runtime prompt gives required/optional argument signatures and atomic semantics without
+those worked cases.
 
 For every terminal answer, the cited evidence table is scored as the answer. Its rows, columns, and
 column order must match the requested output exactly. `read_subtable(columns=...)` only limits
@@ -179,8 +209,10 @@ produce 1x1 evidence tables and use the same terminal shape. The terminal call c
 model-authored answer data; think/reason text cannot repair answer data.
 
 `read_subtable.limit` is an integer in `1..20`. An out-of-range value is an explicit
-`argument_validation_error`; the harness never clamps it. In bounded rolling mode, prior successful
-actions retain compact result summaries while full factual payloads remain in resident state.
+`argument_validation_error`; the harness never clamps it. The tool has no offset/cursor and does
+not paginate, so an identical call reads the same row prefix. In bounded rolling mode, prior
+successful actions retain compact result summaries while full factual payloads remain in resident
+state.
 
 Each `group_aggregate.aggregations[]` item has `op`, `column`, and `as`, plus an optional `where`
 using the same predicate tree as `condition_filter`. A call may therefore produce a one-row,
@@ -284,6 +316,20 @@ Trajectory JSON may contain harness-owned fields that are not model actions:
 These fields are used for validation, replay, SFT export, provenance slicing, and analysis.
 They should not be copied into model tool arguments.
 
+When a later predicate literal exactly copies a scalar from an earlier model-visible row, the
+harness may add a `row_observation` grounding reference. A declared FK or column-equivalence match
+is preferred. Because BIRD omits some FK declarations, a unique exact visible-cell copy is also
+valid even when the two column names differ. The reference records the consuming argument path and
+the source row/column locator. Counterfactual replay binds only from a singleton observation;
+repeated cells and multi-row selections do not receive a direct replay binding.
+
+This remains harness-side semantics:
+
+- the model does not emit a source pointer or any new tool argument;
+- literals stated by the question or external knowledge remain task constants;
+- counterfactual replay may rebind only those unambiguous harness-proven visible-cell copies;
+- a row-copy edge proves value flow, not an unexecuted higher-order operation such as `argmax`.
+
 ## Recovery Data Rule
 
 Recoverable model errors stay inside the same episode. The harness preserves the resident factual
@@ -291,13 +337,14 @@ state, spends one action from the shared `max_steps` budget, and supplies the ne
 bounded rolling renderer plus structured `LAST TOOL ERROR` in the current user message:
 
 ```json
-{"step_id":"step_4","status":"error","error":{"type":"argument_validation_error","message":"..."}}
+{"step_id":"step_4","status":"error","error":{"type":"argument_validation_error","code":"argument_validation_error","message":"...","details":{"expected_arguments":{"required":["table"],"optional":["columns","limit"]}}},"attempted_action":{"tool":"read_subtable","arguments":{"table":"T","limit":21}}}
 ```
 
 The bounded recoverable classes are `protocol_error`, `argument_validation_error`, and an
-`execution_error` whose environment-state snapshot is unchanged. Each class has its own error
-limit; a mutated-state execution failure is terminal as `nonrecoverable_execution_error`. API
-transport retries are client-side requests, not semantic actions or recovery events.
+`execution_error` whose environment-state snapshot is unchanged. `no_progress_error` is the
+recoverable rejection for one exactly repeated adjacent structured call. Each class has its own
+error limit; a mutated-state execution failure is terminal as `nonrecoverable_execution_error`.
+API transport retries are client-side requests, not semantic actions or recovery events.
 
 Every rejected model action is retained in the full audit record as an `error_event`, with action
 index and before/after state hashes. It is never included in `trajectory.steps` or exported as an
@@ -305,11 +352,10 @@ SFT target. The first later legal step carries `feedback_recovery: true` and its
 A verifier-correct episode is `clean_success` only when it had no error events; otherwise it is
 `recovered_success`.
 
-Strict recovery parsing accepts exactly one non-empty `<think>` block followed directly by one
-complete raw JSON object with exact `tool`/`arguments` keys. It rejects `tool_call` tags. Do not
-close tags, balance JSON, normalize arguments, or otherwise repair model output. Whole-episode
-restarts, when deliberately enabled for pass@k, are distinct attempts and must be reported as
-such.
+Strict recovery parsing accepts exactly one non-empty `<think>` block followed by one complete raw
+JSON object with exact `tool`/`arguments` keys and nothing else. It does not accept `tool_call`
+tags, balance JSON, normalize arguments, or otherwise repair model output. Whole-episode restarts,
+when deliberately enabled for pass@k, are distinct attempts and must be reported as such.
 
 Recovery behavior is represented by ordinary first-person `<think>` text and existing tools:
 

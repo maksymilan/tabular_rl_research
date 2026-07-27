@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Evaluate the hybrid action-block interface.
+"""Evaluate the unified action-block interface.
 
 Each block executes multiple existing atomic tools. Local references induce dependencies; root
 errors are attempted failures while dependency-blocked descendants are not executed or counted as
-additional process errors. The terminal action selects exact answer columns from a grounded
-resident table without changing its rows. Gold SQL is hidden from the model and used only for
-terminal scoring.
+additional process errors. ``answer_from_context`` is a separate top-level terminal action citing
+one grounded resident table. Gold SQL is hidden from the model and used only for terminal scoring.
 """
 from __future__ import annotations
 
@@ -31,19 +30,24 @@ from batch_plan_protocol import (  # noqa: E402
     BATCH_CARRIERS,
     BATCH_CARRIER_INLINE_THINK,
     BATCH_CARRIER_PROVIDER_NATIVE,
+    BATCH_PLAN_TOOL,
     BATCH_PLAN_PROTOCOL_VERSION,
     LOCAL_COLUMN_REF_RE,
     LOCAL_REF_RE,
     LOW_FRICTION_INTERFACE_PROTOCOL_VERSION,
+    MAX_ACTION_BLOCK_CALLS,
     SAFE_LOW_FRICTION_INTERFACE_PROTOCOL_VERSION,
     STRUCTURED_ERROR_FEEDBACK_PROTOCOL_VERSION,
     TERMINAL_TOOL,
+    UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION,
     BatchPlanProtocolError,
     LocalReferenceError,
     batch_plan_protocol_hash,
     build_batch_plan_messages,
     build_batch_plan_system_prompt,
     local_reference_ids,
+    parse_legacy_batch_plan_action,
+    parse_legacy_batch_plan_assistant,
     parse_batch_plan_assistant,
     parse_batch_plan_action,
     render_batch_observation,
@@ -68,13 +72,14 @@ from provider_adapter import (  # noqa: E402
     provider_request_options,
 )
 from provider_client import load_api_config  # noqa: E402
-from protocol import ProtocolError  # noqa: E402
+from protocol import ProtocolError, validate_model_arguments  # noqa: E402
 from tool_schemes import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     TOOL_SCHEME_REGISTRY_VERSION,
 )
 from rollout import (  # noqa: E402
     ContextOverflowError,
+    TERMINAL_ANSWER_CONTRACT,
     execute_tool,
     format_tool_error,
     new_ctx,
@@ -86,9 +91,8 @@ from rollout import (  # noqa: E402
 
 
 DEFAULT_MODEL = "deepseek-v4-flash"
-DEFAULT_MAX_ATOMIC_ACTIONS = 30
-DEFAULT_MAX_MODEL_TURNS = 30
-DEFAULT_MAX_BATCH_CALLS = 8
+DEFAULT_MAX_ACTION_BLOCKS = 30
+DEFAULT_MAX_BATCH_CALLS = MAX_ACTION_BLOCK_CALLS
 DEFAULT_HISTORY_TURNS = 4
 DEFAULT_MAX_TOKENS = 2048
 DEFAULT_MAX_ERRORS_PER_TYPE = 3
@@ -118,7 +122,7 @@ def _state_hash(state: dict) -> str:
 
 def _error_event(
     *,
-    atomic_index: int,
+    atomic_index: int | None,
     model_turn: int,
     batch_index: int | None,
     call_id: str | None,
@@ -132,7 +136,9 @@ def _error_event(
 ) -> dict:
     event = {
         "atomic_index": atomic_index,
-        "step_id": f"step_{atomic_index}",
+        "step_id": (
+            f"step_{atomic_index}" if atomic_index is not None else None
+        ),
         "model_turn": model_turn,
         "batch_index": batch_index,
         "call_id": call_id,
@@ -150,12 +156,12 @@ def _error_event(
 
 def _top_level_error_message(
     *,
-    atomic_index: int,
+    block_action_index: int,
     error_type: str,
     message: str,
 ) -> dict:
     return {
-        "step_id": f"step_{atomic_index}",
+        "action_block_index": block_action_index,
         "status": "error",
         "error": {"type": error_type, "message": message},
     }
@@ -620,6 +626,330 @@ def _resolve_implicit_local_references(
     return resolved
 
 
+def _resolve_resident_runtime_references(
+    tool: str,
+    value,
+    *,
+    declared_ids: set[str],
+    resident_handles: set[str],
+    handle_to_step: dict[str, str],
+    resolutions: list[dict],
+    path=(),
+):
+    """Resolve action-block-only handle spellings that the harness owns deterministically."""
+    if isinstance(value, dict):
+        # Models naturally extend the action-block "$call.column" shorthand to persistent
+        # handles.  For scalar operands this is exactly equivalent to the public
+        # value_ref+column form, so normalize it before resolving the handle to its producer step.
+        # A current-block declaration still shadows an identically named resident handle.
+        resident_scalar = value.get("value_ref") if tool == "scalar_compute" else None
+        if isinstance(resident_scalar, str) and "column" not in value:
+            sigiled = resident_scalar.startswith("$")
+            candidate = resident_scalar[1:] if sigiled else resident_scalar
+            matching_handles = sorted(
+                (
+                    handle
+                    for handle in resident_handles
+                    if handle not in declared_ids
+                    and candidate.startswith(f"{handle}.")
+                    and handle_to_step.get(handle)
+                ),
+                key=len,
+                reverse=True,
+            )
+            if matching_handles:
+                handle = matching_handles[0]
+                column = candidate[len(handle) + 1 :]
+                resolved = handle_to_step[handle]
+                normalized = deepcopy(value)
+                normalized["value_ref"] = resolved
+                normalized["column"] = column
+                resolutions.append({
+                    "path": ".".join((*path, "value_ref")),
+                    "provided": resident_scalar,
+                    "resolved": {
+                        "value_ref": resolved,
+                        "column": column,
+                    },
+                    "rule": (
+                        "sigiled_resident_handle_column_to_producing_step"
+                        if sigiled
+                        else "resident_handle_column_to_producing_step"
+                    ),
+                })
+                return {
+                    key: _resolve_resident_runtime_references(
+                        tool,
+                        child,
+                        declared_ids=declared_ids,
+                        resident_handles=resident_handles,
+                        handle_to_step=handle_to_step,
+                        resolutions=resolutions,
+                        path=(*path, str(key)),
+                    )
+                    for key, child in normalized.items()
+                }
+        return {
+            key: _resolve_resident_runtime_references(
+                tool,
+                child,
+                declared_ids=declared_ids,
+                resident_handles=resident_handles,
+                handle_to_step=handle_to_step,
+                resolutions=resolutions,
+                path=(*path, str(key)),
+            )
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _resolve_resident_runtime_references(
+                tool,
+                child,
+                declared_ids=declared_ids,
+                resident_handles=resident_handles,
+                handle_to_step=handle_to_step,
+                resolutions=resolutions,
+                path=(*path, str(index)),
+            )
+            for index, child in enumerate(value)
+        ]
+    reference_kind = _is_table_or_value_reference_path(tool, path)
+    if not isinstance(value, str) or reference_kind is None:
+        return value
+    sigiled = value.startswith("$")
+    candidate = value[1:] if sigiled else value
+    if candidate in declared_ids or candidate not in resident_handles:
+        return value
+    if reference_kind == "step":
+        resolved = handle_to_step.get(candidate)
+        if not resolved:
+            return value
+        rule = (
+            "sigiled_resident_handle_to_producing_step"
+            if sigiled
+            else "resident_handle_to_producing_step"
+        )
+    else:
+        if not sigiled:
+            return value
+        resolved = candidate
+        rule = "remove_sigil_from_resident_handle"
+    resolutions.append({
+        "path": ".".join(path),
+        "provided": value,
+        "resolved": resolved,
+        "rule": rule,
+    })
+    return resolved
+
+
+def _normalize_action_block_predicates(
+    tool: str,
+    arguments: dict,
+    resolutions: list[dict],
+) -> dict:
+    """Normalize an unambiguous infix boolean list without changing predicate meaning.
+
+    The public predicate tree remains canonical.  This action-block-only adapter accepts the
+    common equivalent ``[predicate, {"op":"and"}, predicate]`` spelling when every connector is
+    the same boolean operator. Mixed connectors are deliberately left for validation because
+    precedence would require a semantic guess.
+    """
+    if tool != "condition_filter":
+        return arguments
+    conditions = arguments.get("conditions")
+    if not isinstance(conditions, list) or len(conditions) < 3 or len(conditions) % 2 == 0:
+        return arguments
+    predicates = conditions[::2]
+    connectors = conditions[1::2]
+    if (
+        not all(isinstance(predicate, dict) and predicate for predicate in predicates)
+        or not all(
+            isinstance(connector, dict)
+            and set(connector) == {"op"}
+            and connector.get("op") in {"and", "or"}
+            for connector in connectors
+        )
+    ):
+        return arguments
+    operators = {connector["op"] for connector in connectors}
+    if len(operators) != 1:
+        return arguments
+    operator = next(iter(operators))
+    resolved = deepcopy(arguments)
+    resolved["conditions"] = {operator: deepcopy(predicates)}
+    resolutions.append({
+        "path": "conditions",
+        "provided": deepcopy(conditions),
+        "resolved": deepcopy(resolved["conditions"]),
+        "rule": "uniform_infix_boolean_predicate",
+    })
+    return resolved
+
+
+def _normalize_action_block_order_by(
+    tool: str,
+    arguments: dict,
+    resolutions: list[dict],
+) -> dict:
+    """Accept the unambiguous structured spelling of an ordered column."""
+    if tool != "extreme_value_select":
+        return arguments
+    order_by = arguments.get("order_by")
+    if not isinstance(order_by, list):
+        return arguments
+    normalized = []
+    changed = False
+    for index, item in enumerate(order_by):
+        if not (
+            isinstance(item, dict)
+            and set(item) == {"column", "direction"}
+            and isinstance(item.get("column"), str)
+            and item["column"].strip()
+            and isinstance(item.get("direction"), str)
+            and item["direction"].upper() in {"ASC", "DESC"}
+        ):
+            normalized.append(item)
+            continue
+        rendered = f"{item['column']} {item['direction'].upper()}"
+        normalized.append(rendered)
+        changed = True
+        resolutions.append({
+            "path": f"order_by.{index}",
+            "provided": deepcopy(item),
+            "resolved": rendered,
+            "rule": "structured_order_by_to_string",
+        })
+    if not changed:
+        return arguments
+    resolved = deepcopy(arguments)
+    resolved["order_by"] = normalized
+    return resolved
+
+
+def _normalize_predicate_scalar_references(
+    tool: str,
+    arguments: dict,
+    *,
+    ctx: dict,
+    bindings: dict[str, dict],
+    prior_bindings: dict[str, dict],
+    resolutions: list[dict],
+) -> dict:
+    """Normalize named references to a verified one-cell predicate scalar.
+
+    Predicate ``value_ref`` has no separate source-column field. The adapter accepts named
+    ``value_ref`` spellings and the common cross-result ``column_value`` spelling only when the
+    cited successful source is factually one row and one column and the supplied column names that
+    sole output. Nothing is guessed for wider sources; unresolved local ``column_value`` references
+    are rejected later instead of becoming same-table self-comparisons.
+    """
+    if tool not in {"condition_filter", "group_aggregate"}:
+        return arguments
+
+    merged_bindings = dict(prior_bindings)
+    merged_bindings.update(bindings)
+    history = ctx.get("history") or {}
+    handle_to_step = ctx.get("handle_to_step") or {}
+
+    def source(raw):
+        provided = deepcopy(raw)
+        requested_column = None
+        reference = raw
+        if isinstance(raw, dict):
+            if (
+                set(raw) != {"value_ref", "column"}
+                or not isinstance(raw.get("value_ref"), str)
+                or not isinstance(raw.get("column"), str)
+            ):
+                return None
+            reference = raw["value_ref"]
+            requested_column = raw["column"]
+        if not isinstance(reference, str):
+            return None
+
+        base = reference
+        if "." in reference:
+            base, dotted_column = reference.split(".", 1)
+            requested_column = requested_column or dotted_column
+
+        step_id = None
+        if base.startswith("$"):
+            binding = merged_bindings.get(base[1:])
+            if isinstance(binding, dict) and binding.get("status") == "success":
+                step_id = binding.get("step_id")
+        elif base in history:
+            step_id = base
+        elif base in handle_to_step:
+            step_id = handle_to_step[base]
+        if not isinstance(step_id, str) or not requested_column:
+            return None
+
+        record = history.get(step_id)
+        output = record.get("output") if isinstance(record, dict) else None
+        columns = output.get("columns") if isinstance(output, dict) else None
+        if (
+            not isinstance(columns, list)
+            or len(columns) != 1
+            or output.get("row_count") != 1
+        ):
+            return None
+        only_column = columns[0]
+        if not isinstance(only_column, str) or (
+            only_column.casefold() != requested_column.casefold()
+            and only_column.rsplit(".", 1)[-1].casefold()
+            != requested_column.rsplit(".", 1)[-1].casefold()
+        ):
+            return None
+        return provided, step_id, only_column
+
+    def visit(value, path=()):
+        if isinstance(value, dict):
+            normalized = deepcopy(value)
+            if (
+                "column_value" in value
+                and "value_ref" not in value
+                and "value" not in value
+            ):
+                match = source(value["column_value"])
+                if match is not None:
+                    provided, step_id, column = match
+                    normalized.pop("column_value")
+                    normalized["value_ref"] = step_id
+                    resolutions.append({
+                        "path": ".".join((*path, "column_value")),
+                        "provided": provided,
+                        "resolved": step_id,
+                        "verified_source_column": column,
+                        "rule": "one_cell_column_value_to_value_ref",
+                    })
+            if "value_ref" in normalized:
+                match = source(normalized["value_ref"])
+                if match is not None:
+                    provided, step_id, column = match
+                    normalized["value_ref"] = step_id
+                    resolutions.append({
+                        "path": ".".join((*path, "value_ref")),
+                        "provided": provided,
+                        "resolved": step_id,
+                        "verified_source_column": column,
+                        "rule": "named_one_cell_predicate_value_ref",
+                    })
+            return {
+                key: visit(child, (*path, str(key)))
+                for key, child in normalized.items()
+            }
+        if isinstance(value, list):
+            return [
+                visit(child, (*path, str(index)))
+                for index, child in enumerate(value)
+            ]
+        return value
+
+    return visit(arguments)
+
+
 def _resolution_bindings(
     *,
     bindings: dict[str, dict],
@@ -957,7 +1287,68 @@ def _canonicalize_low_friction_columns(
     return resolved
 
 
-def _execute_plan_action(
+def _schedule_action_block_calls(
+    calls: list[dict],
+    *,
+    low_friction_interface: bool,
+) -> list[dict]:
+    """Topologically order calls from harness-derived result references.
+
+    The submitted list is only a set of requested tool calls. The model does not provide or
+    maintain a DAG. Unknown references and cycles remain executable error roots so the harness can
+    return precise factual feedback instead of rejecting unrelated independent calls.
+    """
+    if not low_friction_interface:
+        return list(calls)
+
+    declared_ids = {call["id"] for call in calls}
+    dependencies: dict[str, list[str]] = {}
+    for call in calls:
+        refs = local_reference_ids(call["arguments"])
+        if low_friction_interface:
+            for dependency in _implicit_local_reference_ids(
+                call["tool"],
+                call["arguments"],
+                declared_ids,
+            ):
+                if dependency not in refs:
+                    refs.append(dependency)
+        dependencies[call["id"]] = refs
+
+    pending = list(calls)
+    scheduled_ids: set[str] = set()
+    scheduled: list[dict] = []
+    while pending:
+        nonterminal_pending = [
+            (index, call)
+            for index, call in enumerate(pending)
+            if call.get("tool") != TERMINAL_TOOL
+        ]
+        candidate_items = nonterminal_pending or list(enumerate(pending))
+        ready_index = next(
+            (
+                index
+                for index, call in candidate_items
+                if all(
+                    dependency not in declared_ids
+                    or dependency in scheduled_ids
+                    for dependency in dependencies[call["id"]]
+                )
+            ),
+            None,
+        )
+        # A cycle or self-reference has no topologically ready node. Execute one root so normal
+        # local-reference validation reports the actual bad reference; its descendants then become
+        # blocked without being counted as additional errors.
+        if ready_index is None:
+            ready_index = candidate_items[0][0]
+        call = pending.pop(ready_index)
+        scheduled.append(call)
+        scheduled_ids.add(call["id"])
+    return scheduled
+
+
+def _execute_action_block(
     *,
     h: Harness,
     ctx: dict,
@@ -975,14 +1366,28 @@ def _execute_plan_action(
     safe_low_friction_interface: bool = False,
     interface_resolution_events: list[dict] | None = None,
 ) -> tuple[int, list[dict], list[dict], bool]:
-    """Best-effort execute a block while separating root errors from blocked descendants."""
+    """Execute one block and isolate root errors from blocked descendants."""
     low_friction_interface = (
         low_friction_interface or safe_low_friction_interface
     )
+    submitted_calls = arguments.get("calls") or []
+    terminal_calls = [
+        call for call in submitted_calls
+        if call.get("tool") == TERMINAL_TOOL
+    ]
+    if terminal_calls and (
+        len(terminal_calls) != 1 or len(submitted_calls) != 1
+    ):
+        raise BatchPlanProtocolError(
+            "answer_from_context must be the one and only call in its action_block"
+        )
     results: list[dict] = []
     atomic_events: list[dict] = []
     nonrecoverable = False
-    calls = arguments["calls"]
+    calls = _schedule_action_block_calls(
+        submitted_calls,
+        low_friction_interface=low_friction_interface,
+    )
     declared_ids = {call["id"] for call in calls}
     bindings: dict[str, dict] = {}
     prior_bindings = prior_bindings if prior_bindings is not None else {}
@@ -1032,9 +1437,11 @@ def _execute_plan_action(
             }
             bindings[call_id] = {
                 "status": "blocked",
+                "tool": tool,
                 "step_id": None,
                 "table": None,
                 "columns": None,
+                "source_reference": original_args.get("table"),
                 "root_causes": root_causes,
             }
             results.append(blocked)
@@ -1045,6 +1452,7 @@ def _execute_plan_action(
         step_id = f"step_{atomic_count}"
         state_before = ctx["environment"].snapshot()
         resolved_args = None
+        terminal_score_arguments = None
         interface_resolutions: list[dict] = []
         try:
             reference_args = original_args
@@ -1053,11 +1461,39 @@ def _execute_plan_action(
             if low_friction_interface:
                 if safe_low_friction_interface:
                     _reject_local_column_literal_references(original_args)
+                reference_args = _normalize_action_block_predicates(
+                    tool,
+                    reference_args,
+                    interface_resolutions,
+                )
+                reference_args = _normalize_action_block_order_by(
+                    tool,
+                    reference_args,
+                    interface_resolutions,
+                )
+                reference_args = _normalize_predicate_scalar_references(
+                    tool,
+                    reference_args,
+                    ctx=ctx,
+                    bindings=bindings,
+                    prior_bindings=prior_bindings,
+                    resolutions=interface_resolutions,
+                )
                 reference_args = _resolve_implicit_local_references(
                     tool,
                     reference_args,
                     bindings=bindings,
                     declared_ids=declared_ids,
+                    resolutions=interface_resolutions,
+                )
+                reference_args = _resolve_resident_runtime_references(
+                    tool,
+                    reference_args,
+                    declared_ids=declared_ids,
+                    resident_handles=set(
+                        (ctx["environment"].snapshot().get("tables") or {})
+                    ),
+                    handle_to_step=ctx["handle_to_step"],
                     resolutions=interface_resolutions,
                 )
                 _record_persistent_reference_resolutions(
@@ -1093,15 +1529,24 @@ def _execute_plan_action(
                     interface_resolutions,
                     progressive_join_equivalence=safe_low_friction_interface,
                 )
-            validate_atomic_call(tool, resolved_args)
-            output, table = execute_tool(
-                h,
-                tool,
-                resolved_args,
-                ctx,
-                step_id,
-                table_output_rows=table_output_rows,
-            )
+            if tool == TERMINAL_TOOL:
+                validate_model_arguments(TERMINAL_TOOL, resolved_args)
+                terminal_score_arguments = deepcopy(resolved_args)
+                output = {
+                    "terminal_ready": True,
+                    "evidence_table": resolved_args["evidence"]["table"],
+                }
+                table = None
+            else:
+                validate_atomic_call(tool, resolved_args)
+                output, table = execute_tool(
+                    h,
+                    tool,
+                    resolved_args,
+                    ctx,
+                    step_id,
+                    table_output_rows=table_output_rows,
+                )
             if table:
                 created.add(table)
             result = {
@@ -1117,10 +1562,16 @@ def _execute_plan_action(
                 "environment_state_before": state_before,
                 "environment_state": ctx["environment"].snapshot(),
             }
+            if terminal_score_arguments is not None:
+                result["terminal_score_arguments"] = deepcopy(
+                    terminal_score_arguments
+                )
+                result["resolved_evidence_arguments"] = deepcopy(resolved_args)
             if interface_resolutions:
                 result["interface_resolutions"] = deepcopy(interface_resolutions)
             bindings[call_id] = {
                 "status": "success",
+                "tool": tool,
                 "step_id": step_id,
                 "table": table,
                 "columns": deepcopy(
@@ -1128,6 +1579,7 @@ def _execute_plan_action(
                     if isinstance(output, dict)
                     else None
                 ),
+                "source_reference": original_args.get("table"),
                 "root_causes": [],
             }
         except Exception as exc:  # noqa: BLE001
@@ -1186,9 +1638,11 @@ def _execute_plan_action(
                 result["interface_resolutions"] = deepcopy(interface_resolutions)
             bindings[call_id] = {
                 "status": "error",
+                "tool": tool,
                 "step_id": step_id,
                 "table": None,
                 "columns": None,
+                "source_reference": original_args.get("table"),
                 "root_causes": [call_id],
             }
         results.append(result)
@@ -1230,12 +1684,19 @@ def _execute_plan_action(
                 continue
             prior_bindings[local_id] = {
                 "status": "success",
+                "tool": binding.get("tool"),
                 "block_index": batch_index,
                 "step_id": binding.get("step_id"),
                 "table": binding.get("table"),
                 "columns": deepcopy(binding.get("columns")),
+                "source_reference": binding.get("source_reference"),
             }
     return atomic_count, results, atomic_events, nonrecoverable
+
+
+# Explicit replay compatibility for v4-v11 audit code. Active callers use
+# ``_execute_action_block`` so the retired planning name does not define current semantics.
+_execute_plan_action = _execute_action_block
 
 
 def run_episode(
@@ -1248,8 +1709,7 @@ def run_episode(
     model: str,
     system_prompt: str,
     protocol_hash: str,
-    max_atomic_actions: int,
-    max_model_turns: int,
+    max_action_blocks: int,
     max_batch_calls: int,
     max_tokens: int,
     api_retries: int,
@@ -1258,7 +1718,7 @@ def run_episode(
     table_output_rows: int,
     history_turns: int,
     denotation_comparison: str,
-    protocol_version: str = BATCH_PLAN_PROTOCOL_VERSION,
+    protocol_version: str = UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION,
     structured_error_feedback: bool = False,
     low_friction_interface: bool = False,
     safe_low_friction_interface: bool = False,
@@ -1289,9 +1749,10 @@ def run_episode(
     atomic_count = 0
     model_turn_count = 0
     batch_count = 0
-    planned_node_count = 0
+    submitted_call_count = 0
     blocked_node_count = 0
     prior_call_bindings: dict[str, dict] = {}
+    pending_feedback_recovery = False
     started = time.time()
 
     rec = {
@@ -1307,10 +1768,10 @@ def run_episode(
         "correct": False,
         "legal": False,
         "model_turns": 0,
-        "plan_rounds": 0,
         "action_blocks": 0,
+        "executed_action_blocks": 0,
         "atomic_actions": 0,
-        "planned_nodes": 0,
+        "submitted_calls": 0,
         "blocked_nodes": 0,
         "errors": 0,
         "failure_type": None,
@@ -1320,16 +1781,17 @@ def run_episode(
         "error_events": error_events,
         "interface_resolution_events": interface_resolution_events,
         "denotation_comparison": denotation_comparison,
+        "terminal_answer_contract": TERMINAL_ANSWER_CONTRACT,
         "protocol_version": protocol_version,
         "protocol_hash": protocol_hash,
         "sft_export_eligible": False,
     }
+    legacy_action_shape = (
+        protocol_version != UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION
+    )
 
     try:
-        while (
-            model_turn_count < max_model_turns
-            and atomic_count < max_atomic_actions
-        ):
+        while model_turn_count < max_action_blocks:
             model_turn_count += 1
             state_before = ctx["environment"].snapshot()
             model_input = build_batch_plan_messages(
@@ -1345,6 +1807,7 @@ def run_episode(
             turn = {
                 "turn_index": model_turn_count - 1,
                 "model_input": deepcopy(model_input),
+                "feedback_recovery": pending_feedback_recovery,
                 "provider_request_options": provider_request_options(
                     model, carrier=DEEPSEEK_CARRIER_JSON_OUTPUT
                 ),
@@ -1400,7 +1863,12 @@ def run_episode(
                         raise BatchPlanProtocolError(
                             "provider native reasoning field must be non-empty"
                         )
-                    tool, arguments = parse_batch_plan_action(
+                    parser = (
+                        parse_legacy_batch_plan_action
+                        if legacy_action_shape
+                        else parse_batch_plan_action
+                    )
+                    tool, arguments = parser(
                         raw_content,
                         max_batch_calls=max_batch_calls,
                     )
@@ -1410,8 +1878,13 @@ def run_episode(
                         raw_content,
                     )
                 else:
+                    parser = (
+                        parse_legacy_batch_plan_assistant
+                        if legacy_action_shape
+                        else parse_batch_plan_assistant
+                    )
                     authored_reasoning, tool, arguments = (
-                        parse_batch_plan_assistant(
+                        parser(
                             raw_content,
                             max_batch_calls=max_batch_calls,
                         )
@@ -1425,16 +1898,26 @@ def run_episode(
                 }
 
                 if tool == TERMINAL_TOOL:
+                    terminal_arguments = arguments
+                    terminal_call_id = "__answer__"
                     step_id = f"step_{atomic_count + 1}"
-                    score_arguments, terminal_projection = (
-                        _materialize_terminal_evidence(
-                            h=h,
-                            ctx=ctx,
-                            arguments=arguments,
-                            created=created,
-                            step_id=step_id,
+                    terminal_projection = None
+                    if legacy_action_shape:
+                        # Retired column-selecting terminal actions are materialized only for
+                        # explicitly named historical reproduction. The active protocol cites its
+                        # exact resident result without any hidden execution.
+                        score_arguments, terminal_projection = (
+                            _materialize_terminal_evidence(
+                                h=h,
+                                ctx=ctx,
+                                arguments=terminal_arguments,
+                                created=created,
+                                step_id=step_id,
+                            )
                         )
-                    )
+                    else:
+                        score_arguments = deepcopy(terminal_arguments)
+                        submitted_call_count += 1
                     atomic_count += 1
                     correct, pred_sample, gold_sample = score(
                         h,
@@ -1449,13 +1932,13 @@ def run_episode(
                     rec["gold_sample"] = gold_sample
                     rec["failure_type"] = None if correct else "wrong_answer"
                     terminal_event = {
-                        "call_id": "__answer__",
+                        "call_id": terminal_call_id,
                         "step_id": step_id,
-                        "tool": tool,
+                        "tool": TERMINAL_TOOL,
                         "status": "success",
-                        "arguments": deepcopy(arguments),
+                        "arguments": deepcopy(terminal_arguments),
                         "resolved_arguments": deepcopy(score_arguments),
-                        "terminal_projection": deepcopy(terminal_projection),
+                        "resolved_evidence_arguments": deepcopy(score_arguments),
                         "output": {
                             "correct": correct,
                             "pred_sample": pred_sample,
@@ -1464,22 +1947,18 @@ def run_episode(
                         "environment_state_before": state_before,
                         "environment_state": ctx["environment"].snapshot(),
                     }
+                    if terminal_projection is not None:
+                        terminal_event["terminal_projection"] = deepcopy(
+                            terminal_projection
+                        )
                     atomic_events.append(terminal_event)
                     turn["terminal_result"] = deepcopy(terminal_event["output"])
                     turns.append(turn)
                     break
 
-                proposed = len(arguments["calls"])
-                remaining = max_atomic_actions - atomic_count
-                if proposed > remaining:
-                    raise BatchPlanProtocolError(
-                        f"action_block plans {proposed} atomic calls, but only {remaining} "
-                        "primitive-action budget slots remain"
-                    )
-
                 batch_count += 1
-                planned_node_count += len(arguments["calls"])
-                atomic_count, results, events, nonrecoverable = _execute_plan_action(
+                submitted_call_count += len(arguments["calls"])
+                atomic_count, results, events, nonrecoverable = _execute_action_block(
                     h=h,
                     ctx=ctx,
                     arguments=arguments,
@@ -1496,9 +1975,57 @@ def run_episode(
                     safe_low_friction_interface=safe_low_friction_interface,
                     interface_resolution_events=interface_resolution_events,
                 )
+                terminal_result = next(
+                    (
+                        result
+                        for result in results
+                        if result.get("tool") == TERMINAL_TOOL
+                    ),
+                    None,
+                )
+                if (
+                    terminal_result is not None
+                    and terminal_result.get("status") == "success"
+                ):
+                    score_arguments = terminal_result["terminal_score_arguments"]
+                    correct, pred_sample, gold_sample = score(
+                        h,
+                        gold_sql,
+                        score_arguments,
+                        created,
+                        denotation_comparison=denotation_comparison,
+                    )
+                    rec["legal"] = True
+                    rec["correct"] = correct
+                    rec["pred_sample"] = pred_sample
+                    rec["gold_sample"] = gold_sample
+                    rec["failure_type"] = None if correct else "wrong_answer"
+                    scored_output = {
+                        "correct": correct,
+                        "pred_sample": pred_sample,
+                        "gold_sample": gold_sample,
+                    }
+                    terminal_result["output"] = deepcopy(scored_output)
+                    for event in events:
+                        if event.get("call_id") == terminal_result.get("call_id"):
+                            event["output"] = deepcopy(scored_output)
+                            event["resolved_evidence_arguments"] = deepcopy(
+                                terminal_result["resolved_evidence_arguments"]
+                            )
+                            break
+                    atomic_events.extend(events)
+                    turn["batch_index"] = batch_count
+                    turn["batch_results"] = deepcopy(results)
+                    turn["terminal_result"] = deepcopy(scored_output)
+                    turns.append(turn)
+                    break
+
                 atomic_events.extend(events)
                 blocked_in_block = sum(
                     result.get("status") == "blocked" for result in results
+                )
+                root_errors_in_block = sum(
+                    result.get("status") == "error" for result in results
                 )
                 blocked_node_count += blocked_in_block
                 observation = render_batch_observation(
@@ -1508,9 +2035,7 @@ def run_episode(
                 )
                 turn["batch_index"] = batch_count
                 turn["batch_results"] = deepcopy(results)
-                turn["root_error_count"] = sum(
-                    result.get("status") == "error" for result in results
-                )
+                turn["root_error_count"] = root_errors_in_block
                 turn["blocked_count"] = blocked_in_block
                 turn["observation"] = observation
                 turns.append(turn)
@@ -1519,6 +2044,9 @@ def run_episode(
                     "observation": observation,
                 })
                 last_error = None
+                pending_feedback_recovery = bool(
+                    root_errors_in_block or blocked_in_block
+                )
                 if nonrecoverable:
                     rec["failure_type"] = "nonrecoverable_execution_error"
                     rec["fail"] = "a batch call changed resident state before failing"
@@ -1539,9 +2067,9 @@ def run_episode(
                     )
                     break
             except Exception as exc:  # noqa: BLE001
-                # A rejected top-level response spends one atomic action, as in the production
-                # protocol, and is never inserted into legal assistant history.
-                atomic_count += 1
+                # Every model turn spends one action-block budget unit. A rejected top-level
+                # response contains no attempted primitive call, so it does not increment the
+                # primitive-action audit counter and is never inserted into legal history.
                 state_after = ctx["environment"].snapshot()
                 error_type = _error_type(exc)
                 if compact_json(state_after) != compact_json(state_before):
@@ -1549,7 +2077,7 @@ def run_episode(
                 message = str(exc)
                 error_counts[error_type] += 1
                 event = _error_event(
-                    atomic_index=atomic_count,
+                    atomic_index=None,
                     model_turn=model_turn_count,
                     batch_index=None,
                     call_id=None,
@@ -1566,10 +2094,11 @@ def run_episode(
                 turn["error_event"] = event
                 turns.append(turn)
                 last_error = _top_level_error_message(
-                    atomic_index=atomic_count,
+                    block_action_index=model_turn_count,
                     error_type=error_type,
                     message=message,
                 )
+                pending_feedback_recovery = True
                 if (
                     error_type == "nonrecoverable_execution_error"
                     or error_counts[error_type] >= max_errors_per_type
@@ -1581,12 +2110,8 @@ def run_episode(
                     )
                     break
         else:
-            if atomic_count >= max_atomic_actions:
-                rec["failure_type"] = "max_atomic_actions"
-                rec["fail"] = "max_atomic_actions"
-            else:
-                rec["failure_type"] = "max_model_turns"
-                rec["fail"] = "max_model_turns"
+            rec["failure_type"] = "max_action_blocks"
+            rec["fail"] = "max_action_blocks"
     finally:
         try:
             h.conn.close()
@@ -1594,10 +2119,10 @@ def run_episode(
             pass
 
     rec["model_turns"] = model_turn_count
-    rec["plan_rounds"] = batch_count
-    rec["action_blocks"] = batch_count
+    rec["action_blocks"] = model_turn_count
+    rec["executed_action_blocks"] = batch_count
     rec["atomic_actions"] = atomic_count
-    rec["planned_nodes"] = planned_node_count
+    rec["submitted_calls"] = submitted_call_count
     rec["blocked_nodes"] = blocked_node_count
     rec["errors"] = len(error_events)
     rec["interface_resolutions"] = len(interface_resolution_events)
@@ -1634,7 +2159,7 @@ def summarize_records(path: Path) -> dict:
     tool_hist: collections.Counter = collections.Counter()
     status_hist: collections.Counter = collections.Counter()
     total_turns = total_blocks = total_atomic = total_errors = 0
-    total_planned = total_blocked = total_interface_resolutions = 0
+    total_submitted = total_blocked = total_interface_resolutions = 0
     interface_resolution_hist: collections.Counter = collections.Counter()
     fingerprints: collections.Counter = collections.Counter()
     for record in records:
@@ -1649,7 +2174,9 @@ def summarize_records(path: Path) -> dict:
             record.get("action_blocks") or record.get("plan_rounds") or 0
         )
         total_atomic += int(record.get("atomic_actions") or 0)
-        total_planned += int(record.get("planned_nodes") or 0)
+        total_submitted += int(
+            record.get("submitted_calls") or record.get("planned_nodes") or 0
+        )
         total_blocked += int(record.get("blocked_nodes") or 0)
         total_errors += int(record.get("errors") or 0)
         total_interface_resolutions += int(record.get("interface_resolutions") or 0)
@@ -1677,8 +2204,8 @@ def summarize_records(path: Path) -> dict:
         "mean_action_blocks": total_blocks / n if n else None,
         "total_atomic_actions": total_atomic,
         "mean_atomic_actions": total_atomic / n if n else None,
-        "total_planned_nodes": total_planned,
-        "mean_planned_nodes": total_planned / n if n else None,
+        "total_submitted_calls": total_submitted,
+        "mean_submitted_calls": total_submitted / n if n else None,
         "total_blocked_nodes": total_blocked,
         "mean_blocked_nodes": total_blocked / n if n else None,
         "total_process_errors": total_errors,
@@ -1713,10 +2240,13 @@ def main() -> int:
     parser.add_argument("--out", required=True, help="all episode records JSONL")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument(
-        "--max-atomic-actions", type=int, default=DEFAULT_MAX_ATOMIC_ACTIONS
-    )
-    parser.add_argument(
-        "--max-model-turns", type=int, default=DEFAULT_MAX_MODEL_TURNS
+        "--max-action-blocks",
+        type=int,
+        default=DEFAULT_MAX_ACTION_BLOCKS,
+        help=(
+            "maximum model action blocks; each block costs one budget unit "
+            "regardless of its number of primitive calls"
+        ),
     )
     parser.add_argument(
         "--max-batch-calls", type=int, default=DEFAULT_MAX_BATCH_CALLS
@@ -1745,7 +2275,7 @@ def main() -> int:
         action="store_true",
         help=(
             "experimental action-block-v9 fact-only feedback on failed blocks; "
-            "the action-block-v4 default remains unchanged"
+            "retained only for artifact reproduction"
         ),
     )
     parser.add_argument(
@@ -1786,10 +2316,13 @@ def main() -> int:
         )
     if args.denotation_comparison != "bird-set":
         parser.error("new BIRD evaluations must use --denotation-comparison bird-set")
-    if args.max_atomic_actions < 2:
-        parser.error("--max-atomic-actions must be at least 2")
-    if args.max_batch_calls < 1:
-        parser.error("--max-batch-calls must be positive")
+    if args.max_action_blocks < 2:
+        parser.error("--max-action-blocks must be at least 2")
+    if not 1 <= args.max_batch_calls <= MAX_ACTION_BLOCK_CALLS:
+        parser.error(
+            f"--max-batch-calls must be between 1 and {MAX_ACTION_BLOCK_CALLS} "
+            "for the active action-block protocol"
+        )
     selected_ablations = sum(bool(item) for item in (
         args.structured_error_feedback,
         args.low_friction_interface,
@@ -1799,6 +2332,10 @@ def main() -> int:
         parser.error(
             "structured feedback, v10 low-friction, and v11 safe low-friction "
             "are separate ablations and cannot be combined"
+        )
+    if selected_ablations == 0 and args.history_turns != 4:
+        parser.error(
+            "active action-block-v32 requires --history-turns 4"
         )
 
     api_key, base_url = load_api_config()
@@ -1855,7 +2392,7 @@ def main() -> int:
             else (
                 LOW_FRICTION_INTERFACE_PROTOCOL_VERSION
                 if args.low_friction_interface
-                else BATCH_PLAN_PROTOCOL_VERSION
+                else UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION
             )
         )
     )
@@ -1878,8 +2415,7 @@ def main() -> int:
                 model=args.model,
                 system_prompt=system_prompt,
                 protocol_hash=protocol_hash,
-                max_atomic_actions=args.max_atomic_actions,
-                max_model_turns=args.max_model_turns,
+                max_action_blocks=args.max_action_blocks,
                 max_batch_calls=args.max_batch_calls,
                 max_tokens=args.max_tokens,
                 api_retries=args.api_retries,
@@ -1909,10 +2445,10 @@ def main() -> int:
                 "correct": False,
                 "legal": False,
                 "model_turns": 0,
-                "plan_rounds": 0,
                 "action_blocks": 0,
+                "executed_action_blocks": 0,
                 "atomic_actions": 0,
-                "planned_nodes": 0,
+                "submitted_calls": 0,
                 "blocked_nodes": 0,
                 "errors": 0,
                 "failure_type": "runner_error",
@@ -1925,6 +2461,7 @@ def main() -> int:
                 "interface_resolution_hist": {},
                 "usage": {},
                 "denotation_comparison": args.denotation_comparison,
+                "terminal_answer_contract": TERMINAL_ANSWER_CONTRACT,
                 "protocol_version": protocol_version,
                 "protocol_hash": protocol_hash,
                 "sft_export_eligible": False,
@@ -1952,7 +2489,7 @@ def main() -> int:
         "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
         "assistant_carrier": args.assistant_carrier,
         "method": (
-            "hybrid_action_block_with_branch_local_recovery_terminal_column_selection_"
+            "ordered_variable_width_action_block_"
             + (
                 "and_error_only_structured_facts"
                 if args.structured_error_feedback
@@ -1962,7 +2499,7 @@ def main() -> int:
                     else (
                         "and_deterministic_low_friction_resolution"
                         if args.low_friction_interface
-                        else "v4_default"
+                        else "v32_exact_terminal_shape_and_join_shape_default"
                     )
                 )
             )
@@ -1982,17 +2519,23 @@ def main() -> int:
         ).hexdigest(),
         "system_prompt_characters": len(system_prompt),
         "system_prompt": system_prompt,
-        "max_atomic_actions": args.max_atomic_actions,
-        "max_model_turns": args.max_model_turns,
+        "max_action_blocks": args.max_action_blocks,
         "max_batch_calls": args.max_batch_calls,
         "max_errors_per_type": args.max_errors_per_type,
         "history_turns": args.history_turns,
+        "rolling_observation_style": "full-atomic-results-plus-resident-state",
         "max_tokens": args.max_tokens,
         "workers": max(1, args.workers),
         "table_output_rows": args.table_output_rows,
         "structured_error_feedback": args.structured_error_feedback,
         "low_friction_interface": args.low_friction_interface,
         "safe_low_friction_interface": args.safe_low_friction_interface,
+        "ordered_execution": not (
+            args.low_friction_interface or args.safe_low_friction_interface
+        ),
+        "automatic_argument_rewrites": bool(
+            args.low_friction_interface or args.safe_low_friction_interface
+        ),
         "temperature": 0,
         "thinking": (
             "enabled"
@@ -2013,6 +2556,7 @@ def main() -> int:
             args.model, carrier=DEEPSEEK_CARRIER_JSON_OUTPUT
         ),
         "denotation_comparison": args.denotation_comparison,
+        "terminal_answer_contract": TERMINAL_ANSWER_CONTRACT,
         "sft_export_eligible": False,
         "gold_sql_visible_to_model": False,
         "summary": summary,

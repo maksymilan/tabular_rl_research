@@ -105,6 +105,12 @@ Final dataset:
 
 The remote copy was verified against the same SHA-256 before training.
 
+All five component exports store the same full rolling system prompt with SHA-256
+`e118a6de955a2ba85f785abf7de7856138a03468ae793e8f9364e183a24cb69c`.
+This is byte-identical to the current version24 full rolling prompt. Thus the
+model-visible training prompt matches the evaluation prompt even though the
+additional-800 teacher generation run itself used the version10 provider contract.
+
 ## Training configuration
 
 The comparison changes only the base checkpoint and output path. Both runs use:
@@ -151,3 +157,23 @@ Per-model logs:
 Do not interpret training loss as tool-use accuracy. After both runs finish, evaluate the two
 checkpoints with the same held-out task selection, protocol, decoding, timeout, external knowledge,
 and named denotation metric.
+
+## Automatic post-training evaluation
+
+`src/eval/monitor_external_teacher_dual_sft_eval.sh` monitors the two PIDs recorded
+in the run manifest rather than assuming that a launcher process is authoritative.
+After both jobs exit, it:
+
+1. verifies both `checkpoint-516` adapters and requires
+   `global_step == max_steps == 516`;
+2. waits for GPUs 0 and 1 to release training memory without terminating any
+   unrelated process;
+3. starts the two matched tool-use evaluations in parallel through
+   `src/eval/run_bird_lora_tool_passk_table_rl.sh`;
+4. uses BIRD dev 1534, four samples, pass@1/2/4, rolling legal history with four
+   turns, and the `bird-set` denotation metric for both models;
+5. resumes an existing compatible result directory and retries only transient
+   model-service failures.
+
+The monitor does not launch RL training and does not overwrite an incompatible
+evaluation manifest.

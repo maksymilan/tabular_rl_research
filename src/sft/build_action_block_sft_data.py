@@ -6,8 +6,9 @@ strict ``<think>...</think>`` followed by that same JSON action. Every target is
 the causal recorded model prefix, and every source episode is freshly replayed before export.
 
 This builder intentionally rejects current evaluation artifacts unless they were explicitly marked
-``sft_export_eligible`` after an evaluation gate. It also rejects episodes containing process
-errors, so a partially failed action block can never become an SFT target or legal-history example.
+``sft_export_eligible`` after an evaluation gate. Verified recovery episodes are allowed, but a
+failed or blocked action block is never an SFT target; only later clean recovery blocks may carry
+loss.
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ sys.path[:0] = [
     str(ROOT / "src" / "sft"),
 ]
 
-from evaluate_batch_plan import _materialize_terminal_evidence  # noqa: E402
+from batch_plan_protocol import UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION  # noqa: E402
 from executor import Harness  # noqa: E402
 from rollout import execute_tool, new_ctx, overview, score, task_db_path  # noqa: E402
 from tool_schemes import (  # noqa: E402
@@ -106,6 +107,11 @@ def task_for_record(record: dict, tasks: dict[str, dict]) -> dict:
 def validate_source_episode(record: dict) -> None:
     trajectory_id = record.get("trajectory_id") or "<unknown>"
     assert_record_tool_scheme(record, ACTION_BLOCK_TOOL_SCHEME)
+    if record.get("protocol_version") != UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION:
+        raise ValueError(
+            f"{trajectory_id}: only {UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION} episodes "
+            "may enter the active action-block SFT path"
+        )
     if record.get("sft_export_eligible") is not True:
         raise ValueError(
             f"{trajectory_id}: action-block episode was not explicitly promoted for SFT export"
@@ -114,31 +120,36 @@ def validate_source_episode(record: dict) -> None:
         raise ValueError(f"{trajectory_id}: episode is not a verified correct termination")
     if record.get("denotation_comparison") != "bird-set":
         raise ValueError(f"{trajectory_id}: SFT replay metric must be bird-set")
-    if record.get("error_events") or int(record.get("errors") or 0):
-        raise ValueError(
-            f"{trajectory_id}: error-bearing action blocks are not SFT targets"
-        )
     turns = record.get("turns")
     if not isinstance(turns, list) or not turns:
         raise ValueError(f"{trajectory_id}: episode has no model turns")
     for index, turn in enumerate(turns):
-        if turn.get("execution_error"):
-            raise ValueError(f"{trajectory_id}: turn {index} is a rejected action")
-        if int(turn.get("root_error_count") or 0) or int(turn.get("blocked_count") or 0):
-            raise ValueError(
-                f"{trajectory_id}: turn {index} contains a failed or blocked atomic call"
-            )
         parsed = turn.get("parsed")
-        if not isinstance(parsed, dict) or not isinstance(parsed.get("arguments"), dict):
-            raise ValueError(f"{trajectory_id}: turn {index} has no parsed legal action")
-        if not str(turn.get("provider_reasoning_content") or "").strip():
+        if parsed is not None and (
+            not isinstance(parsed, dict)
+            or not isinstance(parsed.get("arguments"), dict)
+        ):
+            raise ValueError(f"{trajectory_id}: turn {index} has malformed parsed action")
+        if parsed is not None and not str(
+            turn.get("provider_reasoning_content") or ""
+        ).strip():
             raise ValueError(f"{trajectory_id}: turn {index} has empty causal reasoning")
-    if turns[-1]["parsed"].get("tool") != "answer_from_context":
-        raise ValueError(f"{trajectory_id}: final turn is not answer_from_context")
+    final_parsed = turns[-1]["parsed"]
+    if not (
+        final_parsed.get("tool") == "answer_from_context"
+        and isinstance(final_parsed.get("arguments"), dict)
+    ):
+        raise ValueError(
+            f"{trajectory_id}: final turn must be the standalone terminal action"
+        )
 
 
 def replay_episode(record: dict, task: dict) -> None:
-    """Freshly replay one error-free action-block episode and verify terminal denotation."""
+    """Replay successful primitive events and verify terminal denotation.
+
+    Failed and blocked calls are audit-only context: recoverable failures are required to preserve
+    state, so replay skips them and re-executes every later successful primitive in causal order.
+    """
     trajectory_id = record.get("trajectory_id") or "<unknown>"
     harness = Harness(task_db_path(task))
     ctx = new_ctx(overview(harness))
@@ -149,18 +160,13 @@ def replay_episode(record: dict, task: dict) -> None:
             raise ValueError(f"{trajectory_id}: episode has no atomic replay events")
         for event in atomic_events:
             if event.get("status") != "success":
-                raise ValueError(
-                    f"{trajectory_id}: replay source contains non-success atomic event"
-                )
+                continue
             tool = event.get("tool")
             step_id = event.get("step_id")
             if tool == "answer_from_context":
-                score_arguments, _ = _materialize_terminal_evidence(
-                    h=harness,
-                    ctx=ctx,
-                    arguments=event["arguments"],
-                    created=created,
-                    step_id=step_id,
+                score_arguments = deepcopy(
+                    event.get("resolved_evidence_arguments")
+                    or event["arguments"]
                 )
                 correct, _, _ = score(
                     harness,
@@ -280,6 +286,7 @@ def convert_turn(
         "protocol_hash": scheme.protocol_hash,
         "context_mode": "rolling-legal-history",
         "loss_policy": "last_assistant_turn_only",
+        "feedback_recovery": bool(turn.get("feedback_recovery")),
     }
     output = {
         "system": scheme.system_prompt,
@@ -300,6 +307,26 @@ def convert_turn(
     return output, index
 
 
+def is_sft_target_turn(turn: dict) -> bool:
+    """Only cleanly executed blocks are targets; error blocks remain causal context."""
+    parsed = turn.get("parsed")
+    if (
+        turn.get("execution_error")
+        or not isinstance(parsed, dict)
+        or not isinstance(parsed.get("arguments"), dict)
+        or int(turn.get("root_error_count") or 0)
+        or int(turn.get("blocked_count") or 0)
+    ):
+        return False
+    results = turn.get("batch_results")
+    if isinstance(results, list) and any(
+        result.get("status") != "success"
+        for result in results
+    ):
+        return False
+    return True
+
+
 def percentile(values: list[int], fraction: float) -> int:
     if not values:
         return 0
@@ -313,7 +340,7 @@ def build(
     index_path: Path,
     *,
     split: str,
-    max_batch_calls: int = 8,
+    max_batch_calls: int = 5,
 ) -> dict:
     records = read_jsonl(input_path)
     tasks = load_tasks(tasks_path, split)
@@ -327,6 +354,8 @@ def build(
     prefix_lengths: list[int] = []
     target_lengths: list[int] = []
     emitted = 0
+    skipped_error_turns = 0
+    recovery_targets = 0
     try:
         with tmp_out.open("w", encoding="utf-8") as out, tmp_index.open(
             "w", encoding="utf-8"
@@ -335,6 +364,9 @@ def build(
                 validate_source_episode(record)
                 replay_episode(record, task_for_record(record, tasks))
                 for turn_index in range(len(record["turns"])):
+                    if not is_sft_target_turn(record["turns"][turn_index]):
+                        skipped_error_turns += 1
+                        continue
                     converted, index_row = convert_turn(
                         record,
                         turn_index,
@@ -343,6 +375,7 @@ def build(
                     out.write(json.dumps(converted, ensure_ascii=False) + "\n")
                     index.write(json.dumps(index_row, ensure_ascii=False) + "\n")
                     emitted += 1
+                    recovery_targets += bool(index_row.get("feedback_recovery"))
                     tool_hist[index_row["tool_name"]] += 1
                     batch_size_hist[index_row["atomic_calls"]] += 1
                     prefix_lengths.append(
@@ -378,6 +411,9 @@ def build(
         "required_llamafactory_flag": "mask_history: true",
         "denotation_comparison": "bird-set",
         "error_actions_are_sft_targets": False,
+        "error_turns_retained_as_causal_context": True,
+        "skipped_error_turns": skipped_error_turns,
+        "feedback_recovery_targets": recovery_targets,
         "tool_hist": dict(tool_hist.most_common()),
         "batch_size_hist": dict(sorted(batch_size_hist.items())),
         "prefix_characters": {
@@ -437,12 +473,12 @@ def main() -> int:
     parser.add_argument("--index-out", type=Path)
     parser.add_argument("--dataset-name", required=True)
     parser.add_argument("--split", choices=("train", "dev"), default="train")
-    parser.add_argument("--max-batch-calls", type=int, default=8)
+    parser.add_argument("--max-batch-calls", type=int, default=5)
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", args.dataset_name):
         parser.error("--dataset-name must contain only letters, digits, '.', '_' or '-'")
-    if args.max_batch_calls < 1:
-        parser.error("--max-batch-calls must be positive")
+    if not 1 <= args.max_batch_calls <= 5:
+        parser.error("--max-batch-calls must be between 1 and 5")
     input_path = args.input.resolve()
     tasks_path = args.tasks_json.resolve()
     out_path = args.out.resolve()

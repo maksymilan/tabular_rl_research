@@ -85,7 +85,7 @@ def build_atomic_tool_scheme(
 
 def build_action_block_tool_scheme(
     *,
-    max_batch_calls: int = 8,
+    max_batch_calls: int = 5,
     assistant_carrier: str | None = None,
     protocol_version: str | None = None,
 ) -> ToolScheme:
@@ -93,14 +93,20 @@ def build_action_block_tool_scheme(
     from batch_plan_protocol import (
         BATCH_CARRIER_INLINE_THINK,
         EXECUTABLE_TOOLS,
-        SAFE_LOW_FRICTION_INTERFACE_PROTOCOL_VERSION,
+        MAX_ACTION_BLOCK_CALLS,
+        TERMINAL_TOOL,
+        UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION,
         batch_plan_protocol_hash,
         build_batch_plan_system_prompt,
     )
 
+    if not 1 <= max_batch_calls <= MAX_ACTION_BLOCK_CALLS:
+        raise ValueError(
+            f"active action-block max_batch_calls must be in 1..{MAX_ACTION_BLOCK_CALLS}"
+        )
     carrier = assistant_carrier or BATCH_CARRIER_INLINE_THINK
     version = (
-        protocol_version or SAFE_LOW_FRICTION_INTERFACE_PROTOCOL_VERSION
+        protocol_version or UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION
     )
     prompt = build_batch_plan_system_prompt(
         max_batch_calls,
@@ -116,7 +122,7 @@ def build_action_block_tool_scheme(
         ),
         system_prompt=prompt,
         assistant_carrier=carrier,
-        top_level_tools=("action_block", "answer_from_context"),
+        top_level_tools=("action_block", TERMINAL_TOOL),
         atomic_tools=tuple(EXECUTABLE_TOOLS),
         max_batch_calls=max_batch_calls,
     )
@@ -126,7 +132,7 @@ def build_tool_scheme(
     name: str,
     *,
     system_prompt: str | None = None,
-    max_batch_calls: int = 8,
+    max_batch_calls: int = 5,
     assistant_carrier: str | None = None,
     protocol_version: str | None = None,
 ) -> ToolScheme:

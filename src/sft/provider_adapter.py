@@ -10,6 +10,8 @@ import json
 import re
 from typing import Any
 
+from prompt_contract import CANONICAL_ACTION_RULE, TEACHER_ONE_ACTION_RULE
+
 
 DEEPSEEK_V4_MODELS = frozenset({"deepseek-v4-flash", "deepseek-v4-pro"})
 DEEPSEEK_V4_DEFAULT_MAX_TOKENS = 2048
@@ -20,10 +22,7 @@ DEEPSEEK_CARRIER_CHOICES = (
     DEEPSEEK_CARRIER_JSON_OUTPUT,
     DEEPSEEK_CARRIER_TOOL_CALL,
 )
-_CANONICAL_SYSTEM_RESPONSE_RULE = (
-    '1. Each turn, output exactly: <think>brief reasoning</think> then one raw JSON object '
-    '{"tool": "<name>", "arguments": {...}}. Nothing else; do not use tool_call tags.'
-)
+_CANONICAL_SYSTEM_RESPONSE_RULE = CANONICAL_ACTION_RULE
 _SPLIT_SYSTEM_RESPONSE_RULE = (
     "1. Produce exactly one tool action per turn using the provider-specific response envelope "
     "at the end of this prompt."
@@ -47,14 +46,7 @@ _SPLIT_ROLLING_COMPACT_RESPONSE_RULE = (
     "Produce exactly one tool action using the provider-specific response envelope at the end of "
     "this prompt. Do not emit a second action, shorthand JSON, or legacy tool fields."
 )
-_CANONICAL_GENERATION_RESPONSE_RULE = (
-    "ONE REQUEST = ONE ACTION. Emit exactly one non-empty <think> block and exactly one raw JSON "
-    'object with only "tool" and "arguments". Immediately STOP after that JSON object: never emit '
-    "a second <think>, a second action, a numbered plan of calls, or a complete multi-step "
-    "solution in one response. The harness will execute only this one action and return a fresh "
-    "state before you choose the next action. Your <think> block must be non-empty on every turn. "
-    "Put the reason inside <think> tags and do not use tool_call tags."
-)
+_CANONICAL_GENERATION_RESPONSE_RULE = TEACHER_ONE_ACTION_RULE
 _SPLIT_GENERATION_RESPONSE_RULE = (
     "ONE REQUEST = ONE ACTION. Produce one non-empty brief action reason in the provider's native "
     "reasoning field and exactly one action in the provider's visible field, using the "
@@ -156,7 +148,7 @@ def provider_request_messages(
 
     DeepSeek receives prior assistant actions as one raw JSON action object. Their old reasoning is
     deliberately omitted: resident state and tool observations are authoritative, and replaying a
-    canonical ``<think>`` envelope in visible history contradicts the current split-field contract.
+    ``<think>`` content in visible history contradicts the current split-field contract.
     The returned list is a copy; canonical audit/history records are not mutated.
     """
     rendered = [dict(message) for message in messages]

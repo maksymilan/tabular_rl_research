@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = "process-counterfactual-suite-v1"
+SCHEMA_VERSION = "process-counterfactual-suite-v2"
 
 
 @lru_cache(maxsize=4096)

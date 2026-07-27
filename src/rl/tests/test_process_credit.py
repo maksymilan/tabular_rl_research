@@ -556,6 +556,110 @@ class ProcessRewardTests(unittest.TestCase):
         row_refs = [ref for ref in refs if ref["role"] == "row_observation"]
         self.assertEqual([ref["step"] for ref in row_refs], ["step_2"])
         self.assertEqual(row_refs[0]["target"]["values"], [559])
+        match = row_refs[0]["target"]["column_matches"][0]
+        self.assertEqual(match["argument_path"], ["conditions", "value"])
+        self.assertEqual(match["source_row_index"], 0)
+        self.assertEqual(match["source_column_index"], 0)
+
+    def test_unique_visible_cell_copy_survives_missing_foreign_key_metadata(self):
+        refs = build_grounding_references(
+            "condition_filter",
+            {
+                "table": "Player",
+                "conditions": {"column": "Player_Id", "op": "=", "value": 9},
+            },
+            {
+                "step_1": {
+                    "tool": "condition_filter",
+                    "arguments": {
+                        "table": "Ball_by_Ball",
+                        "conditions": {"column": "Match_Id", "op": "=", "value": 419169},
+                    },
+                    "output": {
+                        "table": "filter_001",
+                        "columns": ["Striker"],
+                        "rows": [[9]],
+                        "row_count": 1,
+                    },
+                    "references": [{
+                        "type": "data",
+                        "source": "Ball_by_Ball",
+                        "role": "table",
+                        "target": {"table": "Ball_by_Ball"},
+                    }],
+                },
+            },
+        )
+        row_refs = [ref for ref in refs if ref["role"] == "row_observation"]
+        self.assertEqual([ref["step"] for ref in row_refs], ["step_1"])
+        match = row_refs[0]["target"]["column_matches"][0]
+        self.assertEqual(match["match_kind"], "visible_literal_copy")
+        self.assertEqual(match["argument_path"], ["conditions", "value"])
+        self.assertEqual(match["source_row_index"], 0)
+        self.assertEqual(match["source_column_index"], 0)
+        self.assertEqual(
+            match["replay_binding"],
+            {
+                "step": "step_1",
+                "row_index": 0,
+                "column_index": 0,
+                "column": "Striker",
+            },
+        )
+
+    def test_replay_binding_uses_the_selected_grounding_producer(self):
+        refs = build_grounding_references(
+            "condition_filter",
+            {
+                "table": "Player",
+                "conditions": {"column": "Player_Id", "op": "=", "value": 9},
+            },
+            {
+                "step_1": {
+                    "tool": "read_subtable",
+                    "arguments": {"table": "Player", "limit": 1},
+                    "output": {
+                        "rows": [[9]],
+                        "row_count": 1,
+                    },
+                    "observed_columns": ["Player_Id"],
+                },
+                "step_2": {
+                    "tool": "read_subtable",
+                    "arguments": {"table": "unrelated", "limit": 1},
+                    "output": {
+                        "rows": [[9]],
+                        "row_count": 1,
+                    },
+                    "observed_columns": ["other_value"],
+                },
+            },
+        )
+        row_ref = next(ref for ref in refs if ref["role"] == "row_observation")
+        match = row_ref["target"]["column_matches"][0]
+        self.assertEqual(row_ref["step"], "step_1")
+        self.assertEqual(match["match_kind"], "column_equivalent")
+        self.assertEqual(match["replay_binding"]["step"], row_ref["step"])
+
+    def test_ambiguous_unrelated_visible_cells_do_not_create_copy_edge(self):
+        refs = build_grounding_references(
+            "condition_filter",
+            {
+                "table": "Player",
+                "conditions": {"column": "Player_Id", "op": "=", "value": 9},
+            },
+            {
+                "step_1": {
+                    "tool": "read_subtable",
+                    "arguments": {"table": "unrelated", "limit": 1},
+                    "output": {"rows": [[9, 9]], "row_count": 1},
+                    "observed_columns": ["left_value", "right_value"],
+                },
+            },
+        )
+        self.assertFalse(
+            any(ref["role"] == "row_observation" for ref in refs)
+        )
 
     def test_computed_scalar_result_can_ground_a_later_predicate_literal(self):
         refs = build_grounding_references(

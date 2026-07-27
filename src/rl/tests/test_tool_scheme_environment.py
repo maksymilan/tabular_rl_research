@@ -56,11 +56,11 @@ class ToolSchemeEnvironmentTests(unittest.TestCase):
                 atomic.model_messages()[0]["content"],
             )
             self.assertNotIn(
-                "Emit only action_block",
+                "Always emit action_block",
                 atomic.model_messages()[0]["content"],
             )
             self.assertIn(
-                "Emit only action_block",
+                "TOP-LEVEL ACTION CONTRACT",
                 block.model_messages()[0]["content"],
             )
             self.assertNotIn(
@@ -75,8 +75,7 @@ class ToolSchemeEnvironmentTests(unittest.TestCase):
         env = create_tool_use_env(
             self.example,
             tool_scheme=ACTION_BLOCK_TOOL_SCHEME,
-            max_steps=5,
-            max_atomic_actions=10,
+            max_steps=2,
         )
         try:
             first = (
@@ -95,7 +94,7 @@ class ToolSchemeEnvironmentTests(unittest.TestCase):
             second = (
                 '<think>The resident projection has the exact answer column.</think>\n'
                 '{"tool":"answer_from_context","arguments":{"evidence":'
-                '{"table":"project_001","columns":["category"]}}}'
+                '{"table":"project_001"}}}'
             )
             terminal = env.apply_model_output(second)
             self.assertTrue(terminal.done)
@@ -104,6 +103,58 @@ class ToolSchemeEnvironmentTests(unittest.TestCase):
             self.assertEqual(record["tool_scheme"], ACTION_BLOCK_TOOL_SCHEME)
             self.assertEqual(record["model_turns"], 2)
             self.assertEqual(record["atomic_actions"], 3)
+            self.assertEqual(record["action_blocks"], 2)
+            self.assertEqual(record["submitted_calls"], 3)
+        finally:
+            env.close()
+
+    def test_action_block_rejects_mixed_terminal_and_can_recover(self):
+        env = create_tool_use_env(
+            self.example,
+            tool_scheme=ACTION_BLOCK_TOOL_SCHEME,
+            max_steps=5,
+        )
+        try:
+            output = (
+                '<think>Derive the exact answer and terminate from its grounded result.</think>\n'
+                '{"tool":"action_block","arguments":{"calls":['
+                '{"id":"final","tool":"answer_from_context","arguments":{"evidence":'
+                '{"table":"$exact"}}},'
+                '{"id":"exact","tool":"project","arguments":'
+                '{"table":"items","expressions":["category"]}}]}}'
+            )
+            rejected = env.apply_model_output(output)
+            self.assertFalse(rejected.done)
+            self.assertIn("standalone top-level terminal", rejected.observation)
+
+            derive = (
+                '<think>Derive the exact answer table first.</think>\n'
+                '{"tool":"action_block","arguments":{"calls":['
+                '{"id":"exact","tool":"project","arguments":'
+                '{"table":"items","expressions":["category"]}}]}}'
+            )
+            intermediate = env.apply_model_output(derive)
+            self.assertFalse(intermediate.done)
+
+            answer = (
+                '<think>Terminate from the grounded prior result.</think>\n'
+                '{"tool":"answer_from_context","arguments":{"evidence":'
+                '{"table":"project_001"}}}'
+            )
+            terminal = env.apply_model_output(answer)
+            self.assertTrue(terminal.done)
+            self.assertTrue(terminal.correct)
+            record = env.record()
+            self.assertEqual(record["model_turns"], 3)
+            self.assertEqual(record["action_blocks"], 3)
+            self.assertEqual(record["executed_action_blocks"], 1)
+            self.assertEqual(record["atomic_actions"], 2)
+            self.assertEqual(record["submitted_calls"], 2)
+            self.assertEqual(record["errors"], 1)
+            self.assertEqual(
+                [event["tool"] for event in record["atomic_events"]],
+                ["project", "answer_from_context"],
+            )
         finally:
             env.close()
 

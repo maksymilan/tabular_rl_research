@@ -76,6 +76,38 @@ class SelectProviderRetryTasksTest(unittest.TestCase):
             self.assertEqual(3, manifest["retry_tasks"])
             self.assertIn("provider transport/carrier incomplete", manifest["semantic_interpretation"])
 
+    def test_supports_selected_recovery_anchor_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "selected.jsonl"
+            attempts = root / "attempts.jsonl"
+            output = root / "retry.jsonl"
+            write_jsonl(source, [
+                {"task": {"example_id": "task_1"}, "selected_candidate": {}},
+                {"task": {"example_id": "task_2"}, "selected_candidate": {}},
+            ])
+            write_jsonl(attempts, [
+                {
+                    "example_id": "task_1",
+                    "correct": False,
+                    "failure_type": "provider_carrier_error",
+                },
+                {
+                    "example_id": "task_2",
+                    "correct": False,
+                    "failure_type": "wrong_answer",
+                },
+            ])
+
+            manifest = build(source, attempts, output)
+
+            selected = [
+                json.loads(line)
+                for line in output.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(["task_1"], [row["task"]["example_id"] for row in selected])
+            self.assertEqual(1, manifest["retry_tasks"])
+
 
 if __name__ == "__main__":
     unittest.main()

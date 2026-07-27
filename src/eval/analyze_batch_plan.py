@@ -127,8 +127,9 @@ def summarize_new(records: list[dict]) -> dict:
             for record in records
         ),
         "interface_resolution_hist": interface_resolution_hist(records),
-        "planned_nodes_total": sum(
-            int(record.get("planned_nodes") or 0) for record in records
+        "submitted_calls_total": sum(
+            int(record.get("submitted_calls") or record.get("planned_nodes") or 0)
+            for record in records
         ),
         "blocked_nodes_total": sum(
             int(record.get("blocked_nodes") or 0) for record in records

@@ -1,13 +1,17 @@
 """Role-separated model-visible prompts for the table-tool protocol.
 
-The student runtime contract is the shared semantic authority used by SFT export, evaluation, and
-RL. A teacher receives that same contract plus generation-only guidance and examples.
+The student runtime contract is the shared semantic authority used by SFT export, evaluation,
+and RL.  A teacher receives that same contract plus generation-only guidance and examples.  The
+teacher additions may improve data quality, but they must never add tools, arguments, state fields,
+or execution semantics that are absent from the shared contract.
 """
 from __future__ import annotations
 
 import hashlib
 
 from public_tool_contract import (
+    ACTION_BLOCK_PUBLIC_TOOL_ARGUMENTS,
+    ACTION_BLOCK_PUBLIC_TOOL_CONTRACTS,
     PUBLIC_TOOL_ARGUMENTS,
     PUBLIC_TOOL_CONTRACTS,
     render_action_grammar,
@@ -41,6 +45,15 @@ SHARED_TOOL_SPECS: dict[str, str] = {
     tool: f"{_tool_signature(tool, required, optional)} -> {PUBLIC_TOOL_CONTRACTS[tool].semantics}"
     for tool, (required, optional) in PUBLIC_TOOL_ARGUMENTS.items()
 }
+
+ACTION_BLOCK_TOOL_SPECS: dict[str, str] = {
+    tool: (
+        f"{_tool_signature(tool, required, optional)} -> "
+        f"{ACTION_BLOCK_PUBLIC_TOOL_CONTRACTS[tool].semantics}"
+    )
+    for tool, (required, optional) in ACTION_BLOCK_PUBLIC_TOOL_ARGUMENTS.items()
+}
+
 
 STUDENT_CONTEXT_CONTRACT = (
     "The opening overview is a catalog of table names, row counts, and relations, not table "

@@ -55,16 +55,32 @@ def is_retryable_provider_failure(record: dict[str, Any]) -> bool:
     return legacy_protocol_failure or explicit_carrier_failure or explicit_api_failure
 
 
+def source_identity(record: dict[str, Any]) -> str:
+    value = record.get("example_id")
+    if value is None and isinstance(record.get("task"), dict):
+        value = record["task"].get("example_id")
+    if not isinstance(value, str) or not value:
+        raise ValueError("source row is missing a non-empty example_id")
+    return value
+
+
+def attempt_identity(record: dict[str, Any]) -> str:
+    value = record.get("example_id") or record.get("trajectory_id")
+    if not isinstance(value, str) or not value:
+        raise ValueError("attempt row is missing trajectory_id/example_id")
+    return value
+
+
 def build(source_path: Path, attempts_path: Path, out_path: Path) -> dict[str, Any]:
     source = read_jsonl(source_path)
     attempts = read_jsonl(attempts_path)
-    source_by_id = {str(row.get("example_id")): row for row in source}
-    if len(source_by_id) != len(source) or "None" in source_by_id:
+    source_by_id = {source_identity(row): row for row in source}
+    if len(source_by_id) != len(source):
         raise ValueError("source tasks must have unique non-empty example_id values")
 
     latest_by_id: dict[str, dict[str, Any]] = {}
     for record in attempts:
-        trajectory_id = str(record.get("trajectory_id"))
+        trajectory_id = attempt_identity(record)
         if trajectory_id not in source_by_id:
             raise ValueError(f"attempt references task outside source: {trajectory_id}")
         previous = latest_by_id.get(trajectory_id)
@@ -76,7 +92,7 @@ def build(source_path: Path, attempts_path: Path, out_path: Path) -> dict[str, A
         for trajectory_id, record in latest_by_id.items()
         if is_retryable_provider_failure(record)
     }
-    selected = [row for row in source if str(row["example_id"]) in retry_ids]
+    selected = [row for row in source if source_identity(row) in retry_ids]
     write_jsonl_atomic(out_path, selected)
     manifest = {
         "selection": "provider_transport_or_empty_carrier_retry",
@@ -86,7 +102,7 @@ def build(source_path: Path, attempts_path: Path, out_path: Path) -> dict[str, A
         "attempts_sha256": sha256(attempts_path),
         "attempted_tasks": len(latest_by_id),
         "retry_tasks": len(selected),
-        "retry_example_ids": [row["example_id"] for row in selected],
+        "retry_example_ids": [source_identity(row) for row in selected],
         "output": str(out_path),
         "output_sha256": sha256(out_path),
         "semantic_interpretation": (
