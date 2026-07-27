@@ -127,7 +127,7 @@ class ToolSchemeRegistryTests(unittest.TestCase):
                 "id": "exact",
                 "operation": "select",
                 "arguments": {
-                    "table": "items",
+                    "table": {"source_table": "items"},
                     "expressions": ["category"],
                 },
             }],

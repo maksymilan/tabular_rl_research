@@ -54,6 +54,7 @@ from relational_program_protocol import (  # noqa: E402
     MAX_RELATIONAL_PROGRAM_CALLS,
     PROVIDER_NATIVE_CARRIER,
     RELATIONAL_PROGRAM_PROTOCOL_VERSION,
+    TYPED_REFERENCE_SCHEMA,
     build_relational_program_messages,
     build_relational_program_system_prompt,
     parse_relational_program_action,
@@ -264,6 +265,7 @@ def main() -> int:
                 "denotation_comparison": args.denotation_comparison,
                 "terminal_answer_contract": TERMINAL_ANSWER_CONTRACT,
                 "protocol_version": RELATIONAL_PROGRAM_PROTOCOL_VERSION,
+                "typed_reference_schema": TYPED_REFERENCE_SCHEMA,
                 "underlying_atomic_protocol_version": (
                     UNDERLYING_ATOMIC_PROTOCOL_VERSION
                 ),
@@ -291,13 +293,17 @@ def main() -> int:
     summary = summarize_records(out_path)
     manifest = {
         "generator": "src/eval/evaluate_relational_program.py",
-        "method": "interactive_perception_plus_harness_derived_relational_program_dag",
+        "method": (
+            "interactive_perception_plus_typed_references_plus_"
+            "harness_derived_relational_program_dag"
+        ),
         "model_role": "external_teacher_diagnostic",
         "model": args.model,
         "tool_scheme": RELATIONAL_PROGRAM_TOOL_SCHEME,
         "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
         "assistant_carrier": args.assistant_carrier,
         "protocol_version": RELATIONAL_PROGRAM_PROTOCOL_VERSION,
+        "typed_reference_schema": TYPED_REFERENCE_SCHEMA,
         "underlying_atomic_protocol_version": (
             UNDERLYING_ATOMIC_PROTOCOL_VERSION
         ),

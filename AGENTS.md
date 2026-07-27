@@ -146,15 +146,20 @@ Start at `docs/current/README.md`.
   The active adapter performs no spelling, schema, column, predicate, order, handle, or argument
   shape rewrite. Provider-specific carrier constraints are API-facing only. Its completed frozen
   200-task gate scored 144/200 and remains ineligible for SFT.
-- The separate experimental `relational-program-v3` scheme exposes only `observe`,
+- The separate experimental `relational-program-v4` scheme exposes only `observe`,
   `relational_program`, and `answer_from_context`; its prompt contains no atomic or action-block
   tool definitions. A program contains up to eight deterministic `filter`, `select`, `scalar`,
-  `join`, `aggregate`, `rank`, or `combine` nodes. The model emits exact `$id`/`$id.column`
-  parameter references plus a primary result and optional exports; the harness maps operations to
+  `join`, `aggregate`, `rank`, or `combine` nodes. Source tables, prior resident tables/steps, and
+  current-program nodes use disjoint `typed-relational-reference-v1` objects. Only current-program
+  node references create DAG edges; the harness deterministically lowers the public references to
   internal atomic executors, derives and validates the DAG, topologically schedules execution, and
   propagates root errors to blocked descendants. Primitive nodes remain the execution/audit unit.
-  The scheme has evaluation and causal-rollout plumbing only, uses
-  `tool-scheme-registry-v3`, and remains
+  Its frozen 20-task DeepSeek v4 Flash diagnostic scored 10/20 with 19/20 legal termination,
+  eight process errors, three blocked descendants, 119 model turns, and 508,471 tokens. V3 scored
+  12/20 on the same cohort; v4 halved process errors and reduced tokens 9.5% but lost two net
+  correct tasks. Do not expand v4 or use it as an SFT/RL source; see
+  `docs/reports/evaluation/BIRD_RELATIONAL_PROGRAM_V4_TYPED_REFERENCES_PILOT20_20260727_ZH.md`.
+  The scheme has evaluation and causal-rollout plumbing only, uses `tool-scheme-registry-v3`, and remains
   `diagnostic_only_pending_protocol_scale_gate`; it has no SFT exporter or RL environment.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id

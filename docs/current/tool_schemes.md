@@ -157,7 +157,7 @@ Result directories must remain isolated by scheme.
 
 ## Relational-program boundary
 
-`relational-program-v3` is a separate diagnostic scheme implemented by
+`relational-program-v4` is a separate diagnostic scheme implemented by
 `src/eval/relational_program_protocol.py` and `src/eval/evaluate_relational_program.py`. It does
 not add raw SQL or merge the atomic and action-block prompts.
 
@@ -169,16 +169,21 @@ inspect an intermediate result and then submit another program. A deterministic 
 ```json
 {"tool":"relational_program","arguments":{
   "calls":[
-    {"id":"filtered","operation":"filter","arguments":{"table":"orders","conditions":{"column":"amount","op":">","value":100}}},
-    {"id":"exact","operation":"select","arguments":{"table":"$filtered","expressions":["order_id"],"distinct":true}}
+    {"id":"filtered","operation":"filter","arguments":{"table":{"source_table":"orders"},"conditions":{"column":"amount","op":">","value":100}}},
+    {"id":"exact","operation":"select","arguments":{"table":{"node":"filtered"},"expressions":["order_id"],"distinct":true}}
   ],
   "result":"exact",
   "exports":[]
 }}
 ```
 
-The model supplies only node ids, program operations, exact `$id`/`$id.column` parameter references,
-one primary result, and optional exported roots. The harness derives dependency edges, validates
+The model supplies only node ids, program operations, typed references, one primary result, and
+optional exported roots. Source relations use `{"source_table":"..."}`, earlier resident outputs
+use `{"resident_table":"..."}` or `{"resident_step":"..."}`, and current-program dependencies use
+`{"node":"..."}`. A current node's exact join column uses
+`{"node":"...","column":"..."}`. These shapes are disjoint: bare strings and the former
+`$id`/`$id.column` syntax are invalid in reference positions. The harness derives dependency edges,
+validates
 undefined references, cycles, result/export roots, and disconnected nodes, and computes a stable
 topological order. It then maps each operation to an existing internal relational primitive and
 executes the primitives one by one. A failed node is
@@ -196,7 +201,12 @@ reference lifetime plus the exact local-result join argument shape explicit afte
 20-task v1 diagnostic exposed repeated join-shape errors. Version 3 removes all atomic tool names
 and definitions from the model-visible prompt and feedback, replacing them with one observation
 tool and named program-operation variants while retaining the same internal atomic execution and
-credit boundary. The scheme is evaluation/causal-rollout plumbing only. It has no SFT exporter and
+credit boundary. Version 4 keeps that exclusive prompt and execution boundary, but replaces
+ambiguous sigiled strings with `typed-relational-reference-v1`. The deterministic compiler lowers
+the typed public syntax into the private executor carrier while recording every authored reference
+and deriving edges only from current-program node references. It also makes the existing
+`observe.rows` no-filter contract explicit when a model incorrectly supplies conditions.
+The scheme is evaluation/causal-rollout plumbing only. It has no SFT exporter and
 no RL environment; all outputs are
 `diagnostic_only_pending_protocol_scale_gate` until a frozen scale gate explicitly promotes the
 protocol.

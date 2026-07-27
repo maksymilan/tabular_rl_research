@@ -49,6 +49,11 @@ class RelationalProgramProtocolTests(unittest.TestCase):
         self.assertIn("List order is not execution order", prompt)
         self.assertIn("derives the DAG", prompt)
         self.assertIn("Programs may be used multiple", prompt)
+        self.assertIn('{"source_table":"orders"}', prompt)
+        self.assertIn('{"resident_table":"filter_002"}', prompt)
+        self.assertIn('{"node":"filtered"}', prompt)
+        self.assertIn('{"resident_step":"step_7"}', prompt)
+        self.assertNotIn('"$id"', prompt)
         self.assertNotIn("<think>", prompt)
         for retired_name in (
             "describe_table",
@@ -71,7 +76,7 @@ class RelationalProgramProtocolTests(unittest.TestCase):
                 "id": "exact",
                 "operation": "select",
                 "arguments": {
-                    "table": "$filtered",
+                    "table": {"node": "filtered"},
                     "expressions": ["category"],
                 },
             },
@@ -79,7 +84,7 @@ class RelationalProgramProtocolTests(unittest.TestCase):
                 "id": "filtered",
                 "operation": "filter",
                 "arguments": {
-                    "table": "items",
+                    "table": {"source_table": "items"},
                     "conditions": {
                         "column": "price",
                         "op": ">",
@@ -95,6 +100,134 @@ class RelationalProgramProtocolTests(unittest.TestCase):
         )
         self.assertEqual(graph["dependencies"]["exact"], ["filtered"])
         self.assertEqual(graph["result"], "exact")
+        self.assertEqual(graph["reference_schema"], "typed-relational-reference-v1")
+        self.assertEqual(
+            executable["calls"][1]["arguments"]["table"],
+            "$filtered",
+        )
+        self.assertEqual(
+            graph["authored_references"]["filtered"],
+            [{
+                "path": "table",
+                "kind": "source_table",
+                "target": "items",
+            }],
+        )
+
+    def test_typed_reference_kinds_lower_without_cross_program_dependencies(self):
+        executable, graph = compile_relational_program(program([
+            {
+                "id": "combined",
+                "operation": "combine",
+                "arguments": {
+                    "left": {"resident_table": "project_002"},
+                    "right": {"source_table": "archive"},
+                    "op": "union",
+                },
+            },
+            {
+                "id": "metric",
+                "operation": "scalar",
+                "arguments": {
+                    "operation": "percent",
+                    "operands": [
+                        {"value_ref": {"node": "combined"}},
+                        {"value_ref": {"resident_step": "step_7"}},
+                    ],
+                },
+            },
+        ], "metric"))
+        self.assertEqual(graph["dependencies"]["combined"], [])
+        self.assertEqual(graph["dependencies"]["metric"], ["combined"])
+        self.assertEqual(
+            executable["calls"][0]["arguments"],
+            {
+                "left": "project_002",
+                "right": "archive",
+                "op": "union",
+            },
+        )
+        self.assertEqual(
+            executable["calls"][1]["arguments"]["operands"],
+            [
+                {"value_ref": "$combined"},
+                {"value_ref": "step_7"},
+            ],
+        )
+
+    def test_join_node_column_reference_lowers_to_private_executor_carrier(self):
+        executable, graph = compile_relational_program(program([
+            {
+                "id": "joined",
+                "operation": "join",
+                "arguments": {
+                    "base": {"node": "filtered"},
+                    "joins": [{
+                        "table": {"source_table": "customers"},
+                        "on": [{
+                            "left": {
+                                "node": "filtered",
+                                "column": "customer_id",
+                            },
+                            "right": "id",
+                        }],
+                    }],
+                },
+            },
+            {
+                "id": "filtered",
+                "operation": "filter",
+                "arguments": {
+                    "table": {"source_table": "orders"},
+                    "conditions": {
+                        "column": "status",
+                        "op": "=",
+                        "value": "open",
+                    },
+                },
+            },
+        ], "joined"))
+        self.assertEqual(graph["topological_order"], ["filtered", "joined"])
+        self.assertEqual(
+            executable["calls"][1]["arguments"]["joins"][0]["on"][0]["left"],
+            "$filtered.customer_id",
+        )
+
+    def test_raw_or_legacy_references_are_rejected(self):
+        raw_source = program([{
+            "id": "exact",
+            "operation": "select",
+            "arguments": {
+                "table": "items",
+                "expressions": ["category"],
+            },
+        }], "exact")
+        with self.assertRaisesRegex(
+            RelationalProgramProtocolError,
+            "must be a typed object",
+        ):
+            compile_relational_program(raw_source)
+
+        legacy_node = program([{
+            "id": "exact",
+            "operation": "select",
+            "arguments": {
+                "table": "$filtered",
+                "expressions": ["category"],
+            },
+        }, {
+            "id": "filtered",
+            "operation": "filter",
+            "arguments": {
+                "table": {"source_table": "items"},
+                "conditions": {"column": "price", "op": ">", "value": 0},
+            },
+        }], "exact")
+        with self.assertRaisesRegex(
+            RelationalProgramProtocolError,
+            "legacy local reference",
+        ):
+            compile_relational_program(legacy_node)
 
     def test_static_gate_rejects_undefined_cycles_and_disconnected_nodes(self):
         with self.assertRaisesRegex(
@@ -106,7 +239,7 @@ class RelationalProgramProtocolTests(unittest.TestCase):
                     "id": "exact",
                     "operation": "select",
                     "arguments": {
-                        "table": "$missing",
+                        "table": {"node": "missing"},
                         "expressions": ["category"],
                     },
                 },
@@ -121,7 +254,7 @@ class RelationalProgramProtocolTests(unittest.TestCase):
                     "id": "left",
                     "operation": "select",
                     "arguments": {
-                        "table": "$right",
+                        "table": {"node": "right"},
                         "expressions": ["category"],
                     },
                 },
@@ -129,7 +262,7 @@ class RelationalProgramProtocolTests(unittest.TestCase):
                     "id": "right",
                     "operation": "select",
                     "arguments": {
-                        "table": "$left",
+                        "table": {"node": "left"},
                         "expressions": ["category"],
                     },
                 },
@@ -144,7 +277,7 @@ class RelationalProgramProtocolTests(unittest.TestCase):
                     "id": "answer",
                     "operation": "select",
                     "arguments": {
-                        "table": "items",
+                        "table": {"source_table": "items"},
                         "expressions": ["category"],
                     },
                 },
@@ -152,7 +285,7 @@ class RelationalProgramProtocolTests(unittest.TestCase):
                     "id": "unused",
                     "operation": "filter",
                     "arguments": {
-                        "table": "items",
+                        "table": {"source_table": "items"},
                         "conditions": {
                             "column": "price",
                             "op": ">",
@@ -177,7 +310,7 @@ class RelationalProgramProtocolTests(unittest.TestCase):
                     "id": "exact",
                     "operation": "select",
                     "arguments": {
-                        "table": "items",
+                        "table": {"source_table": "items"},
                         "expressions": ["category"],
                     },
                 }], "exact"),
@@ -202,6 +335,24 @@ class RelationalProgramProtocolTests(unittest.TestCase):
                     "operation": "rows",
                     "arguments": {"table": "items", "limit": 3},
                 }], "rows"),
+            }))
+
+    def test_observe_rows_rejects_filter_arguments_with_precise_feedback(self):
+        with self.assertRaisesRegex(
+            RelationalProgramProtocolError,
+            "reads rows from exactly one supplied table without filtering",
+        ):
+            parse_relational_program_action(json.dumps({
+                "tool": "observe",
+                "arguments": {
+                    "operation": "rows",
+                    "table": "items",
+                    "conditions": {
+                        "column": "price",
+                        "op": ">",
+                        "value": 0,
+                    },
+                },
             }))
 
     def test_observe_maps_to_internal_executor_without_leaking_old_names(self):
@@ -251,7 +402,7 @@ class RelationalProgramExecutionTests(unittest.TestCase):
                             "id": "exact",
                             "operation": "select",
                             "arguments": {
-                                "table": "$filtered",
+                                "table": {"node": "filtered"},
                                 "expressions": ["category"],
                             },
                         },
@@ -259,7 +410,7 @@ class RelationalProgramExecutionTests(unittest.TestCase):
                             "id": "filtered",
                             "operation": "filter",
                             "arguments": {
-                                "table": "items",
+                                "table": {"source_table": "items"},
                                 "conditions": {
                                     "column": "price",
                                     "op": ">",

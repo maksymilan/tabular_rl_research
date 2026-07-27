@@ -2,9 +2,10 @@
 """Relational-program tool scheme with harness-derived dependency graphs.
 
 Perception remains interactive at the top level. Deterministic relational primitives may be
-submitted as one declarative program whose dependencies are inferred exclusively from exact
-``$node`` and ``$node.column`` parameter references. The harness validates and topologically
-orders the graph; the model never authors edges, statuses, handles, or an execution schedule.
+submitted as one declarative program whose dependencies are inferred exclusively from typed
+node-reference objects. Source relations, prior resident outputs, and current-program nodes have
+disjoint public shapes. The harness validates and topologically orders the graph; the model never
+authors edges, statuses, handles, or an execution schedule.
 """
 from __future__ import annotations
 
@@ -34,10 +35,11 @@ from batch_plan_protocol import (
 from protocol import ProtocolError, validate_model_arguments
 
 
-RELATIONAL_PROGRAM_PROTOCOL_VERSION = "relational-program-v3"
+RELATIONAL_PROGRAM_PROTOCOL_VERSION = "relational-program-v4"
 OBSERVE_TOOL = "observe"
 RELATIONAL_PROGRAM_TOOL = "relational_program"
 MAX_RELATIONAL_PROGRAM_CALLS = 8
+TYPED_REFERENCE_SCHEMA = "typed-relational-reference-v1"
 
 OBSERVE_OPERATIONS = {
     "schema": "describe_table",
@@ -81,7 +83,7 @@ def build_relational_program_system_prompt(
     *,
     assistant_carrier: str = BATCH_CARRIER_PROVIDER_NATIVE,
 ) -> str:
-    """Build the exclusive model-facing contract for relational-program v3."""
+    """Build the exclusive model-facing contract for relational-program v4."""
     if not 1 <= max_program_calls <= MAX_RELATIONAL_PROGRAM_CALLS:
         raise ValueError(
             "active relational programs require max_program_calls in "
@@ -158,12 +160,21 @@ Terminate with one already resident exact result table:
 PROGRAM RULES
 1. calls contains 1 to {max_program_calls} deterministic relational calls. Every call has exactly
    id, operation, arguments. ids are unique and begin with a letter.
-2. Express parameter dependency only with exact "$id" or "$id.column" values. "$id" denotes that
-   node's produced table, or its producing step when used as value_ref. "$id.column" denotes one
-   exact output column. List order is not execution order: the harness derives the DAG from these
-   references, rejects undefined references/cycles, and runs a stable topological order.
-   Local references exist only inside the current program. Never reuse "$id" in a later turn;
-   later programs copy the exact resident handle or producing step id returned by the harness.
+2. Every relation or step reference is one typed JSON object. Never use a bare string in table,
+   base, joins[].table, combine left/right, in_table, or value_ref:
+   - {{"source_table":"orders"}} means one immutable catalog table.
+   - {{"resident_table":"filter_002"}} means one exact table handle returned before this program.
+   - {{"node":"filtered"}} means the table produced by one node in this program.
+   - {{"resident_step":"step_7"}} means one producing step id returned before this program; it is
+     valid only as value_ref.
+   - {{"node":"metrics"}} as value_ref means that node's producing step. Add the ordinary sibling
+     field "column":"metric" when selecting one named cell from a one-row multi-metric result.
+   - {{"node":"filtered","column":"customer_id"}} is valid only as join on.left and means one exact
+     output column of that current-program node.
+   List order is not execution order: the harness derives the DAG only from node references,
+   rejects undefined references/cycles, and runs a stable topological order. Node references exist
+   only inside the current program. A later program must use the returned resident_table or
+   resident_step identity, never an earlier node id.
 3. result names the program's primary result node. exports optionally names other required output
    roots. Every submitted node must contribute to result or an export; disconnected work is
    rejected. Omit exports when there are no additional roots; if independent branches are
@@ -177,10 +188,11 @@ PROGRAM RULES
    episode and may consume exact resident handles from earlier turns.
 6. Use each operation's arguments exactly. Preserve population, grain, duplicates, and
    column order. The harness performs no spelling, schema, predicate, column, or argument repair.
-   In join, joins[].on is always a list of pair objects. If base is "$filtered", write
-   on.left as "$filtered.exact_column"; never write "filtered.exact_column" or the old source-table
-   namespace. on.right is always the bare column of the newly attached table. If base is a source
-   table or a resident handle from an earlier turn, copy its exact visible logical namespace.
+   In join, joins[].on is always a list of pair objects. If base is {{"node":"filtered"}}, write
+   on.left as {{"node":"filtered","column":"exact_column"}}. on.right is always the bare column of
+   the newly attached table. If base is a source table or a resident table from an earlier turn,
+   on.left remains the exact visible logical namespace string such as "orders.customer_id" or
+   "filter_002.customer_id".
 7. answer_from_context is never nested. Its cited table must already have exactly the requested
    rows and columns. Observing a table does not reshape it; use select for the exact result before
    terminating.
@@ -189,9 +201,10 @@ EXAMPLE AFTER SCHEMA AND LITERALS ARE GROUNDED
 {{"tool":"relational_program","arguments":{{
   "calls":[
     {{"id":"exact","operation":"select","arguments":
-      {{"table":"$filtered","expressions":["order_id"],"distinct":true}}}},
+      {{"table":{{"node":"filtered"}},"expressions":["order_id"],"distinct":true}}}},
     {{"id":"filtered","operation":"filter","arguments":
-      {{"table":"orders","conditions":{{"column":"amount","op":">","value":100}}}}}}
+      {{"table":{{"source_table":"orders"}},
+       "conditions":{{"column":"amount","op":">","value":100}}}}}}
   ],
   "result":"exact"
 }}}}
@@ -200,16 +213,17 @@ LOCAL-RESULT JOIN EXAMPLE
 {{"tool":"relational_program","arguments":{{
   "calls":[
     {{"id":"joined","operation":"join","arguments":{{
-      "base":"$filtered",
-      "joins":[{{"table":"customers","on":[
-        {{"left":"$filtered.customer_id","right":"id"}}
+      "base":{{"node":"filtered"}},
+      "joins":[{{"table":{{"source_table":"customers"}},"on":[
+        {{"left":{{"node":"filtered","column":"customer_id"}},"right":"id"}}
       ]}}]
     }}}},
     {{"id":"filtered","operation":"filter","arguments":{{
-      "table":"orders","conditions":{{"column":"status","op":"=","value":"open"}}
+      "table":{{"source_table":"orders"}},
+      "conditions":{{"column":"status","op":"=","value":"open"}}
     }}}},
     {{"id":"exact","operation":"select","arguments":{{
-      "table":"$joined","expressions":["customers.name"],"distinct":true
+      "table":{{"node":"joined"}},"expressions":["customers.name"],"distinct":true
     }}}}
   ],
   "result":"exact"
@@ -241,36 +255,166 @@ def relational_program_protocol_hash(
         "top_level_tools": TOP_LEVEL_TOOLS,
         "observe_operations": OBSERVE_OPERATIONS,
         "program_operations": PROGRAM_OPERATIONS,
+        "typed_reference_schema": TYPED_REFERENCE_SCHEMA,
     }
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()[:16]
 
 
-def _all_local_references(value: Any) -> list[str]:
-    found: list[str] = []
+_REFERENCE_KEYS = frozenset({
+    "source_table",
+    "resident_table",
+    "resident_step",
+    "node",
+})
+_REFERENCE_KEYSETS = frozenset({
+    frozenset({"source_table"}),
+    frozenset({"resident_table"}),
+    frozenset({"resident_step"}),
+    frozenset({"node"}),
+    frozenset({"node", "column"}),
+})
 
-    def visit(item: Any) -> None:
-        if isinstance(item, list):
-            for child in item:
-                visit(child)
-            return
-        if isinstance(item, dict):
-            for child in item.values():
-                visit(child)
-            return
-        if not isinstance(item, str) or not item.startswith("$"):
-            return
-        match = LOCAL_COLUMN_REF_RE.fullmatch(item) or LOCAL_REF_RE.fullmatch(item)
-        if not match:
-            raise RelationalProgramProtocolError(
-                f"local reference {item!r} must be exactly $id or $id.column"
+
+def _path_text(path: tuple[str, ...]) -> str:
+    return ".".join(path) if path else "arguments"
+
+
+def _is_table_reference_path(
+    operation: str,
+    path: tuple[str, ...],
+) -> bool:
+    if not path:
+        return False
+    key = path[-1]
+    if key in {"table", "base", "in_table"}:
+        return True
+    return operation == "combine" and key in {"left", "right"}
+
+
+def _compile_typed_references(
+    value: Any,
+    *,
+    operation: str,
+    path: tuple[str, ...] = (),
+) -> tuple[Any, list[dict]]:
+    """Validate and lower public typed references to the private executor carrier."""
+    if isinstance(value, list):
+        lowered = []
+        references: list[dict] = []
+        for index, child in enumerate(value):
+            compiled, child_references = _compile_typed_references(
+                child,
+                operation=operation,
+                path=(*path, str(index)),
             )
-        if match.group(1) not in found:
-            found.append(match.group(1))
+            lowered.append(compiled)
+            references.extend(child_references)
+        return lowered, references
 
-    visit(value)
-    return found
+    if isinstance(value, dict):
+        keys = frozenset(value)
+        if keys & _REFERENCE_KEYS:
+            if keys not in _REFERENCE_KEYSETS:
+                raise RelationalProgramProtocolError(
+                    f"typed reference at {_path_text(path)} must be exactly one of "
+                    '{"source_table":...}, {"resident_table":...}, '
+                    '{"resident_step":...}, {"node":...}, or '
+                    '{"node":...,"column":...}'
+                )
+            reference_key = next(key for key in _REFERENCE_KEYS if key in value)
+            target = value.get(reference_key)
+            if not isinstance(target, str) or not target.strip():
+                raise RelationalProgramProtocolError(
+                    f"typed reference {reference_key} at {_path_text(path)} "
+                    "must be a non-empty string"
+                )
+            if reference_key == "node" and not CALL_ID_RE.fullmatch(target):
+                raise RelationalProgramProtocolError(
+                    f"typed node reference at {_path_text(path)} must name one valid node id"
+                )
+
+            table_position = _is_table_reference_path(operation, path)
+            value_ref_position = bool(path and path[-1] == "value_ref")
+            join_left_position = (
+                operation == "join"
+                and len(path) >= 3
+                and path[-1] == "left"
+                and "on" in path
+            )
+            column = value.get("column")
+            if column is not None and (
+                not isinstance(column, str) or not column.strip()
+            ):
+                raise RelationalProgramProtocolError(
+                    f"typed node column at {_path_text(path)} must be a non-empty string"
+                )
+
+            if reference_key in {"source_table", "resident_table"}:
+                if not table_position:
+                    raise RelationalProgramProtocolError(
+                        f"{reference_key} at {_path_text(path)} is valid only in a "
+                        "table/base/join-table/in_table or combine input position"
+                    )
+                lowered: Any = target
+            elif reference_key == "resident_step":
+                if not value_ref_position:
+                    raise RelationalProgramProtocolError(
+                        f"resident_step at {_path_text(path)} is valid only as value_ref"
+                    )
+                lowered = target
+            elif column is not None:
+                if not join_left_position:
+                    raise RelationalProgramProtocolError(
+                        f"node+column at {_path_text(path)} is valid only as join on.left"
+                    )
+                lowered = f"${target}.{column}"
+            else:
+                if not (table_position or value_ref_position):
+                    raise RelationalProgramProtocolError(
+                        f"node reference at {_path_text(path)} is valid only in a table "
+                        "or value_ref position"
+                    )
+                lowered = f"${target}"
+
+            return lowered, [{
+                "path": _path_text(path),
+                "kind": reference_key,
+                "target": target,
+                **({"column": column} if column is not None else {}),
+            }]
+
+        lowered_dict = {}
+        references = []
+        for key, child in value.items():
+            compiled, child_references = _compile_typed_references(
+                child,
+                operation=operation,
+                path=(*path, str(key)),
+            )
+            lowered_dict[key] = compiled
+            references.extend(child_references)
+        return lowered_dict, references
+
+    if isinstance(value, str):
+        if (
+            LOCAL_COLUMN_REF_RE.fullmatch(value)
+            or LOCAL_REF_RE.fullmatch(value)
+        ):
+            raise RelationalProgramProtocolError(
+                f"legacy local reference {value!r} at {_path_text(path)} is not valid in "
+                f"{RELATIONAL_PROGRAM_PROTOCOL_VERSION}; use a typed node reference object"
+            )
+        if (
+            _is_table_reference_path(operation, path)
+            or (path and path[-1] == "value_ref")
+        ):
+            raise RelationalProgramProtocolError(
+                f"reference at {_path_text(path)} must be a typed object distinguishing "
+                "source_table, resident_table, resident_step, or node"
+            )
+    return deepcopy(value), []
 
 
 def compile_relational_program(
@@ -322,6 +466,7 @@ def compile_relational_program(
         )
 
     by_id: dict[str, dict] = {}
+    authored_references: dict[str, list[dict]] = {}
     original_index: dict[str, int] = {}
     for index, call in enumerate(calls):
         where = f"relational_program.calls[{index}]"
@@ -353,11 +498,16 @@ def compile_relational_program(
             raise RelationalProgramProtocolError(
                 f"{where}.arguments must be an object"
             )
+        lowered_arguments, references = _compile_typed_references(
+            call["arguments"],
+            operation=operation,
+        )
         by_id[call_id] = {
             "id": call_id,
             "tool": PROGRAM_OPERATIONS[operation],
-            "arguments": deepcopy(call["arguments"]),
+            "arguments": lowered_arguments,
         }
+        authored_references[call_id] = references
         original_index[call_id] = index
 
     roots = [result, *exports]
@@ -369,7 +519,12 @@ def compile_relational_program(
 
     dependencies: dict[str, list[str]] = {}
     for call_id, call in by_id.items():
-        refs = _all_local_references(call["arguments"])
+        refs = [
+            reference["target"]
+            for reference in authored_references[call_id]
+            if reference["kind"] == "node"
+        ]
+        refs = list(dict.fromkeys(refs))
         missing = [ref for ref in refs if ref not in by_id]
         if missing:
             raise RelationalProgramProtocolError(
@@ -418,7 +573,8 @@ def compile_relational_program(
         )
 
     graph = {
-        "schema": "relational-program-graph-v1",
+        "schema": "relational-program-graph-v2",
+        "reference_schema": TYPED_REFERENCE_SCHEMA,
         "dependencies": {
             call_id: dependencies[call_id] for call_id in scheduled
         },
@@ -427,6 +583,10 @@ def compile_relational_program(
         "exports": list(exports),
         "authored_operations": {
             call["id"]: call["operation"] for call in calls
+        },
+        "authored_references": {
+            call_id: deepcopy(authored_references[call_id])
+            for call_id in scheduled
         },
     }
     return {"calls": [by_id[call_id] for call_id in scheduled]}, graph
@@ -451,6 +611,27 @@ def _prepare_observe(arguments: dict) -> tuple[str, dict]:
     if operation not in OBSERVE_OPERATIONS:
         raise RelationalProgramProtocolError(
             f"observe.operation must be one of {list(OBSERVE_OPERATIONS)}"
+        )
+    allowed_by_operation = {
+        "schema": {"operation", "tables"},
+        "column": {"operation", "table", "column", "top_k"},
+        "rows": {"operation", "table", "columns", "limit"},
+    }
+    unexpected = sorted(set(arguments) - allowed_by_operation[operation])
+    if unexpected:
+        if operation == "rows" and any(
+            key in {"condition", "conditions", "where"}
+            for key in unexpected
+        ):
+            raise RelationalProgramProtocolError(
+                "observe.rows has no condition, conditions, or where argument. It reads rows "
+                "from exactly one supplied table without filtering. Legal keys are operation, "
+                "table, optional columns, and optional limit; filter is the program operation "
+                "that applies row conditions."
+            )
+        raise RelationalProgramProtocolError(
+            f"observe.{operation} has unexpected keys {unexpected}; legal keys are "
+            f"{sorted(allowed_by_operation[operation])}"
         )
     forwarded = {
         key: deepcopy(value)
@@ -481,7 +662,8 @@ def prepare_relational_work_action(
                 "arguments": perception_arguments,
             }]
         }, {
-            "schema": "relational-program-graph-v1",
+            "schema": "relational-program-graph-v2",
+            "reference_schema": TYPED_REFERENCE_SCHEMA,
             "kind": "interactive_perception",
             "dependencies": {"observation": []},
             "topological_order": ["observation"],
