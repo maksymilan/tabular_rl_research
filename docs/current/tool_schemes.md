@@ -157,7 +157,7 @@ Result directories must remain isolated by scheme.
 
 ## Relational-program boundary
 
-`relational-program-v5` is a separate diagnostic scheme implemented by
+`relational-program-v6` is a separate diagnostic scheme implemented by
 `src/eval/relational_program_protocol.py` and `src/eval/evaluate_relational_program.py`. It does
 not add raw SQL or merge the atomic and action-block prompts.
 
@@ -211,6 +211,10 @@ Version 5 changes only scalar-value ergonomics: scalar operands directly use typ
 `value_from` with the same typed source. The compiler lowers both to the unchanged grounded atomic
 value-reference semantics. Model-visible errors map private executor names and sigiled references
 back to public operations and typed references.
+Version 6 fixes one deterministic compiler defect without changing the public call shape: when a
+join consumes a current-program node and supplies `base_role`, typed bare columns of that base are
+lowered under the declared role rather than the runtime-generated table handle. The lowering is
+recorded in the work graph.
 The scheme is evaluation/causal-rollout plumbing only. It has no SFT exporter and
 no RL environment; all outputs are
 `diagnostic_only_pending_protocol_scale_gate` until a frozen scale gate explicitly promotes the

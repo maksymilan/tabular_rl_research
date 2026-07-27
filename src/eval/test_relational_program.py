@@ -256,6 +256,56 @@ class RelationalProgramProtocolTests(unittest.TestCase):
             "$filtered.customer_id",
         )
 
+    def test_join_current_node_base_role_controls_lowered_namespace(self):
+        executable, graph = compile_relational_program(program([
+            {
+                "id": "latest",
+                "operation": "rank",
+                "arguments": {
+                    "table": {"source_table": "Paper"},
+                    "order_by": ["Year DESC"],
+                    "top_k": 1,
+                },
+            },
+            {
+                "id": "joined",
+                "operation": "join",
+                "arguments": {
+                    "base": {"node": "latest"},
+                    "base_role": "Paper",
+                    "joins": [{
+                        "table": {"source_table": "Journal"},
+                        "on": [{
+                            "left": {
+                                "node": "latest",
+                                "column": "JournalId",
+                            },
+                            "right": "Id",
+                        }],
+                    }],
+                },
+            },
+        ], "joined"))
+        by_id = {
+            call["id"]: call["arguments"]
+            for call in executable["calls"]
+        }
+        self.assertEqual(
+            by_id["joined"]["joins"][0]["on"][0]["left"],
+            "Paper.JournalId",
+        )
+        self.assertEqual(
+            graph["compiler_lowerings"]["joined"],
+            [{
+                "path": "joins.0.on.0.left",
+                "rule": "current_node_base_role_namespace",
+                "node": "latest",
+                "base_role": "Paper",
+                "column": "JournalId",
+                "lowered": "Paper.JournalId",
+            }],
+        )
+
     def test_raw_or_legacy_references_are_rejected(self):
         raw_source = program([{
             "id": "exact",
@@ -552,6 +602,76 @@ class RelationalProgramExecutionTests(unittest.TestCase):
                     [("filtered", "success"), ("exact", "success")],
                 )
                 self.assertEqual(results[-1]["output"]["row_count"], 2)
+            finally:
+                harness.conn.close()
+
+    def test_current_node_base_role_join_executes_with_declared_namespace(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir, "test.sqlite")
+            seed = sqlite3.connect(db_path)
+            seed.executescript(
+                "CREATE TABLE Paper(Id INTEGER, Title TEXT, Year INTEGER, JournalId INTEGER);"
+                "CREATE TABLE Journal(Id INTEGER, HomePage TEXT);"
+                "INSERT INTO Paper VALUES (1, 'old', 2020, 10), (2, 'new', 2024, 11);"
+                "INSERT INTO Journal VALUES (10, 'old.example'), (11, 'new.example');"
+            )
+            seed.close()
+            harness = Harness(str(db_path))
+            try:
+                ctx = new_ctx(overview(harness))
+                executable, _ = prepare_relational_work_action(
+                    "relational_program",
+                    program([
+                        {
+                            "id": "latest",
+                            "operation": "rank",
+                            "arguments": {
+                                "table": {"source_table": "Paper"},
+                                "order_by": ["Year DESC"],
+                                "top_k": 1,
+                            },
+                        },
+                        {
+                            "id": "joined",
+                            "operation": "join",
+                            "arguments": {
+                                "base": {"node": "latest"},
+                                "base_role": "Paper",
+                                "joins": [{
+                                    "table": {"source_table": "Journal"},
+                                    "on": [{
+                                        "left": {
+                                            "node": "latest",
+                                            "column": "JournalId",
+                                        },
+                                        "right": "Id",
+                                    }],
+                                }],
+                            },
+                        },
+                    ], "joined"),
+                )
+                _, results, _, nonrecoverable = _execute_action_block(
+                    h=harness,
+                    ctx=ctx,
+                    arguments=executable,
+                    created=set(),
+                    atomic_count=0,
+                    model_turn=1,
+                    batch_index=1,
+                    table_output_rows=0,
+                    error_counts=collections.Counter(),
+                    error_events=[],
+                    validate_call=validate_relational_program_call,
+                )
+                self.assertFalse(nonrecoverable)
+                self.assertEqual(
+                    [(item["call_id"], item["status"]) for item in results],
+                    [("latest", "success"), ("joined", "success")],
+                )
+                self.assertEqual(results[-1]["output"]["row_count"], 1)
+                self.assertIn("Paper.Title", results[-1]["output"]["columns"])
+                self.assertIn("Journal.HomePage", results[-1]["output"]["columns"])
             finally:
                 harness.conn.close()
 

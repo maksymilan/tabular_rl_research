@@ -68,12 +68,13 @@ when its manifest, task selection, protocol, model, decoding parameters, and den
 match exactly.
 
 `src/eval/evaluate_relational_program.py` is the diagnostic evaluator for the separate
-`relational-program-v5` scheme. It uses the same hidden `bird-set` terminal scorer and causal
+`relational-program-v6` scheme. It uses the same hidden `bird-set` terminal scorer and causal
 model↔harness loop. Its exclusive model prompt exposes only `observe`, `relational_program`, and
 `answer_from_context`; the harness derives a DAG from exact program-local parameter references and
 maps node operations to internal atomic execution. Version 5 uses disjoint typed objects for source
 tables, resident tables/steps, and current-program nodes; only current-program node objects create
 DAG edges. Scalar operands and predicate `value_from` use the same typed value-source objects and
-lower to unchanged harness-grounded producing-step references. Its outputs are isolated by scheme and remain
+lower to unchanged harness-grounded producing-step references. A current-node join with
+`base_role` uses that declared namespace for the base node's bare columns. Its outputs are isolated by scheme and remain
 `diagnostic_only_pending_protocol_scale_gate`; they cannot be admitted to SFT or RL from evaluation
 success alone.

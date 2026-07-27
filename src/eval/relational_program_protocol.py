@@ -36,7 +36,7 @@ from batch_plan_protocol import (
 from protocol import ProtocolError, validate_model_arguments
 
 
-RELATIONAL_PROGRAM_PROTOCOL_VERSION = "relational-program-v5"
+RELATIONAL_PROGRAM_PROTOCOL_VERSION = "relational-program-v6"
 OBSERVE_TOOL = "observe"
 RELATIONAL_PROGRAM_TOOL = "relational_program"
 MAX_RELATIONAL_PROGRAM_CALLS = 8
@@ -84,7 +84,7 @@ def build_relational_program_system_prompt(
     *,
     assistant_carrier: str = BATCH_CARRIER_PROVIDER_NATIVE,
 ) -> str:
-    """Build the exclusive model-facing contract for relational-program v5."""
+    """Build the exclusive model-facing contract for relational-program v6."""
     if not 1 <= max_program_calls <= MAX_RELATIONAL_PROGRAM_CALLS:
         raise ValueError(
             "active relational programs require max_program_calls in "
@@ -197,6 +197,8 @@ PROGRAM RULES
    the newly attached table. If base is a source table or a resident table from an earlier turn,
    on.left remains the exact visible logical namespace string such as "orders.customer_id" or
    "filter_002.customer_id".
+   If a current-node base also supplies base_role, that role is the namespace for the base node's
+   bare columns; the harness derives that namespace from base_role before execution.
    Scalar operands use typed references directly. For example:
    "operands":[{{"node":"metrics","column":"part"}},{{"node":"metrics","column":"total"}}].
 7. answer_from_context is never nested. Its cited table must already have exactly the requested
@@ -464,6 +466,63 @@ def _compile_typed_references(
     return deepcopy(value), []
 
 
+def _lower_join_base_role_columns(
+    authored_arguments: dict,
+    lowered_arguments: dict,
+) -> list[dict]:
+    """Honor an authored base_role when a join consumes a current-program node."""
+    base = authored_arguments.get("base")
+    base_role = authored_arguments.get("base_role")
+    if (
+        not isinstance(base, dict)
+        or set(base) != {"node"}
+        or not isinstance(base.get("node"), str)
+        or not isinstance(base_role, str)
+        or not base_role.strip()
+    ):
+        return []
+    authored_joins = authored_arguments.get("joins")
+    lowered_joins = lowered_arguments.get("joins")
+    if not isinstance(authored_joins, list) or not isinstance(lowered_joins, list):
+        return []
+
+    events: list[dict] = []
+    for join_index, (authored_join, lowered_join) in enumerate(
+        zip(authored_joins, lowered_joins, strict=False)
+    ):
+        if not isinstance(authored_join, dict) or not isinstance(lowered_join, dict):
+            continue
+        authored_edges = authored_join.get("on")
+        lowered_edges = lowered_join.get("on")
+        if not isinstance(authored_edges, list) or not isinstance(lowered_edges, list):
+            continue
+        for edge_index, (authored_edge, lowered_edge) in enumerate(
+            zip(authored_edges, lowered_edges, strict=False)
+        ):
+            if not isinstance(authored_edge, dict) or not isinstance(lowered_edge, dict):
+                continue
+            authored_left = authored_edge.get("left")
+            if (
+                not isinstance(authored_left, dict)
+                or set(authored_left) != {"node", "column"}
+                or authored_left.get("node") != base["node"]
+                or not isinstance(authored_left.get("column"), str)
+                or "." in authored_left["column"]
+            ):
+                continue
+            lowered = f"{base_role}.{authored_left['column']}"
+            lowered_edge["left"] = lowered
+            events.append({
+                "path": f"joins.{join_index}.on.{edge_index}.left",
+                "rule": "current_node_base_role_namespace",
+                "node": base["node"],
+                "base_role": base_role,
+                "column": authored_left["column"],
+                "lowered": lowered,
+            })
+    return events
+
+
 def compile_relational_program(
     arguments: dict,
     *,
@@ -514,6 +573,7 @@ def compile_relational_program(
 
     by_id: dict[str, dict] = {}
     authored_references: dict[str, list[dict]] = {}
+    compiler_lowerings: dict[str, list[dict]] = {}
     original_index: dict[str, int] = {}
     for index, call in enumerate(calls):
         where = f"relational_program.calls[{index}]"
@@ -549,12 +609,21 @@ def compile_relational_program(
             call["arguments"],
             operation=operation,
         )
+        lowerings = (
+            _lower_join_base_role_columns(
+                call["arguments"],
+                lowered_arguments,
+            )
+            if operation == "join"
+            else []
+        )
         by_id[call_id] = {
             "id": call_id,
             "tool": PROGRAM_OPERATIONS[operation],
             "arguments": lowered_arguments,
         }
         authored_references[call_id] = references
+        compiler_lowerings[call_id] = lowerings
         original_index[call_id] = index
 
     roots = [result, *exports]
@@ -634,6 +703,11 @@ def compile_relational_program(
         "authored_references": {
             call_id: deepcopy(authored_references[call_id])
             for call_id in scheduled
+        },
+        "compiler_lowerings": {
+            call_id: deepcopy(compiler_lowerings[call_id])
+            for call_id in scheduled
+            if compiler_lowerings[call_id]
         },
     }
     return {"calls": [by_id[call_id] for call_id in scheduled]}, graph

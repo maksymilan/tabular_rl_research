@@ -146,7 +146,7 @@ Start at `docs/current/README.md`.
   The active adapter performs no spelling, schema, column, predicate, order, handle, or argument
   shape rewrite. Provider-specific carrier constraints are API-facing only. Its completed frozen
   200-task gate scored 144/200 and remains ineligible for SFT.
-- The separate experimental `relational-program-v5` scheme exposes only `observe`,
+- The separate experimental `relational-program-v6` scheme exposes only `observe`,
   `relational_program`, and `answer_from_context`; its prompt contains no atomic or action-block
   tool definitions. A program contains up to eight deterministic `filter`, `select`, `scalar`,
   `join`, `aggregate`, `rank`, or `combine` nodes. Source tables, prior resident tables/steps, and
@@ -165,6 +165,13 @@ Start at `docs/current/README.md`.
   micro-gate scored 3/6: 0/2 target recoveries and 3/4 controls retained, with seven process errors
   and two blocked nodes. It failed its expansion gate. Do not expand or train on v5; see
   `docs/reports/evaluation/BIRD_RELATIONAL_PROGRAM_V5_TYPED_SCALAR_GATE6_20260727_ZH.md`.
+  V6 changes no public call shape; it fixes only the deterministic lowering of a typed bare
+  `on.left` column when a current-node join declares `base_role`, and records that lowering in the
+  work graph. Its frozen one-target/three-control gate scored 3/4: all controls retained but the
+  target remained wrong after 11 successful primitive actions. The live target did not exercise
+  `base_role`; the bug fix is covered by deterministic SQLite tests only. Stop further prompt/schema
+  expansion, and do not use v6 for SFT/RL; see
+  `docs/reports/evaluation/BIRD_RELATIONAL_PROGRAM_V6_BASE_ROLE_GATE4_20260727_ZH.md`.
   The scheme has evaluation and causal-rollout plumbing only, uses `tool-scheme-registry-v3`, and remains
   `diagnostic_only_pending_protocol_scale_gate`; it has no SFT exporter or RL environment.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
