@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import csv
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -19,6 +20,7 @@ from executor import Harness  # noqa: E402
 from schema_context_ablation import (  # noqa: E402
     CONTEXT_RENDERER_VERSION,
     FULL_SCHEMA_PROFILE,
+    FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE,
     FULL_SCHEMA_SEMANTIC_PROFILE,
     FULL_SCHEMA_SEMANTIC_VALUES_PROFILE,
     INITIAL_CONTEXT_PROFILES,
@@ -98,6 +100,31 @@ class SchemaContextAblationTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        description_dir = root / "database_description"
+        description_dir.mkdir()
+        with (description_dir / "staff.csv").open(
+            "w", encoding="utf-8", newline=""
+        ) as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=[
+                    "original_column_name",
+                    "column_name",
+                    "column_description",
+                    "data_format",
+                    "value_description",
+                ],
+            )
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "original_column_name": "nm",
+                    "column_name": "employee name",
+                    "column_description": "full name of the employee",
+                    "data_format": "text",
+                    "value_description": "not model-visible in this arm",
+                }
+            )
         self.example = {
             "db_id": "toy",
             "db_path": str(self.db_path),
@@ -150,6 +177,16 @@ class SchemaContextAblationTest(unittest.TestCase):
         name = next(column for column in staff["columns"] if column["name"] == "nm")
         self.assertEqual(["Ada", "Grace"], name["example_values"])
 
+    def test_sql_astra_description_arm_adds_description_without_values(self):
+        overview = self.build(FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE)
+        staff = next(table for table in overview["tables"] if table["table_name"] == "staff")
+        name = next(column for column in staff["columns"] if column["name"] == "nm")
+        self.assertEqual("employee name", name["semantic_name"])
+        self.assertEqual("full name of the employee", name["description"])
+        self.assertNotIn("example_values", name)
+        rendered = json.dumps(overview, ensure_ascii=False)
+        self.assertNotIn("not model-visible in this arm", rendered)
+
     def test_describe_feedback_is_aligned_only_for_semantic_profiles(self):
         raw = self.harness.describe_table(["staff"])
         aligned = align_tool_output(
@@ -187,6 +224,7 @@ class SchemaContextAblationTest(unittest.TestCase):
         for profile in (
             FULL_SCHEMA_PROFILE,
             FULL_SCHEMA_SEMANTIC_PROFILE,
+            FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE,
             FULL_SCHEMA_SEMANTIC_VALUES_PROFILE,
         ):
             aligned = align_base_system_prompt(base, profile)

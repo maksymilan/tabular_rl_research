@@ -7,6 +7,7 @@ names, semantic aliases, and sampled values cannot be silently mixed across arms
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 from copy import deepcopy
@@ -22,6 +23,9 @@ CONTEXT_RENDERER_VERSION = "bird-tool-context-ablation-v1"
 LAZY_CATALOG_PROFILE = "lazy-catalog-v1"
 FULL_SCHEMA_PROFILE = "full-schema-v1"
 FULL_SCHEMA_SEMANTIC_PROFILE = "full-schema-bird-semantic-v1"
+FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE = (
+    "full-schema-bird-semantic-sql-astra-descriptions-v1"
+)
 FULL_SCHEMA_SEMANTIC_VALUES_PROFILE = "full-schema-bird-semantic-values2-v1"
 LAZY_SEMANTIC_DESCRIBE_PROFILE = "lazy-catalog-semantic-describe-v1"
 
@@ -29,18 +33,21 @@ INITIAL_CONTEXT_PROFILES = (
     LAZY_CATALOG_PROFILE,
     FULL_SCHEMA_PROFILE,
     FULL_SCHEMA_SEMANTIC_PROFILE,
+    FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE,
     FULL_SCHEMA_SEMANTIC_VALUES_PROFILE,
     LAZY_SEMANTIC_DESCRIBE_PROFILE,
 )
 
 _SEMANTIC_PROFILES = {
     FULL_SCHEMA_SEMANTIC_PROFILE,
+    FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE,
     FULL_SCHEMA_SEMANTIC_VALUES_PROFILE,
     LAZY_SEMANTIC_DESCRIBE_PROFILE,
 }
 _FULL_SCHEMA_PROFILES = {
     FULL_SCHEMA_PROFILE,
     FULL_SCHEMA_SEMANTIC_PROFILE,
+    FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE,
     FULL_SCHEMA_SEMANTIC_VALUES_PROFILE,
 }
 
@@ -64,6 +71,19 @@ _PROFILE_PROMPT_SUFFIXES = {
         "the exact raw table_name and raw column name. No database values are provided. Source "
         "describe_table returns the same raw-name/semantic-name distinction. Use inspect_column "
         "or read_subtable when actual values are needed."
+    ),
+    FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE: (
+        "\n\nINITIAL CONTEXT PROFILE: "
+        "full-schema-bird-semantic-sql-astra-descriptions-v1\n"
+        "The opening DATASET OVERVIEW lists every source table and every executable raw column "
+        "name with its SQLite type and primary-key flag, plus BIRD's semantic_table_name and "
+        "semantic_name aliases and the BIRD column description used by SQL-ASTRA-style prompts. "
+        "Foreign-key edges are in relations. Semantic names and descriptions are task-"
+        "understanding metadata only: they are not executable identifiers, observed database "
+        "values, or evidence that a predicate is true. Every tool argument must use the exact raw "
+        "table_name and raw column name. No example values are provided. Source describe_table "
+        "returns the same raw/semantic/description distinction. Use inspect_column or "
+        "read_subtable when actual values are needed."
     ),
     FULL_SCHEMA_SEMANTIC_VALUES_PROFILE: (
         "\n\nINITIAL CONTEXT PROFILE: full-schema-bird-semantic-values2-v1\n"
@@ -240,6 +260,47 @@ def _semantic_maps(db_schema: dict) -> tuple[dict[str, str], dict[tuple[str, str
     return table_aliases, column_aliases
 
 
+@lru_cache(maxsize=128)
+def _load_column_descriptions(directory: str) -> dict[tuple[str, str], str]:
+    """Load BIRD's per-table CSV descriptions without treating value metadata as evidence."""
+    root = Path(directory)
+    if not root.is_dir():
+        raise FileNotFoundError(f"BIRD database_description directory not found: {root}")
+    descriptions: dict[tuple[str, str], str] = {}
+    for csv_path in sorted(root.glob("*.csv"), key=lambda path: path.name.lower()):
+        table_key = csv_path.stem.lower()
+        with csv_path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            required = {"original_column_name", "column_description"}
+            if not reader.fieldnames or not required.issubset(reader.fieldnames):
+                raise ValueError(
+                    f"BIRD description CSV lacks {sorted(required)}: {csv_path}"
+                )
+            for row in reader:
+                raw_column = str(row.get("original_column_name") or "").strip()
+                description = str(row.get("column_description") or "").strip()
+                if not raw_column or not description:
+                    continue
+                key = (table_key, raw_column.lower())
+                previous = descriptions.get(key)
+                if previous is not None and previous != description:
+                    raise ValueError(
+                        f"conflicting BIRD descriptions for {key}: {csv_path}"
+                    )
+                descriptions[key] = description
+    return descriptions
+
+
+def resolve_database_description_dir(example: dict) -> str:
+    db_path = Path(example["db_path"]).expanduser().resolve()
+    path = db_path.parent / "database_description"
+    if not path.is_dir():
+        raise FileNotFoundError(
+            f"could not discover BIRD database_description beside {db_path}"
+        )
+    return str(path)
+
+
 def _quote_identifier(value: str) -> str:
     return '"' + str(value).replace('"', '""') + '"'
 
@@ -288,6 +349,7 @@ def _enrich_describe_output(
     db_schema: dict,
     *,
     add_semantics: bool,
+    column_descriptions: dict[tuple[str, str], str] | None = None,
     value_count: int,
 ) -> dict:
     visible = deepcopy(output)
@@ -319,6 +381,10 @@ def _enrich_describe_output(
             column["pk"] = bool(column.get("pk") or column_key in primary_by_name)
             if add_semantics:
                 column["semantic_name"] = column_aliases.get(column_key, raw_column)
+            if column_descriptions:
+                description = column_descriptions.get(column_key)
+                if description:
+                    column["description"] = description
             if value_count:
                 column["example_values"] = _sample_column_values(
                     harness,
@@ -353,11 +419,17 @@ def build_initial_context(
             explicit_path=schema_metadata_json,
         )
         db_schema = load_database_schema(schema_path, example["db_id"])
+        column_descriptions = (
+            _load_column_descriptions(resolve_database_description_dir(example))
+            if profile == FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE
+            else None
+        )
         enriched = _enrich_describe_output(
             harness,
             described,
             db_schema,
             add_semantics=True,
+            column_descriptions=column_descriptions,
             value_count=(
                 value_count if profile == FULL_SCHEMA_SEMANTIC_VALUES_PROFILE else 0
             ),
@@ -401,11 +473,17 @@ def align_tool_output(
         explicit_path=schema_metadata_json,
     )
     db_schema = load_database_schema(schema_path, example["db_id"])
+    column_descriptions = (
+        _load_column_descriptions(resolve_database_description_dir(example))
+        if profile == FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE
+        else None
+    )
     return _enrich_describe_output(
         harness,
         output,
         db_schema,
         add_semantics=True,
+        column_descriptions=column_descriptions,
         value_count=(
             value_count if profile == FULL_SCHEMA_SEMANTIC_VALUES_PROFILE else 0
         ),
