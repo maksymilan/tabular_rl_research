@@ -188,12 +188,14 @@ Start at `docs/current/README.md`.
   `version40` is an isolated external-teacher diagnostic selected with
   `--atomic-protocol-version version40 --diagnostic-only`. It keeps version39 execution, state,
   grounding, feedback, carrier, and the exact multi-edge `join_tables` rule. It removes `plan`
-  from its public surface, renames the read-only row observer to `inspect_rows`, and replaces the
-  appended teacher/runtime prompt stack with one concise layered prompt. All successful and
-  rejected reasoning is retained as explicitly labeled, non-factual continuity context; the latest
-  rejected call and complete error remain in `LAST TOOL ERROR`. Exact successful calls and
-  unabridged tool results use a recent-4 window. It is catalog-only, has no accuracy promotion, and
-  is ineligible for SFT/RL pending a paired gate.
+  from its public surface, renames the read-only row observer to `inspect_rows`, uses one concise
+  layered prompt, retains all successful and rejected reasoning, and limits exact successful calls
+  plus unabridged observations to recent-4. Its frozen first-50 gate on the version24 fixed-200
+  cohort scored 37/50 versus the paired version24 42/50, with 0 gains, 5 regressions, 50/50 legal
+  termination, nine process errors, and exact paired `p=0.0625`. All five new regressions selected
+  the correct entity/row set but cited the wrong output columns, order, or representation. Do not
+  run the remaining 150 or use version40 for SFT/RL. See
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION40_CONCISE_HISTORY_GATE50_20260729_ZH.md`.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may
@@ -343,6 +345,11 @@ Start at `docs/current/README.md`.
   legal termination, 29 process errors, 10 paired gains, and 8 paired regressions versus
   version20. It fails the 150/200 gate and is ineligible as an SFT source. See
   `docs/reports/evaluation/BIRD_VERSION24_RELATION_DERIVATION_FIXED200_20260724.md`.
+- The version40 concise-prompt/full-reasoning-history diagnostic stopped after the frozen first
+  50 tasks: **37/50** versus paired version24 **42/50**, with 50/50 legal termination, zero gains,
+  five output-shape regressions, and nine process errors. Do not expand it to the remaining 150.
+  Its total tokens fell 12.4%, but completion reasoning tokens rose 81.3%; removing concrete
+  output-slot and high-entropy argument guidance was not redundant.
 - A paired six-hard-task diagnostic found no gain from forced resident planning:
   optional and required were both 0/6, while required planning increased mean actions by 16.4%
   and tokens by 18.5%. Keep `required-resident` experimental; do not expand it or make it default
