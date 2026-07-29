@@ -252,7 +252,10 @@ Public version mapping:
   carrier, and join rule unchanged. It changes only the prompt through
   `src/sft/atomic_version41_prompt.py`: one consolidated output contract restores exact output-slot
   discriminators, and concise legal examples correct the five tool families that produced
-  Gate50 process errors. It is diagnostic-only pending a paired output-shape gate;
+  Gate50 process errors. Its frozen output-shape Gate16 scored 10/16 versus paired version40 8/16,
+  with two gains, no regressions, 16/16 legal termination, and zero versus six process errors, but
+  only 2/8 targets recovered. It failed the predeclared 4/8 recovery gate. Do not expand it or use
+  it for SFT/RL;
 - future changes increment only the integer (`version42`, `version43`, ...).
 
 The current version39 diagnostic tool set remains the one in

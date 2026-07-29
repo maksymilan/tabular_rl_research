@@ -200,9 +200,11 @@ Start at `docs/current/README.md`.
   join, and full-reasoning recent-4 history behavior unchanged. It adds one prompt-only module:
   a consolidated exact-output contract restoring separate-field and ID/code representation
   boundaries, plus legal correction examples for the five tool families that produced version40
-  Gate50 process errors. Its tool-schema hash is identical to version40. Version41 is
-  diagnostic-only pending a paired output-shape gate and is ineligible for SFT/RL. See
-  `docs/current/atomic_version41_output_corrections_zh.md`.
+  Gate50 process errors. Its frozen 8-target/8-control output-shape Gate16 scored 10/16 versus
+  paired version40 8/16, with two gains, no regressions, 8/8 controls retained, 16/16 legal
+  termination, and zero versus six process errors. It recovered only 2/8 targets, below the
+  predeclared 4/8 threshold. Do not expand it to the fixed first 50 or use it for SFT/RL. See
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION41_OUTPUT_CORRECTION_GATE16_20260729_ZH.md`.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may
@@ -357,6 +359,11 @@ Start at `docs/current/README.md`.
   five output-shape regressions, and nine process errors. Do not expand it to the remaining 150.
   Its total tokens fell 12.4%, but completion reasoning tokens rose 81.3%; removing concrete
   output-slot and high-entropy argument guidance was not redundant.
+- The version41 prompt-only output-correction Gate16 scored **10/16** versus paired version40
+  **8/16**, with two gains, no regressions, all eight controls retained, and zero versus six
+  process errors. It nevertheless recovered only 2/8 output-shape targets, below the required 4/8;
+  do not expand it to the fixed first 50. See
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION41_OUTPUT_CORRECTION_GATE16_20260729_ZH.md`.
 - A paired six-hard-task diagnostic found no gain from forced resident planning:
   optional and required were both 0/6, while required planning increased mean actions by 16.4%
   and tokens by 18.5%. Keep `required-resident` experimental; do not expand it or make it default

@@ -3,7 +3,11 @@
 ## 状态
 
 `version41` 是 version40 之上的 **prompt-only external-teacher 诊断**。它不改变工具、
-参数、执行、状态、反馈、历史策略或 DeepSeek carrier，也不能用于 SFT/RL。入口：
+参数、执行、状态、反馈、历史策略或 DeepSeek carrier，也不能用于 SFT/RL。冻结 Gate16
+已经完成：10/16，对同题 version40 的 8/16 有 2 个恢复、0 回退，但只恢复 2/8 输出形态
+目标，未达到至少 4/8 的扩量门槛。不要运行固定前 50 题。完整报告见
+`docs/reports/evaluation/BIRD_ATOMIC_VERSION41_OUTPUT_CORRECTION_GATE16_20260729_ZH.md`。
+入口：
 
 ```bash
 .venv/bin/python -u src/sft/generate_teacher_rollouts.py \
@@ -63,10 +67,10 @@ DeepSeek v4 Flash provider prompt 从 version40 的 7,503 字符增至 10,572 �
 - 与 version40 相同的 public tool schema SHA-256：
   `b7761922ee1164520630f4dbe66c7c766abb9257e617ba7061e4730884ae08c4`。
 
-## 验证顺序
+## 已完成的验证
 
-先使用 version40 Gate50 的 8 个 output-shape 错误加 8 个同类正确控制建立冻结 Gate16。
-建议预先固定：
+冻结 Gate16 使用 version40 Gate50 的 8 个 output-shape 错误加 8 个同类正确控制，预先
+固定：
 
 - output-shape 目标恢复至少 4/8；
 - 正确控制保留至少 7/8；
@@ -74,5 +78,6 @@ DeepSeek v4 Flash provider prompt 从 version40 的 7,503 字符增至 10,572 �
 - 16/16 形成语义终止；
 - 通过后才在原固定前 50 题上配对 version40/version24。
 
-如果 version41 仍不能恢复终止列选择，下一步才单独测试 reasoning-history 策略；不要同时
-改工具名、plan 或执行反馈。
+实际结果只有 2/8 目标恢复，虽然 8/8 控制保留且过程错误从 6 降为 0，仍按门槛停止。
+下一步应先审计显式 output-field specification 和 external/gold 冲突，不继续增加相同的
+全局输出规则。
