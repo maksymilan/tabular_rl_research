@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import multiprocessing as mp
 import os
 import re
@@ -20,22 +19,25 @@ sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 from artifacts import ArtifactWriter                          # noqa: E402
 from candidate_selection import QueryResult  # noqa: E402
 from denotation import add_denotation_comparison_argument, compare_denotations  # noqa: E402
+from direct_sql_prompt import (  # noqa: E402
+    CANONICAL_JSON_PROFILE,
+    CANONICAL_SYSTEM_PROMPT,
+    add_direct_sql_prompt_arguments,
+    build_direct_sql_messages,
+    canonical_schema_prompt,
+    prompt_profile_manifest,
+)
 from executor import Harness                                  # noqa: E402
 from rollout import (  # noqa: E402
     ContextOverflowError,
     chat,
     load_tasks_json,
-    overview,
     task_db_path,
     task_gold_sql,
 )
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
-SYSTEM_PROMPT = (
-    "You translate natural-language questions into SQLite. Put your final query inside "
-    "<answer></answer> tags, e.g. <answer>SELECT ...</answer>. It must be exactly one read-only "
-    "SELECT or WITH query. You may reason before the tags; only the query inside them is graded."
-)
+SYSTEM_PROMPT = CANONICAL_SYSTEM_PROMPT
 
 
 def extract_sql(text: str) -> str | None:
@@ -56,17 +58,8 @@ def extract_sql(text: str) -> str | None:
 
 
 def schema_prompt(h: Harness, question: str, external_knowledge=None) -> str:
-    """Render the complete SQLite schema needed by the one-shot SQL baseline."""
-    table_names = [t["table_name"] for t in overview(h)["tables"]]
-    user_prompt = (
-        "DATABASE SCHEMA\n"
-        + json.dumps(h.describe_table(table_names), ensure_ascii=False, separators=(",", ":"))
-        + "\n\nQUESTION\n"
-        + question
-    )
-    if external_knowledge:
-        user_prompt += "\n\nEXTERNAL KNOWLEDGE\n" + json.dumps(external_knowledge, ensure_ascii=False)
-    return user_prompt
+    """Backward-compatible alias for the historical canonical prompt."""
+    return canonical_schema_prompt(h, question, external_knowledge)
 
 
 def execute_predicted_sql_result(
@@ -105,6 +98,9 @@ def run_one(
     max_tokens: int = 512,
     execution_timeout_seconds: float = 5.0,
     denotation_comparison: str = "bird-set",
+    prompt_profile: str = CANONICAL_JSON_PROFILE,
+    schema_value_count: int = 2,
+    schema_metadata_json: str | None = None,
 ) -> dict:
     gold_sql = task_gold_sql(ex)
     h = Harness(task_db_path(ex))
@@ -112,10 +108,13 @@ def run_one(
     # Direct-SQL needs the FULL schema (columns/types/PK/FK) up front — the model cannot probe with
     # tools here. overview()/_catalog is the v2-ctx lazy catalog (names + row counts only), which
     # starves text-to-SQL and forces column hallucination; describe_table gives the complete schema.
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": schema_prompt(h, ex["question"], ex.get("external_knowledge"))},
-    ]
+    messages = build_direct_sql_messages(
+        h,
+        ex,
+        profile=prompt_profile,
+        schema_value_count=schema_value_count,
+        schema_metadata_json=schema_metadata_json,
+    )
     started = time.time()
     record = {
         "example_index": example_index,
@@ -238,6 +237,7 @@ def main() -> int:
     add_denotation_comparison_argument(parser)
     parser.add_argument("--task-timeout-seconds", type=float, default=0.0,
                         help="hard per-example deadline; records task_timeout and continues when positive")
+    add_direct_sql_prompt_arguments(parser)
     args = parser.parse_args()
 
     if args.tasks_json:
@@ -257,7 +257,7 @@ def main() -> int:
         if args.start_index <= index < end_index
     ]
 
-    writer = ArtifactWriter(args.result_dir, {
+    manifest = {
         "runner": "direct_sql",
         "dataset": dataset,
         "model": args.model,
@@ -270,8 +270,15 @@ def main() -> int:
         "task_timeout_seconds": args.task_timeout_seconds,
         "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
         "execution_feedback": False,
-        "system_prompt": SYSTEM_PROMPT,
-    }, args.resume)
+    }
+    manifest.update(
+        prompt_profile_manifest(
+            args.prompt_profile,
+            schema_value_count=args.schema_value_count,
+            schema_metadata_json=args.schema_metadata_json,
+        )
+    )
+    writer = ArtifactWriter(args.result_dir, manifest, args.resume)
     pending = [(i, ex) for i, ex in indexed_window if i not in writer.completed]
 
     if args.task_timeout_seconds > 0:
@@ -285,6 +292,9 @@ def main() -> int:
                     "max_tokens": args.max_tokens,
                     "execution_timeout_seconds": args.execution_timeout_seconds,
                     "denotation_comparison": args.denotation_comparison,
+                    "prompt_profile": args.prompt_profile,
+                    "schema_value_count": args.schema_value_count,
+                    "schema_metadata_json": args.schema_metadata_json,
                 }, args.task_timeout_seconds)
                 for i, ex in pending
             ]
@@ -306,6 +316,9 @@ def main() -> int:
                     args.max_tokens,
                     args.execution_timeout_seconds,
                     args.denotation_comparison,
+                    args.prompt_profile,
+                    args.schema_value_count,
+                    args.schema_metadata_json,
                 )
                 for i, ex in pending
             ]

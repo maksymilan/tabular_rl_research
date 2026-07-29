@@ -25,6 +25,10 @@ MAX_TOKENS="${MAX_TOKENS:-1024}"
 TEMPERATURE="${TEMPERATURE:-0.7}"
 TOP_P="${TOP_P:-0.95}"
 REPETITION_PENALTY="${REPETITION_PENALTY:-1.05}"
+PROMPT_PROFILE="${PROMPT_PROFILE:-canonical-json-v1}"
+SCHEMA_VALUE_COUNT="${SCHEMA_VALUE_COUNT:-2}"
+SCHEMA_METADATA_JSON="${SCHEMA_METADATA_JSON:-}"
+EXECUTION_TIMEOUT_SECONDS="${EXECUTION_TIMEOUT_SECONDS:-20}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-24}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
@@ -106,6 +110,14 @@ curl --noproxy '*' -fsS --max-time 5 \
   grep -q "$SERVED_MODEL" ||
   die "timed out waiting for vLLM readiness"
 
+PROMPT_ARGS=(
+  --prompt-profile "$PROMPT_PROFILE"
+  --schema-value-count "$SCHEMA_VALUE_COUNT"
+)
+if test -n "$SCHEMA_METADATA_JSON"; then
+  PROMPT_ARGS+=(--schema-metadata-json "$SCHEMA_METADATA_JSON")
+fi
+
 EVAL_ENABLE_THINKING=0 \
 NO_PROXY=127.0.0.1,localhost \
 no_proxy=127.0.0.1,localhost \
@@ -122,8 +134,9 @@ no_proxy=127.0.0.1,localhost \
     --top-p "$TOP_P" \
     --repetition-penalty "$REPETITION_PENALTY" \
     --api-retries 3 \
-    --execution-timeout-seconds 20 \
+    --execution-timeout-seconds "$EXECUTION_TIMEOUT_SECONDS" \
     --denotation-comparison bird-set \
+    "${PROMPT_ARGS[@]}" \
     --result-dir "$RESULT_DIR" \
     --resume \
     >"$EVAL_LOG" 2>&1 &

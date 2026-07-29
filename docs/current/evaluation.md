@@ -33,6 +33,14 @@ a 10-second generated-query timeout, and `bird-set` for that optional Arctic set
 `src/eval/text2sql_passk.py` are direct-SQL controls. Result directories and manifests must not mix
 different denotation contracts.
 
+Direct-SQL input construction is separately versioned in `src/eval/direct_sql_prompt.py`.
+`canonical-json-v1` preserves the historical JSON full-schema control. The diagnostic
+`sql-astra-appendix-v1` profile renders DDL with BIRD column descriptions, deterministic live
+representative values, PK/FK constraints, and the disclosed SQL-ASTRA step-by-step instructions.
+Select it explicitly with `--prompt-profile`; record `--schema-value-count` and any explicit
+`--schema-metadata-json`. Prompt profiles do not change decoding, SQL execution, candidate
+aggregation, or denotation scoring, and their artifacts require separate result directories.
+
 Denotation metrics are registered in `src/eval/denotation.py`; all active evaluation entry points
 select one through `--denotation-comparison` and record the selected name in their manifest.
 Candidate generation and aggregation are independent: greedy/sampling settings belong to runners,

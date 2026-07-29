@@ -27,6 +27,12 @@ from candidate_selection import (  # noqa: E402
     select_arctic_majority,
 )
 from denotation import add_denotation_comparison_argument, compare_denotations  # noqa: E402
+from direct_sql_prompt import (  # noqa: E402
+    CANONICAL_JSON_PROFILE,
+    add_direct_sql_prompt_arguments,
+    build_direct_sql_messages,
+    prompt_profile_manifest,
+)
 from executor import Harness  # noqa: E402
 from passk import attach_passk_fields, parse_pass_k, write_passk_summary  # noqa: E402
 from rollout import (  # noqa: E402
@@ -38,10 +44,8 @@ from rollout import (  # noqa: E402
     task_gold_sql,
 )
 from text2sql import (  # noqa: E402
-    SYSTEM_PROMPT,
     execute_predicted_sql_result,
     extract_sql,
-    schema_prompt,
 )
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
@@ -155,6 +159,9 @@ def run_one(
     denotation_comparison: str,
     candidate_aggregation: str = PASS_K_AGGREGATION,
     repetition_penalty: float | None = None,
+    prompt_profile: str = CANONICAL_JSON_PROFILE,
+    schema_value_count: int = 2,
+    schema_metadata_json: str | None = None,
 ) -> dict:
     if candidate_aggregation not in CANDIDATE_AGGREGATIONS:
         raise ValueError(f"unknown candidate aggregation: {candidate_aggregation}")
@@ -162,11 +169,13 @@ def run_one(
     gold_sql = task_gold_sql(ex)
     h = Harness(task_db_path(ex))
     h.conn.execute("PRAGMA query_only = ON")
-    user_prompt = schema_prompt(h, ex["question"], ex.get("external_knowledge"))
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
+    messages = build_direct_sql_messages(
+        h,
+        ex,
+        profile=prompt_profile,
+        schema_value_count=schema_value_count,
+        schema_metadata_json=schema_metadata_json,
+    )
     record = {
         "example_index": example_index,
         "dataset_index": ex.get("index"),
@@ -183,6 +192,12 @@ def run_one(
         "max_tokens": max_tokens,
         "denotation_comparison": denotation_comparison,
         "candidate_aggregation": candidate_aggregation,
+        "prompt_profile": prompt_profile,
+        "schema_value_count": (
+            schema_value_count
+            if prompt_profile != CANONICAL_JSON_PROFILE
+            else None
+        ),
         "correct": False,
         "failure_type": None,
     }
@@ -287,6 +302,7 @@ def main() -> int:
                         help="per-query SQLite VM deadline for generated SQL; <=0 disables it")
     add_denotation_comparison_argument(parser)
     add_candidate_aggregation_argument(parser)
+    add_direct_sql_prompt_arguments(parser)
     args = parser.parse_args()
 
     try:
@@ -301,7 +317,7 @@ def main() -> int:
         indexed_dev = list(enumerate(json.load(open(os.path.join(SPIDER, "dev.json")))[:args.n]))
         dataset = "spider_dev"
 
-    writer = ArtifactWriter(args.result_dir, {
+    manifest = {
         "runner": "direct_sql_passk",
         "dataset": dataset,
         "model": args.model,
@@ -318,8 +334,15 @@ def main() -> int:
         "candidate_aggregation": args.candidate_aggregation,
         "enable_thinking": os.environ.get("EVAL_ENABLE_THINKING"),
         "execution_feedback": False,
-        "system_prompt": SYSTEM_PROMPT,
-    }, args.resume)
+    }
+    manifest.update(
+        prompt_profile_manifest(
+            args.prompt_profile,
+            schema_value_count=args.schema_value_count,
+            schema_metadata_json=args.schema_metadata_json,
+        )
+    )
+    writer = ArtifactWriter(args.result_dir, manifest, args.resume)
     pending = [(i, ex) for i, ex in indexed_dev if i not in writer.completed]
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
@@ -340,6 +363,9 @@ def main() -> int:
                 denotation_comparison=args.denotation_comparison,
                 candidate_aggregation=args.candidate_aggregation,
                 repetition_penalty=args.repetition_penalty,
+                prompt_profile=args.prompt_profile,
+                schema_value_count=args.schema_value_count,
+                schema_metadata_json=args.schema_metadata_json,
             )
             for i, ex in pending
         ]

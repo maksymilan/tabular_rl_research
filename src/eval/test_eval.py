@@ -28,6 +28,12 @@ from denotation import (  # noqa: E402
     get_denotation_metric,
     rows_equal,
 )
+from direct_sql_prompt import (  # noqa: E402
+    CANONICAL_JSON_PROFILE,
+    SQL_ASTRA_APPENDIX_PROFILE,
+    build_direct_sql_messages,
+    canonical_schema_prompt,
+)
 from protocol import ProtocolError  # noqa: E402
 from rollout import (  # noqa: E402
     ChatAPIError,
@@ -377,6 +383,111 @@ class EvalTests(unittest.TestCase):
         payload = json.loads(urlopen.call_args.args[0].data)
         self.assertEqual(outputs, ["<answer>SELECT 1</answer>"])
         self.assertEqual(payload["repetition_penalty"], 1.05)
+
+    def test_direct_sql_canonical_prompt_profile_is_backward_compatible(self):
+        harness = Harness(":memory:")
+        self.addCleanup(harness.conn.close)
+        harness.conn.executescript(
+            "CREATE TABLE people(id INTEGER PRIMARY KEY, name TEXT);"
+            "INSERT INTO people VALUES (1, 'Ada');"
+        )
+        harness.register_sources()
+        example = {
+            "db_id": "test",
+            "db_path": ":memory:",
+            "question": "Return the name.",
+            "external_knowledge": "Use people.name.",
+        }
+        messages = build_direct_sql_messages(
+            harness,
+            example,
+            profile=CANONICAL_JSON_PROFILE,
+        )
+        self.assertEqual(
+            messages[1]["content"],
+            canonical_schema_prompt(
+                harness,
+                example["question"],
+                example["external_knowledge"],
+            ),
+        )
+        self.assertNotIn("example:", messages[1]["content"])
+
+    def test_sql_astra_prompt_profile_renders_comments_values_and_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp, "school.sqlite")
+            harness = Harness(str(db_path))
+            self.addCleanup(harness.conn.close)
+            harness.conn.executescript(
+                'CREATE TABLE schools("School ID" INTEGER PRIMARY KEY, name TEXT);'
+                'CREATE TABLE scores("School ID" INTEGER, score REAL, '
+                'FOREIGN KEY("School ID") REFERENCES schools("School ID"));'
+                "INSERT INTO schools VALUES (1, 'Ada Academy'), (2, 'Turing School');"
+                "INSERT INTO scores VALUES (1, 98.5), (2, 91.0);"
+            )
+            metadata_path = Path(tmp, "dev_tables.json")
+            metadata_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "db_id": "school",
+                            "table_names_original": ["schools", "scores"],
+                            "table_names": ["schools", "scores"],
+                            "column_names_original": [
+                                [-1, "*"],
+                                [0, "School ID"],
+                                [0, "name"],
+                                [1, "School ID"],
+                                [1, "score"],
+                            ],
+                            "column_names": [
+                                [-1, "*"],
+                                [0, "school identifier"],
+                                [0, "school name"],
+                                [1, "school identifier"],
+                                [1, "test score"],
+                            ],
+                            "column_types": [
+                                "text",
+                                "integer",
+                                "text",
+                                "integer",
+                                "real",
+                            ],
+                            "primary_keys": [1],
+                            "foreign_keys": [[3, 1]],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            messages = build_direct_sql_messages(
+                harness,
+                {
+                    "db_id": "school",
+                    "db_path": str(db_path),
+                    "question": "Which school has the highest score?",
+                    "external_knowledge": "Highest means maximum score.",
+                },
+                profile=SQL_ASTRA_APPENDIX_PROFILE,
+                schema_value_count=2,
+                schema_metadata_json=str(metadata_path),
+            )
+
+        prompt = messages[1]["content"]
+        self.assertIn("CREATE TABLE schools", prompt)
+        self.assertIn("`School ID` integer, -- school identifier, example: [1, 2]", prompt)
+        self.assertIn("name text, -- school name, example: ['Ada Academy', 'Turing School']", prompt)
+        self.assertIn("PRIMARY KEY (`School ID`)", prompt)
+        self.assertIn(
+            "FOREIGN KEY (`School ID`) REFERENCES schools (`School ID`)",
+            prompt,
+        )
+        self.assertIn(
+            "Highest means maximum score.\nWhich school has the highest score?",
+            prompt,
+        )
+        self.assertIn("<answer>SELECT ...</answer>", prompt)
 
     def test_provider_transport_error_is_not_argument_validation(self):
         error = ProtocolError(
