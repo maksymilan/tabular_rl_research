@@ -167,8 +167,14 @@ Start at `docs/current/README.md`.
   knowledge mappings, do not invent singleton/time/aggregate restrictions, fix population and
   row grain before relational commitments, preserve exact aggregation units, investigate
   anomalous observations rather than rationalizing them, and audit the exact terminal table
-  against requested output slots. Version38 is diagnostic-only pending a paired target/control
-  prompt gate; its prompt-only change must not enter student SFT exports.
+  against requested output slots. Its frozen 16-target/16-control DeepSeek v4 Flash prompt gate
+  required an infrastructure-only retry because the initial three-request budget left 19 empty
+  provider carriers and one disconnected request. With a ten-request retry budget, all 32 tasks
+  formed semantic completions: version38 scored 18/32 versus paired version37 at 16/32, with six
+  target recoveries, four control regressions, 32/32 legal termination, seven process errors, and
+  exact paired `p=0.7539`. It missed every semantic expansion threshold. Keep version38
+  diagnostic-only, do not expand it, and do not admit its prompt-only trajectories to SFT. See
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION38_SEMANTIC_DISCIPLINE_GATE32_20260729_ZH.md`.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may

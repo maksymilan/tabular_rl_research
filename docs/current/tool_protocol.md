@@ -224,7 +224,10 @@ Public version mapping:
   answer population, row grain, aggregation unit, and output slots are fixed before semantic
   commitments; unsupported singleton/time/mean/current restrictions are forbidden; anomalous
   observations trigger grounded inspection; and the cited terminal table is checked slot by slot.
-  It is diagnostic-only pending a paired target/control prompt gate;
+  Its frozen 16-target/16-control DeepSeek v4 Flash gate scored 18/32 versus paired version37 at
+  16/32 after infrastructure-only recovery, with six gains and four regressions (`p=0.7539`).
+  It missed its recovery, control-retention, and net-gain thresholds. Keep it diagnostic-only,
+  do not expand it, and do not use its trajectories for SFT;
 - future changes increment only the integer (`version39`, `version40`, ...).
 
 The current version38 diagnostic tool set remains the one in
