@@ -1,4 +1,4 @@
-# Atomic Tool-Scheme Trajectory Protocol (version38 diagnostic)
+# Atomic Tool-Scheme Trajectory Protocol (version39 diagnostic)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -228,9 +228,17 @@ Public version mapping:
   16/32 after infrastructure-only recovery, with six gains and four regressions (`p=0.7539`).
   It missed its recovery, control-retention, and net-gain thresholds. Keep it diagnostic-only,
   do not expand it, and do not use its trajectories for SFT;
-- future changes increment only the integer (`version39`, `version40`, ...).
+- `version39`: keeps version38's public tools, argument schemas, execution, canonical resident
+  state, replay, feedback, carrier, and recent-4 history policy unchanged. Only model-visible
+  resident-state rendering changes: completely equivalent `read_subtable` observations are
+  rendered once with their equivalent source steps, while groups of at least two unread and
+  unreferenced zero-row `condition_filter` handles sharing an input and output shape are folded
+  into a fact-only summary retaining their handles, creator steps, predicates, input, and columns.
+  Referenced, observed, or singleton empty handles remain fully expanded. It is diagnostic-only
+  pending context-efficiency and behavior-preservation gates;
+- future changes increment only the integer (`version40`, `version41`, ...).
 
-The current version38 diagnostic tool set remains the one in
+The current version39 diagnostic tool set remains the one in
 `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`

@@ -36,8 +36,8 @@ Start at `docs/current/README.md`.
 
 - Shared prompt semantics: `src/sft/prompt_contract.py`; protocol/validation:
   `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current atomic local diagnostic implementation: `version38`. The production checkpoint-560
-  evaluation chain remains frozen on `version26`; version38 has not received an accuracy promotion and must
+- Current atomic local diagnostic implementation: `version39`. The production checkpoint-560
+  evaluation chain remains frozen on `version26`; version39 has not received an accuracy promotion and must
   not be mixed into its result directories. Version26 retains version25's prompt-role and
   public-contract refactor, but replaces the model-visible tagged action carrier with one
   non-empty `<think>` block followed directly by a strict raw JSON action object. The former
@@ -175,6 +175,15 @@ Start at `docs/current/README.md`.
   exact paired `p=0.7539`. It missed every semantic expansion threshold. Keep version38
   diagnostic-only, do not expand it, and do not admit its prompt-only trajectories to SFT. See
   `docs/reports/evaluation/BIRD_ATOMIC_VERSION38_SEMANTIC_DISCIPLINE_GATE32_20260729_ZH.md`.
+  `version39` keeps version38's public tools, argument schemas, execution, canonical resident
+  state, replay semantics, feedback, carrier, and recent-4 history policy unchanged. It changes
+  only model-visible resident-state rendering: completely equivalent `read_subtable` observations
+  are shown once with all equivalent source step ids, and groups of at least two unreferenced,
+  unread zero-row `condition_filter` handles sharing one input and output shape are folded into a
+  fact-only summary that retains handle, creator step, predicate, input, and columns. Referenced,
+  read, or singleton empty handles stay fully rendered. Version39 is diagnostic-only pending a
+  context-efficiency and behavior-preservation gate; frozen version26 runs and artifacts remain
+  unchanged.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may

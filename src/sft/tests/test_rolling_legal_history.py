@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import sys
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 SFT_DIR = Path(__file__).resolve().parents[1]
@@ -12,12 +14,18 @@ sys.path[:0] = [str(SFT_DIR), str(HARNESS_DIR)]
 from protocol import (  # noqa: E402
     SYSTEM_PROMPT,
     compact_resident_observation,
+    environment_state_message,
     rolling_legal_history_messages,
     rolling_system_prompt,
 )
 
 
 class RollingLegalHistoryTests(unittest.TestCase):
+    @staticmethod
+    def _visible_state(state):
+        rendered = environment_state_message(state)
+        return json.loads(rendered.split("\n", 1)[1])
+
     def test_keeps_legal_assistant_actions_and_current_state(self):
         messages = rolling_legal_history_messages(
             "system",
@@ -270,6 +278,183 @@ class RollingLegalHistoryTests(unittest.TestCase):
         self.assertIn('"tool":"describe_table"', rendered)
         self.assertNotIn("very_large_schema_column", rendered)
         self.assertIn("very_large_schema_column", str(state))
+
+    def test_identical_read_results_are_rendered_once_without_mutating_canonical_state(self):
+        rows = [["United States", "USA"], ["Canada", "CAN"]]
+        state = {
+            "plan": [],
+            "tables": {
+                "country": {
+                    "kind": "source",
+                    "reads": [
+                        {
+                            "from_step": "step_11",
+                            "columns": None,
+                            "limit": 20,
+                            "row_count": 2,
+                            "rows": rows,
+                        },
+                        {
+                            "from_step": "step_16",
+                            "columns": None,
+                            "limit": None,
+                            "row_count": 2,
+                            "rows": rows,
+                        },
+                    ],
+                },
+            },
+            "values": {},
+        }
+        canonical_before = deepcopy(state)
+
+        visible = self._visible_state(state)
+        reads = visible["tables"]["country"]["reads"]
+        self.assertEqual(len(reads), 1)
+        self.assertEqual(reads[0]["from_step"], "step_16")
+        self.assertEqual(
+            reads[0]["equivalent_from_steps"],
+            ["step_11", "step_16"],
+        )
+        self.assertEqual(reads[0]["rows"], rows)
+        self.assertEqual(state, canonical_before)
+
+    def test_equal_rows_from_different_read_requests_are_not_deduplicated(self):
+        rows = [["United States"]]
+        state = {
+            "plan": [],
+            "tables": {
+                "country": {
+                    "kind": "source",
+                    "reads": [
+                        {
+                            "from_step": "step_1",
+                            "columns": ["Name"],
+                            "conditions": {
+                                "column": "Code",
+                                "op": "=",
+                                "value": "USA",
+                            },
+                            "limit": 20,
+                            "row_count": 1,
+                            "rows": rows,
+                        },
+                        {
+                            "from_step": "step_2",
+                            "columns": ["Name"],
+                            "conditions": {
+                                "column": "Code",
+                                "op": "=",
+                                "value": "CAN",
+                            },
+                            "limit": 20,
+                            "row_count": 1,
+                            "rows": rows,
+                        },
+                    ],
+                },
+            },
+            "values": {},
+        }
+
+        reads = self._visible_state(state)["tables"]["country"]["reads"]
+        self.assertEqual(len(reads), 2)
+        self.assertNotIn("equivalent_from_steps", reads[0])
+        self.assertNotIn("equivalent_from_steps", reads[1])
+
+    @staticmethod
+    def _zero_filter_entry(name, step, source="country", *, reads=None):
+        return {
+            "kind": "filter",
+            "created_by": step,
+            "columns": ["Name", "Code"],
+            "row_count": 0,
+            "reads": reads or [],
+            "derivation": {
+                "schema": "relation-derivation-v1",
+                "operator": "condition_filter",
+                "inputs": [{"kind": "table", "role": "input", "ref": source}],
+                "semantics": {
+                    "row_operation": "filter",
+                    "predicate": {
+                        "column": "Code",
+                        "op": "=",
+                        "value": name.upper(),
+                    },
+                    "predicate_columns": ["Code"],
+                    "column_operation": "preserve",
+                    "projected_columns": ["Name", "Code"],
+                },
+            },
+        }
+
+    def test_unreferenced_zero_row_filter_run_is_folded_but_observed_or_referenced_handles_stay(self):
+        state = {
+            "plan": [],
+            "tables": {
+                "country": {"kind": "source", "columns": ["Name", "Code"], "row_count": 250},
+                "filter_001": self._zero_filter_entry("filter_001", "step_1"),
+                "filter_002": self._zero_filter_entry("filter_002", "step_2"),
+                "filter_003": self._zero_filter_entry("filter_003", "step_3"),
+                "filter_004": self._zero_filter_entry(
+                    "filter_004",
+                    "step_4",
+                    reads=[{
+                        "from_step": "step_5",
+                        "columns": None,
+                        "limit": 20,
+                        "row_count": 0,
+                        "rows": [],
+                    }],
+                ),
+                "project_001": {
+                    "kind": "project",
+                    "created_by": "step_6",
+                    "columns": ["Name"],
+                    "row_count": 0,
+                    "derivation": {
+                        "schema": "relation-derivation-v1",
+                        "operator": "project",
+                        "inputs": [{"kind": "table", "role": "input", "ref": "filter_003"}],
+                        "semantics": {
+                            "row_operation": "preserve",
+                            "column_operation": "project",
+                            "column_lineage": [],
+                        },
+                    },
+                },
+            },
+            "values": {},
+        }
+        canonical_before = deepcopy(state)
+
+        visible = self._visible_state(state)
+        self.assertNotIn("filter_001", visible["tables"])
+        self.assertNotIn("filter_002", visible["tables"])
+        self.assertIn("filter_003", visible["tables"])
+        self.assertIn("filter_004", visible["tables"])
+        run = visible["fact_summaries"]["unreferenced_zero_row_filter_runs"][0]
+        self.assertEqual(run["input"], "country")
+        self.assertEqual(run["columns"], ["Name", "Code"])
+        self.assertEqual(
+            [attempt["table"] for attempt in run["attempts"]],
+            ["filter_001", "filter_002"],
+        )
+        self.assertEqual(run["attempts"][0]["from_step"], "step_1")
+        self.assertEqual(run["attempts"][1]["predicate"]["value"], "FILTER_002")
+        self.assertEqual(state, canonical_before)
+
+    def test_single_unreferenced_zero_row_filter_stays_expanded(self):
+        state = {
+            "plan": [],
+            "tables": {
+                "filter_001": self._zero_filter_entry("filter_001", "step_1"),
+            },
+            "values": {},
+        }
+        visible = self._visible_state(state)
+        self.assertIn("filter_001", visible["tables"])
+        self.assertNotIn("fact_summaries", visible)
 
     def test_full_observation_style_reproduces_pre_r2_history(self):
         observation = (
