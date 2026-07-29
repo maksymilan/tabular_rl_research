@@ -1505,7 +1505,7 @@ def rolling_legal_history_messages(
     """Render a bounded transcript of harness-successful assistant/tool pairs.
 
     By default, rejected assistant text never becomes context and only the latest structured error
-    is carried in the current user message. The isolated version40 diagnostic can set
+    is carried in the current user message. The isolated version40/version41 diagnostics can set
     ``preserve_all_reasoning`` and provide ``reasoning_history`` so successful and rejected reasons
     remain explicitly labeled continuity context while exact action/observation pairs stay bounded.
     ``history_turns=0`` retains every legal pair for experiments; production callers should use an

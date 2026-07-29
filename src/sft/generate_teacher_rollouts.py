@@ -49,6 +49,14 @@ from atomic_version40 import (  # noqa: E402
     provider_system_prompt as provider_system_prompt_version40,
     tool_schema_hash as tool_schema_hash_version40,
 )
+from atomic_version41 import (  # noqa: E402
+    PROTOCOL_VERSION as VERSION41_PROTOCOL_VERSION,
+    STUDENT_SYSTEM_PROMPT as VERSION41_STUDENT_SYSTEM_PROMPT,
+    parse_assistant_strict as parse_assistant_strict_version41,
+    protocol_hash as protocol_hash_version41,
+    provider_system_prompt as provider_system_prompt_version41,
+    tool_schema_hash as tool_schema_hash_version41,
+)
 from prompt_contract import TEACHER_ONE_ACTION_RULE  # noqa: E402
 from provider_adapter import (  # noqa: E402
     DEEPSEEK_CARRIER_CHOICES,
@@ -116,7 +124,12 @@ ELIGIBLE_TRAINING_ADMISSION = "eligible_by_current_context_contract"
 ATOMIC_PROTOCOL_VERSIONS = (
     DEFAULT_PROTOCOL_VERSION,
     VERSION40_PROTOCOL_VERSION,
+    VERSION41_PROTOCOL_VERSION,
 )
+FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS = frozenset({
+    VERSION40_PROTOCOL_VERSION,
+    VERSION41_PROTOCOL_VERSION,
+})
 DATA_GENERATION_SUFFIX = (
     "\n\nDATA GENERATION STRICTNESS\n"
     + TEACHER_ONE_ACTION_RULE
@@ -131,6 +144,8 @@ DATA_GENERATION_SUFFIX = (
 
 
 def selected_protocol_hash(protocol_version: str, system_prompt: str) -> str:
+    if protocol_version == VERSION41_PROTOCOL_VERSION:
+        return protocol_hash_version41(system_prompt)
     if protocol_version == VERSION40_PROTOCOL_VERSION:
         return protocol_hash_version40(system_prompt)
     if protocol_version == DEFAULT_PROTOCOL_VERSION:
@@ -139,6 +154,8 @@ def selected_protocol_hash(protocol_version: str, system_prompt: str) -> str:
 
 
 def selected_tool_schema_hash(protocol_version: str) -> str:
+    if protocol_version == VERSION41_PROTOCOL_VERSION:
+        return tool_schema_hash_version41()
     if protocol_version == VERSION40_PROTOCOL_VERSION:
         return tool_schema_hash_version40()
     if protocol_version == DEFAULT_PROTOCOL_VERSION:
@@ -679,20 +696,35 @@ def run_rollout(
     if atomic_protocol_version not in ATOMIC_PROTOCOL_VERSIONS:
         raise ValueError(f"unknown atomic protocol version {atomic_protocol_version!r}")
     version40 = atomic_protocol_version == VERSION40_PROTOCOL_VERSION
-    if version40:
+    version41 = atomic_protocol_version == VERSION41_PROTOCOL_VERSION
+    full_reasoning_no_plan = (
+        atomic_protocol_version in FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS
+    )
+    if full_reasoning_no_plan:
+        version_label = atomic_protocol_version
         if not diagnostic_only:
-            raise ValueError("version40 is diagnostic-only")
+            raise ValueError(f"{version_label} is diagnostic-only")
         if context_mode != "rolling-legal-history" or history_turns != 4:
-            raise ValueError("version40 requires rolling legal history with exactly four turns")
+            raise ValueError(
+                f"{version_label} requires rolling legal history with exactly four turns"
+            )
         if rolling_prompt_variant != "full":
-            raise ValueError("version40 uses one fixed full prompt")
+            raise ValueError(f"{version_label} uses one fixed full prompt")
         if policy_prompt_variant != POLICY_PROMPT_CANONICAL:
-            raise ValueError("version40 does not combine with policy prompt ablations")
+            raise ValueError(
+                f"{version_label} does not combine with policy prompt ablations"
+            )
         if plan_policy != PLAN_POLICY_OPTIONAL:
-            raise ValueError("version40 removes plan and cannot use a required plan policy")
+            raise ValueError(
+                f"{version_label} removes plan and cannot use a required plan policy"
+            )
         if database_context_profile != CATALOG_CONTEXT_PROFILE:
-            raise ValueError("version40 currently supports only the catalog-v1 context profile")
-    effective_plan_policy = "disabled-by-protocol" if version40 else plan_policy
+            raise ValueError(
+                f"{version_label} currently supports only the catalog-v1 context profile"
+            )
+    effective_plan_policy = (
+        "disabled-by-protocol" if full_reasoning_no_plan else plan_policy
+    )
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
     if not gold_sql:
@@ -723,9 +755,9 @@ def run_rollout(
             f"unknown database context profile: {database_context_profile!r}"
         )
     disabled_model_tools = disabled_tools_for_profile(database_context_profile)
-    if version40:
+    if full_reasoning_no_plan:
         database_context_audit["model_visible_tool_schema_sha256"] = (
-            tool_schema_hash_version40()
+            selected_tool_schema_hash(atomic_protocol_version)
         )
     external_knowledge = ex.get("external_knowledge") or None
     messages = [
@@ -746,7 +778,7 @@ def run_rollout(
     reasoning_history: list[dict] = []
     adjacent_guard = AdjacentActionGuard()
     plan_tracker = ResidentPlanPolicyTracker(
-        PLAN_POLICY_OPTIONAL if version40 else plan_policy
+        PLAN_POLICY_OPTIONAL if full_reasoning_no_plan else plan_policy
     )
     successful_tool_steps = 0
     usage = collections.Counter()
@@ -778,12 +810,14 @@ def run_rollout(
         "plan_policy": effective_plan_policy,
         "history_reasoning": (
             "complete-all-successful-and-rejected"
-            if version40
+            if full_reasoning_no_plan
             else "omitted-from-provider-history"
         ),
         "reasoning_history_events": reasoning_history,
         "history_observations": (
-            "unabridged-recent-4" if version40 else "compact-resident"
+            "unabridged-recent-4"
+            if full_reasoning_no_plan
+            else "compact-resident"
         ),
         "policy_prompt_variant": policy_prompt_variant,
         "denotation_comparison": denotation_comparison,
@@ -813,9 +847,11 @@ def run_rollout(
                 external_knowledge,
                 legal_history,
                 history_turns,
-                compact_observations=not version40,
-                preserve_all_reasoning=version40,
-                reasoning_history=reasoning_history if version40 else None,
+                compact_observations=not full_reasoning_no_plan,
+                preserve_all_reasoning=full_reasoning_no_plan,
+                reasoning_history=(
+                    reasoning_history if full_reasoning_no_plan else None
+                ),
             )
         else:
             model_input = model_context_messages(
@@ -830,7 +866,7 @@ def run_rollout(
             model,
             model_input,
             carrier=deepseek_carrier,
-            preserve_reasoning=version40,
+            preserve_reasoning=full_reasoning_no_plan,
         )
         turn = {
             "turn_index": len(turns),
@@ -920,11 +956,12 @@ def run_rollout(
                 adjacent_guard.clear()
                 raise ProtocolError(rejection)
             step_id = f"step_{action_count}"
-            parser = (
-                parse_assistant_strict_version40
-                if version40
-                else parse_assistant_strict
-            )
+            if version41:
+                parser = parse_assistant_strict_version41
+            elif version40:
+                parser = parse_assistant_strict_version40
+            else:
+                parser = parse_assistant_strict
             think, tool, args = parser(
                 text,
                 adjacent_guard=adjacent_guard,
@@ -939,7 +976,7 @@ def run_rollout(
             plan_tracker.validate_before_execution(tool, args)
             if tool == "answer_from_context":
                 validate_tool_arguments_against_state(h, tool, args)
-                if version40:
+                if full_reasoning_no_plan:
                     reasoning_history.append({
                         "step_id": step_id,
                         "status": "success",
@@ -1003,7 +1040,7 @@ def run_rollout(
             last_error = None
             successful_tool_steps += 1
             plan_tracker.record_success(tool, args)
-            if version40:
+            if full_reasoning_no_plan:
                 reasoning_history.append({
                     "step_id": step_id,
                     "status": "success",
@@ -1056,7 +1093,7 @@ def run_rollout(
                 or turn.get("provider_reasoning_content")
             )
             if (
-                version40
+                full_reasoning_no_plan
                 and isinstance(rejected_reasoning, str)
                 and rejected_reasoning.strip()
             ):
@@ -1170,11 +1207,13 @@ def run_rollout(
                 "plan_policy": effective_plan_policy,
                 "history_reasoning": (
                     "complete-all-successful-and-rejected"
-                    if version40
+                    if full_reasoning_no_plan
                     else "omitted-from-provider-history"
                 ),
                 "history_observations": (
-                    "unabridged-recent-4" if version40 else "compact-resident"
+                    "unabridged-recent-4"
+                    if full_reasoning_no_plan
+                    else "compact-resident"
                 ),
                 "deepseek_carrier": deepseek_carrier,
                 "denotation_comparison": denotation_comparison,
@@ -1313,7 +1352,8 @@ def main() -> int:
         default=DEFAULT_PROTOCOL_VERSION,
         help=(
             "version39 preserves the current default; version40 enables the isolated no-plan, "
-            "inspect_rows, full-reasoning recent-4 prompt diagnostic"
+            "inspect_rows, full-reasoning recent-4 diagnostic; version41 changes only its prompt "
+            "by adding one consolidated output contract and Gate50 error corrections"
         ),
     )
     parser.add_argument(
@@ -1383,21 +1423,34 @@ def main() -> int:
         parser.error(
             "full-bird-schema-samples-v1 requires --rolling-prompt-variant full"
         )
-    if args.atomic_protocol_version == VERSION40_PROTOCOL_VERSION:
+    if args.atomic_protocol_version in FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS:
+        version_label = args.atomic_protocol_version
         if not args.diagnostic_only:
-            parser.error("version40 is diagnostic-only; pass --diagnostic-only")
+            parser.error(f"{version_label} is diagnostic-only; pass --diagnostic-only")
         if args.context_mode != "rolling-legal-history":
-            parser.error("version40 requires --context-mode rolling-legal-history")
+            parser.error(
+                f"{version_label} requires --context-mode rolling-legal-history"
+            )
         if args.history_turns != 4:
-            parser.error("version40 requires --history-turns 4")
+            parser.error(f"{version_label} requires --history-turns 4")
         if args.rolling_prompt_variant != "full":
-            parser.error("version40 has one fixed layered prompt; use --rolling-prompt-variant full")
+            parser.error(
+                f"{version_label} has one fixed layered prompt; "
+                "use --rolling-prompt-variant full"
+            )
         if args.policy_prompt_variant != POLICY_PROMPT_CANONICAL:
-            parser.error("version40 does not combine with policy prompt ablations")
+            parser.error(
+                f"{version_label} does not combine with policy prompt ablations"
+            )
         if args.plan_policy != PLAN_POLICY_OPTIONAL:
-            parser.error("version40 removes plan; do not select a required plan policy")
+            parser.error(
+                f"{version_label} removes plan; do not select a required plan policy"
+            )
         if args.database_context_profile != CATALOG_CONTEXT_PROFILE:
-            parser.error("version40 currently supports only --database-context-profile catalog-v1")
+            parser.error(
+                f"{version_label} currently supports only "
+                "--database-context-profile catalog-v1"
+            )
     if args.max_tokens is None:
         args.max_tokens = provider_default_max_tokens(args.model, DEFAULT_MAX_TOKENS)
 
@@ -1418,7 +1471,18 @@ def main() -> int:
         if trajectory_id(args.split, i, ex) not in completed
     ]
     version40 = args.atomic_protocol_version == VERSION40_PROTOCOL_VERSION
-    if version40:
+    version41 = args.atomic_protocol_version == VERSION41_PROTOCOL_VERSION
+    full_reasoning_no_plan = (
+        args.atomic_protocol_version in FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS
+    )
+    if version41:
+        student_prompt = VERSION41_STUDENT_SYSTEM_PROMPT
+        canonical_teacher_prompt = VERSION41_STUDENT_SYSTEM_PROMPT
+        system_prompt = provider_system_prompt_version41(
+            args.model,
+            carrier=args.deepseek_carrier,
+        )
+    elif version40:
         student_prompt = VERSION40_STUDENT_SYSTEM_PROMPT
         canonical_teacher_prompt = VERSION40_STUDENT_SYSTEM_PROMPT
         system_prompt = provider_system_prompt_version40(
@@ -1472,8 +1536,8 @@ def main() -> int:
             args.atomic_protocol_version
         ),
         "model_visible_tool_schema_sha256": (
-            tool_schema_hash_version40()
-            if version40
+            selected_tool_schema_hash(args.atomic_protocol_version)
+            if full_reasoning_no_plan
             else model_visible_tool_schema_hash(args.database_context_profile)
         ),
         "database_context_profile": args.database_context_profile,
@@ -1605,15 +1669,19 @@ def main() -> int:
         "rolling_prompt_variant": args.rolling_prompt_variant,
         "policy_prompt_variant": args.policy_prompt_variant,
         "plan_policy": (
-            "disabled-by-protocol" if version40 else args.plan_policy
+            "disabled-by-protocol"
+            if full_reasoning_no_plan
+            else args.plan_policy
         ),
         "history_reasoning": (
             "complete-all-successful-and-rejected"
-            if version40
+            if full_reasoning_no_plan
             else "omitted-from-provider-history"
         ),
         "history_observations": (
-            "unabridged-recent-4" if version40 else "compact-resident"
+            "unabridged-recent-4"
+            if full_reasoning_no_plan
+            else "compact-resident"
         ),
         "deepseek_carrier": args.deepseek_carrier,
         "denotation_comparison": args.denotation_comparison,

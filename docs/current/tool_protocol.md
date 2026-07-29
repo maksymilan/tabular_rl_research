@@ -19,6 +19,7 @@ spaces are never merged in one prompt.
   - `MODEL_ARG_SCHEMA`
   - message rendering/parsing
 - Isolated atomic version40 diagnostic: `src/sft/atomic_version40.py`
+- Isolated atomic version41 prompt module: `src/sft/atomic_version41_prompt.py`
 - Harness provenance sidecars: `src/harness/provenance.py`
 - Visible-cell binding semantics: `src/harness/observation_binding.py`
 - Scalar `value_ref` grounding: `src/harness/scalar_grounding.py`
@@ -244,10 +245,15 @@ Public version mapping:
   prompt states each policy once and has no appended teacher-policy duplicate. All successful and
   rejected reasoning is retained as explicitly labeled, non-factual continuity context. The
   latest rejected attempted action and complete error remain in `LAST TOOL ERROR`; exact
-  successful actions and unabridged results are fixed to the four most recent pairs. Version40
-  currently supports only the lazy catalog
-  profile and is ineligible for SFT/RL pending a paired gate;
-- future changes increment only the integer (`version41`, `version42`, ...).
+  successful actions and unabridged results are fixed to the four most recent pairs. Its frozen
+  first-50 gate scored 37/50 versus paired version24 42/50, with zero gains and five output-shape
+  regressions. Do not expand it or use it for SFT/RL;
+- `version41`: keeps every version40 public tool, argument, execution, state, feedback, history,
+  carrier, and join rule unchanged. It changes only the prompt through
+  `src/sft/atomic_version41_prompt.py`: one consolidated output contract restores exact output-slot
+  discriminators, and concise legal examples correct the five tool families that produced
+  Gate50 process errors. It is diagnostic-only pending a paired output-shape gate;
+- future changes increment only the integer (`version42`, `version43`, ...).
 
 The current version39 diagnostic tool set remains the one in
 `src/sft/protocol.py::TOOL_SPECS`:
@@ -265,18 +271,19 @@ The current version39 diagnostic tool set remains the one in
 - `read_subtable`
 - `answer_from_context`
 
-The separate version40 public set is defined by
+The shared version40/version41 public set is defined by
 `src/sft/atomic_version40.py::TOOL_SPECS`. It removes `plan`, replaces
 `read_subtable` with `inspect_rows`, and leaves every other signature—including `join_tables`—
-unchanged. The executor keeps `read_subtable` only as a private/replay-compatible implementation
-name.
+unchanged. Version41 reuses the exact same tool-schema hash. The executor keeps `read_subtable`
+only as a private/replay-compatible implementation name.
 
 The model-visible relation derivation schema is indexed separately in
 `docs/current/relation_derivation.md`.
 
-Only the teacher-generation prompt includes canonical JSON examples for complex operation families.
-The student runtime prompt gives required/optional argument signatures and atomic semantics without
-those worked cases.
+For the promoted/default version39 contract, only the teacher-generation prompt includes canonical
+JSON examples for complex operation families; its student runtime prompt has no worked cases. The
+isolated external-teacher-only version40/version41 diagnostics instead use one fixed prompt and
+remain ineligible for student SFT/RL.
 
 For every terminal answer, the cited evidence table is scored as the answer. Its rows, columns, and
 column order must match the requested output exactly. `read_subtable(columns=..., conditions=...)`

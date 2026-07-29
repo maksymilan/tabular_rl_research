@@ -196,8 +196,8 @@ def provider_request_messages(
     """Render canonical legal-history actions in the provider's API-facing carrier.
 
     By default DeepSeek receives prior assistant actions as one raw JSON action object and old
-    reasoning is omitted, preserving the promoted contract. The isolated version40 diagnostic may
-    instead copy the complete prior canonical reason into the provider-native
+    reasoning is omitted, preserving the promoted contract. The isolated version40/version41
+    diagnostics may instead copy the complete prior canonical reason into the provider-native
     ``reasoning_content`` field while keeping the visible action carrier unchanged.
     The returned list is a copy; canonical audit/history records are not mutated.
     """

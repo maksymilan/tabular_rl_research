@@ -36,9 +36,9 @@ Start at `docs/current/README.md`.
 
 - Shared prompt semantics: `src/sft/prompt_contract.py`; protocol/validation:
   `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current atomic local diagnostic default: `version39`; `version40` is an opt-in prompt/tool-name
-  diagnostic. The production checkpoint-560 evaluation chain remains frozen on `version26`;
-  neither version39 nor version40 has received an accuracy promotion and they must
+- Current atomic local diagnostic default: `version39`; `version40` and `version41` are opt-in
+  prompt/tool-name diagnostics. The production checkpoint-560 evaluation chain remains frozen on
+  `version26`; none of version39-version41 has received an accuracy promotion and they must
   not be mixed into its result directories. Version26 retains version25's prompt-role and
   public-contract refactor, but replaces the model-visible tagged action carrier with one
   non-empty `<think>` block followed directly by a strict raw JSON action object. The former
@@ -196,6 +196,13 @@ Start at `docs/current/README.md`.
   the correct entity/row set but cited the wrong output columns, order, or representation. Do not
   run the remaining 150 or use version40 for SFT/RL. See
   `docs/reports/evaluation/BIRD_ATOMIC_VERSION40_CONCISE_HISTORY_GATE50_20260729_ZH.md`.
+  `version41` keeps every version40 public tool, argument, execution, state, feedback, carrier,
+  join, and full-reasoning recent-4 history behavior unchanged. It adds one prompt-only module:
+  a consolidated exact-output contract restoring separate-field and ID/code representation
+  boundaries, plus legal correction examples for the five tool families that produced version40
+  Gate50 process errors. Its tool-schema hash is identical to version40. Version41 is
+  diagnostic-only pending a paired output-shape gate and is ineligible for SFT/RL. See
+  `docs/current/atomic_version41_output_corrections_zh.md`.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may

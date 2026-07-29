@@ -3,6 +3,9 @@
 ## 状态
 
 `version40` 是独立的 external-teacher 诊断配置，不替代 version39，也不能用于 SFT/RL。
+其冻结前 50 题 Gate 已完成：37/50，对同题 version24 的 42/50 有 0 个恢复、5 个回归；
+不运行剩余 150 题。完整审计见
+`docs/reports/evaluation/BIRD_ATOMIC_VERSION40_CONCISE_HISTORY_GATE50_20260729_ZH.md`。
 入口是 `src/sft/generate_teacher_rollouts.py`：
 
 ```bash
@@ -65,6 +68,6 @@ provider 响应合同。它不是只保留工具签名的极简 prompt。
 5. **推理长度的“两到六句”软范围。** 这是本轮按要求新增的行为约束；若观察到模型机械
    凑句子，再单独测试只保留 “focused, medium-length continuation”。
 
-建议先用当前 version40 做固定 target/control 小门，再根据错误分型只选择一个候选项做
-paired ablation。至少分别报告：`bird-set`、合法终止、process errors、provider/transport
-失败、最终表 shape-only 错误、总 token 和平均 action 数。
+version40 Gate50 已证明第 4 项不能继续删除：五个新增回归全部是 output-shape 错误。
+后续 `version41` 只恢复一个合并后的输出合同及本轮实际过程错误对应的合法调用示例，见
+`docs/current/atomic_version41_output_corrections_zh.md`。
