@@ -59,7 +59,8 @@ class AtomicVersion40Tests(unittest.TestCase):
         self.assertEqual(prompt.count("REASONING CONTINUITY"), 1)
         self.assertNotIn("under 120 words", prompt)
         self.assertIn("two to six substantive sentences", prompt)
-        self.assertIn("at most the four most recent", prompt)
+        self.assertIn("all successful model reasoning", prompt)
+        self.assertIn("limited to the four most recent", prompt)
 
     def test_version40_parser_accepts_only_the_new_public_row_name(self):
         inspect_rows = (
@@ -107,6 +108,7 @@ class AtomicVersion40Tests(unittest.TestCase):
             history,
             4,
             compact_observations=False,
+            preserve_all_reasoning=True,
         )
         rendered = provider_request_messages(
             "deepseek-v4-flash",
@@ -116,6 +118,12 @@ class AtomicVersion40Tests(unittest.TestCase):
         assistants = [item for item in rendered if item["role"] == "assistant"]
         observations = [item["content"] for item in rendered if item["role"] == "user"][1:]
         self.assertEqual(len(assistants), 4)
+        self.assertIn("OLDER SUCCESSFUL MODEL REASONING", rendered[1]["content"])
+        self.assertIn(
+            "complete reasoning 0 with an unfinished hypothesis",
+            rendered[1]["content"],
+        )
+        self.assertNotIn("full-row-0", rendered[1]["content"])
         self.assertEqual(
             [item["reasoning_content"] for item in assistants],
             [

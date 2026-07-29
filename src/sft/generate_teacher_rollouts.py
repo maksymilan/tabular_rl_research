@@ -776,7 +776,7 @@ def run_rollout(
         "outcome": None,
         "plan_policy": effective_plan_policy,
         "history_reasoning": (
-            "provider-native-complete-recent-4" if version40 else "omitted-from-provider-history"
+            "complete-all-successful" if version40 else "omitted-from-provider-history"
         ),
         "history_observations": (
             "unabridged-recent-4" if version40 else "compact-resident"
@@ -810,6 +810,7 @@ def run_rollout(
                 legal_history,
                 history_turns,
                 compact_observations=not version40,
+                preserve_all_reasoning=version40,
             )
         else:
             model_input = model_context_messages(
@@ -1134,7 +1135,7 @@ def run_rollout(
                 "policy_prompt_variant": policy_prompt_variant,
                 "plan_policy": effective_plan_policy,
                 "history_reasoning": (
-                    "provider-native-complete-recent-4"
+                    "complete-all-successful"
                     if version40
                     else "omitted-from-provider-history"
                 ),
@@ -1573,7 +1574,7 @@ def main() -> int:
             "disabled-by-protocol" if version40 else args.plan_policy
         ),
         "history_reasoning": (
-            "provider-native-complete-recent-4"
+            "complete-all-successful"
             if version40
             else "omitted-from-provider-history"
         ),

@@ -189,10 +189,10 @@ Start at `docs/current/README.md`.
   `--atomic-protocol-version version40 --diagnostic-only`. It keeps version39 execution, state,
   grounding, feedback, carrier, and the exact multi-edge `join_tables` rule. It removes `plan`
   from its public surface, renames the read-only row observer to `inspect_rows`, and replaces the
-  appended teacher/runtime prompt stack with one 7.45k-character layered prompt. Its recent-4
-  successful history retains complete provider-native reasoning, exact calls, and unabridged tool
-  results; rejected text is still excluded. It is catalog-only, has no accuracy promotion, and is
-  ineligible for SFT/RL pending a paired gate.
+  appended teacher/runtime prompt stack with one 7.45k-character layered prompt. All successful
+  prior reasoning is retained as non-factual continuity context; exact calls and unabridged tool
+  results use a recent-4 window. Rejected text is still excluded. It is catalog-only, has no
+  accuracy promotion, and is ineligible for SFT/RL pending a paired gate.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may

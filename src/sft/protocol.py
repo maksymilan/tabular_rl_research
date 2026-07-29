@@ -1497,6 +1497,7 @@ def rolling_legal_history_messages(
     history_turns: int,
     *,
     compact_observations: bool = True,
+    preserve_all_reasoning: bool = False,
     history_policy: str = HISTORY_POLICY_RECENT,
     history_head_turns: int = 0,
 ) -> list[dict]:
@@ -1515,6 +1516,8 @@ def rolling_legal_history_messages(
         raise ValueError("history_head_turns must be non-negative")
     if history_policy == HISTORY_POLICY_RECENT and history_head_turns:
         raise ValueError("recent history_policy does not accept history_head_turns")
+    if preserve_all_reasoning and history_policy != HISTORY_POLICY_RECENT:
+        raise ValueError("complete reasoning retention currently requires recent history_policy")
     initial = first_user_message(overview, question, external_knowledge)
     if not legal_history:
         content = initial
@@ -1524,12 +1527,42 @@ def rolling_legal_history_messages(
 
     if history_turns == 0:
         retained = legal_history
+        older = []
     elif history_policy == HISTORY_POLICY_RECENT:
         retained = legal_history[-history_turns:]
+        older = legal_history[:-history_turns] if preserve_all_reasoning else []
     else:
         head = legal_history[:history_head_turns]
         tail_start = max(history_head_turns, len(legal_history) - history_turns)
         retained = [*head, *legal_history[tail_start:]]
+        older = []
+    if older:
+        older_reasons = []
+        for item in older:
+            assistant = item.get("assistant")
+            if not isinstance(assistant, str) or not assistant.strip():
+                raise ValueError("rolling legal history has an empty assistant action")
+            match = re.fullmatch(
+                r"\s*<think>(?P<reasoning>.*?)</think>\s*\{.*\}\s*",
+                assistant,
+                re.DOTALL,
+            )
+            if match is None or not match.group("reasoning").strip():
+                raise ValueError(
+                    "complete reasoning retention requires canonical assistant history"
+                )
+            older_reasons.append(match.group("reasoning").strip())
+        initial += (
+            "\n\nOLDER SUCCESSFUL MODEL REASONING\n"
+            "The following complete model-authored reasoning is continuity context, not factual "
+            "evidence. Its older tool calls and observations are outside the four-pair window. "
+            "Revise it whenever current harness state or feedback disagrees.\n"
+            + json.dumps(
+                {"reasoning": older_reasons},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
     messages = [{"role": "system", "content": system}, {"role": "user", "content": initial}]
     for index, item in enumerate(retained):
         assistant = item.get("assistant")
