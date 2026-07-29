@@ -20,6 +20,7 @@ spaces are never merged in one prompt.
   - message rendering/parsing
 - Isolated atomic version40 diagnostic: `src/sft/atomic_version40.py`
 - Isolated atomic version41 prompt module: `src/sft/atomic_version41_prompt.py`
+- Isolated atomic version42 terminal-column protocol: `src/sft/atomic_version42.py`
 - Harness provenance sidecars: `src/harness/provenance.py`
 - Visible-cell binding semantics: `src/harness/observation_binding.py`
 - Scalar `value_ref` grounding: `src/harness/scalar_grounding.py`
@@ -256,7 +257,12 @@ Public version mapping:
   with two gains, no regressions, 16/16 legal termination, and zero versus six process errors, but
   only 2/8 targets recovered. It failed the predeclared 4/8 recovery gate. Do not expand it or use
   it for SFT/RL;
-- future changes increment only the integer (`version42`, `version43`, ...).
+- `version42`: keeps every version41 nonterminal tool and behavior unchanged, but requires
+  `answer_from_context.evidence={"table":handle,"columns":[...]}`. The harness validates exact
+  existing columns and deterministically projects only those columns in order before scoring. It
+  never consults gold or changes rows/values. Version42 is diagnostic-only pending its frozen
+  output-shape Gate16 and has no SFT/replay admission;
+- future changes increment only the integer (`version43`, `version44`, ...).
 
 The current version39 diagnostic tool set remains the one in
 `src/sft/protocol.py::TOOL_SPECS`:
@@ -274,11 +280,12 @@ The current version39 diagnostic tool set remains the one in
 - `read_subtable`
 - `answer_from_context`
 
-The shared version40/version41 public set is defined by
+The shared version40/version41 nonterminal public set is defined by
 `src/sft/atomic_version40.py::TOOL_SPECS`. It removes `plan`, replaces
 `read_subtable` with `inspect_rows`, and leaves every other signature—including `join_tables`—
 unchanged. Version41 reuses the exact same tool-schema hash. The executor keeps `read_subtable`
-only as a private/replay-compatible implementation name.
+only as a private/replay-compatible implementation name. Version42 reuses those nonterminal specs
+but has a distinct tool-schema hash because its terminal evidence object requires `columns`.
 
 The model-visible relation derivation schema is indexed separately in
 `docs/current/relation_derivation.md`.

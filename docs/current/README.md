@@ -15,6 +15,8 @@ sources of truth.
   prompt diagnostic, prompt-size audit, and failed Gate50 result.
 - `atomic_version41_output_corrections_zh.md`: prompt-only output-contract consolidation and
   Gate50-derived error-correction examples over the frozen version40 behavior.
+- `atomic_version42_terminal_columns_zh.md`: diagnostic terminal carrier requiring explicit
+  grounded evidence columns with deterministic harness projection.
 - `relation_derivation.md`: fact-only semantics attached to every derived table handle.
 - `execution_contract.md`: harness semantics and error handling.
 - `data_generation.md`: causal SFT-1/SFT-2 data construction.

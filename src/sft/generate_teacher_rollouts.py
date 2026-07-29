@@ -57,6 +57,15 @@ from atomic_version41 import (  # noqa: E402
     provider_system_prompt as provider_system_prompt_version41,
     tool_schema_hash as tool_schema_hash_version41,
 )
+from atomic_version42 import (  # noqa: E402
+    PROTOCOL_VERSION as VERSION42_PROTOCOL_VERSION,
+    STUDENT_SYSTEM_PROMPT as VERSION42_STUDENT_SYSTEM_PROMPT,
+    lower_terminal_evidence as lower_terminal_evidence_version42,
+    parse_assistant_strict as parse_assistant_strict_version42,
+    protocol_hash as protocol_hash_version42,
+    provider_system_prompt as provider_system_prompt_version42,
+    tool_schema_hash as tool_schema_hash_version42,
+)
 from prompt_contract import TEACHER_ONE_ACTION_RULE  # noqa: E402
 from provider_adapter import (  # noqa: E402
     DEEPSEEK_CARRIER_CHOICES,
@@ -125,10 +134,12 @@ ATOMIC_PROTOCOL_VERSIONS = (
     DEFAULT_PROTOCOL_VERSION,
     VERSION40_PROTOCOL_VERSION,
     VERSION41_PROTOCOL_VERSION,
+    VERSION42_PROTOCOL_VERSION,
 )
 FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS = frozenset({
     VERSION40_PROTOCOL_VERSION,
     VERSION41_PROTOCOL_VERSION,
+    VERSION42_PROTOCOL_VERSION,
 })
 DATA_GENERATION_SUFFIX = (
     "\n\nDATA GENERATION STRICTNESS\n"
@@ -144,6 +155,8 @@ DATA_GENERATION_SUFFIX = (
 
 
 def selected_protocol_hash(protocol_version: str, system_prompt: str) -> str:
+    if protocol_version == VERSION42_PROTOCOL_VERSION:
+        return protocol_hash_version42(system_prompt)
     if protocol_version == VERSION41_PROTOCOL_VERSION:
         return protocol_hash_version41(system_prompt)
     if protocol_version == VERSION40_PROTOCOL_VERSION:
@@ -154,6 +167,8 @@ def selected_protocol_hash(protocol_version: str, system_prompt: str) -> str:
 
 
 def selected_tool_schema_hash(protocol_version: str) -> str:
+    if protocol_version == VERSION42_PROTOCOL_VERSION:
+        return tool_schema_hash_version42()
     if protocol_version == VERSION41_PROTOCOL_VERSION:
         return tool_schema_hash_version41()
     if protocol_version == VERSION40_PROTOCOL_VERSION:
@@ -697,6 +712,7 @@ def run_rollout(
         raise ValueError(f"unknown atomic protocol version {atomic_protocol_version!r}")
     version40 = atomic_protocol_version == VERSION40_PROTOCOL_VERSION
     version41 = atomic_protocol_version == VERSION41_PROTOCOL_VERSION
+    version42 = atomic_protocol_version == VERSION42_PROTOCOL_VERSION
     full_reasoning_no_plan = (
         atomic_protocol_version in FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS
     )
@@ -818,6 +834,11 @@ def run_rollout(
             "unabridged-recent-4"
             if full_reasoning_no_plan
             else "compact-resident"
+        ),
+        "terminal_evidence_policy": (
+            "explicit-columns-deterministic-project-v1"
+            if version42
+            else "exact-table"
         ),
         "policy_prompt_variant": policy_prompt_variant,
         "denotation_comparison": denotation_comparison,
@@ -956,7 +977,9 @@ def run_rollout(
                 adjacent_guard.clear()
                 raise ProtocolError(rejection)
             step_id = f"step_{action_count}"
-            if version41:
+            if version42:
+                parser = parse_assistant_strict_version42
+            elif version41:
                 parser = parse_assistant_strict_version41
             elif version40:
                 parser = parse_assistant_strict_version40
@@ -976,6 +999,13 @@ def run_rollout(
             plan_tracker.validate_before_execution(tool, args)
             if tool == "answer_from_context":
                 validate_tool_arguments_against_state(h, tool, args)
+                score_args = args
+                terminal_projection = None
+                if version42:
+                    score_args, terminal_projection = (
+                        lower_terminal_evidence_version42(h, args)
+                    )
+                    turn["terminal_projection"] = terminal_projection
                 if full_reasoning_no_plan:
                     reasoning_history.append({
                         "step_id": step_id,
@@ -988,7 +1018,7 @@ def run_rollout(
                 correct, pred_sample, gold_sample = score(
                     h,
                     gold_sql,
-                    args,
+                    score_args,
                     created,
                     denotation_comparison=denotation_comparison,
                 )
@@ -1005,7 +1035,10 @@ def run_rollout(
                     "think": think,
                     "think_source": think_source,
                     "tool_call": {"tool": tool, "arguments": args},
-                    "tool_output": {"final_answer": args.get("answer")},
+                    "tool_output": {
+                        "final_answer": args.get("answer"),
+                        "terminal_projection": terminal_projection,
+                    },
                     "environment_state_before": state_before,
                     "environment_state": ctx["environment"].snapshot(),
                     "last_tool_error_before": last_error,
@@ -1215,6 +1248,11 @@ def run_rollout(
                     if full_reasoning_no_plan
                     else "compact-resident"
                 ),
+                "terminal_evidence_policy": (
+                    "explicit-columns-deterministic-project-v1"
+                    if version42
+                    else "exact-table"
+                ),
                 "deepseek_carrier": deepseek_carrier,
                 "denotation_comparison": denotation_comparison,
                 "database_context_profile": database_context_profile,
@@ -1353,7 +1391,8 @@ def main() -> int:
         help=(
             "version39 preserves the current default; version40 enables the isolated no-plan, "
             "inspect_rows, full-reasoning recent-4 diagnostic; version41 changes only its prompt "
-            "by adding one consolidated output contract and Gate50 error corrections"
+            "by adding one consolidated output contract and Gate50 error corrections; version42 "
+            "requires explicit terminal evidence columns and deterministically projects them"
         ),
     )
     parser.add_argument(
@@ -1472,10 +1511,18 @@ def main() -> int:
     ]
     version40 = args.atomic_protocol_version == VERSION40_PROTOCOL_VERSION
     version41 = args.atomic_protocol_version == VERSION41_PROTOCOL_VERSION
+    version42 = args.atomic_protocol_version == VERSION42_PROTOCOL_VERSION
     full_reasoning_no_plan = (
         args.atomic_protocol_version in FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS
     )
-    if version41:
+    if version42:
+        student_prompt = VERSION42_STUDENT_SYSTEM_PROMPT
+        canonical_teacher_prompt = VERSION42_STUDENT_SYSTEM_PROMPT
+        system_prompt = provider_system_prompt_version42(
+            args.model,
+            carrier=args.deepseek_carrier,
+        )
+    elif version41:
         student_prompt = VERSION41_STUDENT_SYSTEM_PROMPT
         canonical_teacher_prompt = VERSION41_STUDENT_SYSTEM_PROMPT
         system_prompt = provider_system_prompt_version41(
@@ -1682,6 +1729,11 @@ def main() -> int:
             "unabridged-recent-4"
             if full_reasoning_no_plan
             else "compact-resident"
+        ),
+        "terminal_evidence_policy": (
+            "explicit-columns-deterministic-project-v1"
+            if version42
+            else "exact-table"
         ),
         "deepseek_carrier": args.deepseek_carrier,
         "denotation_comparison": args.denotation_comparison,

@@ -36,9 +36,9 @@ Start at `docs/current/README.md`.
 
 - Shared prompt semantics: `src/sft/prompt_contract.py`; protocol/validation:
   `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current atomic local diagnostic default: `version39`; `version40` and `version41` are opt-in
+- Current atomic local diagnostic default: `version39`; `version40`-`version42` are opt-in
   prompt/tool-name diagnostics. The production checkpoint-560 evaluation chain remains frozen on
-  `version26`; none of version39-version41 has received an accuracy promotion and they must
+  `version26`; none of version39-version42 has received an accuracy promotion and they must
   not be mixed into its result directories. Version26 retains version25's prompt-role and
   public-contract refactor, but replaces the model-visible tagged action carrier with one
   non-empty `<think>` block followed directly by a strict raw JSON action object. The former
@@ -205,6 +205,12 @@ Start at `docs/current/README.md`.
   termination, and zero versus six process errors. It recovered only 2/8 targets, below the
   predeclared 4/8 threshold. Do not expand it to the fixed first 50 or use it for SFT/RL. See
   `docs/reports/evaluation/BIRD_ATOMIC_VERSION41_OUTPUT_CORRECTION_GATE16_20260729_ZH.md`.
+  `version42` keeps every version41 nonterminal tool and behavior unchanged, but requires
+  `answer_from_context.evidence` to contain a source table plus an ordered non-empty list of exact
+  existing columns. The harness deterministically projects only those grounded columns before
+  scoring and records the lowering; it never consults question semantics or gold. Version42 is
+  diagnostic-only, has no SFT/replay admission, and must pass the frozen output-shape Gate16 before
+  any expansion. See `docs/current/atomic_version42_terminal_columns_zh.md`.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may
