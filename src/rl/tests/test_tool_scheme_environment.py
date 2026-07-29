@@ -60,7 +60,7 @@ class ToolSchemeEnvironmentTests(unittest.TestCase):
                 atomic.model_messages()[0]["content"],
             )
             self.assertIn(
-                "TOP-LEVEL ACTION CONTRACT",
+                "TWO TOP-LEVEL ACTIONS",
                 block.model_messages()[0]["content"],
             )
             self.assertNotIn(
@@ -70,6 +70,43 @@ class ToolSchemeEnvironmentTests(unittest.TestCase):
         finally:
             atomic.close()
             block.close()
+
+    def test_action_block_scalar_cell_surface_matches_eval_runtime(self):
+        env = create_tool_use_env(
+            self.example,
+            tool_scheme=ACTION_BLOCK_TOOL_SCHEME,
+            max_steps=2,
+        )
+        try:
+            first = (
+                "<think>Project one row, then add one to its grounded cell.</think>\n"
+                '{"tool":"action_block","arguments":{"calls":['
+                '{"id":"one","tool":"condition_filter","arguments":'
+                '{"table":"items","conditions":{"column":"price","op":"=","value":1}}},'
+                '{"id":"cell","tool":"project","arguments":'
+                '{"table":"$one","expressions":["price"]}},'
+                '{"id":"plus","tool":"scalar_compute","arguments":'
+                '{"operation":"add","operands":["$cell.price",{"value":1}],'
+                '"result_name":"answer"}}]}}'
+            )
+            transition = env.apply_model_output(first)
+            self.assertFalse(transition.done)
+            self.assertIn('"status":"success"', transition.observation)
+            self.assertNotIn("value_ref", transition.observation)
+            scalar = transition.turn["batch_results"][-1]
+            self.assertEqual(
+                scalar["resolved_arguments"]["operands"],
+                [
+                    {"value_ref": "step_2", "column": "price"},
+                    {"value": 1},
+                ],
+            )
+            self.assertEqual(
+                env.interface_resolution_events[0]["rule"],
+                "same_block_one_cell",
+            )
+        finally:
+            env.close()
 
     def test_action_block_student_model_can_execute_and_answer(self):
         env = create_tool_use_env(

@@ -39,20 +39,24 @@ class ToolSchemeRegistryTests(unittest.TestCase):
             block.top_level_tools,
             ("action_block", "answer_from_context"),
         )
-        self.assertEqual(block.max_batch_calls, 5)
+        self.assertEqual(block.max_batch_calls, 8)
         self.assertNotIn("answer_from_context", block.atomic_tools)
-        with self.assertRaisesRegex(ValueError, "1..5"):
-            build_action_block_tool_scheme(max_batch_calls=6)
+        self.assertIn("join", block.atomic_tools)
+        self.assertNotIn("join_tables", block.atomic_tools)
+        with self.assertRaisesRegex(ValueError, "1..8"):
+            build_action_block_tool_scheme(max_batch_calls=9)
         self.assertNotEqual(atomic.protocol_hash, block.protocol_hash)
         self.assertEqual(atomic.assistant_carrier, block.assistant_carrier)
-        self.assertEqual(block.protocol_hash, "34d5122197bda7ea")
+        self.assertEqual(block.protocol_version, "action-block-v35")
+        self.assertEqual(block.protocol_hash, "7d9d924141ea4beb")
         provider_block = build_action_block_tool_scheme(
             assistant_carrier=BATCH_CARRIER_PROVIDER_NATIVE,
         )
-        self.assertEqual(provider_block.protocol_hash, "40bb637422e7ca6b")
-        self.assertIn("partition_by", atomic.system_prompt)
+        self.assertEqual(provider_block.protocol_hash, "6d926b09e2150e3b")
+        self.assertNotIn("partition_by", atomic.system_prompt)
         self.assertNotIn("partition_by", block.system_prompt)
-        self.assertIn("offset", atomic.system_prompt)
+        self.assertIn("read_subtable(table, limit?, columns?, conditions?, order_by?, offset?)",
+                      atomic.system_prompt)
         self.assertNotIn("offset", block.system_prompt)
 
         relational_program = build_relational_program_tool_scheme()

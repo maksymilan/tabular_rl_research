@@ -90,7 +90,14 @@ All table-producing tools return a harness-created handle such as `filter_002` o
 Handles are the only derived-table names the model may use later. `read_subtable` is the explicit
 way to view row values; handles alone expose schema and row-count metadata. Its public `limit` must
 be an integer from 1 through 20. Larger or non-integer values are explicit argument-validation
-errors and are never silently clamped.
+errors and are never silently clamped. It may read matching rows with the shared typed predicate
+tree and may page only with explicit exact-column ordering plus a non-negative offset. These
+arguments affect observation only and never create a filtered or sorted handle.
+
+`project` additionally accepts typed row-date expressions for
+`date_diff_days(start,end)` and `extract_year(date)`. The adapter validates exact source columns
+and deterministically lowers those operations; arbitrary model-authored date functions are not
+required.
 
 Each derived handle also carries one validated `relation-derivation-v1` record describing the
 executed operator, ordered inputs, and formal row/column semantics. This record is bound to that

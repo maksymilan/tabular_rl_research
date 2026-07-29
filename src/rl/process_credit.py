@@ -93,6 +93,7 @@ MAX_GROUNDING_ROWS = 10_000
 class ProcessRewardConfig:
     """Configurable weights; defaults are audit values, not tuned research conclusions."""
 
+    w_terminal_correct: float = 0.0
     w_back_slice: float = 1.0
     w_new_evidence: float = 1.0
     w_search_reduction: float = 1.0
@@ -105,6 +106,7 @@ class ProcessRewardConfig:
     lambda_answer_format: float = 0.02
     lambda_terminal_failure: float = 0.30
     lambda_tool_error: float = 0.08
+    lambda_adjacent_repeat: float = 0.0
     lambda_repeat_without_feedback: float = 0.06
     lambda_legal_no_state_change: float = 0.03
     lambda_ignored_feedback: float = 0.05
@@ -121,15 +123,22 @@ class ProcessRewardConfig:
         omega = self.omega_target_table + self.omega_target_column + self.omega_target_row
         if not math.isclose(omega, 1.0, rel_tol=0.0, abs_tol=1e-9):
             raise ValueError("target-potential omega weights must sum to 1")
-        if not (
-            0
-            < self.eta_failure_progress + self.lambda_answer_format
-            < self.lambda_terminal_failure
-            <= self.penalty_cap
-            < 1
-        ):
+        auxiliary_positive = self.eta_failure_progress + self.lambda_answer_format
+        if self.lambda_terminal_failure > 0:
+            if not (
+                0
+                < auxiliary_positive
+                < self.lambda_terminal_failure
+                <= self.penalty_cap
+                < 1
+            ):
+                raise ValueError(
+                    "reward bounds require 0 < eta+lambda_A < lambda_fail <= P_max < 1"
+                )
+        elif auxiliary_positive != 0:
             raise ValueError(
-                "reward bounds require 0 < eta+lambda_A < lambda_fail <= P_max < 1"
+                "eta_failure_progress and lambda_answer_format must both be zero "
+                "when terminal-failure shaping is disabled"
             )
 
 
@@ -145,6 +154,7 @@ class StepFeature:
     state_changed: bool = False
     empty_result: bool = False
     repeated_call: bool = False
+    adjacent_repeat: bool = False
     feedback_error_before: bool = False
     feedback_empty_before: bool = False
     action_changed_after_empty: bool = False
@@ -658,6 +668,7 @@ def replay_step_features(
         features: list[StepFeature] = []
         provenance_steps: list[dict[str, Any]] = []
         seen_signatures: set[str] = set()
+        previous_action_signature: str | None = None
         seen_observation_signatures: set[str] = set()
         final_arguments: dict[str, Any] | None = None
         final_step_id: str | None = None
@@ -674,6 +685,13 @@ def replay_step_features(
         for action_index in action_indices:
             if action_index in error_events:
                 event = error_events[action_index]
+                attempted_signature = (
+                    action_signature(
+                        event["attempted_tool"], event.get("attempted_arguments") or {}
+                    )
+                    if event.get("attempted_tool")
+                    else None
+                )
                 features.append(
                     StepFeature(
                         action_index=action_index,
@@ -681,17 +699,16 @@ def replay_step_features(
                         tool=event.get("attempted_tool"),
                         legal_success=False,
                         error_type=event.get("error_type"),
-                        action_signature=(
-                            action_signature(
-                                event["attempted_tool"], event.get("attempted_arguments") or {}
-                            )
-                            if event.get("attempted_tool")
-                            else None
+                        action_signature=attempted_signature,
+                        adjacent_repeat=bool(
+                            attempted_signature
+                            and attempted_signature == previous_action_signature
                         ),
                         state_changed=event.get("state_before_hash") != event.get("state_after_hash"),
                         tool_error=1.0,
                     )
                 )
+                previous_action_signature = attempted_signature
                 continue
 
             step = legal_steps[action_index]
@@ -704,6 +721,8 @@ def replay_step_features(
             signature = action_signature(tool, authored_arguments)
             repeated = signature in seen_signatures
             seen_signatures.add(signature)
+            adjacent_repeat = signature == previous_action_signature
+            previous_action_signature = signature
             input_table = _table_ref(arguments, ctx)
             n_in = _row_count(harness, input_table)
             references: list[dict[str, Any]] = []
@@ -877,6 +896,7 @@ def replay_step_features(
                 ),
                 empty_result=_is_empty_result(tool, output),
                 repeated_call=repeated,
+                adjacent_repeat=adjacent_repeat,
                 verified_negative_evidence=verified_negative_evidence,
                 target_table_delta=_fraction_delta(
                     tables_before, discovered_tables, target_support.tables
@@ -1258,7 +1278,8 @@ def allocate_process_rewards(
         )
 
     positive = [
-        config.w_back_slice * feature.back_slice
+        config.w_terminal_correct * float(feature.is_terminal)
+        + config.w_back_slice * feature.back_slice
         + config.w_new_evidence * feature.new_used_evidence
         + config.w_search_reduction * feature.search_reduction
         + config.w_feedback_response * feature.feedback_response
@@ -1271,6 +1292,7 @@ def allocate_process_rewards(
     ]
     local_penalties = [
         config.lambda_tool_error * feature.tool_error
+        + config.lambda_adjacent_repeat * float(feature.adjacent_repeat)
         + config.lambda_repeat_without_feedback * feature.repeat_without_feedback
         + config.lambda_legal_no_state_change * feature.legal_no_state_change
         + config.lambda_ignored_feedback * feature.ignored_feedback
@@ -1315,8 +1337,8 @@ def allocate_process_rewards(
         raise AssertionError(f"reward conservation failed: {sum(rewards)} != {expected}")
     if correct and process_update and sum(rewards) <= 0:
         raise AssertionError("a correct trajectory must retain positive total reward")
-    if not correct and sum(rewards) >= 0:
-        raise AssertionError("a failed trajectory must retain negative total reward")
+    if not correct and sum(rewards) > 0:
+        raise AssertionError("a failed trajectory cannot receive positive total reward")
 
     step_rewards = []
     for feature, g_value, p_outcome, p_local, p_value, plus, minus, reward in zip(

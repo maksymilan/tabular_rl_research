@@ -48,6 +48,57 @@ class RollingLegalHistoryTests(unittest.TestCase):
         self.assertNotIn("first", contents)
         self.assertIn("second", contents)
 
+    def test_head_tail_history_keeps_early_anchor_and_recent_progress_without_duplicates(self):
+        history = [
+            {"assistant": f"action-{index}", "observation": f"output-{index}"}
+            for index in range(12)
+        ]
+        messages = rolling_legal_history_messages(
+            "system",
+            {"tables": [], "relations": []},
+            "question",
+            {},
+            None,
+            None,
+            history,
+            5,
+            history_policy="head-tail",
+            history_head_turns=5,
+        )
+        assistant_messages = [
+            message["content"] for message in messages if message["role"] == "assistant"
+        ]
+        self.assertEqual(
+            assistant_messages,
+            [*(f"action-{index}" for index in range(5)),
+             *(f"action-{index}" for index in range(7, 12))],
+        )
+
+    def test_head_tail_history_deduplicates_overlapping_windows(self):
+        history = [
+            {"assistant": f"action-{index}", "observation": f"output-{index}"}
+            for index in range(7)
+        ]
+        messages = rolling_legal_history_messages(
+            "system",
+            {"tables": [], "relations": []},
+            "question",
+            {},
+            None,
+            None,
+            history,
+            5,
+            history_policy="head-tail",
+            history_head_turns=5,
+        )
+        assistant_messages = [
+            message["content"] for message in messages if message["role"] == "assistant"
+        ]
+        self.assertEqual(
+            assistant_messages,
+            [f"action-{index}" for index in range(7)],
+        )
+
     def test_rolling_system_prompt_explains_bounded_history(self):
         prompt = rolling_system_prompt("base")
         self.assertIn("bounded transcript", prompt)

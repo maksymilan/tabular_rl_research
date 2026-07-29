@@ -122,6 +122,7 @@ def main() -> int:
                 "action_changed_after_empty",
                 "empty_result",
                 "tool_error",
+                "adjacent_repeat",
                 "repeat_without_feedback",
                 "legal_no_state_change",
                 "ignored_feedback",

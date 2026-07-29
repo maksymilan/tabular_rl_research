@@ -33,8 +33,8 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def has_repeated_call(episode: dict[str, Any]) -> bool:
-    calls: set[str] = set()
+def has_adjacent_repeated_call(episode: dict[str, Any]) -> bool:
+    previous: str | None = None
     for step in episode.get("steps") or []:
         call = step.get("tool_call") or {}
         key = json.dumps(
@@ -42,9 +42,9 @@ def has_repeated_call(episode: dict[str, Any]) -> bool:
             ensure_ascii=False,
             sort_keys=True,
         )
-        if key in calls:
+        if key == previous:
             return True
-        calls.add(key)
+        previous = key
     return False
 
 
@@ -75,8 +75,8 @@ def quality_reason(
     steps = episode.get("steps") or []
     if not steps or (max_steps is not None and len(steps) > max_steps):
         return "step_limit"
-    if has_repeated_call(episode):
-        return "repeated_call"
+    if has_adjacent_repeated_call(episode):
+        return "adjacent_repeated_call"
     if max_think_words is not None and any(
         len(str(step.get("think") or "").split()) > max_think_words
         for step in steps

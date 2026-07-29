@@ -13,11 +13,13 @@ import os
 import sqlite3
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from threading import BoundedSemaphore
 from typing import Literal
 
@@ -56,6 +58,7 @@ from rollout import (  # noqa: E402
     MAX_ERRORS_PER_TYPE,
     MIN_CONTEXT_RETRY_TOKENS,
     TERMINAL_ANSWER_CONTRACT,
+    error_limit_reached,
     execute_tool,
     format_tool_error,
     is_context_overflow,
@@ -67,6 +70,7 @@ from rollout import (  # noqa: E402
     state_digest,
     task_db_path,
     task_gold_sql,
+    validate_tool_arguments_against_state,
 )
 from tool_schemes import (  # noqa: E402
     ATOMIC_ASSISTANT_CARRIER,
@@ -340,6 +344,7 @@ def run_sample(
             turn["feedback_recovery"] = bool(last_error)
             turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
             if tool == "answer_from_context":
+                validate_tool_arguments_against_state(h, tool, args)
                 rec["legal"] = True
                 rec["steps"] = action_count
                 rec["errors"] = errors
@@ -401,7 +406,11 @@ def run_sample(
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
             error_counts[error_type] = error_counts.get(error_type, 0) + 1
-            if error_counts[error_type] >= MAX_ERRORS_PER_TYPE:
+            if error_limit_reached(
+                error_type,
+                error_counts[error_type],
+                MAX_ERRORS_PER_TYPE,
+            ):
                 rec["failure_type"] = error_type
                 rec["error"] = f"aborted after {error_counts[error_type]} {error_type} events: {error}"
                 rec["errors"] = errors
@@ -439,6 +448,39 @@ def run_sample(
 
 
 SampleDetail = Literal["full", "compact", "none"]
+
+
+def append_runner_error(
+    writer: ArtifactWriter,
+    example_index: int,
+    example: dict,
+    exc: BaseException,
+) -> dict:
+    """Audit an unhandled per-example exception without turning it into a model failure.
+
+    The example deliberately remains absent from ``all.jsonl`` so ``--resume`` retries it.  In
+    particular, do not let one failed future unwind the executor context: that waits for every
+    already-submitted future while preventing their completed records from being drained.
+    """
+    record = {
+        "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+        "example_index": example_index,
+        "db_id": example.get("db_id"),
+        "question": example.get("question"),
+        "error_type": type(exc).__name__,
+        "error": str(exc),
+        "traceback": "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        ),
+        "retry_required": True,
+        "semantic_failure": False,
+    }
+    path = writer.path / "runner_errors.jsonl"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return record
 
 
 def stored_sample(sample: dict, detail: SampleDetail) -> dict:
@@ -625,6 +667,14 @@ def main() -> int:
         default="",
         help="optional JSON/text example-index selection for a frozen evaluation cohort",
     )
+    parser.add_argument(
+        "--allow-missing-task-databases",
+        action="store_true",
+        help=(
+            "operationally defer examples whose adapter-provided SQLite path is not yet present; "
+            "a later --resume with the same manifest can fill them after data sync"
+        ),
+    )
     parser.add_argument("--allow-eval-tasks", action="store_true",
                         help="explicitly allow dev/eval DatasetTask inputs; outputs are evaluation-only")
     parser.add_argument("--workers", type=int, default=1)
@@ -749,6 +799,7 @@ def main() -> int:
         "dataset": args.examples_json or "data/spider_data/dev.json",
         "indices_file": args.indices_file or None,
         "selected_indices": sorted(selected_indices) if selected_indices else None,
+        "allow_missing_task_databases": args.allow_missing_task_databases,
         "requested_size": args.n,
         "n_samples": args.n_samples,
         "sample_workers": args.sample_workers,
@@ -824,6 +875,31 @@ def main() -> int:
         missing = sorted(selected_indices - found)
         parser.error(f"--indices-file contains unavailable example indices: {missing}")
     pending = [(index, example) for index, example in indexed_examples if index not in writer.completed]
+    missing_task_databases = [
+        (index, task_db_path(example))
+        for index, example in pending
+        if not os.path.isfile(task_db_path(example))
+    ]
+    if missing_task_databases and not args.allow_missing_task_databases:
+        preview = ", ".join(
+            f"{index}:{path}" for index, path in missing_task_databases[:5]
+        )
+        parser.error(
+            f"{len(missing_task_databases)} pending examples have unavailable SQLite paths; "
+            f"examples: {preview}"
+        )
+    if missing_task_databases:
+        missing_indices = {index for index, _ in missing_task_databases}
+        pending = [
+            (index, example)
+            for index, example in pending
+            if index not in missing_indices
+        ]
+        print(
+            "operationally deferred "
+            f"{len(missing_task_databases)} examples with unavailable SQLite paths",
+            flush=True,
+        )
     print(f"loaded {len(indexed_examples)} examples from {source_name}; pending {len(pending)}")
 
     request_semaphore = (
@@ -831,8 +907,9 @@ def main() -> int:
         if args.max_inflight_requests > 0
         else None
     )
+    runner_error_count = 0
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = [
+        futures = {
             pool.submit(
                 run_one,
                 example,
@@ -857,11 +934,23 @@ def main() -> int:
                 api_retries=args.api_retries,
                 tool_execution_timeout_seconds=args.tool_execution_timeout_seconds,
                 denotation_comparison=args.denotation_comparison,
-            )
+            ): (index, example)
             for index, example in pending
-        ]
+        }
         for position, future in enumerate(as_completed(futures), 1):
-            record = future.result()
+            index, example = futures[future]
+            try:
+                record = future.result()
+            except Exception as exc:  # noqa: BLE001
+                runner_error_count += 1
+                error_record = append_runner_error(writer, index, example, exc)
+                print(
+                    f"[{position}/{len(pending)}] RUNNER_ERROR q{index} "
+                    f"{error_record['error_type']}: {error_record['error']}; "
+                    "excluded from semantic artifacts and pending --resume",
+                    flush=True,
+                )
+                continue
             writer.append(record)
             flag = "OK" if record["correct"] else record["failure_type"]
             print(
@@ -878,6 +967,13 @@ def main() -> int:
     summary = write_passk_summary(writer, pass_k, include_legal=True)
     print(json.dumps(summary["pass_at"], ensure_ascii=False, indent=2))
     print(f"-> {writer.path}")
+    if runner_error_count:
+        print(
+            f"{runner_error_count} unhandled per-example runner errors were isolated in "
+            f"{writer.path / 'runner_errors.jsonl'}; rerun with --resume",
+            flush=True,
+        )
+        return 2
     return 0
 
 

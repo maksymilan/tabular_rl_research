@@ -32,6 +32,7 @@ from process_credit import (  # noqa: E402
 
 
 POSITIVE_WEIGHTS = (
+    "w_terminal_correct",
     "w_back_slice",
     "w_new_evidence",
     "w_search_reduction",
@@ -40,6 +41,7 @@ POSITIVE_WEIGHTS = (
 )
 LOCAL_PENALTIES = (
     "lambda_tool_error",
+    "lambda_adjacent_repeat",
     "lambda_repeat_without_feedback",
     "lambda_legal_no_state_change",
     "lambda_ignored_feedback",

@@ -134,6 +134,20 @@ inside the optimizer. The remaining release work is to re-audit the changed edge
 build adequate BIRD suites for the three confirmed shortcut classes. See
 `docs/reports/rl/GROUNDING_SHORTCUT_REAUDIT_20260724.md`.
 
+This remains the default `counterfactual-completeness` admission policy. The explicitly weaker
+`denotation-nonempty` pilot instead treats fresh `bird-set` correctness on a retained task as the
+episode-level success condition and uses replay only for local action shaping. It neither requires
+nor claims a privileged operation sequence, dependency completeness, or counterfactual causal
+proof. The two admission policies have distinct CLI values and must not share result directories.
+
+The current `denotation-nonempty` simple-process pilot additionally excludes whole training tasks when the hidden
+reference query returns zero rows, a NULL scalar, or a numeric scalar zero on the source database.
+This is a task-admission policy rather than a negative reward: excluded tasks are never sampled by
+the actor and contribute neither positive nor negative gradients. The filter runs read-only before
+rollout, records only result shape/classification plus a reference-query hash, and never exposes
+the query or result to the model. Launchers must set `EXCLUDE_EMPTY_REFERENCE_RESULTS=1`; the
+trainer repeats the check and writes `reference_result_filter.json` into the isolated run output.
+
 ## Invariants
 
 - Training tasks only; held-out BIRD/Spider development labels never select RL examples.
@@ -143,7 +157,9 @@ build adequate BIRD suites for the three confirmed shortcut classes. See
 - All active terminal, replay, and reward scoring uses `bird-set`.
 - A missing legacy `answer` field is never interpreted as an authored empty answer; current
   terminal correctness comes from the cited evidence relation.
-- Correct process trajectories update only after their immutable counterfactual suite passes.
+- Under `counterfactual-completeness`, correct trajectories update only after their immutable
+  counterfactual suite passes. Under `denotation-nonempty`, they update only after the hidden
+  reference-result filter retains the task and fresh replay is `bird-set` correct.
 - API transport retries are client events, not semantic actions.
 - SFT, evaluation, and RL share harness semantics but use the renderer/parser belonging to their
   explicitly recorded tool scheme.

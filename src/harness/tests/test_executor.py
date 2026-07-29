@@ -5,6 +5,20 @@ from common import T, employees_db, norm
 def run():
     t = T("executor")
     h = employees_db()
+    h.conn.executescript(
+        """
+        CREATE TABLE events(
+          id INT,
+          started_at TEXT,
+          ended_at TEXT
+        );
+        INSERT INTO events VALUES
+          (1, '2024-01-01', '2024-01-03'),
+          (2, '2024-01-31 09:15:00', '2024-02-05 09:15:00'),
+          (3, '2024-01-31 18:30:00', '2024-02-01 06:30:00');
+        """
+    )
+    h.register_sources()
 
     f = h.condition_filter("employees", [{"column": "salary", "op": ">", "value": 1000}])
     t.check("condition_filter count", f["row_count"] == 4, str(f))  # 1200,1500,1100,2000
@@ -46,6 +60,31 @@ def run():
             norm(h.rows(returned["table_name"])) ==
             norm(h.gold("SELECT name,salary FROM employees WHERE salary > 1000")),
             str(returned))
+
+    read_matching = h.read_subtable(
+        "employees",
+        columns=["id", "name"],
+        conditions={"column": "dept", "op": "=", "value": "eng"},
+        order_by=["id"],
+        offset=1,
+        limit=2,
+    )
+    t.check(
+        "read_subtable reads matching ordered rows without deriving a table",
+        read_matching == [(2, "B"), (5, "E")],
+        str(read_matching),
+    )
+    read_calendar_date = h.read_subtable(
+        "events",
+        columns=["id"],
+        conditions={"column": "started_at", "op": "on_date", "value": "2024-01-31"},
+        order_by=["id"],
+    )
+    t.check(
+        "read_subtable on_date matches timestamps on one calendar date",
+        read_calendar_date == [(2,), (3,)],
+        str(read_calendar_date),
+    )
 
     g = h.group_aggregate(f["table_name"], ["dept"], [{"op": "mean", "column": "salary", "as": "a"}])
     t.check("group_aggregate", norm(h.rows(g["table_name"])) ==
@@ -125,6 +164,28 @@ def run():
             "JOIN depts d ON e.dept=d.dept JOIN sales s ON d.dept=s.dept"
         )),
         str(component),
+    )
+    filtered_employees = h.condition_filter(
+        "employees",
+        {"column": "dept", "op": "=", "value": "eng"},
+    )
+    cached_join = h.join_tables(
+        base=filtered_employees["table_name"],
+        joins=[
+            {"table": "depts", "on": [
+                {"left": f"{filtered_employees['table_name']}.dept", "right": "dept"}
+            ]},
+        ],
+    )
+    t.check(
+        "version5 join lazily materializes a small derived input without changing rows",
+        filtered_employees["table_name"] in h._materialized_handles
+        and h.views[filtered_employees["table_name"]].startswith("SELECT * FROM temp.")
+        and norm(h.rows(cached_join["table_name"])) == norm(h.gold(
+            "SELECT e.*,d.* FROM employees e JOIN depts d ON e.dept=d.dept "
+            "WHERE e.dept='eng'"
+        )),
+        str(cached_join),
     )
     dotted_project = h.project(component["table_name"], ["employees.name", "depts.location"])
     t.check(
@@ -321,78 +382,8 @@ def run():
     t.check("extreme_value_select (projection)",
             h.rows(e["table_name"]) == h.gold("SELECT name FROM employees ORDER BY salary DESC LIMIT 2"))
 
-    second = h.extreme_value_select(
-        "employees", ["salary DESC"], top_k=1, return_columns=["name"], offset=1
-    )
-    t.check(
-        "extreme_value_select supports a global rank offset",
-        h.rows(second["table_name"]) ==
-        h.gold("SELECT name FROM employees ORDER BY salary DESC LIMIT 1 OFFSET 1"),
-        str(second),
-    )
-
-    per_department = h.extreme_value_select(
-        "employees",
-        ["salary DESC"],
-        top_k=1,
-        return_columns=["dept", "name"],
-        partition_by=["dept"],
-    )
-    t.check(
-        "extreme_value_select supports top-k inside each partition",
-        norm(h.rows(per_department["table_name"])) == norm(h.gold(
-            "SELECT dept,name FROM ("
-            "SELECT dept,name,ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn "
-            "FROM employees) WHERE rn=1"
-        )),
-        str(per_department),
-    )
-
     p = h.project("employees", ["name", "salary"])
     t.check("project", norm(h.rows(p["table_name"])) == norm(h.gold("SELECT name,salary FROM employees")))
-
-    typed = h.project(
-        "employees",
-        [
-            "name",
-            {
-                "op": "subtract",
-                "operands": [{"column": "salary"}, {"column": "age"}],
-                "as": "salary_minus_age",
-            },
-        ],
-    )
-    t.check(
-        "project supports typed row-wise arithmetic",
-        h.rows(typed["table_name"]) ==
-        h.gold("SELECT name,salary-age AS salary_minus_age FROM employees"),
-        str(typed),
-    )
-
-    dates = h._new(
-        "dates",
-        "SELECT '2008-02-15' AS started, '2008-02-26' AS stopped",
-    )
-    typed_dates = h.project(
-        dates["table_name"],
-        [
-            {
-                "op": "date_diff_days",
-                "operands": [{"column": "started"}, {"column": "stopped"}],
-                "as": "duration_days",
-            },
-            {
-                "op": "extract_year",
-                "operands": [{"column": "started"}],
-                "as": "start_year",
-            },
-        ],
-    )
-    t.check(
-        "project supports typed row-wise date operations",
-        h.rows(typed_dates["table_name"]) == [(11.0, 2008)],
-        str(typed_dates),
-    )
 
     distinct_project = h.project("employees", ["dept"], distinct=True)
     t.check(
@@ -420,6 +411,31 @@ def run():
         "scalar_compute computes date differences without model arithmetic",
         h.rows(elapsed["table_name"]) == [(11.0,)],
         str(elapsed),
+    )
+    row_dates = h.project(
+        "events",
+        [
+            "id",
+            {
+                "op": "date_diff_days",
+                "operands": [
+                    {"column": "started_at"},
+                    {"column": "ended_at"},
+                ],
+                "as": "duration_days",
+            },
+            {
+                "op": "extract_year",
+                "operands": [{"column": "started_at"}],
+                "as": "start_year",
+            },
+        ],
+    )
+    t.check(
+        "project computes typed row-wise date values",
+        h.rows(row_dates["table_name"])
+        == [(1, 2.0, 2024), (2, 5.0, 2024), (3, 0.5, 2024)],
+        str(row_dates),
     )
 
     duplicate_names = h._new("dup", "SELECT name AS Name, dept AS Name FROM employees")
@@ -449,13 +465,6 @@ def run():
     o = h.extreme_value_select("employees", ["salary DESC"], 2)
     t.check("extreme_value_select (no projection)",
             h.rows(o["table_name"]) == h.gold("SELECT * FROM employees ORDER BY salary DESC LIMIT 2"))
-
-    second_page = h.read_subtable("employees", columns=["id"], limit=2, offset=2)
-    t.check(
-        "read_subtable supports explicit pagination offset",
-        [tuple(row) for row in second_page] == [(3,), (4,)],
-        str(second_page),
-    )
 
     pv = h.preview(f["table_name"])
     t.check("preview inlines small table",

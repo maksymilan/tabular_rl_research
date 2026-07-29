@@ -17,6 +17,7 @@ SFT text and the RL/eval context do not drift.
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from typing import Any
 
 from relation_derivation import (
@@ -31,6 +32,10 @@ class EnvironmentStateError(ValueError):
 
 def _table_key(name: str) -> str:
     return str(name)
+
+
+def _stable_key(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _status(value: Any) -> str:
@@ -297,6 +302,9 @@ class EnvironmentState:
                     "row_count": output.get("row_count"),
                     "rows": deepcopy(output.get("rows", [])),
                 }
+                for optional_key in ("conditions", "order_by", "offset"):
+                    if optional_key in args:
+                        read[optional_key] = deepcopy(args[optional_key])
                 self._upsert_read(entry, read)
             return
 
@@ -358,12 +366,18 @@ class EnvironmentState:
         reads = entry.setdefault("reads", [])
         key = (
             tuple(read.get("columns") or []),
+            _stable_key(read.get("conditions")),
+            tuple(read.get("order_by") or []),
+            read.get("offset", 0),
             read.get("limit"),
             read.get("note"),
         )
         for idx, old in enumerate(reads):
             old_key = (
                 tuple(old.get("columns") or []),
+                _stable_key(old.get("conditions")),
+                tuple(old.get("order_by") or []),
+                old.get("offset", 0),
                 old.get("limit"),
                 old.get("note"),
             )

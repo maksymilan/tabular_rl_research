@@ -31,6 +31,40 @@ TEACHER_ONE_ACTION_RULE = (
     "on every turn. Put the reason inside <think> tags and do not use tool_call tags."
 )
 
+TEACHER_SEMANTIC_DECISION_DISCIPLINE = (
+    "SEMANTIC DECISION DISCIPLINE\n"
+    "Treat the QUESTION and EXTERNAL KNOWLEDGE as the binding answer specification. Follow every "
+    "explicit phrase-to-column, value, operator, aggregation, formula, identifier, or output-field "
+    "mapping exactly. Do not replace it with a more natural label, field, COUNT DISTINCT, proxy, "
+    "or formatted value. You may inspect the stored spelling of a literal, but never silently "
+    "redefine the requested target.\n"
+    "Before the first filter, join, aggregation, or ranking commitment, identify from visible "
+    "evidence: (a) the requested answer entity or measurement unit, (b) what one row of the current "
+    "input represents, (c) the conditions that define the eligible population, and (d) the exact "
+    "requested output fields and their order. Preserve that population and grain unless a later "
+    "observation from the harness proves the assumption wrong.\n"
+    "Do not invent a selector or restriction merely to obtain one row or a plausible answer. In "
+    "particular, do not add earliest, latest, current, active, first, top-1, mean, or same-year "
+    "semantics unless the question, external knowledge, or observed schema establishes it. If "
+    "several rows satisfy every stated condition, retain them unless the specification supplies a "
+    "grounded disambiguator.\n"
+    "Match aggregation semantics to the requested unit exactly. COUNT, COUNT DISTINCT, row count, "
+    "and entity count are different. Numerators and denominators must use the same eligible "
+    "population and grain unless the specification explicitly defines otherwise. Ranking before "
+    "a required join may rank the wrong population; establish all answer-eligibility relations "
+    "before aggregation or ranking.\n"
+    "Treat zero rows, unexpected multiplicity, NULLs, impossible dates, or implausible arithmetic "
+    "as evidence that an assumption needs inspection. Do not make an empty join nonempty with a "
+    "left join, choose an arbitrary matching row, switch from an ID to a label, or accept malformed "
+    "numeric coercion just because it yields an answer. Inspect the relevant schema, values, rows, "
+    "or relationship, then revise only what the new evidence supports; normalize every arithmetic "
+    "operand consistently when stored numeric text requires normalization.\n"
+    "Immediately before answer_from_context, compare the evidence table to the question one slot "
+    "at a time. It must contain exactly the requested rows, columns, column order, and representation: "
+    "remove ranking/count/join helper columns, preserve separate source fields unless formatting is "
+    "explicitly requested, and never rely on the reason text to repair the cited table."
+)
+
 
 def _tool_signature(
     tool: str,
@@ -122,6 +156,8 @@ def add_teacher_guidance(
         "The following elaborations and examples are quality controls for producing causal "
         "demonstrations. They are not part of the student runtime prompt and do not add any public "
         "tool, argument, state field, or execution behavior.\n"
+        + TEACHER_SEMANTIC_DECISION_DISCIPLINE
+        + "\n\n"
         + "\n".join(tool_guidance.values())
         + "\n\n"
         + call_cookbook

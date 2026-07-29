@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Evaluate the unified action-block interface.
+"""Evaluate the sequential action-block interface.
 
-Each block executes multiple existing atomic tools. Local references induce dependencies; root
-errors are attempted failures while dependency-blocked descendants are not executed or counted as
-additional process errors. ``answer_from_context`` is a separate top-level terminal action citing
-one grounded resident table. Gold SQL is hidden from the model and used only for terminal scoring.
+Each block executes a few consecutive atomic operations. Local references only name earlier
+results in the submitted list; the harness discovers dependencies and returns one complete result
+per submitted operation. The active public ``join`` is one edge and is deterministically lowered
+to the frozen executor. ``answer_from_context`` is a separate top-level terminal action citing one
+grounded resident table. Gold SQL is hidden from the model and used only for terminal scoring.
 """
 from __future__ import annotations
 
@@ -37,6 +38,9 @@ from batch_plan_protocol import (  # noqa: E402
     LOW_FRICTION_INTERFACE_PROTOCOL_VERSION,
     MAX_ACTION_BLOCK_CALLS,
     SAFE_LOW_FRICTION_INTERFACE_PROTOCOL_VERSION,
+    SEQUENTIAL_ACTION_BLOCK_PROTOCOL_VERSION,
+    SIMPLE_SCALAR_CELL_PROTOCOL_VERSION,
+    SIMPLE_SEQUENTIAL_ACTION_BLOCK_PROTOCOL_VERSION,
     STRUCTURED_ERROR_FEEDBACK_PROTOCOL_VERSION,
     TERMINAL_TOOL,
     UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION,
@@ -45,14 +49,21 @@ from batch_plan_protocol import (  # noqa: E402
     batch_plan_protocol_hash,
     build_batch_plan_messages,
     build_batch_plan_system_prompt,
+    build_sequential_messages,
     local_reference_ids,
+    lower_sequential_atomic_call,
     parse_legacy_batch_plan_action,
     parse_legacy_batch_plan_assistant,
     parse_batch_plan_assistant,
     parse_batch_plan_action,
+    prepare_simple_scalar_cell_arguments,
+    publicize_simple_scalar_error,
+    publicize_sequential_error,
     render_batch_observation,
+    render_sequential_observation,
     resolve_local_references,
     validate_atomic_call,
+    validate_sequential_atomic_call,
 )
 from denotation import add_denotation_comparison_argument  # noqa: E402
 from executor import Harness  # noqa: E402
@@ -91,7 +102,7 @@ from rollout import (  # noqa: E402
 
 
 DEFAULT_MODEL = "deepseek-v4-flash"
-DEFAULT_MAX_ACTION_BLOCKS = 30
+DEFAULT_MAX_ACTION_BLOCKS = 40
 DEFAULT_MAX_BATCH_CALLS = MAX_ACTION_BLOCK_CALLS
 DEFAULT_HISTORY_TURNS = 4
 DEFAULT_MAX_TOKENS = 2048
@@ -1366,6 +1377,9 @@ def _execute_action_block(
     safe_low_friction_interface: bool = False,
     interface_resolution_events: list[dict] | None = None,
     validate_call=validate_atomic_call,
+    prepare_call_arguments=None,
+    lower_call=None,
+    publicize_error=None,
 ) -> tuple[int, list[dict], list[dict], bool]:
     """Execute one block and isolate root errors from blocked descendants."""
     low_friction_interface = (
@@ -1442,6 +1456,7 @@ def _execute_action_block(
                 "step_id": None,
                 "table": None,
                 "columns": None,
+                "row_count": None,
                 "source_reference": original_args.get("table"),
                 "root_causes": root_causes,
             }
@@ -1453,10 +1468,21 @@ def _execute_action_block(
         step_id = f"step_{atomic_count}"
         state_before = ctx["environment"].snapshot()
         resolved_args = None
+        execution_tool = tool
+        execution_args = None
         terminal_score_arguments = None
         interface_resolutions: list[dict] = []
         try:
             reference_args = original_args
+            if prepare_call_arguments is not None:
+                reference_args = prepare_call_arguments(
+                    tool,
+                    reference_args,
+                    bindings=bindings,
+                    declared_ids=declared_ids,
+                    ctx=ctx,
+                    resolutions=interface_resolutions,
+                )
             resolution_bindings = bindings
             resolution_declared_ids = declared_ids
             if low_friction_interface:
@@ -1540,10 +1566,17 @@ def _execute_action_block(
                 table = None
             else:
                 validate_call(tool, resolved_args)
+                if lower_call is not None:
+                    execution_tool, execution_args = lower_call(
+                        tool,
+                        resolved_args,
+                    )
+                else:
+                    execution_args = deepcopy(resolved_args)
                 output, table = execute_tool(
                     h,
-                    tool,
-                    resolved_args,
+                    execution_tool,
+                    execution_args,
                     ctx,
                     step_id,
                     table_output_rows=table_output_rows,
@@ -1563,6 +1596,9 @@ def _execute_action_block(
                 "environment_state_before": state_before,
                 "environment_state": ctx["environment"].snapshot(),
             }
+            if execution_tool != tool:
+                result["execution_tool"] = execution_tool
+                result["execution_arguments"] = deepcopy(execution_args)
             if terminal_score_arguments is not None:
                 result["terminal_score_arguments"] = deepcopy(
                     terminal_score_arguments
@@ -1580,6 +1616,11 @@ def _execute_action_block(
                     if isinstance(output, dict)
                     else None
                 ),
+                "row_count": (
+                    output.get("row_count")
+                    if isinstance(output, dict)
+                    else None
+                ),
                 "source_reference": original_args.get("table"),
                 "root_causes": [],
             }
@@ -1592,7 +1633,14 @@ def _execute_action_block(
             if isinstance(exc, LocalReferenceError):
                 message = str(exc)
             else:
-                message = format_tool_error(exc, h, tool, original_args)
+                message = format_tool_error(
+                    exc,
+                    h,
+                    execution_tool,
+                    execution_args or original_args,
+                )
+            if publicize_error is not None:
+                message = publicize_error(message)
             facts = {}
             if structured_error_feedback:
                 facts = _structured_error_facts(
@@ -1643,6 +1691,7 @@ def _execute_action_block(
                 "step_id": step_id,
                 "table": None,
                 "columns": None,
+                "row_count": None,
                 "source_reference": original_args.get("table"),
                 "root_causes": [call_id],
             }
@@ -1690,6 +1739,7 @@ def _execute_action_block(
                 "step_id": binding.get("step_id"),
                 "table": binding.get("table"),
                 "columns": deepcopy(binding.get("columns")),
+                "row_count": binding.get("row_count"),
                 "source_reference": binding.get("source_reference"),
             }
     return atomic_count, results, atomic_events, nonrecoverable
@@ -1731,6 +1781,9 @@ def run_episode(
     prepare_work_action=None,
     render_work_observation=render_batch_observation,
     validate_call=validate_atomic_call,
+    prepare_call_arguments=None,
+    lower_call=None,
+    publicize_error=None,
 ) -> dict:
     low_friction_interface = (
         low_friction_interface or safe_low_friction_interface
@@ -1796,7 +1849,12 @@ def run_episode(
     }
     legacy_action_shape = (
         tool_scheme == ACTION_BLOCK_TOOL_SCHEME
-        and protocol_version != UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION
+        and protocol_version not in {
+            UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION,
+            SEQUENTIAL_ACTION_BLOCK_PROTOCOL_VERSION,
+            SIMPLE_SEQUENTIAL_ACTION_BLOCK_PROTOCOL_VERSION,
+            SIMPLE_SCALAR_CELL_PROTOCOL_VERSION,
+        }
     )
 
     try:
@@ -1991,6 +2049,9 @@ def run_episode(
                     safe_low_friction_interface=safe_low_friction_interface,
                     interface_resolution_events=interface_resolution_events,
                     validate_call=validate_call,
+                    prepare_call_arguments=prepare_call_arguments,
+                    lower_call=lower_call,
+                    publicize_error=publicize_error,
                 )
                 terminal_result = next(
                     (
@@ -2353,7 +2414,7 @@ def main() -> int:
         )
     if selected_ablations == 0 and args.history_turns != 4:
         parser.error(
-            "active action-block-v32 requires --history-turns 4"
+            "active action-block-v35 requires --history-turns 4"
         )
 
     api_key, base_url = load_api_config()
@@ -2397,10 +2458,6 @@ def main() -> int:
         for index, ex in examples
         if trajectory_id(args.split, index, ex) not in completed
     ]
-    system_prompt = build_batch_plan_system_prompt(
-        args.max_batch_calls,
-        assistant_carrier=args.assistant_carrier,
-    )
     protocol_version = (
         STRUCTURED_ERROR_FEEDBACK_PROTOCOL_VERSION
         if args.structured_error_feedback
@@ -2410,9 +2467,14 @@ def main() -> int:
             else (
                 LOW_FRICTION_INTERFACE_PROTOCOL_VERSION
                 if args.low_friction_interface
-                else UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION
+                else SIMPLE_SCALAR_CELL_PROTOCOL_VERSION
             )
         )
+    )
+    system_prompt = build_batch_plan_system_prompt(
+        args.max_batch_calls,
+        assistant_carrier=args.assistant_carrier,
+        protocol_version=protocol_version,
     )
     protocol_hash = batch_plan_protocol_hash(
         system_prompt,
@@ -2450,6 +2512,36 @@ def main() -> int:
                 ),
                 safe_low_friction_interface=args.safe_low_friction_interface,
                 assistant_carrier=args.assistant_carrier,
+                build_messages=(
+                    build_batch_plan_messages
+                    if selected_ablations
+                    else build_sequential_messages
+                ),
+                render_work_observation=(
+                    render_batch_observation
+                    if selected_ablations
+                    else render_sequential_observation
+                ),
+                validate_call=(
+                    validate_atomic_call
+                    if selected_ablations
+                    else validate_sequential_atomic_call
+                ),
+                prepare_call_arguments=(
+                    None
+                    if selected_ablations
+                    else prepare_simple_scalar_cell_arguments
+                ),
+                lower_call=(
+                    None
+                    if selected_ablations
+                    else lower_sequential_atomic_call
+                ),
+                publicize_error=(
+                    None
+                    if selected_ablations
+                    else publicize_simple_scalar_error
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             return {
@@ -2517,7 +2609,7 @@ def main() -> int:
                     else (
                         "and_deterministic_low_friction_resolution"
                         if args.low_friction_interface
-                        else "v32_exact_terminal_shape_and_join_shape_default"
+                        else "v35_one_edge_join_and_simple_scalar_cells"
                     )
                 )
             )
@@ -2553,6 +2645,18 @@ def main() -> int:
         ),
         "automatic_argument_rewrites": bool(
             args.low_friction_interface or args.safe_low_friction_interface
+        ),
+        "deterministic_public_lowering": (
+            None
+            if selected_ablations
+            else {
+                "join": "join_tables with exactly one edge",
+                "scalar_cell": (
+                    '"$id.column" or "step_id.column" to verified '
+                    "one-row value_ref+column"
+                ),
+                "semantic_guessing": False,
+            }
         ),
         "temperature": 0,
         "thinking": (

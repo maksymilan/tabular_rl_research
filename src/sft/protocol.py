@@ -48,8 +48,8 @@ from public_tool_contract import (
     JOIN_ITEM_OPTIONAL,
     JOIN_ITEM_REQUIRED,
     JOIN_TYPES,
-    ROW_EXPRESSION_OPERAND_KEYSETS,
-    ROW_EXPRESSION_OPERATIONS,
+    ROW_DATE_EXPRESSION_OPERAND_KEYSETS,
+    ROW_DATE_EXPRESSION_OPERATIONS,
     SCALAR_OPERAND_KEYSETS,
     SCALAR_OPERATIONS,
 )
@@ -72,7 +72,8 @@ TEACHER_TOOL_GUIDANCE: dict[str, str] = {
         'satisfy `conditions`; return_columns optionally keeps only named output columns.\n'
         '  conditions: a predicate {"column": c, "op": o, "value": v} with op in '
         '=,!=,>,>=,<,<= | {"op":"in","values":[..]} | {"op":"between","low":x,"high":y} | '
-        '{"op":"like","value":pat} | {"op":"contains","value":s} | {"op":"is_null"} | '
+        '{"op":"like","value":pat} | {"op":"contains","value":s} | '
+        '{"op":"on_date","value":"YYYY-MM-DD"} | {"op":"is_null"} | '
         'column-vs-column via {"column":a,"op":o,"column_value":b}; '
         'a scalar computed by an earlier step via {"column":a,"op":o,"value_ref":step_id}; '
         'set membership against a computed table via {"column":a,"op":"in","in_table":table}; '
@@ -80,11 +81,10 @@ TEACHER_TOOL_GUIDANCE: dict[str, str] = {
     "project":
         'project(table, expressions, distinct=false) -> new table with exactly the given columns. '
         '`expressions` is a list of column names, SQL scalar expressions optionally with '
-        '"expr AS alias", or typed row expressions '
-        '{"op":op,"operands":[{"column":c}|{"value":v},...],"as":"name"}. Typed op is '
-        'add|subtract|multiply|divide|percent|percent_change|date_diff_days|extract_year. '
-        'For date_diff_days the operands are start,end; extract_year has one operand. '
-        'distinct=true removes duplicate projected rows. Exact '
+        '"expr AS alias", or typed date expressions '
+        '{"op":"date_diff_days","operands":[{"column":"start"},{"column":"end"}],"as":"days"} '
+        'and {"op":"extract_year","operands":[{"column":"date"}],"as":"year"}. '
+        'date_diff_days operand order is start,end. distinct=true removes duplicate rows. Exact '
         'namespace.column identifiers remain valid inside expressions; a bare downstream column '
         'name is accepted only when it identifies exactly one available column. Project preserves '
         'the input row orientation: it cannot turn category rows into separate columns; use '
@@ -133,11 +133,9 @@ TEACHER_TOOL_GUIDANCE: dict[str, str] = {
         'output_layout/category_values/output_columns. Put where only inside the aggregation it '
         'conditions; top-level where, conditions, and result_name are invalid.',
     "extreme_value_select":
-        'extreme_value_select(table, order_by, top_k=None, return_columns=None, offset=0, '
-        'partition_by=None) -> ordered rows. order_by is a list of "col" or "col DESC". '
-        'Without partition_by, offset skips that many globally ordered rows and top_k keeps the '
-        'next rows. With partition_by, top_k is required and selection is performed independently '
-        'inside each partition; offset skips ranks inside every partition. return_columns projects.',
+        'extreme_value_select(table, order_by, top_k=None, return_columns=None) -> new table with '
+        'the rows ordered by `order_by` (list of "col" or "col DESC") keeping the top `top_k` '
+        '(None = all rows, just ordered). return_columns optionally projects.',
     "set_op":
         'set_op(left, right, op) -> new table combining two tables with op: '
         'union|union_all|intersect|except (their columns must align).',
@@ -150,12 +148,15 @@ TEACHER_TOOL_GUIDANCE: dict[str, str] = {
         'column. Use it to ground a filter literal (does "France" exist? what is the exact spelling?) '
         'before condition_filter.',
     "read_subtable":
-        'read_subtable(table, limit=20, columns=None, offset=0) -> up to 20 actual rows of a table '
-        '(limit must be 1..20; offset is a non-negative zero-based row offset); columns optionally '
-        'limits which columns are observed. Tool results otherwise '
+        'read_subtable(table, limit=20, columns=None, conditions=None, order_by=None, offset=0) -> '
+        'up to 20 matching actual rows without deriving a table. conditions uses the same typed '
+        'predicate tree as condition_filter, including on_date for calendar-date matching. '
+        'columns limits which columns are observed; order_by is a list of exact columns optionally '
+        'ending in ASC/DESC. A positive offset requires order_by and reads a later deterministic '
+        'page. Tool results otherwise '
         'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
-        'the evidence rows before answering. Reading columns does not project or change the table. '
-        'Pagination changes offset; repeating the same arguments reads the same page.',
+        'the evidence rows before answering. Reading does not project, filter into a new handle, or '
+        'change the table.',
     "answer_from_context":
         'answer_from_context(evidence, reason="") -> TERMINAL. evidence must be {"table": name} '
         'for a grounded table holding the exact answer rows, columns, and column order. This same '
@@ -173,7 +174,7 @@ LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version29"  # atomic typed row expressions plus explicit rank/read offsets
+PROTOCOL_VERSION = "version38"  # teacher-only semantic fidelity discipline
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 POLICY_PROMPT_CANONICAL = "canonical"
@@ -182,6 +183,9 @@ POLICY_PROMPT_VARIANTS = (
     POLICY_PROMPT_CANONICAL,
     POLICY_PROMPT_RELATIONAL_INVARIANTS,
 )
+HISTORY_POLICY_RECENT = "recent"
+HISTORY_POLICY_HEAD_TAIL = "head-tail"
+HISTORY_POLICIES = (HISTORY_POLICY_RECENT, HISTORY_POLICY_HEAD_TAIL)
 STUDENT_PROMPT_CANONICAL = "canonical"
 STUDENT_PROMPT_FORMAL = "formal"
 STUDENT_PROMPT_VARIANTS = (
@@ -221,12 +225,15 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "aggregate": ({"table", "column", "op"}, set()),
     "extreme_value_select": (
         {"table", "order_by"},
-        {"top_k", "return_columns", "offset", "partition_by"},
+        {"top_k", "return_columns"},
     ),
     "set_op": ({"left", "right", "op"}, set()),
     "describe_table": ({"tables"}, set()),
     "inspect_column": ({"table", "column"}, {"top_k"}),
-    "read_subtable": ({"table"}, {"limit", "columns", "offset"}),
+    "read_subtable": (
+        {"table"},
+        {"limit", "columns", "conditions", "order_by", "offset"},
+    ),
     "answer_from_context": (set(), {"answer", "evidence", "reason"}),
 }
 
@@ -254,9 +261,15 @@ CANONICAL_CALL_COOKBOOK = (
     '"expressions":["first_name","middle_name","last_name"],"distinct":true}}\n'
     'Compute a column with project: {"tool":"project","arguments":{"table":"sales",'
     '"expressions":["product","price * quantity AS revenue"]}}\n'
-    'Typed row-wise date difference: {"tool":"project","arguments":{"table":"courses",'
+    'Compute a date difference for every row: {"tool":"project","arguments":{"table":"courses",'
     '"expressions":["person",{"op":"date_diff_days","operands":'
     '[{"column":"start_date"},{"column":"end_date"}],"as":"duration_days"}]}}\n'
+    'Read one matching row without deriving a table: {"tool":"read_subtable","arguments":'
+    '{"table":"transactions","columns":["id","amount"],"conditions":'
+    '{"column":"posted_at","op":"on_date","value":"2024-01-31"},"limit":1}}\n'
+    'Read the next deterministic page: {"tool":"read_subtable","arguments":'
+    '{"table":"transactions","columns":["id","amount"],"order_by":["id"],'
+    '"offset":20,"limit":20}}\n'
     'Join a three-table path: {"tool":"join_tables","arguments":'
     '{"base":"orders","joins":['
     '{"table":"customers","on":[{"left":"orders.customer_id","right":"id"}]},'
@@ -286,11 +299,6 @@ CANONICAL_CALL_COOKBOOK = (
     '{"value_ref":"step_7","column":"total_nominees"}],"result_name":"percentage"}}\n'
     'Top 3 with exact output: {"tool":"extreme_value_select","arguments":{"table":"employees",'
     '"order_by":["sick_leave_hours DESC"],"top_k":3,"return_columns":["job_title"]}}\n'
-    'Second ranked row: {"tool":"extreme_value_select","arguments":{"table":"teams",'
-    '"order_by":["margin"],"offset":1,"top_k":1,"return_columns":["team_name"]}}\n'
-    'Top row per group: {"tool":"extreme_value_select","arguments":{"table":"films",'
-    '"partition_by":["genre"],"order_by":["budget DESC"],"top_k":1,'
-    '"return_columns":["genre","title"]}}\n'
     'Set operation after aligning both inputs with project: {"tool":"set_op","arguments":'
     '{"left":"project_001","right":"project_002","op":"union"}}\n'
     'Any final answer, including a scalar: {"tool":"answer_from_context","arguments":'
@@ -507,48 +515,69 @@ def _validate_read_subtable(args: dict) -> None:
     limit = args.get("limit", 20)
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
         raise ProtocolError("read_subtable: limit must be an integer from 1 to 20")
-    offset = args.get("offset", 0)
-    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-        raise ProtocolError("read_subtable: offset must be a non-negative integer")
     columns = args.get("columns")
     if columns is not None and (
         not isinstance(columns, list)
+        or not columns
         or not all(isinstance(item, str) and item.strip() for item in columns)
     ):
-        raise ProtocolError("read_subtable: columns must be a list of non-empty column names")
+        raise ProtocolError(
+            "read_subtable: columns must be a non-empty list of non-empty column names"
+        )
+    conditions = args.get("conditions")
+    if conditions is not None and (
+        not isinstance(conditions, (dict, list)) or not conditions
+    ):
+        raise ProtocolError(
+            "read_subtable: conditions must be a non-empty condition predicate"
+        )
+    order_by = args.get("order_by")
+    if order_by is not None and (
+        not isinstance(order_by, list)
+        or not order_by
+        or not all(isinstance(item, str) and item.strip() for item in order_by)
+    ):
+        raise ProtocolError(
+            "read_subtable: order_by must be a non-empty list of column strings"
+        )
+    offset = args.get("offset", 0)
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ProtocolError("read_subtable: offset must be a non-negative integer")
+    if offset and not order_by:
+        raise ProtocolError(
+            "read_subtable: positive offset requires order_by for deterministic pagination"
+        )
 
 
-def _validate_project(args: dict, *, allow_typed_rows: bool) -> None:
+def _validate_project(args: dict, *, allow_typed_date_rows: bool) -> None:
     if not isinstance(args.get("distinct", False), bool):
         raise ProtocolError("project: distinct must be true or false")
     expressions = args.get("expressions")
     if not isinstance(expressions, list) or not expressions:
         raise ProtocolError("project: expressions must be a non-empty list")
     arity = {
-        "add": (2, None),
-        "subtract": (2, None),
-        "multiply": (2, None),
-        "divide": (2, 2),
-        "percent": (2, 2),
-        "percent_change": (2, 2),
-        "date_diff_days": (2, 2),
-        "extract_year": (1, 1),
+        "date_diff_days": 2,
+        "extract_year": 1,
     }
     for index, expression in enumerate(expressions):
         if isinstance(expression, str) and expression.strip():
             continue
-        if not allow_typed_rows or not isinstance(expression, dict):
-            expected = "strings" if not allow_typed_rows else "non-empty strings or typed objects"
+        if not allow_typed_date_rows or not isinstance(expression, dict):
+            expected = (
+                "non-empty strings"
+                if not allow_typed_date_rows
+                else "non-empty strings or typed date-expression objects"
+            )
             raise ProtocolError(f"project: expressions[{index}] must contain {expected}")
         if set(expression) != {"op", "operands", "as"}:
             raise ProtocolError(
                 f"project: expressions[{index}] typed object must contain exactly op, operands, as"
             )
         operation = expression.get("op")
-        if operation not in ROW_EXPRESSION_OPERATIONS:
+        if operation not in ROW_DATE_EXPRESSION_OPERATIONS:
             raise ProtocolError(
                 f"project: expressions[{index}].op must be one of "
-                f"{sorted(ROW_EXPRESSION_OPERATIONS)}"
+                f"{sorted(ROW_DATE_EXPRESSION_OPERATIONS)}"
             )
         alias = expression.get("as")
         if not isinstance(alias, str) or not re.fullmatch(
@@ -558,19 +587,14 @@ def _validate_project(args: dict, *, allow_typed_rows: bool) -> None:
                 f"project: expressions[{index}].as must be an identifier"
             )
         operands = expression.get("operands")
-        minimum, maximum = arity[operation]
-        if (
-            not isinstance(operands, list)
-            or len(operands) < minimum
-            or maximum is not None and len(operands) > maximum
-        ):
-            expected = str(minimum) if minimum == maximum else f"at least {minimum}"
+        if not isinstance(operands, list) or len(operands) != arity[operation]:
             raise ProtocolError(
-                f"project: expressions[{index}] {operation} requires {expected} operands"
+                f"project: expressions[{index}] {operation} requires "
+                f"{arity[operation]} operands"
             )
         for operand_index, operand in enumerate(operands):
             keys = set(operand) if isinstance(operand, dict) else set()
-            if frozenset(keys) not in ROW_EXPRESSION_OPERAND_KEYSETS:
+            if frozenset(keys) not in ROW_DATE_EXPRESSION_OPERAND_KEYSETS:
                 raise ProtocolError(
                     f"project: expressions[{index}].operands[{operand_index}] must be "
                     "exactly column or value"
@@ -607,23 +631,6 @@ def _validate_extreme_value_select(args: dict) -> None:
         isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1
     ):
         raise ProtocolError("extreme_value_select: top_k must be a positive integer")
-    offset = args.get("offset", 0)
-    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-        raise ProtocolError("extreme_value_select: offset must be a non-negative integer")
-    partition_by = args.get("partition_by")
-    if partition_by is not None:
-        if (
-            not isinstance(partition_by, list)
-            or not partition_by
-            or not all(isinstance(item, str) and item.strip() for item in partition_by)
-        ):
-            raise ProtocolError(
-                "extreme_value_select: partition_by must be a non-empty list of columns"
-            )
-        if top_k is None:
-            raise ProtocolError(
-                "extreme_value_select: top_k is required when partition_by is used"
-            )
     return_columns = args.get("return_columns")
     if return_columns is not None and (
         not isinstance(return_columns, list)
@@ -639,7 +646,7 @@ def _validate_common_model_arguments(
     tool: str,
     args: dict,
     *,
-    allow_typed_rows: bool,
+    allow_typed_date_rows: bool,
 ) -> None:
     if tool == "join_tables":
         _validate_model_join(args)
@@ -648,7 +655,7 @@ def _validate_common_model_arguments(
     if tool == "read_subtable":
         _validate_read_subtable(args)
     if tool == "project":
-        _validate_project(args, allow_typed_rows=allow_typed_rows)
+        _validate_project(args, allow_typed_date_rows=allow_typed_date_rows)
     if tool == "extreme_value_select":
         _validate_extreme_value_select(args)
     if tool == "scalar_compute":
@@ -698,13 +705,13 @@ def _validate_common_model_arguments(
 def validate_model_arguments(tool: str, args: dict) -> None:
     """Validate the current atomic action API, excluding replay compatibility."""
     _validate_argument_keys(tool, args, MODEL_ARG_SCHEMA)
-    _validate_common_model_arguments(tool, args, allow_typed_rows=True)
+    _validate_common_model_arguments(tool, args, allow_typed_date_rows=True)
 
 
 def validate_action_block_arguments(tool: str, args: dict) -> None:
     """Validate the frozen action-block-v32 primitive API."""
     _validate_argument_keys(tool, args, ACTION_BLOCK_MODEL_ARG_SCHEMA)
-    _validate_common_model_arguments(tool, args, allow_typed_rows=False)
+    _validate_common_model_arguments(tool, args, allow_typed_date_rows=False)
 
 
 def tool_schema_hash() -> str:
@@ -780,7 +787,8 @@ SYSTEM_PROMPT_COMPACT = (
     "join_tables(base,joins,base_role?), "
     "group_aggregate(table,group_by,aggregations,passthrough?,output_layout?,category_values?,output_columns?), "
     "extreme_value_select(table,order_by,top_k?,return_columns?), set_op(left,right,op), "
-    "read_subtable(table,limit?,columns?), answer_from_context(evidence,reason?).\n"
+    "read_subtable(table,limit?,columns?,conditions?,order_by?,offset?), "
+    "answer_from_context(evidence,reason?).\n"
 )
 
 ROLLING_HISTORY_SYSTEM_SUFFIX = ROLLING_HISTORY_CONTRACT
@@ -809,7 +817,8 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
     "join_tables(base,joins,base_role?); "
     "group_aggregate(table,group_by,aggregations,passthrough?,output_layout?,category_values?,output_columns?); "
     "extreme_value_select(table,order_by,top_k?,return_columns?); set_op(left,right,op); "
-    "read_subtable(table,limit?,columns?); answer_from_context(evidence,reason?).\n\n"
+    "read_subtable(table,limit?,columns?,conditions?,order_by?,offset?); "
+    "answer_from_context(evidence,reason?).\n\n"
     "RULES\n"
     "plan is control only: goals/status/evidence may cite prior step ids, never results or answer "
     "values. Inspect text domains before literal filters unless already inspected. conditions support "
@@ -953,8 +962,8 @@ class AdjacentDuplicateActionError(ProtocolError):
         tool_semantics = ""
         if tool == "read_subtable":
             tool_semantics = (
-                " an identical read_subtable call uses the same offset and reads the same page; "
-                "change offset to inspect a later page."
+                " an identical read_subtable call requests the same rows; change conditions, "
+                "order_by, offset, columns, or limit to inspect different rows."
             )
         super().__init__(
             (
@@ -1286,6 +1295,8 @@ def rolling_legal_history_messages(
     history_turns: int,
     *,
     compact_observations: bool = True,
+    history_policy: str = HISTORY_POLICY_RECENT,
+    history_head_turns: int = 0,
 ) -> list[dict]:
     """Render a bounded transcript of harness-successful assistant/tool pairs.
 
@@ -1296,6 +1307,12 @@ def rolling_legal_history_messages(
     """
     if history_turns < 0:
         raise ValueError("history_turns must be non-negative")
+    if history_policy not in HISTORY_POLICIES:
+        raise ValueError(f"unknown history_policy {history_policy!r}")
+    if history_head_turns < 0:
+        raise ValueError("history_head_turns must be non-negative")
+    if history_policy == HISTORY_POLICY_RECENT and history_head_turns:
+        raise ValueError("recent history_policy does not accept history_head_turns")
     initial = first_user_message(overview, question, external_knowledge)
     if not legal_history:
         content = initial
@@ -1303,7 +1320,14 @@ def rolling_legal_history_messages(
             content += "\n\n" + state_context_message(state, last_error)
         return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
-    retained = legal_history if history_turns == 0 else legal_history[-history_turns:]
+    if history_turns == 0:
+        retained = legal_history
+    elif history_policy == HISTORY_POLICY_RECENT:
+        retained = legal_history[-history_turns:]
+    else:
+        head = legal_history[:history_head_turns]
+        tail_start = max(history_head_turns, len(legal_history) - history_turns)
+        retained = [*head, *legal_history[tail_start:]]
     messages = [{"role": "system", "content": system}, {"role": "user", "content": initial}]
     for index, item in enumerate(retained):
         assistant = item.get("assistant")

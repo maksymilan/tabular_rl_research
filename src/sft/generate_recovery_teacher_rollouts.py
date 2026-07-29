@@ -53,6 +53,8 @@ from provider_adapter import (  # noqa: E402
 from provider_client import load_api_config  # noqa: E402
 from protocol import (  # noqa: E402
     AdjacentActionGuard,
+    HISTORY_POLICIES,
+    HISTORY_POLICY_RECENT,
     PROTOCOL_VERSION,
     ProtocolError,
     assistant_message,
@@ -65,9 +67,11 @@ from protocol import (  # noqa: E402
     tool_error_message,
     tool_output_message,
     tool_schema_hash,
+    validate_model_action,
 )
 from rollout import (  # noqa: E402
     ContextOverflowError,
+    error_limit_reached,
     execute_tool,
     format_tool_error,
     new_ctx,
@@ -76,12 +80,17 @@ from rollout import (  # noqa: E402
     state_digest,
     task_db_path,
     task_gold_sql,
+    validate_tool_arguments_against_state,
 )
 from tool_schemes import (  # noqa: E402
     ATOMIC_ASSISTANT_CARRIER,
     ATOMIC_TOOL_SCHEME,
     TOOL_SCHEME_REGISTRY_VERSION,
 )
+
+
+class _HistoricalErrorNowValid(Exception):
+    """Internal signal that a selected old error is no longer an error."""
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -209,6 +218,95 @@ def replay_error(
         )
 
 
+def replay_error_under_current_contract(
+    harness: Harness,
+    ctx: dict[str, Any],
+    event: dict[str, Any],
+    adjacent_guard: AdjacentActionGuard,
+) -> dict[str, Any]:
+    """Revalidate one historical rejected action under the active public contract.
+
+    Recovery anchors can outlive a diagnostic protocol revision. Reusing the historical
+    human-readable error would then give the teacher stale tool semantics. Parsed rejected
+    actions are therefore re-run through the active argument/state validator while requiring
+    exactly the same state-preserving boundary. Unparsed provider/carrier failures retain their
+    audited historical event and break parsed-action adjacency.
+    """
+    tool = event.get("attempted_tool")
+    arguments = event.get("attempted_arguments")
+    if not isinstance(tool, str) or not isinstance(arguments, dict):
+        replay_error(harness, ctx, event)
+        adjacent_guard.clear()
+        return dict(event)
+
+    state_before = ctx["environment"].snapshot()
+    before_hash = state_digest(state_before)
+    if before_hash != event.get("state_before_hash"):
+        raise ValueError(
+            f"error action {event.get('action_index')}: replay state hash differs before error"
+        )
+    step_id = str(event.get("step_id") or f"step_{event['action_index']}")
+    try:
+        adjacent_guard.observe(tool, arguments, step_id=step_id)
+        validate_model_action(tool, arguments)
+        if tool == "answer_from_context":
+            validate_tool_arguments_against_state(harness, tool, arguments)
+            raise _HistoricalErrorNowValid(
+                f"error action {event.get('action_index')} is now a valid terminal action"
+            )
+        execute_tool(harness, tool, arguments, ctx, step_id)
+    except _HistoricalErrorNowValid as exc:
+        raise ValueError(str(exc)) from exc
+    except Exception as exc:  # active, audited model/tool error
+        state_after = ctx["environment"].snapshot()
+        after_hash = state_digest(state_after)
+        if after_hash != before_hash:
+            raise ValueError(
+                f"error action {event.get('action_index')}: active replay changed visible state"
+            ) from exc
+        error_type = (
+            protocol_failure_type(exc)
+            if isinstance(exc, ProtocolError)
+            else "execution_error"
+        )
+        message = format_tool_error(exc, harness, tool, arguments)
+        current = error_event(
+            int(event["action_index"]),
+            error_type,
+            message,
+            state_before,
+            state_after,
+            tool,
+            arguments,
+            getattr(exc, "code", type(exc).__name__),
+            getattr(exc, "details", None),
+        )
+        current["source_error_contract"] = {
+            "error_type": event.get("error_type"),
+            "error_code": event.get("error_code"),
+            "message_sha256": hashlib.sha256(
+                str(event.get("message") or "").encode("utf-8")
+            ).hexdigest(),
+        }
+        current_error = json.loads(
+            tool_error_message(
+                step_id,
+                error_type,
+                message,
+                error_code=getattr(exc, "code", type(exc).__name__),
+                details=getattr(exc, "details", None),
+                attempted_tool=tool,
+                attempted_arguments=arguments,
+            )
+        )
+        adjacent_guard.mark_last("rejected", current_error["error"])
+        return current
+    raise ValueError(
+        f"error action {event.get('action_index')} now succeeds under {PROTOCOL_VERSION}; "
+        "select a fresh recovery anchor"
+    )
+
+
 def replay_prefix(
     harness: Harness,
     task: dict[str, Any],
@@ -223,6 +321,7 @@ def replay_prefix(
     prefix_steps: list[dict[str, Any]] = []
     replayed_errors: list[dict[str, Any]] = []
     last_error: dict[str, Any] | None = None
+    adjacent_guard = AdjacentActionGuard()
     anchor_index = int(selected_candidate["anchor_action_index"])
     selected_event = matching_error_event(sample, anchor_index)
     selected_error = selected_candidate["last_tool_error"]
@@ -240,9 +339,14 @@ def replay_prefix(
         event_type = turn.get("execution_error_type")
         if event_type:
             event = matching_error_event(sample, action_index)
-            replay_error(harness, ctx, event)
-            replayed_errors.append(event)
-            last_error = error_from_event(event)
+            current_event = replay_error_under_current_contract(
+                harness,
+                ctx,
+                event,
+                adjacent_guard,
+            )
+            replayed_errors.append(current_event)
+            last_error = error_from_event(current_event)
             if action_index == anchor_index:
                 break
             continue
@@ -264,6 +368,8 @@ def replay_prefix(
             raise ValueError(f"action {action_index}: malformed legal prefix action")
         if tool == "answer_from_context":
             raise ValueError("terminal action appears before selected recovery anchor")
+        adjacent_guard.observe(tool, arguments, step_id=f"step_{action_index}")
+        validate_model_action(tool, arguments)
         state_before = ctx["environment"].snapshot()
         output, table_name = execute_tool(
             harness,
@@ -295,9 +401,10 @@ def replay_prefix(
         )
         if table_name:
             created.add(table_name)
+        adjacent_guard.mark_last("success")
         last_error = None
 
-    if last_error != selected_error:
+    if last_error is None:
         raise ValueError("selected LAST TOOL ERROR was not resident after prefix replay")
     return {
         "catalog": catalog,
@@ -308,6 +415,7 @@ def replay_prefix(
         "error_events": replayed_errors,
         "last_error": last_error,
         "anchor_action_index": anchor_index,
+        "anchor_error_revalidated_under_protocol": PROTOCOL_VERSION,
     }
 
 
@@ -326,7 +434,7 @@ def continuation_quality_reason(
         max_teacher_steps is not None and len(targets) > max_teacher_steps
     ):
         return "teacher_step_limit"
-    seen: set[str] = set()
+    previous_signature: str | None = None
     for step in targets:
         if (
             max_think_words is not None
@@ -335,9 +443,9 @@ def continuation_quality_reason(
             return "teacher_think_limit"
         call = step.get("tool_call") or {}
         signature = json.dumps(call, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        if signature in seen:
-            return "teacher_repeated_call"
-        seen.add(signature)
+        if signature == previous_signature:
+            return "teacher_adjacent_repeated_call"
+        previous_signature = signature
     return None
 
 
@@ -359,6 +467,9 @@ def run_recovery(
     api_timeout: int,
     max_errors_per_type: int,
     history_turns: int,
+    history_policy: str,
+    history_head_turns: int,
+    diagnostic_only: bool,
 ) -> dict[str, Any]:
     harness = Harness(task_db_path(task))
     started = time.time()
@@ -413,6 +524,8 @@ def run_recovery(
                 task.get("external_knowledge") or None,
                 legal_history,
                 history_turns,
+                history_policy=history_policy,
+                history_head_turns=history_head_turns,
             )
             model_input = provider_request_messages(
                 model,
@@ -601,7 +714,11 @@ def run_recovery(
                     failure_type = error_type
                     break
                 teacher_error_counts[error_type] += 1
-                if teacher_error_counts[error_type] >= max_errors_per_type:
+                if error_limit_reached(
+                    error_type,
+                    teacher_error_counts[error_type],
+                    max_errors_per_type,
+                ):
                     failure_type = error_type
                     break
                 last_error = json.loads(tool_error_message(
@@ -633,6 +750,9 @@ def run_recovery(
             "legal": legal,
             "failure_type": failure_type,
             "anchor_action_index": seed["anchor_action_index"],
+            "anchor_error_revalidated_under_protocol": seed[
+                "anchor_error_revalidated_under_protocol"
+            ],
             "prefix_legal_steps": len(seed["prefix_steps"]),
             "prefix_error_events": prefix_error_count,
             "teacher_legal_steps": teacher_legal_steps,
@@ -672,22 +792,35 @@ def run_recovery(
                     "model": model,
                     "context_mode": "rolling-legal-history",
                     "history_turns": history_turns,
+                    "history_policy": history_policy,
+                    "history_head_turns": history_head_turns,
+                    "anchor_error_revalidated_under_protocol": seed[
+                        "anchor_error_revalidated_under_protocol"
+                    ],
                     "rolling_prompt_variant": "full",
                     "rolling_observation_style": "resident",
                     "denotation_comparison": "bird-set",
                     "error_actions_are_sft_targets": False,
                     "student_prefix_steps_are_sft_targets": False,
+                    "quality_repeat_policy": "adjacent_exact_tool_and_arguments_only",
                     "action_count": action_count,
                     "prefix_anchor_action_index": seed["anchor_action_index"],
                     "prefix_legal_steps": len(seed["prefix_steps"]),
                     "teacher_legal_steps": teacher_legal_steps,
                     "error_events": error_events,
                     "outcome": "recovery_teacher_success",
+                    "training_admission": (
+                        "diagnostic_only_pending_protocol_scale_gate"
+                        if diagnostic_only
+                        else "subject_to_downstream_admission_gates"
+                    ),
                     "prompt_contract": prompt_audit,
                     "selection_audit": selected["selection_audit"],
                     "usage": dict(usage),
                 },
             }
+            if diagnostic_only:
+                trajectory["sft_export_eligible"] = False
             replay_ok, replay_error_message = replay_success_trajectory(
                 trajectory,
                 denotation_comparison="bird-set",
@@ -729,10 +862,52 @@ def main() -> int:
     parser.add_argument("--api-retries", type=int, default=3)
     parser.add_argument("--max-errors-per-type", type=int, default=3)
     parser.add_argument("--history-turns", type=int, default=4)
+    parser.add_argument(
+        "--history-policy",
+        choices=HISTORY_POLICIES,
+        default=HISTORY_POLICY_RECENT,
+    )
+    parser.add_argument("--history-head-turns", type=int, default=0)
+    parser.add_argument(
+        "--example-id",
+        action="append",
+        default=[],
+        help="restrict a frozen selected-anchor file to one or more exact example ids",
+    )
+    parser.add_argument(
+        "--diagnostic-only",
+        action="store_true",
+        help=(
+            "mark every retained trajectory sft_export_eligible=false and stop at the "
+            "diagnostic audit boundary"
+        ),
+    )
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
     selected_rows = read_jsonl(args.selected_anchors.resolve())
+    if args.example_id:
+        requested_ids = set(args.example_id)
+        selected_rows = [
+            row
+            for row in selected_rows
+            if row["task"]["example_id"] in requested_ids
+        ]
+        missing_requested = requested_ids - {
+            row["task"]["example_id"] for row in selected_rows
+        }
+        if missing_requested:
+            parser.error(
+                f"--example-id values are missing from selected anchors: "
+                f"{sorted(missing_requested)}"
+            )
+    if args.history_head_turns < 0:
+        parser.error("--history-head-turns must be non-negative")
+    if (
+        args.history_policy == HISTORY_POLICY_RECENT
+        and args.history_head_turns != 0
+    ):
+        parser.error("--history-head-turns requires --history-policy head-tail")
     tasks = read_jsonl(args.tasks.resolve())
     tasks_by_id = {task_identity(task): task for task in tasks}
     if len(tasks_by_id) != len(tasks):
@@ -804,6 +979,9 @@ def main() -> int:
             api_timeout=args.api_timeout,
             max_errors_per_type=args.max_errors_per_type,
             history_turns=args.history_turns,
+            history_policy=args.history_policy,
+            history_head_turns=args.history_head_turns,
+            diagnostic_only=args.diagnostic_only,
         )
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
@@ -841,13 +1019,24 @@ def main() -> int:
         "counts": dict(sorted(counts.items())),
         "context_contract": {
             "history_turns": args.history_turns,
+            "history_policy": args.history_policy,
+            "history_head_turns": args.history_head_turns,
             "max_total_steps": args.max_total_steps,
             "max_teacher_steps": args.max_teacher_steps,
             "student_prefix_steps_are_sft_targets": False,
             "error_actions_are_sft_targets": False,
+            "historical_anchor_errors": (
+                f"revalidated_under_active_{PROTOCOL_VERSION}_contract"
+            ),
+            "quality_repeat_policy": "adjacent_exact_tool_and_arguments_only",
             "evaluator_rationale_visible_to_teacher": False,
             "denotation_comparison": "bird-set",
         },
+        "training_admission": (
+            "diagnostic_only_pending_protocol_scale_gate"
+            if args.diagnostic_only
+            else "subject_to_downstream_admission_gates"
+        ),
         "prompt_contract": prompt_audit,
         "outputs": {
             "success": str(args.out),
@@ -855,6 +1044,8 @@ def main() -> int:
             "all": str(args.all_out),
         },
     }
+    if args.diagnostic_only:
+        manifest["sft_export_eligible"] = False
     args.out.with_suffix(".manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",

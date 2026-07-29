@@ -90,7 +90,7 @@ class PrepareBirdSft2OnpolicyTest(unittest.TestCase):
             deterministic_diagnosis(bad, teacher, {"Business", "Hours", "Users"}),
         )
 
-    def test_execution_error_replays_hidden_handle_counter(self):
+    def test_preexecution_argument_error_does_not_consume_handle_counter(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "tiny.sqlite"
             connection = sqlite3.connect(db_path)
@@ -142,7 +142,7 @@ class PrepareBirdSft2OnpolicyTest(unittest.TestCase):
             trajectory = replay_sample(
                 task, sample, require_correct=False, trajectory_id="tiny_recovery",
             )
-            self.assertEqual("filter_002", trajectory["steps"][0]["tool_output"]["table"])
+            self.assertEqual("filter_001", trajectory["steps"][0]["tool_output"]["table"])
             self.assertTrue(trajectory["steps"][0]["feedback_recovery"])
             self.assertEqual((True, None), replay_success_trajectory(trajectory))
 

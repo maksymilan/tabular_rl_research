@@ -24,6 +24,7 @@ import itertools
 import json
 import os
 import re
+import sqlite3
 import sys
 import time
 import urllib.error
@@ -65,6 +66,11 @@ DEFAULT_FEWSHOT_IDS = ["spider_train_0", "spider_train_1"]
 DEFAULT_MAX_TOKENS = 768
 MIN_CONTEXT_RETRY_TOKENS = 128
 TERMINAL_ANSWER_CONTRACT = "exact-cited-table-v1"
+
+
+def error_limit_reached(error_type: str, count: int, limit: int) -> bool:
+    """Keep duplicate-action feedback recoverable until the shared action budget is exhausted."""
+    return error_type != "no_progress_error" and count >= limit
 
 
 class ChatAPIError(RuntimeError):
@@ -174,6 +180,598 @@ def _normalize_table_refs(args, ctx: dict, parent_key: str | None = None):
     return args
 
 
+def _argument_validation_error(
+    tool: str,
+    args: dict,
+    message: str,
+    *,
+    code: str,
+    details: dict,
+) -> ProtocolError:
+    """Build a state-preserving, model-actionable pre-execution validation error."""
+    return ProtocolError(
+        message,
+        code=code,
+        details=details,
+        failure_type="argument_validation_error",
+        attempted_tool=tool,
+        attempted_arguments=args,
+    )
+
+
+def _validated_table_columns(
+    h: Harness,
+    tool: str,
+    args: dict,
+    table,
+    *,
+    argument_path: str,
+) -> list[str]:
+    if not isinstance(table, str) or not table.strip():
+        raise _argument_validation_error(
+            tool,
+            args,
+            f"{argument_path} must name a non-empty table or result handle",
+            code="invalid_table_reference",
+            details={
+                "argument_path": argument_path,
+                "received": table,
+                "valid_table_handles": h.available_tables(),
+            },
+        )
+    try:
+        return h._cols(table)
+    except KeyError:
+        raise _argument_validation_error(
+            tool,
+            args,
+            f"{argument_path} {table!r} is not an available table or result handle",
+            code="unknown_table",
+            details={
+                "argument_path": argument_path,
+                "requested_table": table,
+                "valid_table_handles": h.available_tables(),
+            },
+        ) from None
+
+
+def _validated_column(
+    h: Harness,
+    tool: str,
+    args: dict,
+    table: str,
+    columns: list[str],
+    requested,
+    *,
+    argument_path: str,
+    allow_star: bool = False,
+) -> str:
+    if allow_star and requested == "*":
+        return "*"
+    resolved = h._resolve_col(columns, requested)
+    if resolved not in columns:
+        raise _argument_validation_error(
+            tool,
+            args,
+            (
+                f"{argument_path} {requested!r} is not a column of {table!r}; "
+                f"available columns: {columns}. "
+                "Choose the correct table or column from the observed schemas"
+            ),
+            code="unknown_column",
+            details={
+                "argument_path": argument_path,
+                "requested_table": table,
+                "requested_column": requested,
+                "available_columns": columns,
+            },
+        )
+    return resolved
+
+
+def _validate_condition_against_table(
+    h: Harness,
+    tool: str,
+    args: dict,
+    table: str,
+    columns: list[str],
+    condition,
+    *,
+    argument_path: str,
+) -> None:
+    """Validate predicate shape and every table/column reference before SQLite sees it."""
+    if isinstance(condition, list):
+        if not condition:
+            raise _argument_validation_error(
+                tool,
+                args,
+                f"{argument_path} must not be an empty predicate list",
+                code="invalid_condition",
+                details={"argument_path": argument_path, "received": condition},
+            )
+        for index, item in enumerate(condition):
+            _validate_condition_against_table(
+                h,
+                tool,
+                args,
+                table,
+                columns,
+                item,
+                argument_path=f"{argument_path}[{index}]",
+            )
+        return
+    if not isinstance(condition, dict) or not condition:
+        raise _argument_validation_error(
+            tool,
+            args,
+            f"{argument_path} must be a non-empty predicate object or list",
+            code="invalid_condition",
+            details={"argument_path": argument_path, "received": condition},
+        )
+
+    logical_keys = [key for key in ("and", "or", "not") if key in condition]
+    if logical_keys:
+        if len(logical_keys) != 1 or len(condition) != 1:
+            raise _argument_validation_error(
+                tool,
+                args,
+                f"{argument_path} must contain exactly one of and, or, or not",
+                code="invalid_condition",
+                details={"argument_path": argument_path, "received_keys": sorted(condition)},
+            )
+        key = logical_keys[0]
+        children = condition[key]
+        if key in {"and", "or"}:
+            if not isinstance(children, list) or not children:
+                raise _argument_validation_error(
+                    tool,
+                    args,
+                    f"{argument_path}.{key} must be a non-empty predicate list",
+                    code="invalid_condition",
+                    details={"argument_path": f"{argument_path}.{key}", "received": children},
+                )
+            for index, child in enumerate(children):
+                _validate_condition_against_table(
+                    h,
+                    tool,
+                    args,
+                    table,
+                    columns,
+                    child,
+                    argument_path=f"{argument_path}.{key}[{index}]",
+                )
+        else:
+            _validate_condition_against_table(
+                h,
+                tool,
+                args,
+                table,
+                columns,
+                children,
+                argument_path=f"{argument_path}.not",
+            )
+        return
+
+    column = condition.get("column")
+    if column is None:
+        raise _argument_validation_error(
+            tool,
+            args,
+            f"{argument_path}.column is required",
+            code="invalid_condition",
+            details={"argument_path": argument_path, "received_keys": sorted(condition)},
+        )
+    _validated_column(
+        h,
+        tool,
+        args,
+        table,
+        columns,
+        column,
+        argument_path=f"{argument_path}.column",
+        allow_star=True,
+    )
+    if "column_value" in condition:
+        _validated_column(
+            h,
+            tool,
+            args,
+            table,
+            columns,
+            condition["column_value"],
+            argument_path=f"{argument_path}.column_value",
+        )
+    if "in_table" in condition:
+        in_table = condition["in_table"]
+        in_columns = _validated_table_columns(
+            h,
+            tool,
+            args,
+            in_table,
+            argument_path=f"{argument_path}.in_table",
+        )
+        if len(in_columns) != 1:
+            _validated_column(
+                h,
+                tool,
+                args,
+                in_table,
+                in_columns,
+                column,
+                argument_path=f"{argument_path}.in_table",
+            )
+
+    op = str(condition.get("op", "=")).strip().lower().replace("_", " ")
+    allowed_ops = {
+        "=", "!=", ">", ">=", "<", "<=",
+        "contains", "not contains", "like", "not like", "on date",
+        "in", "not in", "between", "is null", "is not null",
+    }
+    if op not in allowed_ops:
+        raise _argument_validation_error(
+            tool,
+            args,
+            f"{argument_path}.op {op!r} is unsupported; expected one of {sorted(allowed_ops)}",
+            code="invalid_condition_operator",
+            details={
+                "argument_path": f"{argument_path}.op",
+                "received": op,
+                "allowed_operators": sorted(allowed_ops),
+            },
+        )
+    if op in {"contains", "not contains", "like", "not like", "on date"}:
+        required = {"value"}
+    elif op in {"between"}:
+        required = {"low", "high"}
+    elif op in {"is null", "is not null"}:
+        required = set()
+    elif op in {"in", "not in"}:
+        if not any(key in condition for key in ("values", "value", "in_table")):
+            required = {"values or in_table"}
+        else:
+            required = set()
+    else:
+        operands = [
+            key for key in ("value", "column_value", "value_ref") if key in condition
+        ]
+        if not operands:
+            required = {"value, column_value, or value_ref"}
+        else:
+            required = set()
+    missing = sorted(key for key in required if key not in condition)
+    if missing:
+        raise _argument_validation_error(
+            tool,
+            args,
+            f"{argument_path} with op {op!r} is missing {missing}",
+            code="invalid_condition",
+            details={
+                "argument_path": argument_path,
+                "operator": op,
+                "missing": missing,
+                "received_keys": sorted(condition),
+            },
+        )
+    if op not in {"in", "not in", "between", "is null", "is not null"}:
+        operands = [
+            key for key in ("value", "column_value", "value_ref") if key in condition
+        ]
+        if len(operands) > 1:
+            raise _argument_validation_error(
+                tool,
+                args,
+                f"{argument_path} must use exactly one comparison operand, got {operands}",
+                code="ambiguous_condition_operand",
+                details={
+                    "argument_path": argument_path,
+                    "received_operands": operands,
+                },
+            )
+
+
+def validate_tool_arguments_against_state(h: Harness, tool: str, args: dict) -> None:
+    """Reject invalid table/column references before executing a model-authored SQL fragment.
+
+    Static JSON shape validation remains in ``protocol.py``. This second layer is deliberately
+    state-aware: it validates source tables, result handles, and their current logical columns.
+    """
+    if tool == "plan":
+        return
+    if tool == "answer_from_context":
+        evidence = args.get("evidence") or {}
+        _validated_table_columns(
+            h,
+            tool,
+            args,
+            evidence.get("table"),
+            argument_path="answer_from_context.evidence.table",
+        )
+        return
+    if tool == "describe_table":
+        tables = args.get("tables")
+        if not isinstance(tables, list) or not tables:
+            raise _argument_validation_error(
+                tool,
+                args,
+                "describe_table.tables must be a non-empty list of table names",
+                code="invalid_table_reference",
+                details={
+                    "argument_path": "describe_table.tables",
+                    "received": tables,
+                    "valid_table_handles": h.available_tables(),
+                },
+            )
+        for index, table in enumerate(tables):
+            _validated_table_columns(
+                h,
+                tool,
+                args,
+                table,
+                argument_path=f"describe_table.tables[{index}]",
+            )
+        return
+
+    if tool == "set_op":
+        for side in ("left", "right"):
+            _validated_table_columns(
+                h, tool, args, args.get(side), argument_path=f"set_op.{side}"
+            )
+        return
+
+    if tool == "join_tables" and "base" in args:
+        base = args.get("base")
+        base_columns = _validated_table_columns(
+            h, tool, args, base, argument_path="join_tables.base"
+        )
+        base_namespace = args.get("base_role") or base
+        introduced = {
+            (column if "." in column else f"{base_namespace}.{column}").casefold():
+            (column if "." in column else f"{base_namespace}.{column}")
+            for column in base_columns
+        }
+        for join_index, item in enumerate(args.get("joins") or []):
+            table = item.get("table")
+            columns = _validated_table_columns(
+                h,
+                tool,
+                args,
+                table,
+                argument_path=f"join_tables.joins[{join_index}].table",
+            )
+            for edge_index, edge in enumerate(item.get("on") or []):
+                left = edge.get("left")
+                if not isinstance(left, str) or left.casefold() not in introduced:
+                    raise _argument_validation_error(
+                        tool,
+                        args,
+                        (
+                            f"join_tables.joins[{join_index}].on[{edge_index}].left "
+                            f"{left!r} is not an introduced logical column"
+                        ),
+                        code="unknown_column",
+                        details={
+                            "argument_path": (
+                                f"join_tables.joins[{join_index}].on[{edge_index}].left"
+                            ),
+                            "requested_column": left,
+                            "available_columns": sorted(introduced.values()),
+                        },
+                    )
+                _validated_column(
+                    h,
+                    tool,
+                    args,
+                    table,
+                    columns,
+                    edge.get("right"),
+                    argument_path=f"join_tables.joins[{join_index}].on[{edge_index}].right",
+                )
+            namespace = item.get("role") or table
+            introduced.update({
+                (column if "." in column else f"{namespace}.{column}").casefold():
+                (column if "." in column else f"{namespace}.{column}")
+                for column in columns
+            })
+        return
+
+    table = args.get("table")
+    if tool in {
+        "inspect_column",
+        "read_subtable",
+        "condition_filter",
+        "project",
+        "group_aggregate",
+        "extreme_value_select",
+        "aggregate",
+        "pivot",
+    }:
+        columns = _validated_table_columns(
+            h, tool, args, table, argument_path=f"{tool}.table"
+        )
+    else:
+        return
+
+    if tool == "inspect_column":
+        _validated_column(
+            h, tool, args, table, columns, args.get("column"),
+            argument_path="inspect_column.column",
+        )
+    elif tool == "read_subtable":
+        for index, column in enumerate(args.get("columns") or []):
+            _validated_column(
+                h, tool, args, table, columns, column,
+                argument_path=f"read_subtable.columns[{index}]",
+            )
+        if args.get("conditions") is not None:
+            _validate_condition_against_table(
+                h,
+                tool,
+                args,
+                table,
+                columns,
+                args["conditions"],
+                argument_path="read_subtable.conditions",
+            )
+        for index, item in enumerate(args.get("order_by") or []):
+            order_column = re.sub(
+                r"\s+(?:ASC|DESC)\s*$", "", item, flags=re.IGNORECASE
+            )
+            _validated_column(
+                h,
+                tool,
+                args,
+                table,
+                columns,
+                order_column,
+                argument_path=f"read_subtable.order_by[{index}]",
+            )
+    elif tool == "condition_filter":
+        _validate_condition_against_table(
+            h,
+            tool,
+            args,
+            table,
+            columns,
+            args.get("conditions"),
+            argument_path="condition_filter.conditions",
+        )
+        for index, column in enumerate(args.get("return_columns") or []):
+            _validated_column(
+                h, tool, args, table, columns, column,
+                argument_path=f"condition_filter.return_columns[{index}]",
+            )
+    elif tool == "project":
+        for expression_index, expression in enumerate(args.get("expressions") or []):
+            if not isinstance(expression, dict):
+                continue
+            for operand_index, operand in enumerate(expression.get("operands") or []):
+                if isinstance(operand, dict) and "column" in operand:
+                    _validated_column(
+                        h,
+                        tool,
+                        args,
+                        table,
+                        columns,
+                        operand["column"],
+                        argument_path=(
+                            f"project.expressions[{expression_index}]"
+                            f".operands[{operand_index}].column"
+                        ),
+                    )
+        try:
+            h.validate_project(
+                table,
+                args.get("expressions") or [],
+                bool(args.get("distinct", False)),
+            )
+        except sqlite3.OperationalError as exc:
+            message = str(exc)
+            missing = re.search(r"no such column:\s*(.+?)\s*$", message, re.I)
+            if missing:
+                requested = missing.group(1)
+                raise _argument_validation_error(
+                    tool,
+                    args,
+                    (
+                        f"project.expressions references {requested!r}, which is not a column "
+                        f"of {table!r}; available columns: {columns}. "
+                        "Choose the correct table or column from the observed schemas"
+                    ),
+                    code="unknown_column",
+                    details={
+                        "argument_path": "project.expressions",
+                        "requested_table": table,
+                        "requested_column": requested,
+                        "available_columns": columns,
+                    },
+                ) from None
+            raise _argument_validation_error(
+                tool,
+                args,
+                (
+                    f"project.expressions could not be prepared: {message}; "
+                    f"available columns: {columns}"
+                ),
+                code="invalid_project_expression",
+                details={
+                    "argument_path": "project.expressions",
+                    "sqlite_error": message,
+                    "available_columns": columns,
+                },
+            ) from None
+    elif tool == "group_aggregate":
+        if not (
+            args.get("group_by")
+            or args.get("aggregations")
+            or args.get("passthrough")
+        ):
+            raise _argument_validation_error(
+                tool,
+                args,
+                (
+                    "group_aggregate with empty group_by, aggregations, and passthrough is a "
+                    "no-op; cite the existing table or request an actual grouping/aggregation"
+                ),
+                code="no_op_aggregation",
+                details={
+                    "argument_path": "group_aggregate",
+                    "group_by": args.get("group_by"),
+                    "aggregations": args.get("aggregations"),
+                    "passthrough": args.get("passthrough"),
+                },
+            )
+        for field in ("group_by", "passthrough"):
+            for index, column in enumerate(args.get(field) or []):
+                _validated_column(
+                    h, tool, args, table, columns, column,
+                    argument_path=f"group_aggregate.{field}[{index}]",
+                )
+        for index, aggregation in enumerate(args.get("aggregations") or []):
+            _validated_column(
+                h,
+                tool,
+                args,
+                table,
+                columns,
+                aggregation.get("column"),
+                argument_path=f"group_aggregate.aggregations[{index}].column",
+                allow_star=True,
+            )
+            if aggregation.get("where") is not None:
+                _validate_condition_against_table(
+                    h,
+                    tool,
+                    args,
+                    table,
+                    columns,
+                    aggregation["where"],
+                    argument_path=f"group_aggregate.aggregations[{index}].where",
+                )
+    elif tool == "extreme_value_select":
+        for index, item in enumerate(args.get("order_by") or []):
+            order_column = re.sub(r"\s+(?:ASC|DESC)\s*$", "", item, flags=re.IGNORECASE)
+            _validated_column(
+                h, tool, args, table, columns, order_column,
+                argument_path=f"extreme_value_select.order_by[{index}]",
+            )
+        for index, column in enumerate(args.get("return_columns") or []):
+            _validated_column(
+                h, tool, args, table, columns, column,
+                argument_path=f"extreme_value_select.return_columns[{index}]",
+            )
+    elif tool == "aggregate":
+        _validated_column(
+            h, tool, args, table, columns, args.get("column"),
+            argument_path="aggregate.column", allow_star=True,
+        )
+    elif tool == "pivot":
+        for field in ("key_column", "value_column"):
+            _validated_column(
+                h, tool, args, table, columns, args.get(field),
+                argument_path=f"pivot.{field}",
+            )
+
+
 def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
                  table_output_rows: int = 0):
     """Run one tool call, threading online provenance in `ctx`. Returns (output, created|None).
@@ -184,6 +782,7 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
     if tool not in ACCEPTED_TOOLS or tool == "answer_from_context":
         raise ProtocolError(f"tool {tool!r} not executable here")
     args = _normalize_table_refs(args, ctx)
+    validate_tool_arguments_against_state(h, tool, args)
 
     def resolve_step(ref):
         if ref in ctx["handle_to_step"]:
@@ -200,12 +799,27 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
         return output, None
 
     if tool in ("describe_table", "inspect_column", "read_subtable"):   # read-only perception; no table
-        out = getattr(h, tool)(**args)
+        perception_args = dict(args)
+        if tool == "read_subtable" and perception_args.get("conditions") is not None:
+            values = {
+                ref: extract_scalar(ctx["history"], ref)
+                for ref in _value_ref_ids(perception_args["conditions"])
+            }
+            perception_args["conditions"] = resolve_cond(
+                perception_args["conditions"], {}, values
+            )
+        out = getattr(h, tool)(**perception_args)
         output = out if isinstance(out, dict) else {"rows": [list(r) for r in out], "row_count": len(out)}
         history_record = {"tool": tool, "arguments": args, "output": output, "references": references}
         if tool == "read_subtable":
             table = args.get("table")
             requested_columns = args.get("columns")
+            output.update({
+                "limit": args.get("limit", 20),
+                "offset": args.get("offset", 0),
+                "order_by": deepcopy(args.get("order_by")),
+                "conditions": deepcopy(args.get("conditions")),
+            })
             history_record["observed_columns"] = (
                 list(requested_columns) if requested_columns else list(h._cols(table))
             )
@@ -786,6 +1400,7 @@ def run_live(
             turn["feedback_recovery"] = bool(last_error)
             turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
             if tool == "answer_from_context":
+                validate_tool_arguments_against_state(h, tool, args)
                 rec["legal"] = True
                 rec["steps"] = action_count
                 rec["errors"] = errors
@@ -846,7 +1461,11 @@ def run_live(
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
             error_counts[error_type] = error_counts.get(error_type, 0) + 1
-            if error_counts[error_type] >= max_errors_per_type:
+            if error_limit_reached(
+                error_type,
+                error_counts[error_type],
+                max_errors_per_type,
+            ):
                 rec["failure_type"] = error_type
                 rec["fail"] = f"aborted after {error_counts[error_type]} {error_type} events: {error}"
                 rec["errors"] = errors

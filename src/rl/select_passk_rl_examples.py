@@ -15,6 +15,17 @@ from pathlib import Path
 from typing import Any
 
 
+INFRASTRUCTURE_FAILURE_TYPES = {
+    "api_error",
+    "context_overflow",
+    "generation_oom",
+    "incomplete_api_response",
+    "provider_carrier_error",
+    "task_timeout",
+    "transport_error",
+}
+
+
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     with path.open(encoding="utf-8") as source:
@@ -55,6 +66,40 @@ def sample_attempt_count(record: dict[str, Any]) -> int:
     return int(n_samples) if n_samples else 1
 
 
+def sample_correct_count(record: dict[str, Any]) -> int:
+    if record.get("sample_correct_count") is not None:
+        return int(record["sample_correct_count"])
+    samples = record.get("samples") or []
+    return sum(
+        bool(
+            sample.get("correct")
+            if sample.get("correct") is not None
+            else sample.get("is_correct")
+        )
+        for sample in samples
+    )
+
+
+def has_infrastructure_failure(record: dict[str, Any]) -> bool:
+    if record.get("failure_type") in INFRASTRUCTURE_FAILURE_TYPES:
+        return True
+    return any(
+        sample.get("failure_type") in INFRASTRUCTURE_FAILURE_TYPES
+        or any(bool(turn.get("api_error")) for turn in sample.get("turns") or [])
+        for sample in record.get("samples") or []
+    )
+
+
+def has_mixed_attempt_outcomes(record: dict[str, Any]) -> bool:
+    attempts = sample_attempt_count(record)
+    correct = sample_correct_count(record)
+    return (
+        attempts > 1
+        and 0 < correct < attempts
+        and not has_infrastructure_failure(record)
+    )
+
+
 def classify(record: dict[str, Any], *, target_k: int) -> str:
     pass_at = record.get("pass_at") or {}
     pass1 = bool(pass_at.get("1"))
@@ -82,7 +127,7 @@ def as_training_example(record: dict[str, Any], *, bucket: str, source_path: Pat
             "source": str(source_path),
             "target_pass_k": target_k,
             "pass_at": record.get("pass_at") or {},
-            "sample_correct_count": int(record.get("sample_correct_count", 0)),
+            "sample_correct_count": sample_correct_count(record),
             "sample_legal_count": int(record.get("sample_legal_count", 0)),
             "sample_attempt_count": sample_attempt_count(record),
             "failure_type": record.get("failure_type"),
@@ -109,7 +154,13 @@ def main() -> int:
                         help="trainer-ready JSON accepted by group_reinforce.py --examples-json")
     parser.add_argument("--target-pass-k", type=int, default=None,
                         help="success threshold to compare against pass@1; default = largest pass_at key")
-    parser.add_argument("--mode", choices=("pass1_fail_passk_success", "all_attempted_failed", "pass1_success", "all"),
+    parser.add_argument("--mode", choices=(
+        "pass1_fail_passk_success",
+        "mixed_attempt_outcomes",
+        "all_attempted_failed",
+        "pass1_success",
+        "all",
+    ),
                         default="pass1_fail_passk_success")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--seed", type=int, default=20260712)
@@ -135,6 +186,12 @@ def main() -> int:
     buckets = [(record, classify(record, target_k=target_k)) for record in records]
     if args.mode == "all":
         selected = buckets
+    elif args.mode == "mixed_attempt_outcomes":
+        selected = [
+            (record, "mixed_attempt_outcomes")
+            for record, _ in buckets
+            if has_mixed_attempt_outcomes(record)
+        ]
     else:
         selected = [(record, bucket) for record, bucket in buckets if bucket == args.mode]
     if not args.no_shuffle:
@@ -159,6 +216,12 @@ def main() -> int:
         "total_records": len(records),
         "count": len(examples),
         "bucket_counts": dict(Counter(bucket for _, bucket in buckets)),
+        "mixed_attempt_outcome_count": sum(
+            has_mixed_attempt_outcomes(record) for record in records
+        ),
+        "infrastructure_contaminated_count": sum(
+            has_infrastructure_failure(record) for record in records
+        ),
         "selected_bucket_counts": dict(Counter(example["selection"]["bucket"] for example in examples)),
         "note": (
             "For pass@k runs with --stop-on-success, pass1_fail_passk_success means the first sample "

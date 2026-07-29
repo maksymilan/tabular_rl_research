@@ -104,14 +104,29 @@ or text after the action object. Wait for the next `model_input` before choosing
 
 Follow the tool schema printed in the current system message exactly. In particular:
 
+- treat explicit mappings in the question and EXTERNAL KNOWLEDGE as binding; do not replace an ID,
+  field, aggregation, formula, or output slot with a more natural proxy;
+- before filtering, joining, aggregating, or ranking, identify the requested answer unit, current
+  row grain, eligible population, and exact output columns from visible evidence;
+- do not invent earliest/latest/current/active/top-1/mean/same-year restrictions to force a
+  singleton; retain all rows satisfying the stated conditions unless a grounded selector exists;
+- distinguish row count, entity count, COUNT, and COUNT DISTINCT, and keep numerator and denominator
+  on the same population and grain unless the specification says otherwise;
+- treat empty joins, unexpected multiplicity, NULLs, impossible dates, or implausible arithmetic as
+  reasons to inspect assumptions rather than reasons to switch targets or accept a plausible value;
 - call `describe_table` before using unresolved columns;
 - use `inspect_column` to ground uncertain filter literals;
 - after a join, use the exact flat `relation.column` names shown by the environment;
 - in `join_tables`, `left` is an already-introduced exact logical column and `right` is the bare
   column of the newly attached table;
 - cite only producing step IDs in `value_ref`;
-- use `read_subtable` only when seeing rows is necessary, and never repeat an identical read;
-- derive the exact requested row set, column set, and column order before terminating;
+- use `read_subtable` when seeing rows is necessary; use its typed conditions for row lookup and
+  ordered offsets for deterministic pagination, and never repeat identical arguments adjacently;
+- use typed `project` date expressions for row-wise `date_diff_days(start,end)` or
+  `extract_year(date)` instead of authoring SQLite date syntax;
+- derive the exact requested row set, column set, column order, and field representation before
+  terminating; remove helper counts, ranking keys, and join identifiers not requested by the
+  question, and keep separate source fields separate unless formatting is explicit;
 - terminate only with
   `{"tool":"answer_from_context","arguments":{"evidence":{"table":"HANDLE"},"reason":"..."}}`.
 

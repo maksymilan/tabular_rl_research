@@ -19,6 +19,7 @@ if torch is not None:
         build_turn_batch,
         response_logprobs_batched,
         response_token_logprobs_batched,
+        turn_padding_key,
     )
     from process_objective import sampled_forward_kl, sampled_turn_forward_kl  # noqa: E402
 
@@ -60,6 +61,18 @@ class AccelerateTurnLogProbTests(unittest.TestCase):
         self.assertEqual(input_ids.tolist(), [[1, 2, 3], [0, 0, 5]])
         self.assertEqual(attention_mask.tolist(), [[1, 1, 1], [0, 0, 1]])
         self.assertEqual(targets.tolist(), [[3, 4], [-100, 6]])
+
+    def test_turn_padding_key_tracks_sequence_and_response_padding(self):
+        turns = [
+            ([1] * 8, [2] * 2),
+            ([1] * 3, [2] * 4),
+            ([1] * 5, [2] * 2),
+        ]
+        ordered = sorted(turns, key=turn_padding_key)
+        self.assertEqual(
+            [turn_padding_key(turn) for turn in ordered],
+            [(6, 2), (6, 4), (9, 2)],
+        )
 
     def test_turn_logprob_is_sum_of_exact_response_token_logprobs(self):
         turns = [([1, 2], [3, 4]), ([5], [6])]

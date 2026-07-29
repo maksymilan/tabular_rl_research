@@ -78,3 +78,15 @@ lower to unchanged harness-grounded producing-step references. A current-node jo
 `base_role` uses that declared namespace for the base node's bare columns. Its outputs are isolated by scheme and remain
 `diagnostic_only_pending_protocol_scale_gate`; they cannot be admitted to SFT or RL from evaluation
 success alone.
+
+`src/eval/evaluate_batch_plan.py` defaults to the separate `action-block-v34` diagnostic. A work
+turn is an ordered 1..8 sequence of atomic operations, not a declarative program. The model
+declares no DAG, dependency fields, result root, exports, or handles. Same-block backward
+references connect already-determined consecutive operations; the harness returns one complete
+ordered result/error/blocked entry per submitted operation. The only simplified public primitive
+is a one-edge `join(left,right,left_on,right_on,how?)`; the harness deterministically lowers it to
+one frozen `join_tables` edge without guessing schema, columns, predicates, or intent. The private
+executor name never appears in v34 prompts or feedback. The DeepSeek diagnostic allows up to
+40 model actions, records primitive counts separately, uses `history_turns=4` and `bird-set`, and
+always writes `sft_export_eligible=false`. Frozen v32/v33 results and v34 results require separate
+directories and protocol hashes.

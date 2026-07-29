@@ -46,6 +46,7 @@ from rollout import (  # noqa: E402
     ChatAPIError,
     ContextOverflowError,
     db_path,
+    error_limit_reached,
     execute_tool,
     format_tool_error,
     is_context_overflow,
@@ -54,6 +55,7 @@ from rollout import (  # noqa: E402
     score,
     task_db_path,
     task_gold_sql,
+    validate_tool_arguments_against_state,
 )
 from executor import Harness  # noqa: E402
 from protocol import (  # noqa: E402
@@ -90,14 +92,17 @@ DEFAULT_MAX_STEPS = 30
 DEFAULT_MAX_TOKENS = 1024
 MIN_CONTEXT_RETRY_TOKENS = 256
 MAX_COMPLETION_RETRY_TOKENS = 8192
+DIAGNOSTIC_TRAINING_ADMISSION = "diagnostic_only_pending_protocol_scale_gate"
+ELIGIBLE_TRAINING_ADMISSION = "eligible_by_current_context_contract"
 DATA_GENERATION_SUFFIX = (
     "\n\nDATA GENERATION STRICTNESS\n"
     + TEACHER_ONE_ACTION_RULE
     + " The reason should be specific to the current question, "
     "visible schema/observations, and the next tool arguments. After the first turn, do not restate "
     "the original user question; continue from the current environment state or error feedback. "
-    "Do not call read_subtable again for the same table, columns, and limit if that read is already "
-    "present in CURRENT ENVIRONMENT STATE. If a plan item has no evidence yet, omit the evidence "
+    "Do not repeat the exact same read_subtable arguments when that read is already present in "
+    "CURRENT ENVIRONMENT STATE; change conditions, order_by, offset, columns, or limit if different "
+    "rows are needed. If a plan item has no evidence yet, omit the evidence "
     "field or set it to null; never use an empty string for evidence."
 )
 
@@ -108,13 +113,23 @@ def sft_export_eligible(
     history_turns: int,
     rolling_prompt_variant: str,
     denotation_comparison: str,
+    diagnostic_only: bool = False,
 ) -> bool:
     """Return whether a rollout matches the current SFT/RL causal context contract."""
     return bool(
-        context_mode == "rolling-legal-history"
+        not diagnostic_only
+        and context_mode == "rolling-legal-history"
         and history_turns == 4
         and rolling_prompt_variant == "full"
         and denotation_comparison == "bird-set"
+    )
+
+
+def training_admission(*, diagnostic_only: bool) -> str:
+    return (
+        DIAGNOSTIC_TRAINING_ADMISSION
+        if diagnostic_only
+        else ELIGIBLE_TRAINING_ADMISSION
     )
 
 
@@ -616,6 +631,7 @@ def run_rollout(
     plan_policy: str = PLAN_POLICY_OPTIONAL,
     deepseek_carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
     denotation_comparison: str = "bird-set",
+    diagnostic_only: bool = False,
 ) -> dict:
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
@@ -666,6 +682,14 @@ def run_rollout(
         "plan_policy": plan_policy,
         "policy_prompt_variant": policy_prompt_variant,
         "denotation_comparison": denotation_comparison,
+        "training_admission": training_admission(diagnostic_only=diagnostic_only),
+        "sft_export_eligible": sft_export_eligible(
+            context_mode=context_mode,
+            history_turns=history_turns,
+            rolling_prompt_variant=rolling_prompt_variant,
+            denotation_comparison=denotation_comparison,
+            diagnostic_only=diagnostic_only,
+        ),
     }
 
     while action_count < max_steps:
@@ -796,6 +820,7 @@ def run_rollout(
             turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
             plan_tracker.validate_before_execution(tool, args)
             if tool == "answer_from_context":
+                validate_tool_arguments_against_state(h, tool, args)
                 rec["legal"] = True
                 rec["steps"] = action_count
                 rec["errors"] = errors
@@ -904,7 +929,11 @@ def run_rollout(
                 })
                 break
             error_counts[error_type] += 1
-            if error_counts[error_type] >= max_errors_per_type:
+            if error_limit_reached(
+                error_type,
+                error_counts[error_type],
+                max_errors_per_type,
+            ):
                 rec.update({
                     "failure_type": error_type,
                     "fail": f"aborted after {error_counts[error_type]} {error_type} events: {message}",
@@ -958,6 +987,16 @@ def run_rollout(
             "question": ex["question"],
             "difficulty": rec["difficulty"],
             "label_status": "verified",
+            "training_admission": training_admission(
+                diagnostic_only=diagnostic_only,
+            ),
+            "sft_export_eligible": sft_export_eligible(
+                context_mode=context_mode,
+                history_turns=history_turns,
+                rolling_prompt_variant=rolling_prompt_variant,
+                denotation_comparison=denotation_comparison,
+                diagnostic_only=diagnostic_only,
+            ),
             "initial_state": {"dataset_overview": dataset_overview},
             "steps": steps,
             "rollout_generation": {
@@ -981,6 +1020,10 @@ def run_rollout(
                     history_turns=history_turns,
                     rolling_prompt_variant=rolling_prompt_variant,
                     denotation_comparison=denotation_comparison,
+                    diagnostic_only=diagnostic_only,
+                ),
+                "training_admission": training_admission(
+                    diagnostic_only=diagnostic_only,
                 ),
                 "error_actions_are_sft_targets": False,
                 "errors": errors,
@@ -1117,6 +1160,14 @@ def main() -> int:
         help="auditable provider carrier; tool-call omits the JSON Output request constraint",
     )
     add_denotation_comparison_argument(parser)
+    parser.add_argument(
+        "--diagnostic-only",
+        action="store_true",
+        help=(
+            "force every output and the manifest to remain ineligible for SFT export "
+            "while preserving the same causal generation protocol"
+        ),
+    )
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if args.max_tokens is None:
@@ -1201,6 +1252,7 @@ def main() -> int:
             plan_policy=args.plan_policy,
             deepseek_carrier=args.deepseek_carrier,
             denotation_comparison=args.denotation_comparison,
+            diagnostic_only=args.diagnostic_only,
         )
         rec["attempt_index"] = attempt_index
         rec["attempts_per_example"] = max(1, args.attempts_per_example)
@@ -1294,6 +1346,10 @@ def main() -> int:
             history_turns=args.history_turns,
             rolling_prompt_variant=args.rolling_prompt_variant,
             denotation_comparison=args.denotation_comparison,
+            diagnostic_only=args.diagnostic_only,
+        ),
+        "training_admission": training_admission(
+            diagnostic_only=args.diagnostic_only,
         ),
         "teacher_parser": "strict_no_repair",
         "error_actions_are_sft_targets": False,

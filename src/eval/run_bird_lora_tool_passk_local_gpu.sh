@@ -47,6 +47,7 @@ MODEL_MODE="${MODEL_MODE:-adapter}"
 ALLOW_OPERATIONAL_CONCURRENCY_RESUME="${ALLOW_OPERATIONAL_CONCURRENCY_RESUME:-0}"
 TOOL_EXECUTION_TIMEOUT_SECONDS="${TOOL_EXECUTION_TIMEOUT_SECONDS:-20}"
 ALLOW_OPERATIONAL_TOOL_TIMEOUT_RESUME="${ALLOW_OPERATIONAL_TOOL_TIMEOUT_RESUME:-0}"
+ALLOW_MISSING_TASK_DATABASES="${ALLOW_MISSING_TASK_DATABASES:-0}"
 
 for name in BASE_MODEL SERVED_MODEL GPU_ID PORT RESULT_DIR VLLM_LOG VLLM_PID_FILE EVAL_LOG; do
   require_env "$name"
@@ -73,6 +74,10 @@ esac
 case "$ALLOW_OPERATIONAL_TOOL_TIMEOUT_RESUME" in
   0 | 1) ;;
   *) die "ALLOW_OPERATIONAL_TOOL_TIMEOUT_RESUME must be 0 or 1" ;;
+esac
+case "$ALLOW_MISSING_TASK_DATABASES" in
+  0 | 1) ;;
+  *) die "ALLOW_MISSING_TASK_DATABASES must be 0 or 1" ;;
 esac
 
 cd "$PROJECT_DIR"
@@ -166,15 +171,18 @@ curl --noproxy '*' -fsS --max-time 5 \
   die "timed out waiting for vLLM readiness"
 
 operational_resume_args=()
+selection_args=()
+if test -n "$INDICES_FILE"; then
+  selection_args+=(--indices-file "$INDICES_FILE")
+fi
 if test "$ALLOW_OPERATIONAL_CONCURRENCY_RESUME" -eq 1; then
   operational_resume_args+=(--allow-operational-concurrency-resume)
 fi
 if test "$ALLOW_OPERATIONAL_TOOL_TIMEOUT_RESUME" -eq 1; then
   operational_resume_args+=(--allow-operational-tool-timeout-resume)
 fi
-selection_args=()
-if test -n "$INDICES_FILE"; then
-  selection_args+=(--indices-file "$INDICES_FILE")
+if test "$ALLOW_MISSING_TASK_DATABASES" -eq 1; then
+  operational_resume_args+=(--allow-missing-task-databases)
 fi
 
 printf 'Starting evaluation model=%s gpu=%s concurrency=%s result=%s\n' \

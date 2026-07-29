@@ -22,6 +22,7 @@ PLAN_OPERATIONS = ("create", "add", "update", "delete")
 PLAN_STATUSES = ("pending", "in_progress", "done", "blocked")
 CONDITION_COMPARISON_OPERATORS = ("=", "!=", ">", ">=", "<", "<=")
 CONDITION_VALUE_OPERATORS = ("like", "contains")
+CONDITION_DATE_OPERATORS = ("on_date",)
 SCALAR_OPERATIONS = (
     "add",
     "subtract",
@@ -36,17 +37,11 @@ SCALAR_OPERAND_KEYSETS = (
     frozenset({"value_ref"}),
     frozenset({"value_ref", "column"}),
 )
-ROW_EXPRESSION_OPERATIONS = (
-    "add",
-    "subtract",
-    "multiply",
-    "divide",
-    "percent",
-    "percent_change",
+ROW_DATE_EXPRESSION_OPERATIONS = (
     "date_diff_days",
     "extract_year",
 )
-ROW_EXPRESSION_OPERAND_KEYSETS = (
+ROW_DATE_EXPRESSION_OPERAND_KEYSETS = (
     frozenset({"column"}),
     frozenset({"value"}),
 )
@@ -148,8 +143,8 @@ PUBLIC_TOOL_CONTRACTS: dict[str, ToolContract] = {
     ),
 }
 
-# Action-block v32 is a frozen diagnostic protocol.  Keep its exact primitive
-# surface even when the independently selectable atomic scheme evolves.
+# Action-block v32 and the v33 sequential-segment diagnostic share this frozen
+# primitive surface even when the independently selectable atomic scheme evolves.
 ACTION_BLOCK_PUBLIC_TOOL_CONTRACTS = dict(PUBLIC_TOOL_CONTRACTS)
 ACTION_BLOCK_PUBLIC_TOOL_ARGUMENTS: dict[
     str, tuple[tuple[str, ...], tuple[str, ...]]
@@ -158,30 +153,25 @@ ACTION_BLOCK_PUBLIC_TOOL_ARGUMENTS: dict[
     for tool, contract in ACTION_BLOCK_PUBLIC_TOOL_CONTRACTS.items()
 }
 
-# Atomic version29 closes three observed expression/selection gaps without
-# adding another top-level tool name.
+# Atomic version37 adds only two bounded capabilities that were missing from the observation
+# surface: row-addressed reads and typed row-wise date calculations.  The frozen action-block
+# schemes above deliberately retain their previous primitive contract.
 PUBLIC_TOOL_CONTRACTS = dict(PUBLIC_TOOL_CONTRACTS)
 PUBLIC_TOOL_CONTRACTS["read_subtable"] = ToolContract(
     ("table",),
-    ("limit", "columns", "offset"),
-    "observe up to 20 rows (limit 1..20) beginning at zero-based offset "
-    "(default 0). This does not derive or reshape a table; omitted columns means all columns.",
+    ("limit", "columns", "conditions", "order_by", "offset"),
+    "observe up to 20 matching rows without deriving a table. conditions uses the same typed "
+    "predicate shape as condition_filter, including on_date for calendar-date matching. order_by "
+    "is a list of exact columns optionally ending in ASC or DESC. offset is a non-negative row "
+    "offset and requires order_by so pagination is deterministic. Omitted columns means all columns.",
 )
 PUBLIC_TOOL_CONTRACTS["project"] = ToolContract(
     ("table", "expressions"),
     ("distinct",),
-    "derive exactly the listed outputs and order. Each expression is either an exact column/"
-    "'expr AS alias' string or a typed row expression {op,operands,as}. Typed op is "
-    "add|subtract|multiply|divide|percent|percent_change|date_diff_days|extract_year; each "
-    "operand is exactly {column} or {value}. distinct defaults false. Projection does not turn "
-    "category rows into columns.",
-)
-PUBLIC_TOOL_CONTRACTS["extreme_value_select"] = ToolContract(
-    ("table", "order_by"),
-    ("top_k", "return_columns", "offset", "partition_by"),
-    "derive rows ordered by columns optionally ending in DESC. offset is a zero-based global "
-    "rank offset. partition_by selects the ordered top_k rows independently inside each group; "
-    "top_k is required with partition_by and offset then applies inside every group.",
+    "derive exactly the listed output expressions and order. Each expression is either an exact "
+    "column/'expr AS alias' string or a typed date expression {op,operands,as}; op is "
+    "date_diff_days (start,end) or extract_year (date), and each operand is exactly {column} or "
+    "{value}. distinct defaults false. Projection does not turn category rows into columns.",
 )
 
 PUBLIC_TOOL_ARGUMENTS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
@@ -212,11 +202,13 @@ def render_action_grammar() -> str:
             '| {"column":"str","op":"in","in_table":"handle"} '
             '| {"column":"str","op":"between","low":scalar,"high":scalar} '
             '| {"column":"str","op":"' + _choices(CONDITION_VALUE_OPERATORS)
-            + '","value":scalar} | {"column":"str","op":"is_null"} '
+            + '","value":scalar} | {"column":"str","op":"'
+            + _choices(CONDITION_DATE_OPERATORS)
+            + '","value":"YYYY-MM-DD"} | {"column":"str","op":"is_null"} '
             '| {"and":[condition,...]} | {"or":[condition,...]} | {"not":condition}',
             'project.expressions: ["exact_column", "scalar expression AS output_name", ...]; '
             "an exact dotted logical column, including spaces, is one whole JSON string; a typed "
-            'row expression is {"op":"' + _choices(ROW_EXPRESSION_OPERATIONS)
+            'date expression is {"op":"' + _choices(ROW_DATE_EXPRESSION_OPERATIONS)
             + '","operands":[{"column":"str"}|{"value":scalar},...],"as":"output_name"}',
             'scalar_compute.operands: [{"value":scalar} | {"value_ref":"step_k"} | '
             '{"value_ref":"step_k","column":"metric"}, ...]; operation: '

@@ -904,6 +904,110 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertEqual([step.c_positive for step in result.steps], [1.0, 0.0, 0.0])
         self.assertAlmostEqual(result.total_reward, 1.0)
 
+    def test_simple_process_config_uses_only_declared_positive_and_penalty_terms(self):
+        config_path = RL_DIR / "configs" / "simple_process_reward.json"
+        values = {
+            key: value
+            for key, value in json.loads(config_path.read_text(encoding="utf-8")).items()
+            if not key.startswith("_")
+        }
+        config = ProcessRewardConfig(**values)
+        config.validate()
+        result = allocate_process_rewards(
+            "simple-process",
+            [
+                feature(
+                    1,
+                    back_slice=1,
+                    search_reduction=0.5,
+                    new_used_evidence=1,
+                    state_changed=True,
+                ),
+                feature(
+                    2,
+                    legal_success=False,
+                    error_type="execution_error",
+                    adjacent_repeat=True,
+                ),
+                feature(3, state_changed=False, legal_no_state_change=1),
+                feature(4, tool="answer_from_context", is_terminal=True),
+            ],
+            correct=True,
+            config=config,
+        )
+        self.assertEqual([step.g_positive for step in result.steps], [1.5, 0.0, 0.0, 1.0])
+        self.assertAlmostEqual(result.steps[1].p_local, 0.14)
+        self.assertAlmostEqual(result.steps[2].p_local, 0.03)
+        self.assertEqual(result.steps[3].p_outcome, 0.0)
+        self.assertAlmostEqual(result.total_reward, 0.83)
+
+    def test_simple_process_config_allows_zero_reward_clean_failure(self):
+        config_path = RL_DIR / "configs" / "simple_process_reward.json"
+        values = {
+            key: value
+            for key, value in json.loads(config_path.read_text(encoding="utf-8")).items()
+            if not key.startswith("_")
+        }
+        config = ProcessRewardConfig(**values)
+        result = allocate_process_rewards(
+            "simple-clean-failure",
+            [feature(1, state_changed=True)],
+            correct=False,
+            config=config,
+        )
+        self.assertEqual(result.total_reward, 0.0)
+
+    def test_adjacent_repeat_feature_does_not_mark_nonadjacent_same_call(self):
+        with tempfile.NamedTemporaryFile(suffix=".sqlite") as tmp:
+            conn = sqlite3.connect(tmp.name)
+            conn.execute("CREATE TABLE items(id INTEGER)")
+            conn.execute("INSERT INTO items VALUES (1)")
+            conn.commit()
+            conn.close()
+            same_call = {
+                "attempted_tool": "plan",
+                "attempted_arguments": {"goal": "inspect"},
+            }
+            trajectory = {
+                "trajectory_id": "adjacent-repeat-only",
+                "source": {
+                    "db_path": tmp.name,
+                    "gold_sql": "SELECT id FROM items",
+                },
+                "question": "Return item ids.",
+                "steps": [],
+                "rollout_generation": {
+                    "error_events": [
+                        {
+                            "action_index": 1,
+                            "error_type": "protocol_error",
+                            **same_call,
+                        },
+                        {
+                            "action_index": 2,
+                            "error_type": "protocol_error",
+                            **same_call,
+                        },
+                        {
+                            "action_index": 3,
+                            "error_type": "protocol_error",
+                            "attempted_tool": "plan",
+                            "attempted_arguments": {"goal": "other"},
+                        },
+                        {
+                            "action_index": 4,
+                            "error_type": "protocol_error",
+                            **same_call,
+                        },
+                    ],
+                },
+            }
+            features, _ = replay_step_features(trajectory)
+        self.assertEqual(
+            [feature.adjacent_repeat for feature in features],
+            [False, True, False, False],
+        )
+
     def test_correct_zero_grounded_signal_is_excluded_without_fallback(self):
         result = allocate_process_rewards(
             "t2",

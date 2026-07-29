@@ -43,6 +43,7 @@ from tool_schemes import (  # noqa: E402
     build_tool_scheme,
 )
 from task_loader import load_rl_task_records  # noqa: E402
+from reference_result_filter import filter_training_records  # noqa: E402
 from terminal_reward import terminal_result_reward  # noqa: E402
 from external_failure_adapter import normalize_failure_record  # noqa: E402
 from process_credit import (  # noqa: E402
@@ -58,6 +59,7 @@ from counterfactual_suite import (  # noqa: E402
 from trajectory_replay import evaluate_counterfactual_suite  # noqa: E402
 from frameworks.accelerate.turn_logprobs import (  # noqa: E402
     response_token_logprobs_batched,
+    turn_padding_key,
 )
 from frameworks.accelerate.training_state import (  # noqa: E402
     load_training_state,
@@ -95,6 +97,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--examples-json", type=Path)
     parser.add_argument("--selection", type=Path)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument(
+        "--exclude-empty-reference-results",
+        action="store_true",
+        help=(
+            "drop whole tasks whose hidden reference query returns zero rows, NULL scalar, "
+            "or numeric scalar zero before any actor rollout"
+        ),
+    )
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--group-size", type=int, default=4)
     parser.add_argument("--rollout-batch-size", type=int, default=0,
@@ -119,6 +129,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--process-reward-config", type=Path)
     parser.add_argument("--counterfactual-suite-manifest", type=Path)
+    parser.add_argument(
+        "--process-admission-policy",
+        choices=("counterfactual-completeness", "denotation-nonempty"),
+        default="counterfactual-completeness",
+        help=(
+            "process-update admission rule: the default requires a task-keyed "
+            "counterfactual suite; denotation-nonempty accepts fresh bird-set correctness "
+            "on tasks whose hidden reference result was filtered to be non-empty/non-zero"
+        ),
+    )
     parser.add_argument("--kl-beta", type=float, default=0.0)
     parser.add_argument(
         "--denotation-comparison",
@@ -373,7 +393,13 @@ def sample_group(
                 process_update = reward.process_update
                 scalar_reward = reward.total_reward
                 record["process_reward"] = reward.to_dict()
-                if reward.correct and process_update:
+                record["process_admission_policy"] = args.process_admission_policy
+                if (
+                    reward.correct
+                    and process_update
+                    and args.process_admission_policy
+                    == "counterfactual-completeness"
+                ):
                     if counterfactual_suite is None:
                         raise RuntimeError(
                             "correct process trajectory has no counterfactual task suite"
@@ -446,6 +472,10 @@ def backward_group_loss(model, tokenizer, samples: list[Sample], logprob_micro_b
         entries.extend((sample_index, turn) for turn in turns)
     if not entries:
         return None, advantages, 0.0, 0
+    # The objective is a sum over independent turns, so ordering does not change its semantics.
+    # Bucketing adjacent microbatch items by their exact sequence/response lengths avoids padding
+    # a short turn to the longest turn from a different episode.
+    entries.sort(key=lambda entry: turn_padding_key(entry[1]))
 
     loss_value = 0.0
     kl_value = 0.0
@@ -560,6 +590,7 @@ def backward_process_loss(
     entries = process_entries(samples, train_turns)
     if not entries:
         return None, 0.0, 0
+    entries.sort(key=lambda entry: turn_padding_key(entry[0]))
     device = next(model.parameters()).device
     micro_batch_size = max(1, int(logprob_micro_batch_size))
     loss_value = 0.0
@@ -668,6 +699,7 @@ def checkpoint_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "sft_adapter_path": str(args.adapter_path.resolve()),
         "examples_json": artifact_identity(args.examples_json),
         "selection": artifact_identity(args.selection),
+        "exclude_empty_reference_results": args.exclude_empty_reference_results,
         "process_reward_config": (
             artifact_identity(args.process_reward_config)
             if args.reward_mode == "process"
@@ -675,6 +707,14 @@ def checkpoint_metadata(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "counterfactual_suite_manifest": (
             artifact_identity(args.counterfactual_suite_manifest)
+            if (
+                args.reward_mode == "process"
+                and args.counterfactual_suite_manifest is not None
+            )
+            else None
+        ),
+        "process_admission_policy": (
+            args.process_admission_policy
             if args.reward_mode == "process"
             else None
         ),
@@ -751,10 +791,23 @@ def main() -> int:
             "action-block currently supports result-only RL only; atomic-local process "
             "credit must not be assigned to an entire authored block"
         )
-    if args.reward_mode == "process" and args.counterfactual_suite_manifest is None:
+    if (
+        args.reward_mode == "process"
+        and args.process_admission_policy == "counterfactual-completeness"
+        and args.counterfactual_suite_manifest is None
+    ):
         raise SystemExit(
             "--counterfactual-suite-manifest is required for process RL; "
             "single-database correctness cannot pass the dependency-completeness gate"
+        )
+    if (
+        args.reward_mode == "process"
+        and args.process_admission_policy == "denotation-nonempty"
+        and not args.exclude_empty_reference_results
+    ):
+        raise SystemExit(
+            "--process-admission-policy denotation-nonempty requires "
+            "--exclude-empty-reference-results"
         )
     if args.max_batch_calls < 1:
         raise SystemExit("--max-batch-calls must be positive")
@@ -772,9 +825,28 @@ def main() -> int:
         ROOT, split="train", selection=args.selection, examples_json=args.examples_json,
         limit=args.limit, seed=args.seed, context_mode=args.context_mode,
     )
+    reference_result_audits = []
+    if args.exclude_empty_reference_results:
+        records, reference_result_audits = filter_training_records(records)
     if not records:
         raise SystemExit("no training records selected")
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    if args.exclude_empty_reference_results:
+        (args.output_dir / "reference_result_filter.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "rl-empty-reference-task-filter-v1",
+                    "retained_count": len(records),
+                    "excluded_count": sum(
+                        audit.excluded for audit in reference_result_audits
+                    ),
+                    "tasks": [audit.to_dict() for audit in reference_result_audits],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
     process_config = (
         load_process_reward_config(args.process_reward_config)
         if args.reward_mode == "process"
@@ -784,7 +856,10 @@ def main() -> int:
         process_config.validate()
     counterfactual_manifest: CounterfactualSuiteManifest | None = (
         load_counterfactual_suite_manifest(args.counterfactual_suite_manifest)
-        if args.reward_mode == "process"
+        if (
+            args.reward_mode == "process"
+            and args.process_admission_policy == "counterfactual-completeness"
+        )
         else None
     )
     counterfactual_suites: dict[str, CounterfactualTaskSuite] = {}
@@ -833,7 +908,11 @@ def main() -> int:
             process_config,
             (
                 counterfactual_suites[str(record["environment"]["task_id"])]
-                if args.reward_mode == "process"
+                if (
+                    args.reward_mode == "process"
+                    and args.process_admission_policy
+                    == "counterfactual-completeness"
+                )
                 else None
             ),
         )

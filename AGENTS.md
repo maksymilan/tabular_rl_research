@@ -36,8 +36,8 @@ Start at `docs/current/README.md`.
 
 - Shared prompt semantics: `src/sft/prompt_contract.py`; protocol/validation:
   `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current local diagnostic implementation: `version28`. The production checkpoint-560 evaluation
-  chain remains frozen on `version26`; version28 has not received an accuracy promotion and must
+- Current atomic local diagnostic implementation: `version38`. The production checkpoint-560
+  evaluation chain remains frozen on `version26`; version38 has not received an accuracy promotion and must
   not be mixed into its result directories. Version26 retains version25's prompt-role and
   public-contract refactor, but replaces the model-visible tagged action carrier with one
   non-empty `<think>` block followed directly by a strict raw JSON action object. The former
@@ -124,19 +124,67 @@ Start at `docs/current/README.md`.
   Do not expand either version to 120/240 or full greedy, and do not use them as SFT sources.
   See
   `docs/reports/evaluation/BIRD_CP560_ADJACENT_REPEAT_FEEDBACK_GATE_20260727_ZH.md`.
+  `version29` tested typed row expressions and explicit rank/read offsets but was not promoted.
+  `version30` restores the version28 public action surface and adds teacher-only causal evidence
+  discipline; it has no accuracy promotion and does not alter frozen version26 artifacts.
+  `version31` keeps the version30 public tool schema and valid-call execution semantics, but adds
+  state-aware pre-execution validation for table handles, table/column ownership, predicate
+  operands, join-edge columns, and terminal evidence handles. Invalid references now return
+  structured `argument_validation_error` feedback before SQLite executes; version31 is
+  diagnostic-only pending paired failure/control gates. `version32` keeps those semantics and adds
+  only a concise instruction on `unknown_column` errors to choose the correct table or column from already
+  observed schemas; it does not claim global column absence or expose unseen schema. `version33`
+  additionally prepares `project` expressions against the current relation before registering any
+  derived state, translating missing columns or malformed expressions into structured validation
+  errors instead of raw SQLite failures. `version34` keeps the public contract and relational
+  semantics unchanged while lazily materializing connection-local copies of derived relations
+  smaller than 50,000 rows when they are reused as join inputs; this prevents repeated nested SQL
+  evaluation without changing model-visible handles or values. `version35` keeps version34's
+  public contract, validation, and execution semantics. An exactly repeated adjacent call is still
+  rejected, recorded, and charged to the shared action budget, but `no_progress_error` is exempt
+  from the generic three-errors-per-type early abort. The episode may recover until `max_steps`;
+  all other recoverable error limits remain unchanged. The first version35 full-evaluation launch
+  exposed a runner inconsistency: `rollout.py` used the exemption but `rollout_passk.py` retained
+  the generic limit. That partial artifact is frozen. `version36` applies the same shared
+  `error_limit_reached` policy to both atomic runners; public calls and model-visible feedback are
+  unchanged. `version37` keeps version36's execution/error policy and adds two narrowly typed
+  capabilities. `read_subtable` remains a read-only perception tool but can now select rows with
+  typed conditions, exact-column ordering, and deterministic ordered offsets; it never creates a
+  filtered handle. `project` accepts only two typed row-date expressions,
+  `date_diff_days(start,end)` and `extract_year(date)`, alongside its existing string expressions.
+  The action-block and relational-program schemes remain frozen. Version37 is diagnostic-only
+  pending a larger protocol gate. Its frozen seven-task DeepSeek v4 Flash recovery diagnostic
+  compared recent-4 with first-5 plus recent-5 legal pairs after revalidating every historical
+  anchor error under the active version37 contract. Recent-4 scored 5/7 versus 4/7, had one paired
+  gain and no regression, used 76 versus 93 legal teacher actions, and used 709,739 versus
+  1,051,252 tokens. Both policies exercised typed row reads and the date task exercised
+  `date_diff_days`; teacher continuations had no adjacent exact repeats. Keep recent-4 as the
+  active history policy and do not promote these diagnostic trajectories to SFT. See
+  `docs/reports/evaluation/BIRD_VERSION37_ROW_READ_DATE_HISTORY_GATE7_20260728_ZH.md`.
+  `version38` keeps version37's student runtime prompt, public tools, argument schemas, execution,
+  state, feedback, carrier, and recent-4 history policy unchanged. It adds only external-teacher
+  generation guidance derived from the frozen 54-failure audit: obey explicit question/external-
+  knowledge mappings, do not invent singleton/time/aggregate restrictions, fix population and
+  row grain before relational commitments, preserve exact aggregation units, investigate
+  anomalous observations rather than rationalizing them, and audit the exact terminal table
+  against requested output slots. Version38 is diagnostic-only pending a paired target/control
+  prompt gate; its prompt-only change must not enter student SFT exports.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may
   carry the same authored reason in a separate API field, but its API-facing prompt and history
   must describe only that one carrier.
-- The active context contract is bounded rolling legal history with `history_turns=4`: catalog,
+- The promoted/default context contract remains bounded recent legal history with
+  `history_turns=4`: catalog,
   question, and optional external knowledge are followed by at most four successful
   assistant/observation pairs, and the latest observation carries rebuilt resident state plus
-  optional `LAST TOOL ERROR`. Rejected assistant text is never added to history.
+  optional `LAST TOOL ERROR`. Rejected assistant text is never added to history. Version37 may
+  render first-5 plus recent-5 for a paired diagnostic, but that policy is not promoted unless it
+  beats recent-4 on the same frozen tasks.
 - Current tools: `plan`, `describe_table`, `inspect_column`, `read_subtable`,
   `condition_filter`, `project`, `scalar_compute`, `join_tables`, `group_aggregate`,
   `extreme_value_select`, `set_op`, and `answer_from_context`.
-- The separate experimental `action-block-v32` scheme does not change that atomic contract. A
+- The frozen experimental `action-block-v32` scheme does not change that atomic contract. A
   work turn is one top-level `action_block` with one to five ordered nonterminal primitive calls;
   termination is one separate top-level `answer_from_context`. Terminal calls cannot be nested or
   mixed with work. The model does not see `plan`, `update_plan`, dependency fields, handles before
@@ -146,6 +194,40 @@ Start at `docs/current/README.md`.
   The active adapter performs no spelling, schema, column, predicate, order, handle, or argument
   shape rewrite. Provider-specific carrier constraints are API-facing only. Its completed frozen
   200-task gate scored 144/200 and remains ineligible for SFT.
+- The rejected `action-block-v33` diagnostic kept v32's structured action, primitive tools,
+  ordered execution, full per-call feedback, backward `$id` references, and atomic audit boundary.
+  It simplifies only the model-facing abstraction: a block is a short 1..8 sequential operation
+  segment, not a program; the model declares no DAG, dependencies, result root, exports, plan,
+  status, handle, or environment state. Its concise prompt lists every exact tool signature,
+  gives one complete best-practice example, and requires the block to end whenever unseen feedback
+  could change the next operation or argument. The external-teacher diagnostic permits up to
+  40 model actions. Its frozen 20-task diagnostic scored 11/20 with 18 process errors and
+  20 blocked descendants, so it was not expanded. It is diagnostic-only and ineligible for SFT.
+- The completed `action-block-v34` diagnostic keeps v33's short 1..8 consecutive-operation blocks,
+  full ordered per-call feedback, bounded history, and atomic credit boundary. It replaces only
+  the public multi-edge `join_tables(base, joins[])` call with one unambiguous
+  `join(left, right, left_on, right_on, how?)` edge; the harness deterministically lowers it to the
+  frozen executor without semantic guessing and hides the private executor vocabulary from model
+  prompts and feedback. Its frozen 20-task DeepSeek v4 Flash diagnostic scored **14/20**, with
+  20/20 legal termination, seven process errors, two blocked descendants, 113 model turns,
+  165 attempted primitives, and 479,019 tokens. It had three paired gains and no regressions
+  versus v33 (11/20), and eliminated observed join-call errors, but remained below atomic
+  version24 (16/20) and historical action-block v18 (17/20). It is diagnostic-only and ineligible
+  for SFT; see
+  `docs/reports/evaluation/BIRD_ACTION_BLOCK_V34_ONE_EDGE_JOIN_PILOT20_20260727_ZH.md`.
+- The active `action-block-v35` diagnostic changes only the public `scalar_compute` operand
+  carrier on top of v34. A literal is `{"value":...}`; a same-block one-cell result is
+  `"$id.exact_column"`; and a prior resident one-cell result is `"step_id.exact_column"`.
+  The adapter accepts a cell reference only after verifying a successful producer, exactly one
+  source row, and one exact named output column, then deterministically lowers it to the frozen
+  grounded `value_ref + column` executor carrier. It never chooses a row, resolves a suffix,
+  aggregates, or guesses a producer. Evaluation and RL use the same validator/lowering path.
+  Its frozen four-task DeepSeek v4 Flash gate scored 3/4 with 4/4 legal termination, one process
+  error, zero blocked calls, and six verified scalar-cell lowerings. All three v34 zero-error
+  controls remained correct, but the scalar target remained wrong after deriving both matching
+  row durations and citing only one. It failed the predeclared expansion gate and must not be
+  expanded or used for SFT. See
+  `docs/reports/evaluation/BIRD_ACTION_BLOCK_V35_SCALAR_CELL_GATE4_20260727_ZH.md`.
 - The separate experimental `relational-program-v6` scheme exposes only `observe`,
   `relational_program`, and `answer_from_context`; its prompt contains no atomic or action-block
   tool definitions. A program contains up to eight deterministic `filter`, `select`, `scalar`,

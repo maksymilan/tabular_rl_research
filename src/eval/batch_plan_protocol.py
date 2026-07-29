@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Unified variable-width action-block protocol.
+"""Sequential variable-width action-block protocol.
 
-Work turns contain one top-level ``action_block`` with one to five nonterminal primitive calls.
+Work turns contain one top-level ``action_block`` with one to eight nonterminal primitive calls.
 Termination is one separate top-level ``answer_from_context`` action. A single-call work block is
-the safe atomic case; wider blocks reduce model round trips when arguments are already grounded.
-The harness owns ordered execution, handles, resident state, and blocked propagation. The model
-only reasons, calls tools, and interprets factual feedback.
+the safe atomic case; wider blocks are only short consecutive operations whose arguments are
+already determined. They are not plans or programs. The harness owns ordered execution, handles,
+resident state, dependency discovery, and blocked propagation. The model only reasons, calls
+tools, and interprets the complete per-call factual feedback.
 """
 from __future__ import annotations
 
@@ -37,9 +38,13 @@ STRUCTURED_ERROR_FEEDBACK_PROTOCOL_VERSION = "action-block-v9"
 LOW_FRICTION_INTERFACE_PROTOCOL_VERSION = "action-block-v10"
 SAFE_LOW_FRICTION_INTERFACE_PROTOCOL_VERSION = "action-block-v11"
 UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION = "action-block-v32"
+SEQUENTIAL_ACTION_BLOCK_PROTOCOL_VERSION = "action-block-v33"
+SIMPLE_SEQUENTIAL_ACTION_BLOCK_PROTOCOL_VERSION = "action-block-v34"
+SIMPLE_SCALAR_CELL_PROTOCOL_VERSION = "action-block-v35"
 BATCH_PLAN_TOOL = "action_block"
 TERMINAL_TOOL = "answer_from_context"
-MAX_ACTION_BLOCK_CALLS = 5
+SIMPLE_JOIN_TOOL = "join"
+MAX_ACTION_BLOCK_CALLS = 8
 BATCH_CARRIER_PROVIDER_NATIVE = "provider-native-reasoning-raw-json"
 BATCH_CARRIER_INLINE_THINK = ACTIVE_ACTION_CARRIER
 BATCH_CARRIERS = (
@@ -49,6 +54,10 @@ BATCH_CARRIERS = (
 EXECUTABLE_TOOLS = tuple(
     tool for tool in TOOL_SPECS
     if tool not in {"plan", TERMINAL_TOOL}
+)
+SEQUENTIAL_EXECUTABLE_TOOLS = tuple(
+    SIMPLE_JOIN_TOOL if tool == "join_tables" else tool
+    for tool in EXECUTABLE_TOOLS
 )
 OBSERVATION_ONLY_TOOLS = frozenset({
     "describe_table",
@@ -60,6 +69,7 @@ LOCAL_REF_RE = re.compile(r"^\$([A-Za-z][A-Za-z0-9_]{0,31})$")
 LOCAL_COLUMN_REF_RE = re.compile(
     r"^\$([A-Za-z][A-Za-z0-9_]{0,31})\.(.+)$"
 )
+RESIDENT_SCALAR_CELL_REF_RE = re.compile(r"^(step_[1-9][0-9]*)\.(.+)$")
 
 
 class BatchPlanProtocolError(ProtocolError):
@@ -94,16 +104,49 @@ def _observation_reference_error(
     return message
 
 
-def _atomic_specs() -> str:
-    return "\n".join(ACTION_BLOCK_TOOL_SPECS[tool] for tool in EXECUTABLE_TOOLS)
+def _public_tool_spec(
+    tool: str,
+    protocol_version: str,
+) -> str:
+    if tool == SIMPLE_JOIN_TOOL:
+        return (
+            "join(left, right, left_on, right_on, how?) -> attach exactly one right table "
+            "to one left table/result. left_on is one exact column of left; right_on is one "
+            "bare column of right. how is inner (default) or left. For a cross join, set "
+            'how="cross" and omit left_on/right_on.'
+        )
+    if (
+        tool == "scalar_compute"
+        and protocol_version == SIMPLE_SCALAR_CELL_PROTOCOL_VERSION
+    ):
+        return (
+            "scalar_compute(operation, operands, result_name?) -> derive a grounded 1x1 "
+            "table. operation is add|subtract|multiply|divide|percent|percent_change|"
+            "date_diff_days. operands is ordered; each operand is exactly "
+            '{"value":literal}, "$earlier_id.exact_column" for an earlier one-row result '
+            'in this block, or "step_id.exact_column" for a resident one-row result from '
+            "an earlier block. A referenced result must have exactly one row and the named "
+            "column must match exactly. Operand order is semantic."
+        )
+    return ACTION_BLOCK_TOOL_SPECS[tool]
+
+
+def _atomic_specs(
+    protocol_version: str = SIMPLE_SCALAR_CELL_PROTOCOL_VERSION,
+) -> str:
+    return "\n".join(
+        _public_tool_spec(tool, protocol_version)
+        for tool in SEQUENTIAL_EXECUTABLE_TOOLS
+    )
 
 
 def build_batch_plan_system_prompt(
     max_batch_calls: int = MAX_ACTION_BLOCK_CALLS,
     *,
     assistant_carrier: str = BATCH_CARRIER_PROVIDER_NATIVE,
+    protocol_version: str = SIMPLE_SCALAR_CELL_PROTOCOL_VERSION,
 ) -> str:
-    """Build the active unified action-block provider contract."""
+    """Build the active sequential action-block provider contract."""
     if not 1 <= max_batch_calls <= MAX_ACTION_BLOCK_CALLS:
         raise ValueError(
             f"active action blocks require max_batch_calls in 1..{MAX_ACTION_BLOCK_CALLS}"
@@ -113,7 +156,7 @@ def build_batch_plan_system_prompt(
             f"unknown action-block assistant carrier {assistant_carrier!r}; "
             f"expected one of {BATCH_CARRIERS}"
         )
-    tools = _atomic_specs()
+    tools = _atomic_specs(protocol_version)
     if assistant_carrier == BATCH_CARRIER_PROVIDER_NATIVE:
         format_rule = (
             "RESPONSE FORMAT: Follow the provider-specific split-response contract below. Its visible action is "
@@ -125,78 +168,70 @@ def build_batch_plan_system_prompt(
             "one complete raw JSON object with only tool and arguments. No <tool_call> tag, "
             "Markdown, prose, or second action."
         )
-    prompt = f"""You are a relational table-tool agent using one unified action-block interface.
+    prompt = f"""You are a relational table-tool agent using short sequential action blocks.
 
 WORKSPACE
 The opening overview is a catalog, not table schemas. AVAILABLE TOOL CONTEXT is read-only factual
 state maintained by the harness: observed schemas and values, resident result handles, row reads,
-scalar-producing step ids, and fact-only derivations. You reason, call tools, and interpret their
-feedback; you never author plans, dependencies, statuses, handles, or environment state.
+scalar-producing step ids, and fact-only derivations. You choose operations; the harness owns
+execution, result handles, state, and dependencies.
 
-ATOMIC TOOLS AVAILABLE INSIDE action_block.calls
+TOOL REFERENCE — EXACT CALL SIGNATURES AND SEMANTICS
 {tools}
 
-TOP-LEVEL ACTION CONTRACT
-On each turn emit exactly one of these two actions:
+TWO TOP-LEVEL ACTIONS
+Choose exactly one action per turn.
 
-1. WORK ACTION — one action_block:
+WORK — execute a short consecutive sequence:
 {{"tool":"action_block","arguments":{{"calls":[
   {{"id":"local_id","tool":"atomic_tool","arguments":{{...}}}}
 ]}}}}
 
-2. TERMINAL ACTION — one standalone answer_from_context:
+TERMINAL — cite an exact resident result:
 {{"tool":"answer_from_context","arguments":
   {{"evidence":{{"table":"exact_result_handle"}},"reason":"brief optional reason"}}}}
 
-answer_from_context is never nested in action_block.calls. Its evidence must already be resident
-before this turn. If any observation, filter, join, aggregate, rank, scalar, project, or read is
-still needed, emit a work action now and wait for its feedback before answering on the next turn.
-
-1. calls contains 1 to {max_batch_calls} calls. Every call has exactly id, tool, arguments; ids are
-   unique and begin with a letter. Calls contain only the observation and relational tools listed
-   above. The list order is both execution order and feedback order.
-2. Use each atomic tool's public arguments exactly as documented above. The harness performs no
-   spelling repair, schema repair, column repair, predicate rewrite, or alternative-shape rewrite.
-   Copy resident table handles and step ids exactly from returned feedback.
-3. "$id" is block-local and may refer only to an earlier call in the same list. In a table position
-   it means that call's result table; in value_ref it means that call's producing step.
-   "$id.column" means that earlier call's exact output column. Forward and cross-block "$id"
-   references are invalid; use the returned resident handle or step id in a later block.
-4. One block is one semantic action. Put calls together only when every tool, column, predicate,
-   literal, grain, and output choice is already determined from feedback visible before the block.
-   An execution-dependent later call may consume an earlier result through "$id", but if seeing an
-   intermediate schema, value, row, or error could change the next choice, end the block and decide
-   again after feedback.
-5. Calls run in list order. A failed call is reported as error. A later call that references that
-   failed result is not run and is reported as blocked. Independent later calls still run. Every
-   submitted call receives one result entry with its full atomic output, error, or blocked cause.
-6. The standalone terminal action's cited resident table must already have exactly the answer rows,
-   columns, column order, grain, ordering, and duplicates. Use an explicit project call in an
-   earlier work action when helper columns remain or column order is wrong. The harness never
-   writes values or reshapes terminal evidence. A table from which the answer is merely inferable
-   is not exact: before terminating, derive any requested winner row and project only the question's
-   answer fields in their requested order. The reason cannot drop rows/columns, combine fields, or
-   replace an identifier with a label.
-7. Unknown schemas and uncertain text literals require an earlier observation block. Preserve the
-   question's population and grain through joins, filters, ranking, aggregation, and projection.
-   read_subtable observes rows but does not reshape them. scalar_compute operand order is semantic.
-8. Every join item uses exactly
-   {{"table":"new_table","on":[{{"left":"base.column","right":"new_column"}}]}}.
-   on is always a list of pair objects. Copy on.left from the exact logical columns currently
-   exposed by its base. A derived base without base_role uses its resident handle namespace, for
-   example "filter_001.column". With base_role "orders", use "orders.column". on.right remains
-   the new table's bare column.
+SEQUENTIAL RULES
+1. calls contains 1 to {max_batch_calls} entries. Each entry has exactly id, tool, arguments. ids
+   are unique, begin with a letter, and exist only inside this action block. Calls execute from top
+   to bottom. This is a short operation sequence, not a program: do not declare a DAG, dependencies,
+   exports, a result root, plans, statuses, handles, or environment state.
+2. Combine calls only while the next call is fully determined now. A missing result handle is fine:
+   refer to an earlier call with "$id". But if you must inspect a new schema, value, row, or error
+   before choosing the next tool or any of its arguments, end the block and wait for feedback.
+   A one-call block is always valid.
+3. "$id" refers to an earlier call's result table in a table argument. "$id.column" refers to one
+   exact output column. In scalar_compute operands, "$id.column" reads that cell only when the
+   earlier result has exactly one row; in a later turn use "step_id.column".
+   References must point backward in the same block. For table arguments in a later turn, use the
+   exact resident handle.
+4. The harness returns one ordered results[] entry for every submitted call. Each entry contains
+   that atomic call's complete output, exact error, or blocked cause. A failed call is attempted;
+   only later calls that depend on it are blocked. Independent later calls still execute.
+5. Use only the exact signatures above; the harness does not repair an argument. answer_from_context
+   is never inside calls. Cite it only on a later turn after its resident table
+   already has exactly the requested rows, columns, column order, grain, ordering, and duplicates.
+   The reason cannot alter the cited data. If helper columns remain, derive a final project first.
 
 {format_rule}
 
-ORDERED MULTI-CALL EXAMPLE AFTER ALL CHOICES ARE GROUNDED
+ONE BEST-PRACTICE EXAMPLE
+Assume both schemas and the literal "EU" are already grounded, so one join edge, a filter,
+projection, and row inspection are consecutive and need no unseen choice:
 {{"tool":"action_block","arguments":{{"calls":[
-  {{"id":"filtered","tool":"condition_filter","arguments":{{"table":"orders",
-    "conditions":{{"column":"amount","op":">","value":100}}}}}},
+  {{"id":"linked","tool":"join","arguments":{{"left":"orders","right":"customers",
+    "left_on":"customer_id","right_on":"id"}}}},
+  {{"id":"filtered","tool":"condition_filter","arguments":{{"table":"$linked",
+    "conditions":{{"column":"customers.region","op":"=","value":"EU"}}}}}},
   {{"id":"exact","tool":"project","arguments":{{"table":"$filtered",
     "expressions":["order_id"],"distinct":true}}}},
   {{"id":"rows","tool":"read_subtable","arguments":{{"table":"$exact","limit":20}}}}
 ]}}}}
+
+The environment returns four results[] entries in this same order, including the complete output
+of linked, filtered, exact, and rows. After reading that feedback, cite the returned project handle in a
+separate terminal turn. If the filter literal were unknown, the best practice would instead be a
+one-call inspect_column block, followed by a new decision after its output.
 """
     if assistant_carrier == BATCH_CARRIER_PROVIDER_NATIVE:
         prompt += (
@@ -214,9 +249,8 @@ ORDERED MULTI-CALL EXAMPLE AFTER ALL CHOICES ARE GROUNDED
             '{"tool":"answer_from_context","arguments":{"evidence":'
             '{"table":"project_001"}}}\n'
             "Even when terminating, native reasoning is not the visible response: emit the "
-            "complete terminal JSON after reasoning. answer_from_context stays at the top level, "
-            "never inside calls. Put every parameter inside arguments. Do not add "
-            "prose, Markdown, XML tags, a second action, or any text before or after the JSON."
+            "complete terminal JSON after reasoning. Put every parameter inside arguments. Do not "
+            "add prose, Markdown, XML tags, a second action, or text before or after the JSON."
         )
     return prompt
 
@@ -227,12 +261,21 @@ def batch_plan_protocol_hash(
     *,
     protocol_version: str = UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION,
 ) -> str:
+    public_tools = (
+        SEQUENTIAL_EXECUTABLE_TOOLS
+        if protocol_version in {
+            SIMPLE_SEQUENTIAL_ACTION_BLOCK_PROTOCOL_VERSION,
+            SIMPLE_SCALAR_CELL_PROTOCOL_VERSION,
+        }
+        else EXECUTABLE_TOOLS
+    )
     payload = {
         "version": protocol_version,
         "system_prompt": system_prompt,
         "max_batch_calls": max_batch_calls,
         "atomic_tools": {
-            tool: ACTION_BLOCK_TOOL_SPECS[tool] for tool in EXECUTABLE_TOOLS
+            tool: _public_tool_spec(tool, protocol_version)
+            for tool in public_tools
         },
     }
     text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -408,6 +451,255 @@ def validate_atomic_call(tool: str, arguments: dict) -> None:
             f"{list(EXECUTABLE_TOOLS)}"
         )
     validate_action_block_arguments(tool, arguments)
+
+
+def validate_sequential_atomic_call(tool: str, arguments: dict) -> None:
+    """Validate the v34 primitive surface without changing frozen atomic semantics."""
+    if tool != SIMPLE_JOIN_TOOL:
+        validate_atomic_call(tool, arguments)
+        return
+    if not isinstance(arguments, dict):
+        raise ProtocolError("join.arguments must be an object")
+    required = {"left", "right"}
+    allowed = required | {"left_on", "right_on", "how"}
+    missing = required - set(arguments)
+    unexpected = set(arguments) - allowed
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append(f"missing {sorted(missing)}")
+        if unexpected:
+            details.append(f"unexpected {sorted(unexpected)}")
+        raise ProtocolError("join arguments: " + "; ".join(details))
+    for key in ("left", "right"):
+        if not isinstance(arguments.get(key), str) or not arguments[key].strip():
+            raise ProtocolError(f"join.{key} must be a non-empty table or result reference")
+    how = arguments.get("how", "inner")
+    if how not in {"inner", "left", "cross"}:
+        raise ProtocolError("join.how must be inner, left, or cross")
+    has_left_on = "left_on" in arguments
+    has_right_on = "right_on" in arguments
+    if how == "cross":
+        if has_left_on or has_right_on:
+            raise ProtocolError(
+                "join with how=cross must omit left_on and right_on"
+            )
+        return
+    if not has_left_on or not has_right_on:
+        raise ProtocolError(
+            "join requires left_on and right_on unless how=cross"
+        )
+    for key in ("left_on", "right_on"):
+        if not isinstance(arguments.get(key), str) or not arguments[key].strip():
+            raise ProtocolError(f"join.{key} must be a non-empty column name")
+    if "." in arguments["right_on"]:
+        raise ProtocolError("join.right_on must be a bare column of the right table")
+
+
+def lower_sequential_atomic_call(tool: str, arguments: dict) -> tuple[str, dict]:
+    """Deterministically lower one simple public join edge to the frozen executor."""
+    if tool != SIMPLE_JOIN_TOOL:
+        return tool, deepcopy(arguments)
+    validate_sequential_atomic_call(tool, arguments)
+    left = arguments["left"]
+    left_on = arguments.get("left_on")
+    how = arguments.get("how", "inner")
+    if how == "cross":
+        join_item = {
+            "table": arguments["right"],
+            "on": [],
+            "type": "cross",
+        }
+    else:
+        if left.startswith("$"):
+            public_left = f"{left}.{left_on}"
+        elif "." in str(left_on):
+            public_left = left_on
+        else:
+            public_left = f"{left}.{left_on}"
+        join_item = {
+            "table": arguments["right"],
+            "on": [{
+                "left": public_left,
+                "right": arguments["right_on"],
+            }],
+        }
+        if how != "inner":
+            join_item["type"] = how
+    return "join_tables", {
+        "base": left,
+        "joins": [join_item],
+    }
+
+
+def publicize_sequential_error(message: str) -> str:
+    """Map private join executor paths back to the v34 one-edge public surface."""
+    return (
+        str(message)
+        .replace("join_tables.joins[0].on[0].left", "join.left_on")
+        .replace("join_tables.joins[0].on[0].right", "join.right_on")
+        .replace("join_tables.joins[0].on", "join keys")
+        .replace("join_tables", "join")
+    )
+
+
+def publicize_simple_scalar_error(message: str) -> str:
+    """Keep private scalar executor argument carriers out of v35 feedback."""
+    return (
+        publicize_sequential_error(message)
+        .replace(
+            "value_ref must cite a scalar-producing step",
+            "a scalar cell operand must cite an earlier successful one-row result and exact "
+            "column",
+        )
+        .replace(
+            "value_ref",
+            "scalar cell reference",
+        )
+    )
+
+
+def prepare_simple_scalar_cell_arguments(
+    tool: str,
+    arguments: dict,
+    *,
+    bindings: dict[str, dict],
+    declared_ids: set[str],
+    ctx: dict,
+    resolutions: list[dict] | None = None,
+) -> dict:
+    """Lower v35 public scalar cell strings to the frozen internal operand carrier.
+
+    This adapter is deliberately strict: it verifies successful production, exact one-row
+    cardinality, and an exact column name. It never chooses a row, resolves a suffix, computes an
+    aggregate, or guesses a producer.
+    """
+    if tool != "scalar_compute":
+        return deepcopy(arguments)
+    if not isinstance(arguments, dict):
+        raise ProtocolError("scalar_compute.arguments must be an object")
+    operands = arguments.get("operands")
+    if not isinstance(operands, list) or not operands:
+        # The frozen validator owns the exact arity rules; this message only guards the public
+        # operand carrier before local-reference resolution can reinterpret it.
+        raise ProtocolError("scalar_compute.operands must be a non-empty ordered list")
+
+    lowered = deepcopy(arguments)
+    lowered_operands = []
+    history = ctx.get("history") or {}
+    for index, operand in enumerate(operands):
+        where = f"scalar_compute.operands[{index}]"
+        if isinstance(operand, dict):
+            if set(operand) != {"value"}:
+                raise ProtocolError(
+                    f'{where} must be exactly {{"value":literal}}, '
+                    '"$earlier_id.exact_column", or "step_id.exact_column"'
+                )
+            lowered_operands.append(deepcopy(operand))
+            continue
+        if not isinstance(operand, str):
+            raise ProtocolError(
+                f'{where} must be exactly {{"value":literal}}, '
+                '"$earlier_id.exact_column", or "step_id.exact_column"'
+            )
+
+        local_match = LOCAL_COLUMN_REF_RE.fullmatch(operand)
+        resident_match = RESIDENT_SCALAR_CELL_REF_RE.fullmatch(operand)
+        if local_match:
+            call_id, column = local_match.groups()
+            if call_id not in declared_ids:
+                raise LocalReferenceError(
+                    f"scalar cell reference {operand!r} names no call in this block"
+                )
+            binding = bindings.get(call_id)
+            if binding is None:
+                raise LocalReferenceError(
+                    f"scalar cell reference {operand!r} is forward; only earlier calls may be "
+                    "referenced"
+                )
+            if binding.get("status") != "success":
+                raise LocalReferenceError(
+                    f"scalar cell reference {operand!r} depends on a "
+                    f"{binding.get('status')} call"
+                )
+            step_id = binding.get("step_id")
+            row_count = binding.get("row_count")
+            columns = binding.get("columns")
+            internal_reference = f"${call_id}"
+            source_kind = "same_block_one_cell"
+        elif resident_match:
+            step_id, column = resident_match.groups()
+            record = history.get(step_id)
+            if not isinstance(record, dict):
+                raise LocalReferenceError(
+                    f"scalar cell reference {operand!r} names no resident producing step"
+                )
+            output = record.get("output")
+            if not isinstance(output, dict):
+                raise LocalReferenceError(
+                    f"scalar cell reference {operand!r} targets a step with no table output"
+                )
+            row_count = output.get("row_count")
+            columns = output.get("columns")
+            internal_reference = step_id
+            source_kind = "resident_one_cell"
+        else:
+            raise ProtocolError(
+                f'{where} must be exactly {{"value":literal}}, '
+                '"$earlier_id.exact_column", or "step_id.exact_column"'
+            )
+
+        if row_count != 1:
+            raise LocalReferenceError(
+                f"scalar cell reference {operand!r} requires exactly one source row; "
+                f"observed row_count={row_count!r}"
+            )
+        if not isinstance(columns, list) or column not in columns:
+            raise LocalReferenceError(
+                f"scalar cell reference {operand!r} must exactly match one output column; "
+                f"available columns: {columns}"
+            )
+        if not isinstance(step_id, str) or not step_id:
+            raise LocalReferenceError(
+                f"scalar cell reference {operand!r} has no producing step id"
+            )
+        lowered_operand = {
+            "value_ref": internal_reference,
+            "column": column,
+        }
+        lowered_operands.append(lowered_operand)
+        if resolutions is not None:
+            resolutions.append({
+                "path": f"operands.{index}",
+                "provided": operand,
+                "resolved": {
+                    "producing_step": step_id,
+                    "column": column,
+                },
+                "rule": source_kind,
+            })
+    lowered["operands"] = lowered_operands
+    return lowered
+
+
+def _publicize_sequential_derivations(value: Any) -> Any:
+    visible = deepcopy(value)
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            if (
+                item.get("schema") == "relation-derivation-v1"
+                and item.get("operator") == "join_tables"
+            ):
+                item["operator"] = SIMPLE_JOIN_TOOL
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(visible)
+    return visible
 
 
 def local_reference_ids(value: Any) -> list[str]:
@@ -613,6 +905,25 @@ def render_batch_observation(
     })
 
 
+def render_sequential_observation(
+    batch_index: int,
+    results: list[dict],
+    *,
+    structured_error_feedback: bool = False,
+) -> str:
+    """Render v34 feedback using only its public one-edge join vocabulary."""
+    visible = _publicize_sequential_derivations(results)
+    for result in visible:
+        error = result.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            error["message"] = publicize_sequential_error(error["message"])
+    return render_batch_observation(
+        batch_index,
+        visible,
+        structured_error_feedback=structured_error_feedback,
+    )
+
+
 def action_block_context_message(
     state: dict | None,
     last_error: dict | None = None,
@@ -629,6 +940,21 @@ def action_block_context_message(
         )
         .replace("LAST TOOL ERROR", "LAST ACTION ERROR", 1)
     )
+
+
+def build_sequential_messages(**kwargs) -> list[dict]:
+    """Build v34 context without leaking the private multi-edge join executor name."""
+    updated = dict(kwargs)
+    updated["state"] = _publicize_sequential_derivations(
+        kwargs.get("state") or {}
+    )
+    if isinstance(kwargs.get("last_error"), dict):
+        last_error = _publicize_sequential_derivations(kwargs["last_error"])
+        error = last_error.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            error["message"] = publicize_sequential_error(error["message"])
+        updated["last_error"] = last_error
+    return build_batch_plan_messages(**updated)
 
 
 def build_batch_plan_messages(

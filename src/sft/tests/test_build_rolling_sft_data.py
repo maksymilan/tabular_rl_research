@@ -155,7 +155,41 @@ class BuildRollingSftTests(unittest.TestCase):
         item["steps"][1]["tool_call"] = item["steps"][0]["tool_call"]
         self.assertEqual(
             quality_reason(item, max_steps=None, max_think_words=None),
-            "repeated_call",
+            "adjacent_repeated_call",
+        )
+
+    def test_sft2_quality_gate_allows_non_adjacent_identical_calls(self):
+        item = {
+            "label_status": "verified",
+            "steps": [
+                {
+                    "step_id": "step_1",
+                    "think": "Inspect items.",
+                    "tool_call": {
+                        "tool": "describe_table",
+                        "arguments": {"tables": ["items"]},
+                    },
+                },
+                {
+                    "step_id": "step_2",
+                    "think": "Inspect the value domain.",
+                    "tool_call": {
+                        "tool": "inspect_column",
+                        "arguments": {"table": "items", "column": "category"},
+                    },
+                },
+                {
+                    "step_id": "step_3",
+                    "think": "Revisit the schema after other work.",
+                    "tool_call": {
+                        "tool": "describe_table",
+                        "arguments": {"tables": ["items"]},
+                    },
+                },
+            ],
+        }
+        self.assertIsNone(
+            quality_reason(item, max_steps=None, max_think_words=None)
         )
 
 

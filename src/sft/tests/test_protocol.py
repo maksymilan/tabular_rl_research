@@ -34,8 +34,8 @@ from protocol import (  # noqa: E402
 
 
 class ProtocolParseTests(unittest.TestCase):
-    def test_version29_separates_student_contract_from_teacher_guidance(self):
-        self.assertEqual(PROTOCOL_VERSION, "version29")
+    def test_version38_separates_student_contract_from_teacher_guidance(self):
+        self.assertEqual(PROTOCOL_VERSION, "version38")
         self.assertEqual(set(TOOL_SPECS), set(MODEL_ARG_SCHEMA))
         self.assertNotIn("<tool_call>", SYSTEM_PROMPT)
         for spec in TOOL_SPECS.values():
@@ -63,6 +63,15 @@ class ProtocolParseTests(unittest.TestCase):
         self.assertIn("CANONICAL CALLS", TEACHER_SYSTEM_PROMPT)
         self.assertIn('"base":"orders"', TEACHER_SYSTEM_PROMPT)
         self.assertIn('never right="customers.id"', TEACHER_SYSTEM_PROMPT)
+        for teacher_only_anchor in (
+            "SEMANTIC DECISION DISCIPLINE",
+            "binding answer specification",
+            "Do not invent a selector or restriction",
+            "COUNT, COUNT DISTINCT, row count, and entity count are different",
+            "compare the evidence table to the question one slot at a time",
+        ):
+            self.assertIn(teacher_only_anchor, TEACHER_SYSTEM_PROMPT)
+            self.assertNotIn(teacher_only_anchor, SYSTEM_PROMPT)
         self.assertEqual(len(tool_schema_hash()), 64)
         self.assertIn(
             "ROLLING LEGAL HISTORY",
@@ -121,7 +130,7 @@ class ProtocolParseTests(unittest.TestCase):
             )
         parse_assistant_strict(action, adjacent_guard=guard, step_id="step_3")
 
-    def test_adjacent_error_retains_root_rejection_and_read_requires_new_offset(self):
+    def test_adjacent_error_retains_root_rejection_and_explains_read_page_change(self):
         guard = AdjacentActionGuard()
         action = (
             "<think>Read rows.</think>"
@@ -144,37 +153,50 @@ class ProtocolParseTests(unittest.TestCase):
             raised.exception.details["previous_rejection"],
             root_error,
         )
-        self.assertIn("same offset", str(raised.exception))
-        self.assertIn("change offset", str(raised.exception))
+        self.assertIn("same rows", str(raised.exception))
+        self.assertIn("conditions", str(raised.exception))
+        self.assertIn("offset", str(raised.exception))
         self.assertIn("unknown table: items", str(raised.exception))
 
-    def test_atomic_typed_project_and_rank_offsets_are_strictly_validated(self):
-        parse_assistant_strict(
+    def test_atomic_accepts_row_reads_and_typed_dates_but_not_unrelated_rank_extensions(self):
+        _, tool, args = parse_assistant_strict(
             "<think>Compute each duration.</think>"
             '{"tool":"project","arguments":{"table":"courses","expressions":['
             '{"op":"date_diff_days","operands":[{"column":"start"},{"column":"stop"}],'
             '"as":"duration_days"}]}}'
         )
-        parse_assistant_strict(
-            "<think>Select the second row.</think>"
-            '{"tool":"extreme_value_select","arguments":{"table":"teams",'
-            '"order_by":["margin"],"top_k":1,"offset":1,"return_columns":["name"]}}'
+        self.assertEqual(tool, "project")
+        self.assertEqual(args["expressions"][0]["op"], "date_diff_days")
+        with self.assertRaisesRegex(ProtocolError, "unexpected arguments.*offset"):
+            parse_assistant_strict(
+                "<think>Select the second row.</think>"
+                '{"tool":"extreme_value_select","arguments":{"table":"teams",'
+                '"order_by":["margin"],"top_k":1,"offset":1,"return_columns":["name"]}}'
+            )
+        with self.assertRaisesRegex(ProtocolError, "requires order_by"):
+            parse_assistant_strict(
+                "<think>Read the next page.</think>"
+                '{"tool":"read_subtable","arguments":{"table":"items","limit":20,"offset":20}}'
+            )
+        _, tool, args = parse_assistant_strict(
+            "<think>Read the next page deterministically.</think>"
+            '{"tool":"read_subtable","arguments":{"table":"items","limit":20,'
+            '"columns":["id"],"conditions":{"column":"created_at","op":"on_date",'
+            '"value":"2024-01-31"},"order_by":["id"],"offset":20}}'
         )
-        parse_assistant_strict(
-            "<think>Read the next page.</think>"
-            '{"tool":"read_subtable","arguments":{"table":"items","limit":20,"offset":20}}'
-        )
-        with self.assertRaisesRegex(ProtocolError, "top_k is required"):
+        self.assertEqual(tool, "read_subtable")
+        self.assertEqual(args["offset"], 20)
+        with self.assertRaisesRegex(ProtocolError, "must be one of"):
+            parse_assistant_strict(
+                "<think>Do unsupported row arithmetic.</think>"
+                '{"tool":"project","arguments":{"table":"items","expressions":['
+                '{"op":"add","operands":[{"column":"a"},{"column":"b"}],"as":"c"}]}}'
+            )
+        with self.assertRaisesRegex(ProtocolError, "unexpected arguments.*partition_by"):
             parse_assistant_strict(
                 "<think>Rank within groups.</think>"
                 '{"tool":"extreme_value_select","arguments":{"table":"films",'
                 '"order_by":["budget DESC"],"partition_by":["genre"]}}'
-            )
-        with self.assertRaisesRegex(ProtocolError, "exactly op, operands, as"):
-            parse_assistant_strict(
-                "<think>Compute.</think>"
-                '{"tool":"project","arguments":{"table":"items","expressions":['
-                '{"op":"subtract","columns":["a","b"],"as":"difference"}]}}'
             )
 
     def test_structured_carrier_and_argument_feedback_exposes_exact_failure(self):
@@ -196,7 +218,7 @@ class ProtocolParseTests(unittest.TestCase):
             invalid_args.exception.details["expected_arguments"],
             {
                 "required": ["table"],
-                "optional": ["columns", "limit", "offset"],
+                "optional": ["columns", "conditions", "limit", "offset", "order_by"],
             },
         )
 

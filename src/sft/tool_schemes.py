@@ -87,17 +87,17 @@ def build_atomic_tool_scheme(
 
 def build_action_block_tool_scheme(
     *,
-    max_batch_calls: int = 5,
+    max_batch_calls: int = 8,
     assistant_carrier: str | None = None,
     protocol_version: str | None = None,
 ) -> ToolScheme:
     """Build the action-block scheme without modifying the atomic scheme."""
     from batch_plan_protocol import (
         BATCH_CARRIER_INLINE_THINK,
-        EXECUTABLE_TOOLS,
         MAX_ACTION_BLOCK_CALLS,
+        SEQUENTIAL_EXECUTABLE_TOOLS,
+        SIMPLE_SCALAR_CELL_PROTOCOL_VERSION,
         TERMINAL_TOOL,
-        UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION,
         batch_plan_protocol_hash,
         build_batch_plan_system_prompt,
     )
@@ -108,11 +108,12 @@ def build_action_block_tool_scheme(
         )
     carrier = assistant_carrier or BATCH_CARRIER_INLINE_THINK
     version = (
-        protocol_version or UNIFIED_ACTION_BLOCK_PROTOCOL_VERSION
+        protocol_version or SIMPLE_SCALAR_CELL_PROTOCOL_VERSION
     )
     prompt = build_batch_plan_system_prompt(
         max_batch_calls,
         assistant_carrier=carrier,
+        protocol_version=version,
     )
     return ToolScheme(
         name=ACTION_BLOCK_TOOL_SCHEME,
@@ -125,7 +126,7 @@ def build_action_block_tool_scheme(
         system_prompt=prompt,
         assistant_carrier=carrier,
         top_level_tools=("action_block", TERMINAL_TOOL),
-        atomic_tools=tuple(EXECUTABLE_TOOLS),
+        atomic_tools=tuple(SEQUENTIAL_EXECUTABLE_TOOLS),
         max_batch_calls=max_batch_calls,
     )
 
@@ -195,7 +196,7 @@ def build_tool_scheme(
         )
     if name == ACTION_BLOCK_TOOL_SCHEME:
         return build_action_block_tool_scheme(
-            max_batch_calls=max_batch_calls or 5,
+            max_batch_calls=max_batch_calls or 8,
             assistant_carrier=assistant_carrier,
             protocol_version=protocol_version,
         )

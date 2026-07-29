@@ -22,6 +22,7 @@ _AGG = {
     "sum": "SUM", "count": "COUNT", "count_distinct": "COUNT", "mean": "AVG",
     "avg": "AVG", "min": "MIN", "max": "MAX", "total": "TOTAL",
 }
+_JOIN_CACHE_MAX_ROWS = 50_000
 
 
 def _qid(name: str) -> str:
@@ -42,6 +43,8 @@ class Harness:
         self.conn.text_factory = lambda b: b.decode("utf-8", "replace")
         self.views: dict[str, str] = {}
         self._lc: dict[str, str] = {}  # lowercased name -> canonical (SQL identifiers are case-insensitive)
+        self._row_counts: dict[str, int] = {}
+        self._materialized_handles: set[str] = set()
         self._n = 0
         self.register_sources()
 
@@ -88,7 +91,30 @@ class Harness:
         name = f"{kind}_{self._n:03d}"
         self.views[name] = sql
         n = self.conn.execute(f"SELECT COUNT(*) FROM ({sql})").fetchone()[0]
+        self._row_counts[name] = n
         return {"table_name": name, "kind": kind, "row_count": n, "columns": self._cols(name)}
+
+    def _materialize_small_join_input(self, table: str) -> None:
+        """Lazily cache a small derived relation before it is reused inside a join.
+
+        Derived handles otherwise remain nested SQL text. Reusing a multi-stage aggregate/filter
+        chain in a later join can make SQLite recompute the whole chain inside the join loop.
+        A connection-local TEMP table preserves exact rows/columns while bounding that repeated
+        work. Base dataset tables and large derived relations are never copied here.
+        """
+        if (
+            table not in self.views
+            or table not in self._row_counts
+            or table in self._materialized_handles
+            or self._row_counts[table] > _JOIN_CACHE_MAX_ROWS
+        ):
+            return
+        cache_name = f"__harness_join_cache_{table}"
+        self.conn.execute(
+            f"CREATE TEMP TABLE {_qid(cache_name)} AS {self.views[table]}"
+        )
+        self.views[table] = f"SELECT * FROM temp.{_qid(cache_name)}"
+        self._materialized_handles.add(table)
 
     def rows(self, table: str) -> list[tuple]:
         return self.conn.execute(self._sql(table)).fetchall()
@@ -250,6 +276,8 @@ class Harness:
         if op == "not like":
             value = str(c["value"]).replace("*", "%")
             return f"{qcol} NOT LIKE {_lit(value)}"
+        if op == "on date":
+            return f"date({qcol}) = date({_lit(c['value'])})"
         if op in {"in", "not in"} and "in_table" in c:  # membership against an IN-subquery's (single-column) table
             member_col = self._single_col_select(c["in_table"], col)
             neg = "NOT " if op == "not in" else ""
@@ -463,6 +491,7 @@ class Harness:
                 )
             return namespace, pairs
 
+        self._materialize_small_join_input(base)
         _, cur_pairs = logical_pairs(base, base_role)
         cur_src = self._src(base)
         last_sql = None
@@ -486,6 +515,7 @@ class Harness:
             if join_type == "cross" and edges:
                 raise ValueError(f"{where}.on must be [] for a cross join")
 
+            self._materialize_small_join_input(table)
             namespace, right_pairs = logical_pairs(table, item.get("role"))
             current = {logical.casefold(): (logical, physical) for logical, physical in cur_pairs}
             right_source = {physical.casefold(): physical for _, physical in right_pairs}
@@ -705,15 +735,7 @@ class Harness:
             f"SELECT {_AGG[op]}({d}{column if column != '*' else '*'}) FROM {self._src(table)}"
         ).fetchone()[0]
 
-    def extreme_value_select(
-        self,
-        table,
-        order_by,
-        top_k=None,
-        return_columns=None,
-        offset=0,
-        partition_by=None,
-    ) -> dict:
+    def extreme_value_select(self, table, order_by, top_k=None, return_columns=None) -> dict:
         """Table-producing ORDER BY [... LIMIT k]: keep the extreme rows under an ordering.
         Merged from the old `order_limit` — one tool now covers a plain ORDER BY/LIMIT, a top-k
         pick, and multi-column ordering. `order_by`: list of 'col' or 'col DESC'.
@@ -726,42 +748,13 @@ class Harness:
                 return f"{self._col_sql(cols, parts[0])} {parts[1].upper()}"
             return self._col_sql(cols, item)
 
-        rendered_order = ", ".join(render_order(item) for item in order_by)
+        order = f" ORDER BY {', '.join(render_order(item) for item in order_by)}" if order_by else ""
+        lim = f" LIMIT {int(top_k)}" if top_k is not None else ""
         sel = ", ".join(self._col_sql(cols, col) for col in return_columns) if return_columns else "*"
-        if partition_by:
-            partitions = [self._resolve_col(cols, column) for column in partition_by]
-            partition_sql = ", ".join(self._col_sql(cols, column) for column in partitions)
-            rank_column = "__atomic_partition_rank"
-            ranked = (
-                f"SELECT *, ROW_NUMBER() OVER (PARTITION BY {partition_sql} "
-                f"ORDER BY {rendered_order}) AS {_qid(rank_column)} "
-                f"FROM {self._src(table)}"
-            )
-            lower = int(offset) + 1
-            upper = int(offset) + int(top_k)
-            stable_order = ", ".join(
-                [*(_qid(column) for column in partitions), _qid(rank_column)]
-            )
-            sql = (
-                f"SELECT {sel} FROM ({ranked}) "
-                f"WHERE {_qid(rank_column)} BETWEEN {lower} AND {upper} "
-                f"ORDER BY {stable_order}"
-            )
-            return self._new("top", sql)
+        return self._new("top", f"SELECT {sel} FROM {self._src(table)}{order}{lim}")
 
-        order = f" ORDER BY {rendered_order}"
-        if top_k is not None:
-            limit = f" LIMIT {int(top_k)} OFFSET {int(offset)}"
-        elif offset:
-            limit = f" LIMIT -1 OFFSET {int(offset)}"
-        else:
-            limit = ""
-        return self._new("top", f"SELECT {sel} FROM {self._src(table)}{order}{limit}")
-
-    def project(self, table, expressions, distinct: bool = False) -> dict:
-        """Realize a SELECT projection: SELECT <expressions> FROM (src). Table-producing.
-        `expressions` are SQL column/expression strings, optionally `expr AS alias`.
-        `distinct=True` removes duplicate projected rows."""
+    def _project_sql(self, table, expressions, distinct: bool = False) -> str:
+        """Render one project query without registering or executing a derived table."""
         cols = self._cols(table)
 
         def quote_expression_columns(expression: str) -> str:
@@ -793,7 +786,7 @@ class Harness:
                 segments[index] = segment
             return "".join(segments)
 
-        def render_typed(expr: dict) -> str:
+        def render_typed_date(expr: dict) -> str:
             operation = expr["op"]
             operands = []
             for operand in expr["operands"]:
@@ -801,34 +794,17 @@ class Harness:
                     operands.append(self._col_sql(cols, operand["column"]))
                 else:
                     operands.append(_lit(operand["value"]))
-            if operation == "add":
-                sql = " + ".join(f"({operand})" for operand in operands)
-            elif operation == "subtract":
-                sql = f"({operands[0]})"
-                for operand in operands[1:]:
-                    sql = f"({sql} - ({operand}))"
-            elif operation == "multiply":
-                sql = " * ".join(f"({operand})" for operand in operands)
-            elif operation == "divide":
-                sql = f"(CAST(({operands[0]}) AS REAL) / ({operands[1]}))"
-            elif operation == "percent":
-                sql = f"(CAST(({operands[0]}) AS REAL) * 100 / ({operands[1]}))"
-            elif operation == "percent_change":
-                sql = (
-                    f"((CAST(({operands[0]}) AS REAL) - ({operands[1]})) "
-                    f"* 100 / ({operands[1]}))"
-                )
-            elif operation == "date_diff_days":
+            if operation == "date_diff_days":
                 sql = f"(julianday({operands[1]}) - julianday({operands[0]}))"
             elif operation == "extract_year":
                 sql = f"CAST(strftime('%Y', {operands[0]}) AS INTEGER)"
             else:
-                raise ValueError(f"unsupported typed project operation: {operation}")
+                raise ValueError(f"unsupported typed project date operation: {operation}")
             return f"{sql} AS {_qid(expr['as'])}"
 
         def render(expr: str | dict) -> str:
             if isinstance(expr, dict):
-                return render_typed(expr)
+                return render_typed_date(expr)
             raw = str(expr).strip()
             resolved_raw = self._resolve_col(cols, raw)
             if resolved_raw in cols:
@@ -861,7 +837,17 @@ class Harness:
 
         sel = ", ".join(render(expr) for expr in expressions) if expressions else "*"
         select = "SELECT DISTINCT" if distinct else "SELECT"
-        return self._new("project", f"{select} {sel} FROM {self._src(table)}")
+        return f"{select} {sel} FROM {self._src(table)}"
+
+    def validate_project(self, table, expressions, distinct: bool = False) -> list[str]:
+        """Prepare a project query and return its columns without mutating harness state."""
+        return self._cols_of_sql(self._project_sql(table, expressions, distinct))
+
+    def project(self, table, expressions, distinct: bool = False) -> dict:
+        """Realize a SELECT projection: SELECT <expressions> FROM (src). Table-producing.
+        `expressions` are SQL column/expression strings, optionally `expr AS alias`.
+        `distinct=True` removes duplicate projected rows."""
+        return self._new("project", self._project_sql(table, expressions, distinct))
 
     def scalar_compute(
         self,
@@ -982,14 +968,47 @@ class Harness:
             out["note"] = f"showing first {len(rows)} of {total} rows (exceeds {cell_limit}-cell preview budget)"
         return out
 
-    def read_subtable(self, table, columns=None, limit=20, offset=0):
-        if columns:
-            available = self._cols(table)
-            cols = ", ".join(self._col_sql(available, col) for col in columns)
-        else:
-            cols = "*"
+    def read_subtable(
+        self,
+        table,
+        columns=None,
+        limit=20,
+        conditions=None,
+        order_by=None,
+        offset=0,
+    ):
+        """Observe selected rows without creating a derived relation.
+
+        ``conditions`` deliberately shares the typed predicate language of condition_filter, but
+        this method only reads rows and never registers a filtered handle. A positive offset must
+        be paired with an explicit ordering at the public protocol layer.
+        """
+        available = self._cols(table)
+        selected = (
+            ", ".join(self._col_sql(available, col) for col in columns)
+            if columns
+            else "*"
+        )
+        resolved = (
+            self._resolve_cond_columns(available, conditions)
+            if conditions is not None
+            else None
+        )
+        where = f" WHERE {self._render_cond(resolved, available)}" if resolved else ""
+
+        def render_order(item: str) -> str:
+            parts = item.rsplit(" ", 1)
+            if len(parts) == 2 and parts[1].upper() in {"ASC", "DESC"}:
+                return f"{self._col_sql(available, parts[0])} {parts[1].upper()}"
+            return self._col_sql(available, item)
+
+        order = (
+            f" ORDER BY {', '.join(render_order(item) for item in order_by)}"
+            if order_by
+            else ""
+        )
         return self.conn.execute(
-            f"SELECT {cols} FROM {self._src(table)} "
+            f"SELECT {selected} FROM {self._src(table)}{where}{order} "
             f"LIMIT {int(limit)} OFFSET {int(offset)}"
         ).fetchall()
 

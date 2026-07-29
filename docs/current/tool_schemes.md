@@ -7,7 +7,7 @@ The repository exposes three complete and independently selectable model action 
 | Scheme id | Model turn | Top-level actions | Student carrier |
 |---|---|---|---|
 | `atomic` | exactly one primitive tool | the original planning, perception, relational, and terminal tools | `<think>` followed directly by one raw JSON action |
-| `action-block` | one ordered work block of 1..5 primitive calls, or one terminal action | `action_block` for work; `answer_from_context` for termination | `<think>` followed directly by one raw JSON action |
+| `action-block` | one ordered work block of 1..8 primitive calls, or one terminal action | `action_block` for work; `answer_from_context` for termination | `<think>` followed directly by one raw JSON action |
 | `relational-program` | one interactive observation, one declarative relation program of 1..8 nodes, or one terminal action | `observe`; `relational_program`; `answer_from_context` | `<think>` followed directly by one raw JSON action |
 
 The ids are defined by `tool-scheme-registry-v3` in `src/sft/tool_schemes.py`. A model sees exactly
@@ -63,10 +63,17 @@ PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
   --tool-scheme relational-program -- <relational-program evaluator arguments>
 ```
 
-The active action-block protocol is `action-block-v32`. It uses the strict ordered
-interface. Historical v4-v18 artifacts and explicitly named parsers remain compatibility inputs
-for replay/audit; the active launcher does not select them. DeepSeek v4 uses the default
-provider-native carrier. A local or student-model OpenAI-compatible endpoint uses:
+The active action-block diagnostic is `action-block-v35`. It keeps v34's short sequential
+1..8-operation block, concise prompt, one complete best-practice example, full per-operation
+feedback, frozen primitive execution, and the public single-edge
+`join(left,right,left_on,right_on,how?)`. V35 changes only `scalar_compute` operands: literals use
+`{"value":...}`, same-block one-cell results use `"$id.exact_column"`, and resident one-cell
+results use `"step_id.exact_column"`. The harness requires a successful producer, exactly one
+source row, and an exact column match before deterministically lowering the reference to the
+private grounded scalar carrier. It never chooses a row, matches a suffix, aggregates, or guesses
+intent. V32-v34 and historical v4-v18 artifacts remain frozen compatibility inputs for
+replay/audit. DeepSeek v4 uses the default provider-native carrier. A local or student-model
+OpenAI-compatible endpoint uses:
 
 ```bash
 --assistant-carrier think-json-v1 --model <student-model-name>
@@ -88,7 +95,7 @@ Every new episode and manifest records:
 - assistant carrier;
 - scheme-specific budgets.
 
-## Unified action-block boundary
+## Sequential action-block boundary
 
 The action-block model never creates or updates a task plan, DAG, execution status, resident
 handles, or environment state. It receives a read-only `AVAILABLE TOOL CONTEXT`, reasons about
@@ -99,28 +106,41 @@ the question and returned facts, and emits:
 {"tool":"action_block","arguments":{"calls":[...]}}
 ```
 
-`calls` contains one to five entries and list order is both execution order and feedback order. A
-block is one semantic action: every included call must be fully selectable from facts visible
-before the block. An execution-dependent later call may use `$call_id` or `$call_id.column` only
-for an earlier call in the same list and only when its tools, columns, predicates, literals, grain,
-and outputs were already grounded before the block. Forward and cross-block local references are
-invalid; later blocks use exact resident handles or step ids returned by the harness. If unseen
-feedback could change a choice, the block ends before that choice.
+`calls` contains one to eight entries and list order is both execution order and feedback order.
+It is not a model-authored program: there are no dependency declarations, DAGs, result roots,
+exports, plans, or statuses. Every later operation must already be fully determined from facts
+visible before the block. It may use `$call_id` or `$call_id.column` to consume an earlier result,
+but if an unseen schema, value, row, or error could change the next operation or any argument, the
+model ends the block and waits. A one-call block is always valid. Forward and cross-block local
+references are invalid; later turns use exact resident handles or step ids returned by the harness.
 
-Every turn chooses one of two actions. A work action is an `action_block` containing one to five
+Every turn chooses one of two actions. A work action is an `action_block` containing one to eight
 observation or relational calls. A terminal action is a standalone top-level
 `answer_from_context`; its evidence must already be resident before the turn. If any producer or
 observation is still needed, the model emits a work action and waits for feedback before answering.
 
-The active adapter performs no spelling, schema, column, predicate, order-by, handle, or argument
-shape repair. It resolves only the strict block-local reference syntax required to connect ordered
-primitive calls. A failed primitive is an attempted root error. A later call referencing it is
-reported as blocked and is not executed; independent later calls still run.
+The active adapter performs no spelling, schema, column, predicate, order-by, handle, or intent
+repair. It resolves only strict block-local references, deterministically compiles the public
+one-edge `join` into exactly one private executor edge, and lowers only verified one-row
+`scalar_compute` cell references. A failed primitive is an attempted root error. A later call
+referencing it is reported as blocked and is not executed; independent later calls still run.
 
-When a derived handle is the base of `join_tables`, its exact handle is the default logical
-namespace for `on.left`: for example, base `filter_001` uses `filter_001.column`. Supplying
-`base_role:"orders"` instead makes `orders.column` the left namespace. `on.right` remains the new
-table's bare column.
+`join.left_on` is one exact column of the left input and `join.right_on` is one bare column of the
+right table. `how` is `inner` by default, or `left`; a cross join sets `how="cross"` and omits both
+keys. Multi-hop work uses consecutive one-edge `join` calls and `$id` references. The model never
+authors `base`, `joins[]`, `on[]`, `base_role`, or executor namespaces.
+
+For `scalar_compute`, operand order is semantic. A resident duration call has this public form:
+
+```json
+{"operation":"date_diff_days",
+ "operands":["step_19.START","step_19.STOP"],
+ "result_name":"duration_days"}
+```
+
+This is legal only when `step_19` produced exactly one row with exact columns `START` and `STOP`.
+Multi-row elementwise computation is not silently mapped. The private `value_ref` object is not
+part of the v35 `scalar_compute` public schema.
 
 The terminal response is a separate top-level action:
 
@@ -150,8 +170,9 @@ There is no duplicate `reusable_outputs` sidecar; successful resident handles ar
 individual outputs and current harness state.
 
 The bounded history retains four model actions, not four primitive calls. One model action consumes
-one action-budget unit regardless of whether it is a one-to-five-call work block or the standalone
-terminal. Primitive counts remain audit metrics and do not terminate an episode.
+one action-budget unit regardless of whether it is a one-to-eight-call work block or the standalone
+terminal. The v35 external-teacher diagnostic permits up to 40 model actions; primitive counts
+remain separate audit metrics.
 
 Result directories must remain isolated by scheme.
 
@@ -236,9 +257,16 @@ Action-block bounded-history SFT is exported by
 - permits verified recovery episodes while never making a failed or blocked block a target; later
   clean recovery blocks may be targets with the error block retained only as causal context.
 
-The active action-block-v32 fixed-200 evaluation scored 144/200 and remains ineligible because the
-150/200 promotion gate was not passed. The exporter is an implementation path for a future
-promoted protocol, not an authorization to train on current or historical diagnostics.
+The frozen action-block-v32 fixed-200 evaluation scored 144/200 and remains ineligible because the
+150/200 promotion gate was not passed. On the same frozen 20-task diagnostic, v33 scored 11/20
+with 18 process errors and 20 blocked descendants; v34 scored 14/20 with seven process errors and
+two blocked descendants. V34 had three paired gains and no regressions versus v33, and removed all
+observed join-call errors, but remained below atomic version24 (16/20) and historical
+action-block-v18 (17/20). V35's frozen four-task scalar-cell gate retained all three controls but
+left its single target wrong, so it was not expanded. The exporter remains pinned to the frozen
+v32 replay contract; v32-v35 diagnostics are not authorized training sources. See
+`docs/reports/evaluation/BIRD_ACTION_BLOCK_V34_ONE_EDGE_JOIN_PILOT20_20260727_ZH.md` and
+`docs/reports/evaluation/BIRD_ACTION_BLOCK_V35_SCALAR_CELL_GATE4_20260727_ZH.md`.
 
 Datasets and adapters from different schemes must not be mixed. `assert_record_tool_scheme`
 provides the mandatory pre-export guard.
@@ -263,6 +291,10 @@ RL-enabled schemes. Checkpoint metadata, rollout logs, and metrics include the s
 budgets, carrier, protocol version, and protocol hash, so resume cannot silently switch protocols
 or continue a retired tagged-carrier checkpoint. Such a checkpoint requires an explicit offline
 carrier-repair/migration decision rather than metadata fallback.
+
+The action-block RL environment uses the same v35 public join/scalar validators, deterministic
+lowering, public feedback renderer, and protocol hash as evaluation. A prompt/runtime mismatch is
+a failing test, not a supported configuration.
 
 Atomic process credit is the RL-only mechanism that assigns replay-derived reward to individual
 primitive tool actions rather than giving every turn the terminal result reward. No action-block

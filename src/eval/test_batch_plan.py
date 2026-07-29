@@ -21,15 +21,25 @@ sys.path.insert(0, str(ROOT / "src" / "sft"))
 from batch_plan_protocol import (  # noqa: E402
     BATCH_CARRIER_INLINE_THINK,
     BATCH_CARRIER_PROVIDER_NATIVE,
+    SIMPLE_SCALAR_CELL_PROTOCOL_VERSION,
+    SIMPLE_SEQUENTIAL_ACTION_BLOCK_PROTOCOL_VERSION,
     BatchPlanProtocolError,
     LocalReferenceError,
+    batch_plan_protocol_hash,
     build_batch_plan_messages,
     build_batch_plan_system_prompt,
+    build_sequential_messages,
+    lower_sequential_atomic_call,
     parse_batch_plan_assistant,
     parse_batch_plan_action,
+    prepare_simple_scalar_cell_arguments,
+    publicize_simple_scalar_error,
+    publicize_sequential_error,
     render_batch_plan_assistant,
     render_batch_observation,
+    render_sequential_observation,
     resolve_local_references,
+    validate_sequential_atomic_call,
 )
 from evaluate_batch_plan import (  # noqa: E402
     _execute_plan_action,
@@ -61,32 +71,229 @@ def terminal_action(
 
 class ActionBlockProtocolTests(unittest.TestCase):
     def test_prompt_declares_unified_harness_owned_blocks(self):
-        prompt = build_batch_plan_system_prompt(5)
-        self.assertIn("TOP-LEVEL ACTION CONTRACT", prompt)
-        self.assertIn("WORK ACTION", prompt)
-        self.assertIn("TERMINAL ACTION", prompt)
-        self.assertIn("must already be resident", prompt)
-        self.assertIn("calls contains 1 to 5", prompt)
-        self.assertIn("list order is both execution order and feedback order", prompt)
-        self.assertIn("performs no", prompt)
-        self.assertIn('"$id" is block-local', prompt)
-        self.assertIn("Forward and cross-block", prompt)
-        self.assertIn("one semantic action", prompt)
-        self.assertIn("never nested in action_block.calls", prompt)
+        prompt = build_batch_plan_system_prompt(8)
+        self.assertIn("TWO TOP-LEVEL ACTIONS", prompt)
+        self.assertIn("WORK — execute a short consecutive sequence", prompt)
+        self.assertIn("TERMINAL — cite an exact resident result", prompt)
+        self.assertIn("calls contains 1 to 8", prompt)
+        self.assertIn("short operation sequence, not a program", prompt)
+        self.assertIn("do not declare a DAG", prompt)
+        self.assertIn("next call is fully determined now", prompt)
+        self.assertIn("A one-call block is always valid", prompt)
+        self.assertIn('"$id" refers to an earlier call', prompt)
+        self.assertIn("References must point backward", prompt)
+        self.assertIn("one ordered results[] entry for every submitted call", prompt)
+        self.assertIn("complete output, exact error, or blocked cause", prompt)
+        self.assertIn("answer_from_context\n   is never inside calls", prompt)
         self.assertIn('{"evidence":{"table":"exact_result_handle"}', prompt)
-        self.assertIn("writes values or reshapes terminal evidence", prompt)
-        self.assertIn('"filter_001.column"', prompt)
-        self.assertIn('base_role "orders"', prompt)
-        self.assertIn("on is always a list of pair objects", prompt)
-        self.assertIn("merely inferable", prompt)
-        self.assertIn("reason cannot drop rows/columns", prompt)
+        self.assertIn("ONE BEST-PRACTICE EXAMPLE", prompt)
+        self.assertEqual(prompt.count("ONE BEST-PRACTICE EXAMPLE"), 1)
+        self.assertIn("join(left, right, left_on, right_on, how?)", prompt)
+        self.assertIn(
+            '"$earlier_id.exact_column" for an earlier one-row result',
+            prompt,
+        )
+        self.assertIn('"step_id.exact_column" for a resident one-row result', prompt)
+        self.assertIn('each operand is exactly {"value":literal}', prompt)
+        self.assertNotIn("Each operand is exactly value, value_ref", prompt)
+        self.assertIn('"tool":"join"', prompt)
+        self.assertIn("one-call inspect_column block", prompt)
         self.assertIn("native reasoning is not the visible response", prompt)
         self.assertIn("one complete JSON action object", prompt)
         self.assertIn("under 120 words", prompt)
         self.assertIn("reserve output budget", prompt)
+        self.assertLess(len(prompt), 7500)
         self.assertNotIn("<think>", prompt)
         self.assertNotIn("update_plan", prompt)
         self.assertNotIn("plan(ops)", prompt)
+        self.assertNotIn("join_tables", prompt)
+
+    def test_simple_join_validates_and_lowers_one_edge_without_guessing(self):
+        arguments = {
+            "left": "orders",
+            "right": "customers",
+            "left_on": "customer_id",
+            "right_on": "id",
+            "how": "left",
+        }
+        validate_sequential_atomic_call("join", arguments)
+        tool, lowered = lower_sequential_atomic_call("join", arguments)
+        self.assertEqual(tool, "join_tables")
+        self.assertEqual(lowered, {
+            "base": "orders",
+            "joins": [{
+                "table": "customers",
+                "on": [{
+                    "left": "orders.customer_id",
+                    "right": "id",
+                }],
+                "type": "left",
+            }],
+        })
+        self.assertEqual(
+            publicize_sequential_error(
+                "join_tables.joins[0].on[0].right must be a bare column"
+            ),
+            "join.right_on must be a bare column",
+        )
+        with self.assertRaisesRegex(Exception, "right_on must be a bare"):
+            validate_sequential_atomic_call("join", {
+                **arguments,
+                "right_on": "customers.id",
+            })
+        with self.assertRaisesRegex(Exception, "unless how=cross"):
+            validate_sequential_atomic_call("join", {
+                "left": "orders",
+                "right": "customers",
+            })
+
+    def test_v34_hash_and_context_use_only_public_join_vocabulary(self):
+        prompt = build_batch_plan_system_prompt(
+            8,
+            protocol_version=SIMPLE_SEQUENTIAL_ACTION_BLOCK_PROTOCOL_VERSION,
+        )
+        protocol_hash = batch_plan_protocol_hash(
+            prompt,
+            8,
+            protocol_version=SIMPLE_SEQUENTIAL_ACTION_BLOCK_PROTOCOL_VERSION,
+        )
+        self.assertEqual(len(protocol_hash), 16)
+        messages = build_sequential_messages(
+            system_prompt=prompt,
+            overview={"tables": ["orders", "customers"]},
+            question="question",
+            external_knowledge=None,
+            state={
+                "tables": {
+                    "join_001": {
+                        "derivation": {
+                            "schema": "relation-derivation-v1",
+                            "operator": "join_tables",
+                        }
+                    }
+                },
+                "values": {},
+            },
+            last_error=None,
+            legal_history=[],
+            history_turns=4,
+        )
+        rendered_state = messages[-1]["content"]
+        self.assertIn('"operator":"join"', rendered_state)
+        self.assertNotIn("join_tables", rendered_state)
+
+    def test_v35_scalar_cell_lowering_is_exact_and_non_guessing(self):
+        ctx = {
+            "history": {
+                "step_8": {
+                    "output": {
+                        "table": "project_008",
+                        "row_count": 1,
+                        "columns": ["START", "STOP"],
+                    }
+                },
+            }
+        }
+        resolutions: list[dict] = []
+        lowered = prepare_simple_scalar_cell_arguments(
+            "scalar_compute",
+            {
+                "operation": "date_diff_days",
+                "operands": ["$period.START", "step_8.STOP", {"value": 1}],
+                "result_name": "days",
+            },
+            bindings={
+                "period": {
+                    "status": "success",
+                    "step_id": "step_2",
+                    "row_count": 1,
+                    "columns": ["START", "STOP"],
+                }
+            },
+            declared_ids={"period", "duration"},
+            ctx=ctx,
+            resolutions=resolutions,
+        )
+        self.assertEqual(lowered["operands"], [
+            {"value_ref": "$period", "column": "START"},
+            {"value_ref": "step_8", "column": "STOP"},
+            {"value": 1},
+        ])
+        self.assertEqual(
+            [item["rule"] for item in resolutions],
+            ["same_block_one_cell", "resident_one_cell"],
+        )
+        with self.assertRaisesRegex(LocalReferenceError, "row_count=2"):
+            prepare_simple_scalar_cell_arguments(
+                "scalar_compute",
+                {"operation": "add", "operands": ["$many.START", {"value": 1}]},
+                bindings={
+                    "many": {
+                        "status": "success",
+                        "step_id": "step_3",
+                        "row_count": 2,
+                        "columns": ["START"],
+                    }
+                },
+                declared_ids={"many"},
+                ctx={"history": {}},
+            )
+        with self.assertRaisesRegex(LocalReferenceError, "available columns"):
+            prepare_simple_scalar_cell_arguments(
+                "scalar_compute",
+                {"operation": "add", "operands": ["$period.start", {"value": 1}]},
+                bindings={
+                    "period": {
+                        "status": "success",
+                        "step_id": "step_2",
+                        "row_count": 1,
+                        "columns": ["START"],
+                    }
+                },
+                declared_ids={"period"},
+                ctx={"history": {}},
+            )
+        with self.assertRaisesRegex(LocalReferenceError, "is forward"):
+            prepare_simple_scalar_cell_arguments(
+                "scalar_compute",
+                {"operation": "add", "operands": ["$later.START", {"value": 1}]},
+                bindings={},
+                declared_ids={"later"},
+                ctx={"history": {}},
+            )
+        self.assertNotIn(
+            "value_ref",
+            publicize_simple_scalar_error(
+                "value_ref must cite a scalar-producing step"
+            ),
+        )
+
+    def test_active_sequential_block_accepts_eight_calls(self):
+        calls = [
+            {
+                "id": f"schema_{index}",
+                "tool": "describe_table",
+                "arguments": {"tables": ["items"]},
+            }
+            for index in range(8)
+        ]
+        tool, arguments = parse_batch_plan_action(json.dumps({
+            "tool": "action_block",
+            "arguments": {"calls": calls},
+        }))
+        self.assertEqual(tool, "action_block")
+        self.assertEqual(len(arguments["calls"]), 8)
+
+        calls.append({
+            "id": "schema_8",
+            "tool": "describe_table",
+            "arguments": {"tables": ["items"]},
+        })
+        with self.assertRaisesRegex(BatchPlanProtocolError, "1 to 8"):
+            parse_batch_plan_action(json.dumps({
+                "tool": "action_block",
+                "arguments": {"calls": calls},
+            }))
 
     def test_action_block_requires_nonempty_calls_and_no_plan_ops(self):
         valid = json.dumps({
@@ -409,8 +616,12 @@ class ActionBlockExecutionTests(unittest.TestCase):
         low_friction_interface=False,
         safe_low_friction_interface=False,
         interface_resolution_events=None,
+        validate_call=None,
+        prepare_call_arguments=None,
+        lower_call=None,
+        publicize_error=None,
     ):
-        return _execute_plan_action(
+        kwargs = dict(
             h=self.harness,
             ctx=self.ctx,
             arguments=arguments,
@@ -427,6 +638,161 @@ class ActionBlockExecutionTests(unittest.TestCase):
             safe_low_friction_interface=safe_low_friction_interface,
             interface_resolution_events=interface_resolution_events,
         )
+        if validate_call is not None:
+            kwargs["validate_call"] = validate_call
+        if prepare_call_arguments is not None:
+            kwargs["prepare_call_arguments"] = prepare_call_arguments
+        if lower_call is not None:
+            kwargs["lower_call"] = lower_call
+        if publicize_error is not None:
+            kwargs["publicize_error"] = publicize_error
+        return _execute_plan_action(**kwargs)
+
+    def test_v34_simple_join_executes_and_feedback_hides_private_executor(self):
+        _, results, _, nonrecoverable = self.execute(
+            block([{
+                "id": "linked",
+                "tool": "join",
+                "arguments": {
+                    "left": "items",
+                    "right": "categories",
+                    "left_on": "category",
+                    "right_on": "category",
+                },
+            }]),
+            structured_error_feedback=False,
+            validate_call=validate_sequential_atomic_call,
+            lower_call=lower_sequential_atomic_call,
+            publicize_error=publicize_sequential_error,
+        )
+        self.assertFalse(nonrecoverable)
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(results[0]["tool"], "join")
+        self.assertEqual(results[0]["execution_tool"], "join_tables")
+        visible = render_sequential_observation(1, results)
+        self.assertIn('"tool":"join"', visible)
+        self.assertNotIn("join_tables", visible)
+
+    def test_v35_same_block_scalar_cell_executes_and_keeps_public_observation(self):
+        resolutions: list[dict] = []
+        _, results, _, nonrecoverable = self.execute(
+            block([
+                {
+                    "id": "period",
+                    "tool": "project",
+                    "arguments": {
+                        "table": "periods",
+                        "expressions": ["start_date", "stop_date"],
+                    },
+                },
+                {
+                    "id": "duration",
+                    "tool": "scalar_compute",
+                    "arguments": {
+                        "operation": "date_diff_days",
+                        "operands": [
+                            "$period.start_date",
+                            "$period.stop_date",
+                        ],
+                        "result_name": "days",
+                    },
+                },
+            ]),
+            structured_error_feedback=False,
+            interface_resolution_events=resolutions,
+            validate_call=validate_sequential_atomic_call,
+            prepare_call_arguments=prepare_simple_scalar_cell_arguments,
+            lower_call=lower_sequential_atomic_call,
+            publicize_error=publicize_simple_scalar_error,
+        )
+        self.assertFalse(nonrecoverable)
+        self.assertEqual([item["status"] for item in results], ["success", "success"])
+        self.assertEqual(results[0]["output"]["row_count"], 1)
+        self.assertEqual(
+            results[1]["resolved_arguments"]["operands"],
+            [
+                {"value_ref": "step_1", "column": "start_date"},
+                {"value_ref": "step_1", "column": "stop_date"},
+            ],
+        )
+        self.assertEqual(
+            [list(row) for row in self.harness.rows(results[1]["table"])],
+            [[11]],
+        )
+        visible = render_sequential_observation(1, results)
+        self.assertNotIn("value_ref", visible)
+        self.assertEqual(
+            [item["provided"] for item in resolutions],
+            ["$period.start_date", "$period.stop_date"],
+        )
+
+    def test_v35_resident_scalar_cell_executes_and_multirow_is_rejected(self):
+        _, first_results, _, _ = self.execute(
+            block([{
+                "id": "period",
+                "tool": "project",
+                "arguments": {
+                    "table": "periods",
+                    "expressions": ["start_date", "stop_date"],
+                },
+            }]),
+        )
+        self.assertEqual(first_results[0]["step_id"], "step_1")
+        _, results, _, _ = self.execute(
+            block([{
+                "id": "duration",
+                "tool": "scalar_compute",
+                "arguments": {
+                    "operation": "date_diff_days",
+                    "operands": ["step_1.start_date", "step_1.stop_date"],
+                    "result_name": "days",
+                },
+            }]),
+            atomic_count=1,
+            batch_index=2,
+            structured_error_feedback=False,
+            validate_call=validate_sequential_atomic_call,
+            prepare_call_arguments=prepare_simple_scalar_cell_arguments,
+            lower_call=lower_sequential_atomic_call,
+            publicize_error=publicize_simple_scalar_error,
+        )
+        self.assertEqual(results[0]["status"], "success")
+        self.assertEqual(
+            [list(row) for row in self.harness.rows(results[0]["table"])],
+            [[11]],
+        )
+
+        _, bad_results, _, _ = self.execute(
+            block([
+                {
+                    "id": "many",
+                    "tool": "project",
+                    "arguments": {
+                        "table": "items",
+                        "expressions": ["price"],
+                    },
+                },
+                {
+                    "id": "bad",
+                    "tool": "scalar_compute",
+                    "arguments": {
+                        "operation": "add",
+                        "operands": ["$many.price", {"value": 1}],
+                        "result_name": "bad",
+                    },
+                },
+            ]),
+            atomic_count=2,
+            batch_index=3,
+            structured_error_feedback=False,
+            validate_call=validate_sequential_atomic_call,
+            prepare_call_arguments=prepare_simple_scalar_cell_arguments,
+            lower_call=lower_sequential_atomic_call,
+            publicize_error=publicize_simple_scalar_error,
+        )
+        self.assertEqual(bad_results[1]["status"], "error")
+        self.assertIn("requires exactly one source row", bad_results[1]["error"]["message"])
+        self.assertIn("row_count=3", bad_results[1]["error"]["message"])
 
     def test_successful_chain_uses_only_primitive_step_ids(self):
         arguments = block([

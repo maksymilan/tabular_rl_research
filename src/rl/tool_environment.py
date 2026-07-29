@@ -45,13 +45,18 @@ from rollout import (  # noqa: E402
     state_digest,
     task_db_path,
     task_gold_sql,
+    validate_tool_arguments_against_state,
 )
 from batch_plan_protocol import (  # noqa: E402
     BATCH_PLAN_TOOL,
     TERMINAL_TOOL,
-    build_batch_plan_messages,
+    build_sequential_messages,
+    lower_sequential_atomic_call,
     parse_batch_plan_assistant,
-    render_batch_observation,
+    prepare_simple_scalar_cell_arguments,
+    publicize_simple_scalar_error,
+    render_sequential_observation,
+    validate_sequential_atomic_call,
 )
 from evaluate_batch_plan import (  # noqa: E402
     _error_event as batch_error_event,
@@ -231,6 +236,7 @@ class ToolUseEnv:
             )
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
             if tool == "answer_from_context":
+                validate_tool_arguments_against_state(self.harness, tool, args)
                 self.correct, turn["pred_sample"], turn["gold_sample"] = score(
                     self.harness,
                     task_gold_sql(self.example),
@@ -426,7 +432,7 @@ class ActionBlockToolUseEnv:
         return deepcopy(self.initial_messages)
 
     def model_messages(self) -> list[dict]:
-        return build_batch_plan_messages(
+        return build_sequential_messages(
             system_prompt=self.system_prompt,
             overview=self.overview,
             question=self.example["question"],
@@ -587,6 +593,10 @@ class ActionBlockToolUseEnv:
                 low_friction_interface=False,
                 safe_low_friction_interface=False,
                 interface_resolution_events=self.interface_resolution_events,
+                validate_call=validate_sequential_atomic_call,
+                prepare_call_arguments=prepare_simple_scalar_cell_arguments,
+                lower_call=lower_sequential_atomic_call,
+                publicize_error=publicize_simple_scalar_error,
             )
             terminal_result = next(
                 (
@@ -643,7 +653,10 @@ class ActionBlockToolUseEnv:
                 result.get("status") == "error" for result in results
             )
             self.blocked_nodes += blocked
-            observation = render_batch_observation(self.action_blocks, results)
+            observation = render_sequential_observation(
+                self.action_blocks,
+                results,
+            )
             turn["batch_index"] = self.action_blocks
             turn["batch_results"] = deepcopy(results)
             turn["root_error_count"] = root_errors

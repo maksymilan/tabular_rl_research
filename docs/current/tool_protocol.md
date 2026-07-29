@@ -1,4 +1,4 @@
-# Atomic Tool-Scheme Trajectory Protocol (version28 diagnostic)
+# Atomic Tool-Scheme Trajectory Protocol (version38 diagnostic)
 
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
@@ -36,8 +36,8 @@ anything under `docs/archive/`.
 Use `execution_contract.md` for the single current/new-episode contract. This file is the
 protocol index; historical v2h and older documents are replay references only.
 
-Before every assistant turn, the active SFT/evaluation/RL contract is rendered by
-`src/sft/protocol.py::rolling_legal_history_messages` with `history_turns=4`:
+Before every assistant turn, the promoted/default SFT/evaluation/RL contract is rendered by
+`src/sft/protocol.py::rolling_legal_history_messages` with recent `history_turns=4`:
 
 ```text
 system: protocol/system prompt
@@ -54,6 +54,12 @@ source of factual provenance; harness state and references remain authoritative.
 assistant text is never appended, and its structured error appears only in the current user
 message. A rolling SFT record masks prior assistant turns and applies loss only to the final
 supervised assistant action; the final input never includes that action's output.
+
+The completed version37 diagnostic also tested `history_policy=head-tail`,
+`history_head_turns=5`, and `history_turns=10`. It retained the first five and latest five legal
+pairs with overlap removed. Resident state and rejected-action handling were unchanged; only legal
+transcript selection differed. It scored 4/7 versus recent-4's 5/7 while using more actions,
+errors, and tokens, so recent-4 remains the active policy.
 
 Every new model turn is generated causally inside a real model↔harness episode. The model sees only
 the legal prefix represented by current resident state and the latest environment feedback; it
@@ -176,9 +182,52 @@ Public version mapping:
   an identical call reads the same prefix. Its frozen 48-task checkpoint-560 diagnostic improved
   legal termination and mean steps but scored 12/48 versus fresh version26 at 13/48, so it is not
   accuracy-promoted and must not be expanded to full greedy or used for SFT;
-- future changes increment only the integer (`version29`, `version30`, ...).
+- `version29`: adds typed row expressions to `project`, a non-negative `read_subtable.offset`, and
+  explicit rank offset/partition arguments to `extreme_value_select`. It remains a local
+  diagnostic and has no accuracy or SFT promotion;
+- `version30`: restores the version28 public action surface and adds teacher-only causal evidence
+  discipline before semantic commitments and termination. The student tool schema is unchanged;
+  it remains diagnostic-only;
+- `version31`: keeps version30's public tools and valid-call semantics, but validates current table
+  handles, table/column ownership, predicate operands, join-edge columns, and terminal evidence
+  handles before executing model-authored SQL. Failures are structured
+  `argument_validation_error` events with exact argument paths and available columns;
+- `version32`: keeps version31 validation and all valid-call semantics unchanged. An
+  `unknown_column` message now adds one concise instruction to choose the correct table or column from
+  already observed schemas; it does not add global-absence wording or reveal unseen schema;
+- `version33`: keeps version32 feedback and valid-call semantics unchanged, but prepares
+  model-authored `project` expressions against the current relation without registering a derived
+  handle. Missing columns and malformed expressions now become structured, state-preserving
+  validation errors instead of raw SQLite failures;
+- `version34`: keeps version33's public calls, feedback, and relational semantics unchanged. The
+  executor lazily materializes only small derived relations when they are reused as join inputs,
+  preventing nested composed SQL from being recomputed inside a later join. The cache is
+  connection-local, bounded to 50,000 rows, and does not change model-visible handles or values;
+- `version35`: keeps version34's public calls, feedback, validation, and execution semantics.
+  Exactly repeated adjacent calls are still rejected and charged to the shared action budget, but
+  `no_progress_error` no longer triggers the generic three-errors-per-type early abort. The model
+  can recover until `max_steps`; other recoverable error limits are unchanged. Its first full
+  launch revealed that the pass@k runner had retained the old generic limit, so that partial
+  artifact is frozen rather than mixed with corrected output;
+- `version36`: applies version35's no-progress action-budget policy through one shared helper in
+  both atomic runners (`rollout.py` and `rollout_passk.py`). Public tools, feedback, validation,
+  and valid-call execution remain unchanged;
+- `version37`: retains version36's error policy. `read_subtable` remains observation-only but adds
+  typed `conditions`, exact-column `order_by`, and a non-negative `offset` that requires ordering.
+  `project` adds only typed per-row `date_diff_days(start,end)` and `extract_year(date)`
+  expressions. No other arithmetic/ranking extension from the rejected version29 experiment is
+  restored. A frozen seven-task recovery diagnostic scored 5/7 with recent-4 versus 4/7 with
+  first-5 plus recent-5, so the larger history renderer is not promoted;
+- `version38`: keeps version37's student runtime prompt, public tools, argument schemas, execution,
+  state, feedback, carrier, and recent-4 history policy unchanged. It adds only external-teacher
+  semantic decision discipline: explicit question/external-knowledge mappings are binding;
+  answer population, row grain, aggregation unit, and output slots are fixed before semantic
+  commitments; unsupported singleton/time/mean/current restrictions are forbidden; anomalous
+  observations trigger grounded inspection; and the cited terminal table is checked slot by slot.
+  It is diagnostic-only pending a paired target/control prompt gate;
+- future changes increment only the integer (`version39`, `version40`, ...).
 
-The current version28 diagnostic tool set is unchanged and remains the one in
+The current version38 diagnostic tool set remains the one in
 `src/sft/protocol.py::TOOL_SPECS`:
 
 - `condition_filter`
@@ -202,17 +251,25 @@ The student runtime prompt gives required/optional argument signatures and atomi
 those worked cases.
 
 For every terminal answer, the cited evidence table is scored as the answer. Its rows, columns, and
-column order must match the requested output exactly. `read_subtable(columns=...)` only limits
-observation and does not change table shape. If helper columns remain, the model must call `project`
+column order must match the requested output exactly. `read_subtable(columns=..., conditions=...)`
+only limits observation and does not change table shape or create a new handle. If helper columns
+remain, the model must call `project`
 before `answer_from_context(evidence={"table": ...})`. Scalar aggregates and `scalar_compute`
 produce 1x1 evidence tables and use the same terminal shape. The terminal call contains no
 model-authored answer data; think/reason text cannot repair answer data.
 
-`read_subtable.limit` is an integer in `1..20`. An out-of-range value is an explicit
-`argument_validation_error`; the harness never clamps it. The tool has no offset/cursor and does
-not paginate, so an identical call reads the same row prefix. In bounded rolling mode, prior
-successful actions retain compact result summaries while full factual payloads remain in resident
-state.
+`read_subtable.limit` is an integer in `1..20`. An invalid value is an explicit
+`argument_validation_error`; the harness never clamps it. `conditions` uses the same typed
+predicate tree as `condition_filter`, including `on_date` to match the calendar date of a stored
+date/timestamp. `order_by` names exact visible columns and may append `ASC`/`DESC`; a positive
+`offset` is accepted only with `order_by`. Repeating the exact same arguments still requests the
+same rows and is rejected only when immediately adjacent. In bounded rolling mode, prior successful
+actions retain compact result summaries while full factual payloads remain in resident state.
+
+`project` typed date expressions have exactly `{op, operands, as}`. `date_diff_days` has two
+ordered operands (start, end); `extract_year` has one. Each operand is exactly `{column}` or
+`{value}`. The harness validates referenced columns before SQLite, deterministically lowers the
+operation, and records exact input-column lineage on the derived table.
 
 Each `group_aggregate.aggregations[]` item has `op`, `column`, and `as`, plus an optional `where`
 using the same predicate tree as `condition_filter`. A call may therefore produce a one-row,
@@ -337,13 +394,15 @@ state, spends one action from the shared `max_steps` budget, and supplies the ne
 bounded rolling renderer plus structured `LAST TOOL ERROR` in the current user message:
 
 ```json
-{"step_id":"step_4","status":"error","error":{"type":"argument_validation_error","code":"argument_validation_error","message":"...","details":{"expected_arguments":{"required":["table"],"optional":["columns","limit"]}}},"attempted_action":{"tool":"read_subtable","arguments":{"table":"T","limit":21}}}
+{"step_id":"step_4","status":"error","error":{"type":"argument_validation_error","code":"argument_validation_error","message":"...","details":{"expected_arguments":{"required":["table"],"optional":["columns","conditions","limit","offset","order_by"]}}},"attempted_action":{"tool":"read_subtable","arguments":{"table":"T","limit":21}}}
 ```
 
 The bounded recoverable classes are `protocol_error`, `argument_validation_error`, and an
 `execution_error` whose environment-state snapshot is unchanged. `no_progress_error` is the
-recoverable rejection for one exactly repeated adjacent structured call. Each class has its own
-error limit; a mutated-state execution failure is terminal as `nonrecoverable_execution_error`.
+recoverable rejection for one exactly repeated adjacent structured call. It is recorded and spends
+one shared action, but does not trigger an early per-type abort; recovery remains possible until
+`max_steps`. The other recoverable classes retain their per-type error limits. A mutated-state
+execution failure is terminal as `nonrecoverable_execution_error`.
 API transport retries are client-side requests, not semantic actions or recovery events.
 
 Every rejected model action is retained in the full audit record as an `error_event`, with action

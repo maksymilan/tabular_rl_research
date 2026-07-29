@@ -13,6 +13,7 @@ from generate_teacher_rollouts import (  # noqa: E402
     PLAN_POLICY_OPTIONAL,
     PLAN_POLICY_REQUIRED_RESIDENT,
     ResidentPlanPolicyTracker,
+    error_limit_reached,
     retain_in_rolling_history,
     sft_export_eligible,
 )
@@ -36,6 +37,7 @@ class RequiredResidentPlanTest(unittest.TestCase):
             "denotation_comparison": "bird-set",
         }
         self.assertTrue(sft_export_eligible(**current))
+        self.assertFalse(sft_export_eligible(**current, diagnostic_only=True))
         for key, value in (
             ("context_mode", "state-only"),
             ("history_turns", 3),
@@ -45,6 +47,11 @@ class RequiredResidentPlanTest(unittest.TestCase):
             candidate = dict(current)
             candidate[key] = value
             self.assertFalse(sft_export_eligible(**candidate))
+
+    def test_teacher_runner_uses_shared_duplicate_error_limit_policy(self):
+        self.assertFalse(error_limit_reached("no_progress_error", 3, 3))
+        self.assertFalse(error_limit_reached("no_progress_error", 30, 3))
+        self.assertTrue(error_limit_reached("protocol_error", 3, 3))
 
     def test_optional_policy_does_not_restrict_actions(self):
         tracker = ResidentPlanPolicyTracker(PLAN_POLICY_OPTIONAL)

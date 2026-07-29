@@ -18,6 +18,12 @@ import torch.nn.functional as F
 TurnTokens = tuple[list[int], list[int]]
 
 
+def turn_padding_key(turn: TurnTokens) -> tuple[int, int]:
+    """Order turns by the two dimensions that drive padding in ``build_turn_batch``."""
+    prompt_ids, response_ids = turn
+    return len(prompt_ids) + max(0, len(response_ids) - 1), len(response_ids)
+
+
 def build_turn_batch(
     tokenizer: Any,
     turns: Sequence[TurnTokens],

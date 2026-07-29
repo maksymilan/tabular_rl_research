@@ -61,11 +61,17 @@ def _project(
     authored_expressions = expressions or ["*"]
     for expression in authored_expressions:
         if isinstance(expression, dict):
-            sources = [
-                operand["column"]
-                for operand in expression.get("operands") or []
-                if isinstance(operand, dict) and isinstance(operand.get("column"), str)
-            ]
+            sources = []
+            for operand in expression.get("operands") or []:
+                if not isinstance(operand, dict) or not isinstance(
+                    operand.get("column"), str
+                ):
+                    continue
+                for source in expression_source_columns(
+                    operand["column"], input_columns
+                ):
+                    if source not in sources:
+                        sources.append(source)
             lineage.append({
                 "output": (
                     output_columns[output_index]
@@ -73,7 +79,7 @@ def _project(
                     else f"column_{output_index + 1}"
                 ),
                 "sources": sources,
-                "kind": "computed",
+                "kind": "expression",
                 "expression": deepcopy(expression),
             })
             output_index += 1
@@ -331,20 +337,15 @@ def _extreme_value_select(
     _output_table: str,
 ) -> dict:
     return_columns = list(args.get("return_columns") or [])
-    semantics = {
-        "row_operation": "ordered_prefix" if args.get("top_k") is not None else "order",
-        "order_by": list(args.get("order_by") or []),
-        "top_k": args.get("top_k"),
-        "column_operation": "project" if return_columns else "preserve",
-        "projected_columns": return_columns or list(_columns),
-    }
-    if args.get("offset"):
-        semantics["offset"] = args["offset"]
-    if args.get("partition_by"):
-        semantics["partition_by"] = list(args["partition_by"])
     return {
         "inputs": [_table_input("input", args.get("table"))],
-        "semantics": semantics,
+        "semantics": {
+            "row_operation": "ordered_prefix" if args.get("top_k") is not None else "order",
+            "order_by": list(args.get("order_by") or []),
+            "top_k": args.get("top_k"),
+            "column_operation": "project" if return_columns else "preserve",
+            "projected_columns": return_columns or list(_columns),
+        },
     }
 
 

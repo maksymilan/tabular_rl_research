@@ -35,18 +35,22 @@ from rollout import (  # noqa: E402
     _normalize_table_refs,
     answer_row_candidates,
     chat,
+    error_limit_reached,
     execute_tool,
     fewshot_text,
     new_ctx,
     projected_row_candidates,
     protocol_failure_type,
     score,
+    validate_tool_arguments_against_state,
 )
 from executor import Harness  # noqa: E402
 from relation_derivation import SUPPORTED_TABLE_OPERATORS  # noqa: E402
 from rollout_passk import (  # noqa: E402
     ToolExecutionTimeoutError,
+    append_runner_error,
     bounded_harness_execution,
+    error_limit_reached as passk_error_limit_reached,
 )
 from text2sql import extract_sql  # noqa: E402
 from text2sql_passk import chat_n, run_one as run_direct_sql_passk, score_sample  # noqa: E402
@@ -66,6 +70,258 @@ class FakeHarness:
 
 
 class EvalTests(unittest.TestCase):
+    def test_no_progress_error_uses_action_budget_instead_of_per_type_abort(self):
+        self.assertIs(passk_error_limit_reached, error_limit_reached)
+        self.assertFalse(error_limit_reached("no_progress_error", 3, 3))
+        self.assertFalse(error_limit_reached("no_progress_error", 30, 3))
+        self.assertFalse(error_limit_reached("argument_validation_error", 2, 3))
+        self.assertTrue(error_limit_reached("argument_validation_error", 3, 3))
+        self.assertTrue(error_limit_reached("protocol_error", 4, 3))
+
+    def test_preexecution_validation_reports_column_on_the_wrong_table(self):
+        harness = Harness(":memory:")
+        self.addCleanup(harness.conn.close)
+        harness.conn.executescript(
+            'CREATE TABLE schools("School Code" TEXT, "District" TEXT);'
+            'CREATE TABLE frpm("School Code" TEXT, "School Type" TEXT);'
+            'INSERT INTO schools VALUES ("1", "North");'
+            'INSERT INTO frpm VALUES ("1", "Public");'
+        )
+        harness.register_sources()
+        ctx = new_ctx({"tables": [], "relations": []})
+
+        valid, created = execute_tool(
+            harness,
+            "inspect_column",
+            {"table": "frpm", "column": "School Type"},
+            ctx,
+            "step_1",
+        )
+        self.assertIsNone(created)
+        self.assertEqual(valid["column"], "School Type")
+
+        sequence_before = harness._n
+        with self.assertRaises(ProtocolError) as raised:
+            execute_tool(
+                harness,
+                "inspect_column",
+                {"table": "schools", "column": "School Type"},
+                ctx,
+                "step_2",
+            )
+        error = raised.exception
+        self.assertEqual(error.code, "unknown_column")
+        self.assertEqual(error.failure_type, "argument_validation_error")
+        self.assertEqual(error.attempted_tool, "inspect_column")
+        self.assertEqual(error.details["requested_table"], "schools")
+        self.assertEqual(error.details["requested_column"], "School Type")
+        self.assertEqual(error.details["available_columns"], ["School Code", "District"])
+        self.assertIn("is not a column of 'schools'", str(error))
+        self.assertIn("Choose the correct table or column from the observed schemas", str(error))
+        self.assertEqual(harness._n, sequence_before)
+        self.assertNotIn("step_2", ctx["history"])
+
+    def test_preexecution_validation_checks_predicate_shape_and_columns(self):
+        harness = Harness(":memory:")
+        self.addCleanup(harness.conn.close)
+        harness.conn.executescript(
+            "CREATE TABLE people(id INTEGER, team TEXT);"
+            "INSERT INTO people VALUES (1, 'math');"
+        )
+        harness.register_sources()
+        ctx = new_ctx({"tables": [], "relations": []})
+
+        with self.assertRaises(ProtocolError) as missing_value:
+            execute_tool(
+                harness,
+                "condition_filter",
+                {
+                    "table": "people",
+                    "conditions": {"column": "team", "op": "="},
+                },
+                ctx,
+                "step_1",
+            )
+        self.assertEqual(missing_value.exception.code, "invalid_condition")
+        self.assertIn("value, column_value, or value_ref", str(missing_value.exception))
+
+        with self.assertRaises(ProtocolError) as wrong_column:
+            execute_tool(
+                harness,
+                "condition_filter",
+                {
+                    "table": "people",
+                    "conditions": {"column": "department", "op": "=", "value": "math"},
+                },
+                ctx,
+                "step_2",
+            )
+        self.assertEqual(wrong_column.exception.code, "unknown_column")
+        self.assertEqual(
+            wrong_column.exception.details["available_columns"],
+            ["id", "team"],
+        )
+        self.assertEqual(harness._n, 0)
+
+        with self.assertRaises(ProtocolError) as bad_project:
+            execute_tool(
+                harness,
+                "project",
+                {
+                    "table": "people",
+                    "expressions": ["id", "missing_score + 1 AS adjusted_score"],
+                },
+                ctx,
+                "step_3",
+            )
+        self.assertEqual(bad_project.exception.code, "unknown_column")
+        self.assertEqual(
+            bad_project.exception.details["argument_path"],
+            "project.expressions",
+        )
+        self.assertEqual(
+            bad_project.exception.details["requested_column"],
+            "missing_score",
+        )
+        self.assertIn(
+            "Choose the correct table or column from the observed schemas",
+            str(bad_project.exception),
+        )
+        self.assertEqual(harness._n, 0)
+
+        valid_project, created = execute_tool(
+            harness,
+            "project",
+            {"table": "people", "expressions": ["id + 1 AS next_id", "team"]},
+            ctx,
+            "step_4",
+        )
+        self.assertEqual(created, valid_project["table"])
+        self.assertEqual(valid_project["columns"], ["next_id", "team"])
+
+        with self.assertRaises(ProtocolError) as no_op_aggregate:
+            execute_tool(
+                harness,
+                "group_aggregate",
+                {"table": "people", "group_by": [], "aggregations": []},
+                ctx,
+                "step_5",
+            )
+        self.assertEqual(no_op_aggregate.exception.code, "no_op_aggregation")
+        self.assertIn("no-op", str(no_op_aggregate.exception))
+        self.assertEqual(harness._n, 1)
+
+    def test_preexecution_validation_checks_terminal_evidence_handle(self):
+        harness = Harness(":memory:")
+        self.addCleanup(harness.conn.close)
+        harness.conn.execute("CREATE TABLE people(id INTEGER)")
+        harness.register_sources()
+
+        validate_tool_arguments_against_state(
+            harness,
+            "answer_from_context",
+            {"evidence": {"table": "people"}},
+        )
+        with self.assertRaises(ProtocolError) as raised:
+            validate_tool_arguments_against_state(
+                harness,
+                "answer_from_context",
+                {"evidence": {"table": "missing_result"}},
+            )
+        self.assertEqual(raised.exception.code, "unknown_table")
+        self.assertEqual(raised.exception.failure_type, "argument_validation_error")
+
+    def test_row_addressed_read_and_typed_date_project_use_shared_live_path(self):
+        harness = Harness(":memory:")
+        self.addCleanup(harness.conn.close)
+        harness.conn.executescript(
+            """
+            CREATE TABLE events(id INTEGER, started_at TEXT, ended_at TEXT);
+            INSERT INTO events VALUES
+              (1, '2024-01-31 09:00:00', '2024-02-02 09:00:00'),
+              (2, '2024-01-31 18:00:00', '2024-02-01 06:00:00'),
+              (3, '2024-02-01', '2024-02-04');
+            """
+        )
+        harness.register_sources()
+        ctx = new_ctx({"tables": [], "relations": []})
+
+        read, created = execute_tool(
+            harness,
+            "read_subtable",
+            {
+                "table": "events",
+                "columns": ["id", "started_at"],
+                "conditions": {
+                    "column": "started_at",
+                    "op": "on_date",
+                    "value": "2024-01-31",
+                },
+                "order_by": ["id DESC"],
+                "offset": 1,
+                "limit": 1,
+            },
+            ctx,
+            "step_1",
+        )
+        self.assertIsNone(created)
+        self.assertEqual(read["rows"], [[1, "2024-01-31 09:00:00"]])
+        resident_read = ctx["environment"].snapshot()["tables"]["events"]["reads"][0]
+        self.assertEqual(resident_read["offset"], 1)
+        self.assertEqual(resident_read["order_by"], ["id DESC"])
+        self.assertEqual(resident_read["conditions"]["op"], "on_date")
+
+        projected, created = execute_tool(
+            harness,
+            "project",
+            {
+                "table": "events",
+                "expressions": [
+                    "id",
+                    {
+                        "op": "date_diff_days",
+                        "operands": [
+                            {"column": "started_at"},
+                            {"column": "ended_at"},
+                        ],
+                        "as": "duration_days",
+                    },
+                ],
+            },
+            ctx,
+            "step_2",
+        )
+        self.assertEqual(created, projected["table"])
+        self.assertEqual(
+            harness.rows(created),
+            [(1, 2.0), (2, 0.5), (3, 3.0)],
+        )
+        self.assertEqual(
+            projected["derivation"]["semantics"]["column_lineage"][1]["sources"],
+            ["started_at", "ended_at"],
+        )
+
+        with self.assertRaises(ProtocolError) as wrong_date_column:
+            execute_tool(
+                harness,
+                "project",
+                {
+                    "table": "events",
+                    "expressions": [{
+                        "op": "extract_year",
+                        "operands": [{"column": "missing_date"}],
+                        "as": "year",
+                    }],
+                },
+                ctx,
+                "step_3",
+            )
+        self.assertEqual(wrong_date_column.exception.code, "unknown_column")
+        self.assertEqual(
+            wrong_date_column.exception.details["argument_path"],
+            "project.expressions[0].operands[0].column",
+        )
+
     def test_bounded_harness_execution_interrupts_and_restores_handles(self):
         harness = Harness()
         harness.views["infinite"] = (
@@ -296,6 +552,36 @@ class EvalTests(unittest.TestCase):
 
             resumed = ArtifactWriter(tmp, manifest, resume=True)
             self.assertEqual(resumed.completed, {0, 1})
+
+    def test_passk_runner_error_is_audited_without_becoming_completed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            writer = ArtifactWriter(tmp, {"runner": "test"}, resume=False)
+            try:
+                raise RuntimeError("synthetic runner failure")
+            except RuntimeError as exc:
+                record = append_runner_error(
+                    writer,
+                    17,
+                    {
+                        "db_id": "db",
+                        "question": "question",
+                        "gold_sql": "must not be copied",
+                    },
+                    exc,
+                )
+
+            self.assertFalse(record["semantic_failure"])
+            self.assertTrue(record["retry_required"])
+            self.assertEqual(writer.completed, set())
+            self.assertFalse(Path(tmp, "all.jsonl").exists())
+            audited = json.loads(
+                Path(tmp, "runner_errors.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()[0]
+            )
+            self.assertEqual(audited["example_index"], 17)
+            self.assertNotIn("gold_sql", audited)
+            self.assertIn("synthetic runner failure", audited["traceback"])
 
     def test_artifact_manifest_mismatch_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
