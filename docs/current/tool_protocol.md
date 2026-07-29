@@ -241,11 +241,11 @@ Public version mapping:
   `--atomic-protocol-version version40 --diagnostic-only`. It keeps version39 relational
   execution and the exact `join_tables(base, joins[], base_role?)` contract, removes `plan` from
   the public surface, and renames the read-only row observer to `inspect_rows`. Its single layered
-  prompt states each policy once and has no appended teacher-policy duplicate. All successful
-  prior reasoning is retained as non-factual continuity context, while exact actions and
-  unabridged tool results are fixed to the four most recent successful pairs. Rejected assistant
-  text remains excluded and only its structured error is resident. Version40 currently supports
-  only the lazy catalog
+  prompt states each policy once and has no appended teacher-policy duplicate. All successful and
+  rejected reasoning is retained as explicitly labeled, non-factual continuity context. The
+  latest rejected attempted action and complete error remain in `LAST TOOL ERROR`; exact
+  successful actions and unabridged results are fixed to the four most recent pairs. Version40
+  currently supports only the lazy catalog
   profile and is ineligible for SFT/RL pending a paired gate;
 - future changes increment only the integer (`version41`, `version42`, ...).
 

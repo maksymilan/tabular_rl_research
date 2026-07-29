@@ -189,10 +189,11 @@ Start at `docs/current/README.md`.
   `--atomic-protocol-version version40 --diagnostic-only`. It keeps version39 execution, state,
   grounding, feedback, carrier, and the exact multi-edge `join_tables` rule. It removes `plan`
   from its public surface, renames the read-only row observer to `inspect_rows`, and replaces the
-  appended teacher/runtime prompt stack with one 7.45k-character layered prompt. All successful
-  prior reasoning is retained as non-factual continuity context; exact calls and unabridged tool
-  results use a recent-4 window. Rejected text is still excluded. It is catalog-only, has no
-  accuracy promotion, and is ineligible for SFT/RL pending a paired gate.
+  appended teacher/runtime prompt stack with one concise layered prompt. All successful and
+  rejected reasoning is retained as explicitly labeled, non-factual continuity context; the latest
+  rejected call and complete error remain in `LAST TOOL ERROR`. Exact successful calls and
+  unabridged tool results use a recent-4 window. It is catalog-only, has no accuracy promotion, and
+  is ineligible for SFT/RL pending a paired gate.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may
@@ -202,9 +203,11 @@ Start at `docs/current/README.md`.
   `history_turns=4`: catalog,
   question, and optional external knowledge are followed by at most four successful
   assistant/observation pairs, and the latest observation carries rebuilt resident state plus
-  optional `LAST TOOL ERROR`. Rejected assistant text is never added to history. Version37 may
-  render first-5 plus recent-5 for a paired diagnostic, but that policy is not promoted unless it
-  beats recent-4 on the same frozen tasks.
+  optional `LAST TOOL ERROR`. Rejected assistant text is never added to the promoted/default
+  history. Version40 is an explicit diagnostic exception for reasoning only: rejected reasons are
+  retained with `status=rejected`, while the authored failed call is represented by the
+  harness-owned attempted action/error. Version37 may render first-5 plus recent-5 for a paired
+  diagnostic, but that policy is not promoted unless it beats recent-4 on the same frozen tasks.
 - Current tools: `plan`, `describe_table`, `inspect_column`, `read_subtable`,
   `condition_filter`, `project`, `scalar_compute`, `join_tables`, `group_aggregate`,
   `extreme_value_select`, `set_op`, and `answer_from_context`.

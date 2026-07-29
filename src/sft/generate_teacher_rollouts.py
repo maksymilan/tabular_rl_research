@@ -743,6 +743,7 @@ def run_rollout(
     error_counts = collections.Counter()
     error_events: list[dict] = []
     legal_history: list[dict] = []
+    reasoning_history: list[dict] = []
     adjacent_guard = AdjacentActionGuard()
     plan_tracker = ResidentPlanPolicyTracker(
         PLAN_POLICY_OPTIONAL if version40 else plan_policy
@@ -776,8 +777,11 @@ def run_rollout(
         "outcome": None,
         "plan_policy": effective_plan_policy,
         "history_reasoning": (
-            "complete-all-successful" if version40 else "omitted-from-provider-history"
+            "complete-all-successful-and-rejected"
+            if version40
+            else "omitted-from-provider-history"
         ),
+        "reasoning_history_events": reasoning_history,
         "history_observations": (
             "unabridged-recent-4" if version40 else "compact-resident"
         ),
@@ -811,6 +815,7 @@ def run_rollout(
                 history_turns,
                 compact_observations=not version40,
                 preserve_all_reasoning=version40,
+                reasoning_history=reasoning_history if version40 else None,
             )
         else:
             model_input = model_context_messages(
@@ -934,6 +939,12 @@ def run_rollout(
             plan_tracker.validate_before_execution(tool, args)
             if tool == "answer_from_context":
                 validate_tool_arguments_against_state(h, tool, args)
+                if version40:
+                    reasoning_history.append({
+                        "step_id": step_id,
+                        "status": "success",
+                        "reasoning": think,
+                    })
                 rec["legal"] = True
                 rec["steps"] = action_count
                 rec["errors"] = errors
@@ -992,8 +1003,15 @@ def run_rollout(
             last_error = None
             successful_tool_steps += 1
             plan_tracker.record_success(tool, args)
+            if version40:
+                reasoning_history.append({
+                    "step_id": step_id,
+                    "status": "success",
+                    "reasoning": think,
+                })
             if retain_in_rolling_history(tool, plan_policy):
                 legal_history.append({
+                    "step_id": step_id,
                     "assistant": text,
                     "observation": tool_output_message(step_id, out),
                 })
@@ -1033,6 +1051,22 @@ def run_rollout(
             turns.append(turn)
 
             step_id = f"step_{action_count}"
+            rejected_reasoning = (
+                parsed.get("think")
+                or turn.get("provider_reasoning_content")
+            )
+            if (
+                version40
+                and isinstance(rejected_reasoning, str)
+                and rejected_reasoning.strip()
+            ):
+                reasoning_history.append({
+                    "step_id": step_id,
+                    "status": "rejected",
+                    "reasoning": rejected_reasoning.strip(),
+                    "error_type": error_type,
+                    "error_code": str(getattr(exc, "code", type(exc).__name__)),
+                })
             if error_type == "nonrecoverable_execution_error":
                 rec.update({
                     "failure_type": error_type,
@@ -1135,7 +1169,7 @@ def run_rollout(
                 "policy_prompt_variant": policy_prompt_variant,
                 "plan_policy": effective_plan_policy,
                 "history_reasoning": (
-                    "complete-all-successful"
+                    "complete-all-successful-and-rejected"
                     if version40
                     else "omitted-from-provider-history"
                 ),
@@ -1574,7 +1608,7 @@ def main() -> int:
             "disabled-by-protocol" if version40 else args.plan_policy
         ),
         "history_reasoning": (
-            "complete-all-successful"
+            "complete-all-successful-and-rejected"
             if version40
             else "omitted-from-provider-history"
         ),

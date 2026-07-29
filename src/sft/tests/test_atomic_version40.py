@@ -59,8 +59,9 @@ class AtomicVersion40Tests(unittest.TestCase):
         self.assertEqual(prompt.count("REASONING CONTINUITY"), 1)
         self.assertNotIn("under 120 words", prompt)
         self.assertIn("two to six substantive sentences", prompt)
-        self.assertIn("all successful model reasoning", prompt)
-        self.assertIn("limited to the four most recent", prompt)
+        self.assertIn("all prior model reasoning", prompt)
+        self.assertIn("Failed reasoning is explicitly marked rejected", prompt)
+        self.assertIn("limited to the four most recent pairs", prompt)
 
     def test_version40_parser_accepts_only_the_new_public_row_name(self):
         inspect_rows = (
@@ -89,6 +90,7 @@ class AtomicVersion40Tests(unittest.TestCase):
         history = []
         for index in range(5):
             history.append({
+                "step_id": f"step_{index}",
                 "assistant": (
                     f"<think>complete reasoning {index} with an unfinished hypothesis</think>\n"
                     '{"tool":"describe_table","arguments":{"tables":["items"]}}'
@@ -98,17 +100,46 @@ class AtomicVersion40Tests(unittest.TestCase):
                     f'"rows":[["full-row-{index}"]]}}'
                 ),
             })
+        reasoning_history = [
+            {
+                "step_id": f"step_{index}",
+                "status": "success",
+                "reasoning": f"complete reasoning {index} with an unfinished hypothesis",
+            }
+            for index in range(5)
+        ]
+        reasoning_history.append({
+            "step_id": "step_5",
+            "status": "rejected",
+            "reasoning": "I assumed missing_column existed and should now overturn that assumption.",
+            "error_type": "argument_validation_error",
+            "error_code": "unknown_column",
+        })
+        last_error = {
+            "step_id": "step_5",
+            "status": "error",
+            "error": {
+                "type": "argument_validation_error",
+                "code": "unknown_column",
+                "message": "missing_column is unavailable",
+            },
+            "attempted_action": {
+                "tool": "inspect_rows",
+                "arguments": {"table": "items", "columns": ["missing_column"]},
+            },
+        }
         messages = rolling_legal_history_messages(
             "system",
             {"tables": [], "relations": []},
             "question",
             {},
-            None,
+            last_error,
             None,
             history,
             4,
             compact_observations=False,
             preserve_all_reasoning=True,
+            reasoning_history=reasoning_history,
         )
         rendered = provider_request_messages(
             "deepseek-v4-flash",
@@ -118,9 +149,14 @@ class AtomicVersion40Tests(unittest.TestCase):
         assistants = [item for item in rendered if item["role"] == "assistant"]
         observations = [item["content"] for item in rendered if item["role"] == "user"][1:]
         self.assertEqual(len(assistants), 4)
-        self.assertIn("OLDER SUCCESSFUL MODEL REASONING", rendered[1]["content"])
+        self.assertIn("MODEL REASONING CONTINUITY", rendered[1]["content"])
         self.assertIn(
             "complete reasoning 0 with an unfinished hypothesis",
+            rendered[1]["content"],
+        )
+        self.assertIn('"status":"rejected"', rendered[1]["content"])
+        self.assertIn(
+            "I assumed missing_column existed and should now overturn that assumption.",
             rendered[1]["content"],
         )
         self.assertNotIn("full-row-0", rendered[1]["content"])
@@ -134,6 +170,9 @@ class AtomicVersion40Tests(unittest.TestCase):
         self.assertNotIn("<think>", assistants[0]["content"])
         for index in range(1, 5):
             self.assertIn(f"full-row-{index}", observations[index - 1])
+        self.assertIn("LAST TOOL ERROR", observations[-1])
+        self.assertIn("missing_column is unavailable", observations[-1])
+        self.assertIn('"tool":"inspect_rows"', observations[-1])
 
     def test_inspect_rows_executes_same_read_only_operation_under_public_name(self):
         harness = Harness(":memory:")

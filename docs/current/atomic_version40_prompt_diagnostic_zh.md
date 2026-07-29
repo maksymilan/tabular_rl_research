@@ -23,8 +23,9 @@
 - 公开行观察工具从 `read_subtable` 改名为 `inspect_rows`；执行仍使用同一个只读实现。
 - 从公开工具、prompt 和严格解析器中移除 `plan`。
 - `join_tables(base, joins[], base_role?)` 的参数、校验和执行语义完全不变。
-- 所有成功动作的历史推理完整保留；原始调用和未压缩工具结果只保留最近四对。
-- 被拒绝的 assistant 文本仍不进入历史，只保留结构化 `LAST TOOL ERROR`。
+- 成功和失败回合的历史推理都完整保留，失败推理明确标记为 `status=rejected`。
+- 最近一次失败调用及完整错误保留在结构化 `LAST TOOL ERROR` 中；成功调用和未压缩结果
+  只保留最近四对。
 - DeepSeek 继续使用 native reasoning + JSON Output，但不再同时看到 canonical carrier、
   teacher one-action suffix 和 provider carrier 三份响应规则。
 
@@ -35,8 +36,8 @@
 | Prompt | 字符数 |
 |---|---:|
 | version39 当前 external-teacher provider prompt | 21,170 |
-| version40 provider prompt | 7,458 |
-| 减少 | 64.8% |
+| version40 provider prompt | 7,503 |
+| 减少 | 64.6% |
 
 version40 仍保留背景、任务、环境、完整工具语义、复杂参数示例、推理连续性、操作规则和
 provider 响应合同。它不是只保留工具签名的极简 prompt。

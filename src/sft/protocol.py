@@ -1498,15 +1498,18 @@ def rolling_legal_history_messages(
     *,
     compact_observations: bool = True,
     preserve_all_reasoning: bool = False,
+    reasoning_history: list[dict] | None = None,
     history_policy: str = HISTORY_POLICY_RECENT,
     history_head_turns: int = 0,
 ) -> list[dict]:
     """Render a bounded transcript of harness-successful assistant/tool pairs.
 
-    Rejected assistant text never becomes context. Its structured error is carried only in the
-    current user message, so training and online inference cannot teach the model to imitate an
-    invalid call. ``history_turns=0`` retains every legal pair for experiments; production callers
-    should use an explicit positive bound.
+    By default, rejected assistant text never becomes context and only the latest structured error
+    is carried in the current user message. The isolated version40 diagnostic can set
+    ``preserve_all_reasoning`` and provide ``reasoning_history`` so successful and rejected reasons
+    remain explicitly labeled continuity context while exact action/observation pairs stay bounded.
+    ``history_turns=0`` retains every legal pair for experiments; production callers should use an
+    explicit positive bound.
     """
     if history_turns < 0:
         raise ValueError("history_turns must be non-negative")
@@ -1519,11 +1522,6 @@ def rolling_legal_history_messages(
     if preserve_all_reasoning and history_policy != HISTORY_POLICY_RECENT:
         raise ValueError("complete reasoning retention currently requires recent history_policy")
     initial = first_user_message(overview, question, external_knowledge)
-    if not legal_history:
-        content = initial
-        if state or last_error:
-            content += "\n\n" + state_context_message(state, last_error)
-        return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
     if history_turns == 0:
         retained = legal_history
@@ -1536,8 +1534,37 @@ def rolling_legal_history_messages(
         tail_start = max(history_head_turns, len(legal_history) - history_turns)
         retained = [*head, *legal_history[tail_start:]]
         older = []
-    if older:
-        older_reasons = []
+    continuity_events = []
+    if preserve_all_reasoning and reasoning_history is not None:
+        retained_success_steps = {
+            item.get("step_id")
+            for item in retained
+            if isinstance(item.get("step_id"), str)
+        }
+        for event in reasoning_history:
+            if not isinstance(event, dict):
+                raise ValueError("reasoning history events must be objects")
+            step_id = event.get("step_id")
+            status = event.get("status")
+            reasoning = event.get("reasoning")
+            if not isinstance(step_id, str) or not step_id:
+                raise ValueError("reasoning history event requires a step_id")
+            if status not in {"success", "rejected"}:
+                raise ValueError("reasoning history status must be success or rejected")
+            if not isinstance(reasoning, str) or not reasoning.strip():
+                raise ValueError("reasoning history event requires non-empty reasoning")
+            if status == "success" and step_id in retained_success_steps:
+                continue
+            visible_event = {
+                "step_id": step_id,
+                "status": status,
+                "reasoning": reasoning.strip(),
+            }
+            for key in ("error_type", "error_code"):
+                if isinstance(event.get(key), str) and event[key]:
+                    visible_event[key] = event[key]
+            continuity_events.append(visible_event)
+    elif older:
         for item in older:
             assistant = item.get("assistant")
             if not isinstance(assistant, str) or not assistant.strip():
@@ -1551,18 +1578,29 @@ def rolling_legal_history_messages(
                 raise ValueError(
                     "complete reasoning retention requires canonical assistant history"
                 )
-            older_reasons.append(match.group("reasoning").strip())
+            continuity_events.append({
+                "step_id": item.get("step_id"),
+                "status": "success",
+                "reasoning": match.group("reasoning").strip(),
+            })
+    if continuity_events:
         initial += (
-            "\n\nOLDER SUCCESSFUL MODEL REASONING\n"
-            "The following complete model-authored reasoning is continuity context, not factual "
-            "evidence. Its older tool calls and observations are outside the four-pair window. "
-            "Revise it whenever current harness state or feedback disagrees.\n"
+            "\n\nMODEL REASONING CONTINUITY\n"
+            "The following complete model-authored reasoning is working context, not factual "
+            "evidence. A rejected entry records a hypothesis that led to an invalid action; use "
+            "LAST TOOL ERROR to revise or overturn it. Exact older calls and observations remain "
+            "outside the four-pair window.\n"
             + json.dumps(
-                {"reasoning": older_reasons},
+                {"events": continuity_events},
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
         )
+    if not retained:
+        content = initial
+        if state or last_error:
+            content += "\n\n" + state_context_message(state, last_error)
+        return [{"role": "system", "content": system}, {"role": "user", "content": content}]
     messages = [{"role": "system", "content": system}, {"role": "user", "content": initial}]
     for index, item in enumerate(retained):
         assistant = item.get("assistant")

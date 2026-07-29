@@ -6,7 +6,8 @@ semantics and join arguments unchanged while testing four model-facing changes t
 - remove ``plan`` from the public action surface;
 - rename the read-only row observer to ``inspect_rows``;
 - use one layered prompt without duplicated teacher/runtime policy prose;
-- retain every successful prior reason while limiting exact actions and observations to four pairs.
+- retain every prior reason, including rejected hypotheses, while limiting exact successful
+  actions and observations to four pairs.
 """
 from __future__ import annotations
 
@@ -75,10 +76,10 @@ PROMPT_TEMPLATE = (
     "- EXTERNAL KNOWLEDGE, when present, is a binding part of the question. Follow every stated "
     "mapping, literal, field, operator, formula, aggregation, restriction, and output requirement "
     "exactly, even when another interpretation seems more natural.\n"
-    "- LEGAL HISTORY retains all successful model reasoning as non-factual continuity context. "
-    "Exact actions and unabridged tool results are limited to the four most recent successful "
-    "pairs. LAST TOOL ERROR is the latest rejected action's structured feedback. Rejected text is "
-    "not evidence.\n\n"
+    "- REASONING HISTORY retains all prior model reasoning as non-factual continuity context. "
+    "Failed reasoning is explicitly marked rejected; use the corresponding LAST TOOL ERROR and "
+    "attempted action to revise or overturn its assumptions. Exact successful actions and "
+    "unabridged tool results are limited to the four most recent pairs.\n\n"
     "TOOLS\n"
     + "\n".join(TOOL_SPECS.values())
     + "\n\nARGUMENT-SHAPE EXAMPLES\n"
