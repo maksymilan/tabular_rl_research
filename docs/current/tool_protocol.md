@@ -260,8 +260,11 @@ Public version mapping:
 - `version42`: keeps every version41 nonterminal tool and behavior unchanged, but requires
   `answer_from_context.evidence={"table":handle,"columns":[...]}`. The harness validates exact
   existing columns and deterministically projects only those columns in order before scoring. It
-  never consults gold or changes rows/values. Version42 is diagnostic-only pending its frozen
-  output-shape Gate16 and has no SFT/replay admission;
+  never consults gold or changes rows/values. Its frozen output-shape Gate16 scored 12/16 versus
+  paired version41 10/16, with two gains, no regressions, all eight controls retained, and 16/16
+  legal termination. It met the 4/8 target-recovery threshold but produced four process errors,
+  above the allowed two, including two avoidable exact-column errors on uniquely resolvable bare
+  names. Do not expand it or use it for SFT/RL;
 - future changes increment only the integer (`version43`, `version44`, ...).
 
 The current version39 diagnostic tool set remains the one in

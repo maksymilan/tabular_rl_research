@@ -85,3 +85,14 @@ version42 因此要求模型在 terminal call 中结构化声明已有 grounded 
 - 总过程错误不超过 2。
 
 任一失败即停止，不运行固定前 50。
+
+## Gate16 结果
+
+version42 得到 **12/16 `bird-set`**，相对 version41 的 10/16 有 2 个恢复、0 个回退；
+目标准确 4/8、控制保持 8/8、合法终止 16/16、terminal projection errors 0。它达到
+准确率相关门槛，但总过程错误为 4，超过预注册上限 2，因此总体判定 **fail**，没有启动
+固定前 50。
+
+其中两次错误来自连接结果只接受完整 dotted column，而模型使用了当前表中可唯一解析的
+裸列名；下一版本只诊断这一确定性解析边界。完整结果见
+`docs/reports/evaluation/BIRD_ATOMIC_VERSION42_TERMINAL_COLUMNS_GATE16_20260729_ZH.md`。

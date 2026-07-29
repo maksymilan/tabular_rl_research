@@ -209,8 +209,12 @@ Start at `docs/current/README.md`.
   `answer_from_context.evidence` to contain a source table plus an ordered non-empty list of exact
   existing columns. The harness deterministically projects only those grounded columns before
   scoring and records the lowering; it never consults question semantics or gold. Version42 is
-  diagnostic-only, has no SFT/replay admission, and must pass the frozen output-shape Gate16 before
-  any expansion. See `docs/current/atomic_version42_terminal_columns_zh.md`.
+  diagnostic-only and has no SFT/replay admission. Its frozen output-shape Gate16 scored 12/16
+  versus version41 10/16, with two gains, no regressions, 4/8 targets correct, 8/8 controls
+  retained, 16/16 legal termination, and zero terminal projection failures. It nevertheless
+  produced four process errors versus the allowed two, including two exact-column rejections on
+  uniquely resolvable bare names. Do not expand version42. See
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION42_TERMINAL_COLUMNS_GATE16_20260729_ZH.md`.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may
@@ -370,6 +374,12 @@ Start at `docs/current/README.md`.
   process errors. It nevertheless recovered only 2/8 output-shape targets, below the required 4/8;
   do not expand it to the fixed first 50. See
   `docs/reports/evaluation/BIRD_ATOMIC_VERSION41_OUTPUT_CORRECTION_GATE16_20260729_ZH.md`.
+- The version42 explicit-terminal-columns Gate16 scored **12/16** versus paired version41
+  **10/16**, with two gains, no regressions, 4/8 targets correct, 8/8 controls retained, and
+  16/16 legal termination. It failed only the predeclared total-process-error gate: 4 errors
+  versus an allowed 2, of which two were exact-column rejections for uniquely resolvable bare
+  names. Do not expand version42. See
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION42_TERMINAL_COLUMNS_GATE16_20260729_ZH.md`.
 - A paired six-hard-task diagnostic found no gain from forced resident planning:
   optional and required were both 0/6, while required planning increased mean actions by 16.4%
   and tokens by 18.5%. Keep `required-resident` experimental; do not expand it or make it default
