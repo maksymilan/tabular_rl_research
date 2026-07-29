@@ -91,3 +91,8 @@ unique-bare resolution，均未发生 resolver 错误。
 
 因此 version43 停止扩量，不运行其余 150，不用于 SFT/RL。完整配对和错误归因见
 `docs/reports/evaluation/BIRD_ATOMIC_VERSION43_UNIQUE_BARE_TERMINAL_COLUMNS_20260729_ZH.md`。
+
+first-50 的 11 个失败随后各做一次 fresh causal retry：恢复 3 题，合并
+verifier-selected pass@2 为 42/50，但 fresh retry 只有 10/11 合法终止、产生 7 次过程
+错误。两轮合计 1,588,917 tokens，略高于 version24 单次用 1,557,640 tokens 得到同样
+42/50。该 K=2 诊断也停止扩量。

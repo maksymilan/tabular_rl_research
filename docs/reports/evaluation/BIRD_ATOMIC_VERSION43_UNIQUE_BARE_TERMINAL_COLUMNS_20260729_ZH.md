@@ -185,6 +185,56 @@ prompt 说明不太可能稳定解决；version41 已经验证过这一点。
 - 过程错误仍有 9；
 - 主要瓶颈已从 action carrier/列名转为 semantic policy 和任务规范冲突。
 
+## 选择性 K=2 恢复诊断
+
+first-50 失败后，又对其 11 个失败题各运行一次全新、互不看见首轮轨迹的 causal attempt。
+模型仍看不到 gold；Harness 只在 terminal 后用 `bird-set` 判定是否接受。
+
+### 预注册结果
+
+| 门槛 | 要求 | 实际 | 结果 |
+|---|---:|---:|---|
+| fresh recoveries | ≥3/11 | 3/11 | pass |
+| 合并 verifier-selected pass@2 | ≥42/50 | 42/50 | pass |
+| fresh 语义终止 | 11/11 | 10/11 | **fail** |
+| terminal projection errors | 0 | 0 | pass |
+| fresh 过程错误 | ≤3 | 7 | **fail** |
+
+恢复题为：
+
+- `04189`：第二次改用 inner join；
+- `05316`：第二次只提交 label；
+- `02901`：第二次把 Gender 条件落实到关系 action。
+
+这三题证明同一模型/工具下存在明显 trajectory variance。但整体 gate 失败：`05440` 因三次
+argument validation error 未形成 terminal；其余还出现四次参数错误。7 个错误全部是
+argument validation，其中 join 5 次、scalar 1 次、condition filter 1 次。
+
+### 成本
+
+| 指标 | version24 单次 | version43 单次 | version43 选择性 pass@2 |
+|---|---:|---:|---:|
+| 正确 | 42/50 | 39/50 | 42/50 |
+| 模型动作 | 294 | 263 | 346 |
+| API requests | 295 | 265 | 353 |
+| total tokens | 1,557,640 | 1,160,291 | 1,588,917 |
+| 过程错误 | 3 | 9 | 16 |
+
+version43 选择性 K=2 只恢复到 version24 单次的相同 42/50，却多用 2.0% token、17.7%
+模型动作和 19.7% API requests，过程错误从 3 增至 16。它证明采样能恢复部分 semantic
+policy variance，但当前 version43 K=2 **不是优于 version24 的教师生成方案**，不扩量。
+
+K=2 审计：
+
+- records：
+  `data/trajectories/tool_usability_20260729/version43_first50_failures11_fresh_second_attempt_bird_set.all.jsonl`
+  （SHA-256
+  `02340a4c3867fa9abcae0c956c53f585dcc632038241d99dbe2d9c4b47302aeb`）
+- manifest：
+  `data/trajectories/tool_usability_20260729/version43_first50_failures11_fresh_second_attempt_bird_set.manifest.json`
+  （SHA-256
+  `e6f63c60257f6359fed708ebaf30050db427454f488aabb698accafc749697e7`）
+
 ## 下一步
 
 1. 停止 version43 全 200；保留实现和轨迹作为 diagnostic，不推广。
@@ -196,12 +246,13 @@ prompt 说明不太可能稳定解决；version41 已经验证过这一点。
    - `MAX` 是 ties 还是 ordered single row；
    - “count images” 是 distinct/group count 还是 row count。
    这些题应从工具可用性 gate 中分层报告，不能把 benchmark 歧义当成工具缺陷。
-4. 若目标是**训练集教师轨迹的接受率**而不是单次部署准确率，优先测试 causal K=2：
-   每次尝试仍只看合法前缀、gold 对模型隐藏，Harness 只在 terminal 做 `bird-set` 验证并
-   保留首个正确轨迹。这比继续改工具更符合当前误差结构。
-5. K=2 必须另报为 verifier-selected pass@2，不能与 single-attempt 72.5%/78% 混称。
-   先在这 11 个 fresh failures 上做一轮独立恢复率诊断；只有恢复信号足够，才评估更大
-   训练集生成成本。
+4. 选择性 K=2 已恢复到 42/50，但合法率、过程错误和成本门槛失败；不扩量。
+5. 下一轮如继续追求 80%，应先在 version24 的 55 个 full-200 failures 中分离：
+   - 规范冲突/隐含输出槽；
+   - 工具可表达但 semantic policy 错误；
+   - 真正缺少工具表达能力。
+   只对后两类做冻结目标/控制实验。当前结果不支持再写一个更长 prompt 或再加一个
+   model-authored checklist 工具。
 
 ## 审计产物
 

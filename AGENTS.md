@@ -225,6 +225,11 @@ Start at `docs/current/README.md`.
   one gain, four regressions, 50/50 legal termination, zero terminal projection errors, and nine
   process errors. All 12 exercised unique-bare resolutions succeeded, so the resolver fixed its
   narrow interface issue without producing a general accuracy gain. Do not run the remaining 150.
+  A fresh second attempt on each of its 11 first-50 failures recovered three tasks, making the
+  verifier-selected union 42/50, but the recovery gate still failed: only 10/11 fresh attempts
+  terminated semantically and they produced seven process errors versus the allowed three. The
+  selective two-attempt total used 1,588,917 tokens and 346 model actions, slightly more tokens and
+  17.7% more actions than version24's single-attempt 42/50. Do not expand version43 K=2.
   See
   `docs/reports/evaluation/BIRD_ATOMIC_VERSION43_UNIQUE_BARE_TERMINAL_COLUMNS_20260729_ZH.md`.
   Future versions increment numerically.
