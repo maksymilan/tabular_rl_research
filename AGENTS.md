@@ -220,8 +220,13 @@ Start at `docs/current/README.md`.
   exactly one candidate exists in the cited table. Ambiguous, missing, and incorrectly qualified
   names remain structured errors. The resolver never consults the question, external knowledge,
   model reason, or gold and cannot alter rows, values, or declared order. Version43 is
-  diagnostic-only pending the same frozen Gate16 and has no SFT/replay admission. See
-  `docs/current/atomic_version43_unique_bare_terminal_columns_zh.md`.
+  diagnostic-only and has no SFT/replay admission. Its frozen Gate16 scored 13/16 and passed every
+  local threshold, but the original frozen first-50 scored 39/50 versus paired version24 42/50:
+  one gain, four regressions, 50/50 legal termination, zero terminal projection errors, and nine
+  process errors. All 12 exercised unique-bare resolutions succeeded, so the resolver fixed its
+  narrow interface issue without producing a general accuracy gain. Do not run the remaining 150.
+  See
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION43_UNIQUE_BARE_TERMINAL_COLUMNS_20260729_ZH.md`.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may
@@ -387,6 +392,13 @@ Start at `docs/current/README.md`.
   versus an allowed 2, of which two were exact-column rejections for uniquely resolvable bare
   names. Do not expand version42. See
   `docs/reports/evaluation/BIRD_ATOMIC_VERSION42_TERMINAL_COLUMNS_GATE16_20260729_ZH.md`.
+- The version43 unique-bare terminal-column resolver passed Gate16 at **13/16**, then failed the
+  original frozen first-50 at **39/50 = 78%** versus paired version24 **42/50**. It had one paired
+  gain and four regressions, 50/50 legal termination, zero terminal projection errors, and nine
+  process errors. All 12 unique-bare resolutions succeeded, but semantic population, omitted
+  constraints, tie handling, and output-slot choices remained the dominant failures. Do not run
+  the remaining 150. See
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION43_UNIQUE_BARE_TERMINAL_COLUMNS_20260729_ZH.md`.
 - A paired six-hard-task diagnostic found no gain from forced resident planning:
   optional and required were both 0/6, while required planning increased mean actions by 16.4%
   and tokens by 18.5%. Keep `required-resident` experimental; do not expand it or make it default

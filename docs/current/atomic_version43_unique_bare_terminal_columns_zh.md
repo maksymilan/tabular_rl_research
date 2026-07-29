@@ -79,3 +79,15 @@ version43 是 diagnostic-only，不能用于 SFT/RL。
 
 全部通过后才能运行原冻结 first-50；任一失败即停止 version43。由于本轮只修复 deterministic
 column resolution，Gate16 的四个 version42 错误答案不作为定向选择或 prompt 内容。
+
+## 实验结果
+
+Gate16 得到 **13/16**：目标准确 5/8、控制保持 8/8、合法终止 16/16、过程错误 1、
+terminal projection errors 0，通过全部预注册门槛。
+
+随后原冻结 first-50 得到 **39/50 = 78%**，相对 version24 的 42/50 有 1 个恢复、4 个
+回退；过程错误 9，超过预注册上限 5。50 个终止投影全部成功，6 题共 12 列使用
+unique-bare resolution，均未发生 resolver 错误。
+
+因此 version43 停止扩量，不运行其余 150，不用于 SFT/RL。完整配对和错误归因见
+`docs/reports/evaluation/BIRD_ATOMIC_VERSION43_UNIQUE_BARE_TERMINAL_COLUMNS_20260729_ZH.md`。

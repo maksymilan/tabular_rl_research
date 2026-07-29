@@ -271,7 +271,11 @@ Public version mapping:
   logical-column suffix only when exactly one candidate exists in the cited table. Ambiguous,
   missing, or incorrectly qualified names remain errors. It never consults question semantics,
   external knowledge, reason text, or gold, and cannot change rows, values, or declared order.
-  Version43 is diagnostic-only pending the same frozen Gate16 and has no SFT/replay admission;
+  Its frozen Gate16 scored 13/16 and passed all local thresholds, but the original frozen first-50
+  scored 39/50 versus paired version24 42/50: one gain, four regressions, 50/50 legal termination,
+  zero terminal projection errors, and nine process errors. The resolver succeeded on all 12
+  unique-bare columns exercised, but the protocol failed the overall accuracy, paired-regression,
+  and process-error gates. Do not run the remaining 150 or use version43 for SFT/RL;
 - future changes increment only the integer (`version44`, `version45`, ...).
 
 The current version39 diagnostic tool set remains the one in
