@@ -102,7 +102,7 @@ class SchemaContextAblationTest(unittest.TestCase):
         )
         description_dir = root / "database_description"
         description_dir.mkdir()
-        with (description_dir / "staff.csv").open(
+        with (description_dir / "upstream_employee_roster.csv").open(
             "w", encoding="utf-8", newline=""
         ) as handle:
             writer = csv.DictWriter(
@@ -118,6 +118,24 @@ class SchemaContextAblationTest(unittest.TestCase):
             writer.writeheader()
             writer.writerow(
                 {
+                    "original_column_name": "employee_id",
+                    "column_name": "employee id",
+                    "column_description": "unique employee identifier",
+                    "data_format": "integer",
+                    "value_description": "",
+                }
+            )
+            writer.writerow(
+                {
+                    "original_column_name": "dept_id",
+                    "column_name": "department id",
+                    "column_description": "department identifier",
+                    "data_format": "integer",
+                    "value_description": "",
+                }
+            )
+            writer.writerow(
+                {
                     "original_column_name": "nm",
                     "column_name": "employee name",
                     "column_description": "full name of the employee",
@@ -129,6 +147,7 @@ class SchemaContextAblationTest(unittest.TestCase):
             (
                 "original_column_name,column_name,column_description,data_format,"
                 "value_description\r\n"
+                "dept_id,department id,identifiant du département,integer,\r\n"
                 "dept_code,department code,code du département,text,\r\n"
             ).encode("cp1252")
         )
@@ -200,6 +219,14 @@ class SchemaContextAblationTest(unittest.TestCase):
             column for column in departments["columns"] if column["name"] == "dept_code"
         )
         self.assertEqual("code du département", code["description"])
+
+    def test_description_file_with_different_name_uses_unique_exact_column_signature(self):
+        overview = self.build(FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE)
+        staff = next(table for table in overview["tables"] if table["table_name"] == "staff")
+        employee_id = next(
+            column for column in staff["columns"] if column["name"] == "employee_id"
+        )
+        self.assertEqual("unique employee identifier", employee_id["description"])
 
     def test_describe_feedback_is_aligned_only_for_semantic_profiles(self):
         raw = self.harness.describe_table(["staff"])

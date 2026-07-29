@@ -262,14 +262,18 @@ def _semantic_maps(db_schema: dict) -> tuple[dict[str, str], dict[tuple[str, str
 
 
 @lru_cache(maxsize=128)
-def _load_column_descriptions(directory: str) -> dict[tuple[str, str], str]:
-    """Load BIRD's per-table CSV descriptions without treating value metadata as evidence."""
+def _load_description_files(
+    directory: str,
+) -> dict[str, dict[str, str]]:
+    """Load BIRD description CSVs, including blank descriptions for signature matching."""
     root = Path(directory)
     if not root.is_dir():
         raise FileNotFoundError(f"BIRD database_description directory not found: {root}")
-    descriptions: dict[tuple[str, str], str] = {}
+    files: dict[str, dict[str, str]] = {}
     for csv_path in sorted(root.glob("*.csv"), key=lambda path: path.name.lower()):
-        table_key = csv_path.stem.lower()
+        file_key = csv_path.stem.lower()
+        if file_key in files:
+            raise ValueError(f"duplicate case-insensitive BIRD description file: {csv_path}")
         raw = csv_path.read_bytes()
         try:
             decoded = raw.decode("utf-8-sig")
@@ -282,18 +286,70 @@ def _load_column_descriptions(directory: str) -> dict[tuple[str, str], str]:
                 raise ValueError(
                     f"BIRD description CSV lacks {sorted(required)}: {csv_path}"
                 )
+            columns: dict[str, str] = {}
             for row in reader:
                 raw_column = str(row.get("original_column_name") or "").strip()
                 description = str(row.get("column_description") or "").strip()
-                if not raw_column or not description:
+                if not raw_column:
                     continue
-                key = (table_key, raw_column.lower())
-                previous = descriptions.get(key)
+                column_key = raw_column.lower()
+                previous = columns.get(column_key)
                 if previous is not None and previous != description:
                     raise ValueError(
-                        f"conflicting BIRD descriptions for {key}: {csv_path}"
+                        f"conflicting BIRD descriptions for "
+                        f"{file_key}.{column_key}: {csv_path}"
                     )
-                descriptions[key] = description
+                columns[column_key] = description
+            files[file_key] = columns
+    return files
+
+
+def _resolve_column_descriptions(
+    directory: str,
+    described_output: dict,
+) -> dict[tuple[str, str], str]:
+    """Map BIRD files to tables by exact name or a unique exact column signature.
+
+    Some official BIRD description filenames retain an upstream source name instead of the
+    SQLite table name (for example, googleplaystore.csv describes table playstore). We accept
+    those only when the complete case-insensitive column set identifies exactly one file. This
+    avoids fuzzy or semantic guessing.
+    """
+    files = _load_description_files(directory)
+    table_columns = {
+        str(table.get("table_name", "")).lower(): {
+            str(column.get("name", "")).lower()
+            for column in table.get("columns", [])
+            if column.get("name")
+        }
+        for table in described_output.get("tables", [])
+        if table.get("table_name")
+    }
+    assignments: dict[str, str] = {}
+    used_files: set[str] = set()
+
+    for table_key, columns in table_columns.items():
+        if table_key in files and set(files[table_key]) == columns:
+            assignments[table_key] = table_key
+            used_files.add(table_key)
+
+    for table_key, columns in table_columns.items():
+        if table_key in assignments:
+            continue
+        candidates = [
+            file_key
+            for file_key, described_columns in files.items()
+            if file_key not in used_files and set(described_columns) == columns
+        ]
+        if len(candidates) == 1:
+            assignments[table_key] = candidates[0]
+            used_files.add(candidates[0])
+
+    descriptions: dict[tuple[str, str], str] = {}
+    for table_key, file_key in assignments.items():
+        for column_key, description in files[file_key].items():
+            if description:
+                descriptions[(table_key, column_key)] = description
     return descriptions
 
 
@@ -426,7 +482,10 @@ def build_initial_context(
         )
         db_schema = load_database_schema(schema_path, example["db_id"])
         column_descriptions = (
-            _load_column_descriptions(resolve_database_description_dir(example))
+            _resolve_column_descriptions(
+                resolve_database_description_dir(example),
+                described,
+            )
             if profile == FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE
             else None
         )
@@ -480,7 +539,10 @@ def align_tool_output(
     )
     db_schema = load_database_schema(schema_path, example["db_id"])
     column_descriptions = (
-        _load_column_descriptions(resolve_database_description_dir(example))
+        _resolve_column_descriptions(
+            resolve_database_description_dir(example),
+            output,
+        )
         if profile == FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE
         else None
     )
