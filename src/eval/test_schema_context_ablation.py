@@ -24,6 +24,7 @@ from schema_context_ablation import (  # noqa: E402
     INITIAL_CONTEXT_PROFILES,
     LAZY_CATALOG_PROFILE,
     LAZY_SEMANTIC_DESCRIBE_PROFILE,
+    align_base_system_prompt,
     align_tool_output,
     build_initial_context,
     context_contract_sha256,
@@ -173,6 +174,29 @@ class SchemaContextAblationTest(unittest.TestCase):
         for profile in INITIAL_CONTEXT_PROFILES[1:]:
             self.assertIn(profile, context_prompt_suffix(profile))
         self.assertEqual("bird-tool-context-ablation-v1", CONTEXT_RENDERER_VERSION)
+
+    def test_full_schema_prompts_replace_all_lazy_only_instructions(self):
+        from protocol import get_system_prompt
+
+        base = get_system_prompt()
+        self.assertEqual(base, align_base_system_prompt(base, LAZY_CATALOG_PROFILE))
+        self.assertEqual(
+            base,
+            align_base_system_prompt(base, LAZY_SEMANTIC_DESCRIBE_PROFILE),
+        )
+        for profile in (
+            FULL_SCHEMA_PROFILE,
+            FULL_SCHEMA_SEMANTIC_PROFILE,
+            FULL_SCHEMA_SEMANTIC_VALUES_PROFILE,
+        ):
+            aligned = align_base_system_prompt(base, profile)
+            self.assertNotIn("only (no columns)", aligned)
+            self.assertNotIn("describe_table the needed tables first", aligned)
+            self.assertNotIn(
+                "opening overview lists only table names and relations",
+                aligned,
+            )
+            self.assertIn("INITIAL CONTEXT PROFILE", aligned)
 
 
 if __name__ == "__main__":

@@ -38,6 +38,11 @@ _SEMANTIC_PROFILES = {
     FULL_SCHEMA_SEMANTIC_VALUES_PROFILE,
     LAZY_SEMANTIC_DESCRIBE_PROFILE,
 }
+_FULL_SCHEMA_PROFILES = {
+    FULL_SCHEMA_PROFILE,
+    FULL_SCHEMA_SEMANTIC_PROFILE,
+    FULL_SCHEMA_SEMANTIC_VALUES_PROFILE,
+}
 
 _PROFILE_PROMPT_SUFFIXES = {
     LAZY_CATALOG_PROFILE: "",
@@ -91,12 +96,62 @@ def context_prompt_suffix(profile: str) -> str:
         raise ValueError(f"unknown initial context profile: {profile}") from exc
 
 
+def align_base_system_prompt(system_prompt: str, profile: str) -> str:
+    """Remove version24's lazy-only instructions from full-schema experimental arms.
+
+    Appending a later exception is not sufficient: it leaves the model with contradictory schema
+    acquisition instructions. These exact replacements fail closed if the frozen version24 prompt
+    changes, while both lazy profiles preserve the historical base prompt byte-for-byte.
+    """
+    if profile not in INITIAL_CONTEXT_PROFILES:
+        raise ValueError(f"unknown initial context profile: {profile}")
+    if profile not in _FULL_SCHEMA_PROFILES:
+        return system_prompt
+
+    replacements = (
+        (
+            "The opening overview is a CATALOG: table names + row counts + foreign-key relations "
+            "only (no columns) — so it stays small on large databases.",
+            "The opening overview is a DATABASE CONTEXT object whose exact schema information is "
+            "defined by the INITIAL CONTEXT PROFILE below.",
+        ),
+        (
+            "Read the columns of the tables you need with describe_table before operating.",
+            "Follow the schema-acquisition policy in the INITIAL CONTEXT PROFILE below.",
+        ),
+        (
+            "The opening overview lists only table names and relations, so read the schema of the "
+            "tables you need before operating on them.",
+            "Whether source schema needs to be read is defined by the INITIAL CONTEXT PROFILE "
+            "below.",
+        ),
+        (
+            "3. describe_table the needed tables first; inspect_column before filtering by a text "
+            "value.",
+            "3. Follow the INITIAL CONTEXT PROFILE for schema acquisition; inspect_column before "
+            "filtering by a text value.",
+        ),
+    )
+    aligned = system_prompt
+    for old, new in replacements:
+        count = aligned.count(old)
+        if count != 1:
+            raise ValueError(
+                "frozen version24 prompt alignment expected one occurrence, "
+                f"found {count}: {old}"
+            )
+        aligned = aligned.replace(old, new)
+    return aligned
+
+
 def context_contract_sha256(profile: str) -> str:
     payload = {
         "renderer_version": CONTEXT_RENDERER_VERSION,
         "profile": profile,
         "prompt_suffix": context_prompt_suffix(profile),
     }
+    if profile in _FULL_SCHEMA_PROFILES:
+        payload["base_prompt_alignment"] = "replace-version24-lazy-schema-instructions-v1"
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 

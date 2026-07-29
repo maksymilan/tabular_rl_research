@@ -56,6 +56,7 @@ from schema_context_ablation import (  # noqa: E402
     CONTEXT_RENDERER_VERSION,
     INITIAL_CONTEXT_PROFILES,
     LAZY_CATALOG_PROFILE,
+    align_base_system_prompt,
     align_tool_output,
     build_initial_context,
     context_contract_sha256,
@@ -1080,6 +1081,10 @@ def main() -> int:
     base_system_prompt = policy_system_prompt(
         base_system_prompt,
         args.policy_prompt_variant,
+    )
+    base_system_prompt = align_base_system_prompt(
+        base_system_prompt,
+        args.initial_context_profile,
     )
     prompt_suffix = context_prompt_suffix(args.initial_context_profile)
     prompt_suffix += DATA_GENERATION_SUFFIX
