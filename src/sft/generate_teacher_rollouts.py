@@ -66,6 +66,15 @@ from atomic_version42 import (  # noqa: E402
     provider_system_prompt as provider_system_prompt_version42,
     tool_schema_hash as tool_schema_hash_version42,
 )
+from atomic_version43 import (  # noqa: E402
+    PROTOCOL_VERSION as VERSION43_PROTOCOL_VERSION,
+    STUDENT_SYSTEM_PROMPT as VERSION43_STUDENT_SYSTEM_PROMPT,
+    lower_terminal_evidence as lower_terminal_evidence_version43,
+    parse_assistant_strict as parse_assistant_strict_version43,
+    protocol_hash as protocol_hash_version43,
+    provider_system_prompt as provider_system_prompt_version43,
+    tool_schema_hash as tool_schema_hash_version43,
+)
 from prompt_contract import TEACHER_ONE_ACTION_RULE  # noqa: E402
 from provider_adapter import (  # noqa: E402
     DEEPSEEK_CARRIER_CHOICES,
@@ -135,11 +144,13 @@ ATOMIC_PROTOCOL_VERSIONS = (
     VERSION40_PROTOCOL_VERSION,
     VERSION41_PROTOCOL_VERSION,
     VERSION42_PROTOCOL_VERSION,
+    VERSION43_PROTOCOL_VERSION,
 )
 FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS = frozenset({
     VERSION40_PROTOCOL_VERSION,
     VERSION41_PROTOCOL_VERSION,
     VERSION42_PROTOCOL_VERSION,
+    VERSION43_PROTOCOL_VERSION,
 })
 DATA_GENERATION_SUFFIX = (
     "\n\nDATA GENERATION STRICTNESS\n"
@@ -155,6 +166,8 @@ DATA_GENERATION_SUFFIX = (
 
 
 def selected_protocol_hash(protocol_version: str, system_prompt: str) -> str:
+    if protocol_version == VERSION43_PROTOCOL_VERSION:
+        return protocol_hash_version43(system_prompt)
     if protocol_version == VERSION42_PROTOCOL_VERSION:
         return protocol_hash_version42(system_prompt)
     if protocol_version == VERSION41_PROTOCOL_VERSION:
@@ -167,6 +180,8 @@ def selected_protocol_hash(protocol_version: str, system_prompt: str) -> str:
 
 
 def selected_tool_schema_hash(protocol_version: str) -> str:
+    if protocol_version == VERSION43_PROTOCOL_VERSION:
+        return tool_schema_hash_version43()
     if protocol_version == VERSION42_PROTOCOL_VERSION:
         return tool_schema_hash_version42()
     if protocol_version == VERSION41_PROTOCOL_VERSION:
@@ -713,6 +728,7 @@ def run_rollout(
     version40 = atomic_protocol_version == VERSION40_PROTOCOL_VERSION
     version41 = atomic_protocol_version == VERSION41_PROTOCOL_VERSION
     version42 = atomic_protocol_version == VERSION42_PROTOCOL_VERSION
+    version43 = atomic_protocol_version == VERSION43_PROTOCOL_VERSION
     full_reasoning_no_plan = (
         atomic_protocol_version in FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS
     )
@@ -836,9 +852,13 @@ def run_rollout(
             else "compact-resident"
         ),
         "terminal_evidence_policy": (
-            "explicit-columns-deterministic-project-v1"
-            if version42
-            else "exact-table"
+            "explicit-columns-unique-bare-deterministic-project-v2"
+            if version43
+            else (
+                "explicit-columns-deterministic-project-v1"
+                if version42
+                else "exact-table"
+            )
         ),
         "policy_prompt_variant": policy_prompt_variant,
         "denotation_comparison": denotation_comparison,
@@ -977,7 +997,9 @@ def run_rollout(
                 adjacent_guard.clear()
                 raise ProtocolError(rejection)
             step_id = f"step_{action_count}"
-            if version42:
+            if version43:
+                parser = parse_assistant_strict_version43
+            elif version42:
                 parser = parse_assistant_strict_version42
             elif version41:
                 parser = parse_assistant_strict_version41
@@ -1001,7 +1023,12 @@ def run_rollout(
                 validate_tool_arguments_against_state(h, tool, args)
                 score_args = args
                 terminal_projection = None
-                if version42:
+                if version43:
+                    score_args, terminal_projection = (
+                        lower_terminal_evidence_version43(h, args)
+                    )
+                    turn["terminal_projection"] = terminal_projection
+                elif version42:
                     score_args, terminal_projection = (
                         lower_terminal_evidence_version42(h, args)
                     )
@@ -1249,9 +1276,13 @@ def run_rollout(
                     else "compact-resident"
                 ),
                 "terminal_evidence_policy": (
-                    "explicit-columns-deterministic-project-v1"
-                    if version42
-                    else "exact-table"
+                    "explicit-columns-unique-bare-deterministic-project-v2"
+                    if version43
+                    else (
+                        "explicit-columns-deterministic-project-v1"
+                        if version42
+                        else "exact-table"
+                    )
                 ),
                 "deepseek_carrier": deepseek_carrier,
                 "denotation_comparison": denotation_comparison,
@@ -1392,7 +1423,8 @@ def main() -> int:
             "version39 preserves the current default; version40 enables the isolated no-plan, "
             "inspect_rows, full-reasoning recent-4 diagnostic; version41 changes only its prompt "
             "by adding one consolidated output contract and Gate50 error corrections; version42 "
-            "requires explicit terminal evidence columns and deterministically projects them"
+            "requires explicit terminal evidence columns and deterministically projects them; "
+            "version43 additionally resolves only unique bare terminal-column suffixes"
         ),
     )
     parser.add_argument(
@@ -1512,10 +1544,18 @@ def main() -> int:
     version40 = args.atomic_protocol_version == VERSION40_PROTOCOL_VERSION
     version41 = args.atomic_protocol_version == VERSION41_PROTOCOL_VERSION
     version42 = args.atomic_protocol_version == VERSION42_PROTOCOL_VERSION
+    version43 = args.atomic_protocol_version == VERSION43_PROTOCOL_VERSION
     full_reasoning_no_plan = (
         args.atomic_protocol_version in FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS
     )
-    if version42:
+    if version43:
+        student_prompt = VERSION43_STUDENT_SYSTEM_PROMPT
+        canonical_teacher_prompt = VERSION43_STUDENT_SYSTEM_PROMPT
+        system_prompt = provider_system_prompt_version43(
+            args.model,
+            carrier=args.deepseek_carrier,
+        )
+    elif version42:
         student_prompt = VERSION42_STUDENT_SYSTEM_PROMPT
         canonical_teacher_prompt = VERSION42_STUDENT_SYSTEM_PROMPT
         system_prompt = provider_system_prompt_version42(
@@ -1731,9 +1771,13 @@ def main() -> int:
             else "compact-resident"
         ),
         "terminal_evidence_policy": (
-            "explicit-columns-deterministic-project-v1"
-            if version42
-            else "exact-table"
+            "explicit-columns-unique-bare-deterministic-project-v2"
+            if version43
+            else (
+                "explicit-columns-deterministic-project-v1"
+                if version42
+                else "exact-table"
+            )
         ),
         "deepseek_carrier": args.deepseek_carrier,
         "denotation_comparison": args.denotation_comparison,

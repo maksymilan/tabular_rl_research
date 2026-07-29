@@ -21,6 +21,7 @@ spaces are never merged in one prompt.
 - Isolated atomic version40 diagnostic: `src/sft/atomic_version40.py`
 - Isolated atomic version41 prompt module: `src/sft/atomic_version41_prompt.py`
 - Isolated atomic version42 terminal-column protocol: `src/sft/atomic_version42.py`
+- Isolated atomic version43 unique-bare terminal resolver: `src/sft/atomic_version43.py`
 - Harness provenance sidecars: `src/harness/provenance.py`
 - Visible-cell binding semantics: `src/harness/observation_binding.py`
 - Scalar `value_ref` grounding: `src/harness/scalar_grounding.py`
@@ -265,7 +266,13 @@ Public version mapping:
   legal termination. It met the 4/8 target-recovery threshold but produced four process errors,
   above the allowed two, including two avoidable exact-column errors on uniquely resolvable bare
   names. Do not expand it or use it for SFT/RL;
-- future changes increment only the integer (`version43`, `version44`, ...).
+- `version43`: keeps version42's explicit ordered terminal columns and changes only deterministic
+  column-name resolution. Full logical names match first; an unqualified name may match a dotted
+  logical-column suffix only when exactly one candidate exists in the cited table. Ambiguous,
+  missing, or incorrectly qualified names remain errors. It never consults question semantics,
+  external knowledge, reason text, or gold, and cannot change rows, values, or declared order.
+  Version43 is diagnostic-only pending the same frozen Gate16 and has no SFT/replay admission;
+- future changes increment only the integer (`version44`, `version45`, ...).
 
 The current version39 diagnostic tool set remains the one in
 `src/sft/protocol.py::TOOL_SPECS`:

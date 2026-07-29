@@ -36,9 +36,9 @@ Start at `docs/current/README.md`.
 
 - Shared prompt semantics: `src/sft/prompt_contract.py`; protocol/validation:
   `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current atomic local diagnostic default: `version39`; `version40`-`version42` are opt-in
-  prompt/tool-name diagnostics. The production checkpoint-560 evaluation chain remains frozen on
-  `version26`; none of version39-version42 has received an accuracy promotion and they must
+- Current atomic local diagnostic default: `version39`; `version40`-`version43` are opt-in
+  prompt/interface diagnostics. The production checkpoint-560 evaluation chain remains frozen on
+  `version26`; none of version39-version43 has received an accuracy promotion and they must
   not be mixed into its result directories. Version26 retains version25's prompt-role and
   public-contract refactor, but replaces the model-visible tagged action carrier with one
   non-empty `<think>` block followed directly by a strict raw JSON action object. The former
@@ -215,6 +215,13 @@ Start at `docs/current/README.md`.
   produced four process errors versus the allowed two, including two exact-column rejections on
   uniquely resolvable bare names. Do not expand version42. See
   `docs/reports/evaluation/BIRD_ATOMIC_VERSION42_TERMINAL_COLUMNS_GATE16_20260729_ZH.md`.
+  `version43` keeps every version42 behavior and changes only terminal column-name resolution.
+  Full logical names match first; a bare name may match a dotted logical-column suffix only when
+  exactly one candidate exists in the cited table. Ambiguous, missing, and incorrectly qualified
+  names remain structured errors. The resolver never consults the question, external knowledge,
+  model reason, or gold and cannot alter rows, values, or declared order. Version43 is
+  diagnostic-only pending the same frozen Gate16 and has no SFT/replay admission. See
+  `docs/current/atomic_version43_unique_bare_terminal_columns_zh.md`.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may

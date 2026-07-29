@@ -8,7 +8,7 @@ sources of truth.
 - `architecture.md`: active code layout and ownership.
 - `tool_schemes.md`: the three exclusive model action schemes and their train/eval boundaries.
 - `tool_protocol.md`: model-visible action and context protocol, including the version39 default
-  and isolated version40/version41 no-plan/`inspect_rows` diagnostics.
+  and isolated version40-version43 diagnostics.
 - `atomic_tool_interface_zh.md`: standalone Chinese reference for the atomic version39 public
   tools, strict argument shapes, error contract, and full-context/F profile differences.
 - `atomic_version40_prompt_diagnostic_zh.md`: isolated no-plan/`inspect_rows` external-teacher
@@ -17,6 +17,8 @@ sources of truth.
   Gate50-derived error-correction examples over the frozen version40 behavior.
 - `atomic_version42_terminal_columns_zh.md`: diagnostic terminal carrier requiring explicit
   grounded evidence columns with deterministic harness projection.
+- `atomic_version43_unique_bare_terminal_columns_zh.md`: minimal terminal-column resolver
+  diagnostic allowing only one unambiguous dotted-column suffix match.
 - `relation_derivation.md`: fact-only semantics attached to every derived table handle.
 - `execution_contract.md`: harness semantics and error handling.
 - `data_generation.md`: causal SFT-1/SFT-2 data construction.
