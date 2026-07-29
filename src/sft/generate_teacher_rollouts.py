@@ -47,10 +47,18 @@ from rollout import (  # noqa: E402
     format_tool_error,
     is_context_overflow,
     new_ctx,
-    overview,
     score,
     task_db_path,
     task_gold_sql,
+)
+from schema_context_ablation import (  # noqa: E402
+    CONTEXT_RENDERER_VERSION,
+    INITIAL_CONTEXT_PROFILES,
+    LAZY_CATALOG_PROFILE,
+    align_tool_output,
+    build_initial_context,
+    context_contract_sha256,
+    context_prompt_suffix,
 )
 from executor import Harness  # noqa: E402
 from protocol import (  # noqa: E402
@@ -547,13 +555,22 @@ def run_rollout(
     plan_policy: str = PLAN_POLICY_OPTIONAL,
     deepseek_carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
     denotation_comparison: str = "strict-multiset",
+    initial_context_profile: str = LAZY_CATALOG_PROFILE,
+    schema_metadata_json: str | None = None,
+    schema_value_count: int = 2,
 ) -> dict:
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
     if not gold_sql:
         raise ValueError(f"task has no gold SQL: {ex.get('db_id')} / {ex.get('question')}")
     h = Harness(task_path)
-    dataset_overview = overview(h)
+    dataset_overview = build_initial_context(
+        h,
+        ex,
+        profile=initial_context_profile,
+        schema_metadata_json=schema_metadata_json,
+        value_count=schema_value_count,
+    )
     external_knowledge = ex.get("external_knowledge") or None
     messages = [
         {"role": "system", "content": system_prompt},
@@ -590,6 +607,9 @@ def run_rollout(
         "outcome": None,
         "plan_policy": plan_policy,
         "policy_prompt_variant": policy_prompt_variant,
+        "initial_context_profile": initial_context_profile,
+        "context_renderer_version": CONTEXT_RENDERER_VERSION,
+        "context_contract_sha256": context_contract_sha256(initial_context_profile),
         "denotation_comparison": denotation_comparison,
     }
 
@@ -740,6 +760,19 @@ def run_rollout(
                 step_id,
                 table_output_rows=table_output_rows,
             )
+            aligned_out = align_tool_output(
+                h,
+                tool,
+                out,
+                ex,
+                profile=initial_context_profile,
+                schema_metadata_json=schema_metadata_json,
+                value_count=schema_value_count,
+            )
+            if aligned_out is not out:
+                out = aligned_out
+                ctx["history"][step_id]["output"] = deepcopy(out)
+                ctx["environment"].apply_tool_result(tool, args, out, step_id)
             turn["tool_output"] = out
             steps.append({
                 "step_id": step_id,
@@ -852,6 +885,11 @@ def run_rollout(
                 "rolling_prompt_variant": rolling_prompt_variant,
                 "policy_prompt_variant": policy_prompt_variant,
                 "plan_policy": plan_policy,
+                "initial_context_profile": initial_context_profile,
+                "context_renderer_version": CONTEXT_RENDERER_VERSION,
+                "context_contract_sha256": context_contract_sha256(
+                    initial_context_profile
+                ),
                 "deepseek_carrier": deepseek_carrier,
                 "sft_export_eligible": context_mode == "state-only",
                 "error_actions_are_sft_targets": False,
@@ -988,9 +1026,31 @@ def main() -> int:
         default=DEEPSEEK_CARRIER_JSON_OUTPUT,
         help="auditable provider carrier; tool-call omits the JSON Output request constraint",
     )
+    parser.add_argument(
+        "--initial-context-profile",
+        choices=INITIAL_CONTEXT_PROFILES,
+        default=LAZY_CATALOG_PROFILE,
+        help=(
+            "isolated BIRD schema-information ablation; lazy-catalog-v1 is the exact "
+            "historical condition"
+        ),
+    )
+    parser.add_argument(
+        "--schema-metadata-json",
+        default="",
+        help="BIRD train_tables/dev_tables metadata for semantic-name profiles",
+    )
+    parser.add_argument(
+        "--schema-value-count",
+        type=int,
+        default=2,
+        help="live example values per column in the values profile",
+    )
     add_denotation_comparison_argument(parser)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
+    if args.schema_value_count < 0:
+        parser.error("--schema-value-count must be non-negative")
     if args.max_tokens is None:
         args.max_tokens = provider_default_max_tokens(args.model, DEFAULT_MAX_TOKENS)
 
@@ -1020,7 +1080,8 @@ def main() -> int:
         base_system_prompt,
         args.policy_prompt_variant,
     )
-    prompt_suffix = DATA_GENERATION_SUFFIX
+    prompt_suffix = context_prompt_suffix(args.initial_context_profile)
+    prompt_suffix += DATA_GENERATION_SUFFIX
     if args.plan_policy == PLAN_POLICY_REQUIRED_RESIDENT:
         prompt_suffix += REQUIRED_RESIDENT_PLAN_SUFFIX
     system_prompt = provider_system_prompt(
@@ -1057,6 +1118,9 @@ def main() -> int:
             plan_policy=args.plan_policy,
             deepseek_carrier=args.deepseek_carrier,
             denotation_comparison=args.denotation_comparison,
+            initial_context_profile=args.initial_context_profile,
+            schema_metadata_json=args.schema_metadata_json or None,
+            schema_value_count=args.schema_value_count,
         )
         rec["attempt_index"] = attempt_index
         rec["attempts_per_example"] = max(1, args.attempts_per_example)
@@ -1127,6 +1191,8 @@ def main() -> int:
         "failures_output": str(failure_path),
         "all_output": str(all_path),
         "protocol_hash": protocol_hash(system_prompt),
+        "system_prompt_sha256": hashlib.sha256(system_prompt.encode()).hexdigest(),
+        "system_prompt": system_prompt,
         "max_steps": args.max_steps,
         "max_errors_per_type": args.max_errors_per_type,
         "attempts_per_example": max(1, args.attempts_per_example),
@@ -1137,6 +1203,14 @@ def main() -> int:
         "rolling_prompt_variant": args.rolling_prompt_variant,
         "policy_prompt_variant": args.policy_prompt_variant,
         "plan_policy": args.plan_policy,
+        "initial_context_profile": args.initial_context_profile,
+        "context_renderer_version": CONTEXT_RENDERER_VERSION,
+        "context_contract_sha256": context_contract_sha256(
+            args.initial_context_profile
+        ),
+        "schema_metadata_json": args.schema_metadata_json or "auto-discover",
+        "schema_value_count": args.schema_value_count,
+        "context_prompt_suffix": context_prompt_suffix(args.initial_context_profile),
         "deepseek_carrier": args.deepseek_carrier,
         "denotation_comparison": args.denotation_comparison,
         "sft_export_eligible": (
