@@ -137,8 +137,11 @@ def enrichment_summary(records: dict[str, dict]) -> dict:
     fields = collections.Counter()
     tasks = collections.Counter()
     task_patterns = collections.Counter()
+    visible_inspect_fields = collections.Counter()
+    tasks_with_visible_inspect_field = collections.Counter()
     for record in records.values():
         task_tools = set()
+        task_inspect_fields = set()
         audit = record.get("database_context_audit") or {}
         for event in audit.get("perception_enrichment_events", []):
             tool = str(event.get("tool"))
@@ -151,12 +154,41 @@ def enrichment_summary(records: dict[str, dict]) -> dict:
         for tool in task_tools:
             tasks[tool] += 1
         task_patterns["+".join(sorted(task_tools)) or "none"] += 1
+        for turn in record.get("turns", []):
+            if (turn.get("parsed") or {}).get("tool") != "inspect_column":
+                continue
+            output = turn.get("tool_output")
+            if not isinstance(output, dict):
+                continue
+            has_name = bool(output.get("semantic_name"))
+            has_description = bool(output.get("column_description"))
+            visible_inspect_fields["outputs"] += 1
+            visible_inspect_fields["semantic_name"] += int(has_name)
+            visible_inspect_fields["column_description"] += int(
+                has_description
+            )
+            visible_inspect_fields["both"] += int(
+                has_name and has_description
+            )
+            visible_inspect_fields["neither"] += int(
+                not has_name and not has_description
+            )
+            if has_name:
+                task_inspect_fields.add("semantic_name")
+            if has_description:
+                task_inspect_fields.add("column_description")
+        for field in task_inspect_fields:
+            tasks_with_visible_inspect_field[field] += 1
     return {
         "calls": dict(calls),
         "enriched_calls": dict(enriched_calls),
         "enriched_fields": dict(fields),
         "tasks_with_enrichment": dict(tasks),
         "task_coverage_patterns": dict(task_patterns),
+        "visible_inspect_field_calls": dict(visible_inspect_fields),
+        "tasks_with_visible_inspect_field": dict(
+            tasks_with_visible_inspect_field
+        ),
     }
 
 
