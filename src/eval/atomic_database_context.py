@@ -36,9 +36,13 @@ CATALOG_CONTEXT_PROFILE = "catalog-v1"
 CATALOG_BIRD_SEMANTIC_PERCEPTION_PROFILE = (
     "catalog-bird-semantics-on-demand-v1"
 )
+CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE = (
+    "catalog-bird-semantics-inspect-only-v1"
+)
 CATALOG_CONTEXT_PROFILES = (
     CATALOG_CONTEXT_PROFILE,
     CATALOG_BIRD_SEMANTIC_PERCEPTION_PROFILE,
+    CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
 )
 FULL_BIRD_CONTEXT_PROFILE = "full-bird-schema-samples-v1"
 FULL_BIRD_CONTEXT_WITH_INSPECT_PROFILE = (
@@ -217,6 +221,17 @@ aliases nor evidence that a value occurs in the database. Ground literals from t
 inspect_column value-domain fields or read_subtable observations.
 """.rstrip()
 
+_CATALOG_BIRD_INSPECT_SEMANTICS_PROMPT_SUFFIX = """
+
+INSPECT-ONLY BIRD COLUMN SEMANTICS
+The source catalog remains lazy, and describe_table returns only the ordinary raw schema without
+BIRD semantic names or descriptions. A successful inspect_column observation may attach both
+semantic_name and column_description to the one inspected raw column. These BIRD annotations are
+meaning hints only: tool arguments must still copy the exact raw table and column names. They are
+neither executable aliases nor evidence that a value occurs in the database. Ground literals from
+the ordinary inspect_column value-domain fields or read_subtable observations.
+""".rstrip()
+
 
 def catalog_profile_student_prompt(base_prompt: str, profile: str) -> str:
     """Apply only the model-visible prompt delta required by a lazy-catalog profile."""
@@ -224,6 +239,8 @@ def catalog_profile_student_prompt(base_prompt: str, profile: str) -> str:
         return base_prompt
     if profile == CATALOG_BIRD_SEMANTIC_PERCEPTION_PROFILE:
         return base_prompt + _CATALOG_BIRD_SEMANTIC_PROMPT_SUFFIX
+    if profile == CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE:
+        return base_prompt + _CATALOG_BIRD_INSPECT_SEMANTICS_PROMPT_SUFFIX
     raise ValueError(f"not a lazy catalog context profile: {profile!r}")
 
 
@@ -236,14 +253,23 @@ def enrich_catalog_perception_output(
 ) -> tuple[dict, dict | None]:
     """Return a model-visible perception overlay without mutating canonical harness output.
 
-    The diagnostic profile progressively exposes only BIRD's short ``column_name`` through
-    ``describe_table`` and long ``column_description`` through ``inspect_column``. It deliberately
-    omits ``data_format`` and values from the metadata CSV; live value evidence remains owned by
-    the ordinary harness observation.
+    One diagnostic profile progressively exposes BIRD's short ``column_name`` through
+    ``describe_table`` and long ``column_description`` through ``inspect_column``. The stricter
+    inspect-only profile leaves ``describe_table`` bit-identical and exposes both annotations only
+    for the one inspected column. Both omit ``data_format`` and values from the metadata CSV; live
+    value evidence remains owned by the ordinary harness observation.
     """
     if profile == CATALOG_CONTEXT_PROFILE:
         return output, None
-    if profile != CATALOG_BIRD_SEMANTIC_PERCEPTION_PROFILE:
+    if profile not in {
+        CATALOG_BIRD_SEMANTIC_PERCEPTION_PROFILE,
+        CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
+    }:
+        return output, None
+    if (
+        profile == CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE
+        and tool != "inspect_column"
+    ):
         return output, None
     if tool not in {"describe_table", "inspect_column"}:
         return output, None
@@ -299,6 +325,12 @@ def enrich_catalog_perception_output(
             (table_name.casefold(), column_name.casefold()),
             {},
         )
+        if (
+            profile == CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE
+            and annotation.get("column_name")
+        ):
+            visible["semantic_name"] = annotation["column_name"]
+            enriched_fields += 1
         description = annotation.get("column_description")
         if description:
             visible["column_description"] = description

@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT / "src" / "sft"))
 
 from denotation import add_denotation_comparison_argument  # noqa: E402
 from atomic_database_context import (  # noqa: E402
+    CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
     CATALOG_BIRD_SEMANTIC_PERCEPTION_PROFILE,
     CATALOG_CONTEXT_PROFILE,
     CATALOG_CONTEXT_PROFILES,
@@ -690,6 +691,21 @@ def run_rollout(
                 },
                 "perception_enrichment_events": [],
             })
+        elif (
+            database_context_profile
+            == CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE
+        ):
+            database_context_audit.update({
+                "perception_enrichment": {
+                    "describe_table": "ordinary atomic output; no BIRD annotations",
+                    "inspect_column": (
+                        "BIRD column_name as semantic_name plus column_description; "
+                        "live value-domain fields unchanged"
+                    ),
+                    "canonical_state_mutated": False,
+                },
+                "perception_enrichment_events": [],
+            })
     else:
         raise ValueError(
             f"unknown database context profile: {database_context_profile!r}"
@@ -1254,9 +1270,9 @@ def main() -> int:
         choices=DATABASE_CONTEXT_PROFILES,
         default=CATALOG_CONTEXT_PROFILE,
         help=(
-            "model-visible database context; catalog-bird-semantics-on-demand-v1 keeps the lazy "
-            "catalog but adds BIRD semantic_name to describe_table and column_description to "
-            "inspect_column; full-context profiles reveal complete schema/semantics/examples"
+            "model-visible database context; inspect-only keeps describe_table unchanged and "
+            "adds BIRD semantic_name+column_description only to inspect_column; the on-demand "
+            "profile also adds semantic_name to describe_table; full profiles reveal everything"
         ),
     )
     parser.add_argument(

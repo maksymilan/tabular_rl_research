@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from atomic_database_context import (
+    CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
     CATALOG_BIRD_SEMANTIC_PERCEPTION_PROFILE,
     CATALOG_CONTEXT_PROFILE,
     FULL_BIRD_CONTEXT_PROFILE,
@@ -142,6 +143,12 @@ class AtomicDatabaseContextTest(unittest.TestCase):
             ),
             frozenset(),
         )
+        self.assertEqual(
+            model_visible_tool_schema_hash(
+                CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE
+            ),
+            tool_schema_hash(),
+        )
 
     def test_catalog_prompt_delta_is_profile_scoped(self) -> None:
         base = "BASE PROMPT"
@@ -156,6 +163,13 @@ class AtomicDatabaseContextTest(unittest.TestCase):
         self.assertIn("semantic_name", enriched)
         self.assertIn("column_description", enriched)
         self.assertIn("exact raw table and column names", enriched)
+        inspect_only = catalog_profile_student_prompt(
+            base,
+            CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
+        )
+        self.assertIn("describe_table returns only", inspect_only)
+        self.assertIn("both", inspect_only)
+        self.assertIn("semantic_name and column_description", inspect_only)
 
     def test_describe_adds_only_short_semantic_names_without_mutation(self) -> None:
         raw = {
@@ -212,6 +226,59 @@ class AtomicDatabaseContextTest(unittest.TestCase):
         self.assertNotIn("data_format", visible)
         self.assertNotIn("column_description", raw)
         self.assertEqual(audit["enriched_field_count"], 1)
+
+    def test_inspect_only_profile_keeps_describe_bit_identical(self) -> None:
+        raw = {
+            "tables": [{
+                "table_name": "people",
+                "row_count": 3,
+                "columns": [{"name": "city", "type": "text", "pk": False}],
+                "foreign_keys": [],
+            }]
+        }
+        visible, audit = enrich_catalog_perception_output(
+            CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
+            {"db_id": "toy", "db_path": str(self.db_path)},
+            "describe_table",
+            {"tables": ["people"]},
+            raw,
+        )
+        self.assertIs(visible, raw)
+        self.assertIsNone(audit)
+        self.assertNotIn(
+            "semantic_name",
+            visible["tables"][0]["columns"][0],
+        )
+        self.assertNotIn(
+            "column_description",
+            visible["tables"][0]["columns"][0],
+        )
+
+    def test_inspect_only_profile_adds_short_name_and_long_description(self) -> None:
+        raw = {
+            "column": "city",
+            "distinct_count": 2,
+            "has_null": False,
+            "frequent_values": ["Paris", "London"],
+            "truncated": False,
+        }
+        visible, audit = enrich_catalog_perception_output(
+            CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
+            {"db_id": "toy", "db_path": str(self.db_path)},
+            "inspect_column",
+            {"table": "people", "column": "city"},
+            raw,
+        )
+        self.assertEqual(visible["semantic_name"], "CITY")
+        self.assertEqual(
+            visible["column_description"],
+            "the city where the person lives",
+        )
+        self.assertEqual(visible["frequent_values"], ["Paris", "London"])
+        self.assertNotIn("data_format", visible)
+        self.assertNotIn("semantic_name", raw)
+        self.assertNotIn("column_description", raw)
+        self.assertEqual(audit["enriched_field_count"], 2)
 
     def test_default_catalog_perception_is_bit_identical(self) -> None:
         raw = {"column": "city", "frequent_values": ["Paris"]}
