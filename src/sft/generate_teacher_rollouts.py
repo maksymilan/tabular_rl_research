@@ -30,13 +30,17 @@ sys.path.insert(0, str(ROOT / "src" / "sft"))
 
 from denotation import add_denotation_comparison_argument  # noqa: E402
 from atomic_database_context import (  # noqa: E402
+    CATALOG_BIRD_SEMANTIC_PERCEPTION_PROFILE,
     CATALOG_CONTEXT_PROFILE,
+    CATALOG_CONTEXT_PROFILES,
     DATABASE_CONTEXT_PROFILES,
     FULL_BIRD_CONTEXT_PROFILES,
     build_full_bird_database_context,
     build_full_context_student_prompt,
     build_full_context_teacher_prompt,
+    catalog_profile_student_prompt,
     disabled_tools_for_profile,
+    enrich_catalog_perception_output,
     model_visible_tool_schema_hash,
     validate_profile_tool,
 )
@@ -662,16 +666,30 @@ def run_rollout(
             schema_metadata_json=schema_metadata_json,
             profile=database_context_profile,
         )
-    elif database_context_profile == CATALOG_CONTEXT_PROFILE:
+    elif database_context_profile in CATALOG_CONTEXT_PROFILES:
         dataset_overview = execution_catalog
         database_context_audit = {
-            "context_profile": CATALOG_CONTEXT_PROFILE,
+            "context_profile": database_context_profile,
             "schema_value_count": None,
             "disabled_model_tools": [],
             "model_visible_tool_schema_sha256": model_visible_tool_schema_hash(
-                CATALOG_CONTEXT_PROFILE
+                database_context_profile
             ),
         }
+        if (
+            database_context_profile
+            == CATALOG_BIRD_SEMANTIC_PERCEPTION_PROFILE
+        ):
+            database_context_audit.update({
+                "perception_enrichment": {
+                    "describe_table": "BIRD column_name as semantic_name",
+                    "inspect_column": (
+                        "BIRD column_description; live value-domain fields unchanged"
+                    ),
+                    "canonical_state_mutated": False,
+                },
+                "perception_enrichment_events": [],
+            })
     else:
         raise ValueError(
             f"unknown database context profile: {database_context_profile!r}"
@@ -905,6 +923,20 @@ def run_rollout(
                 step_id,
                 table_output_rows=table_output_rows,
             )
+            out, enrichment_audit = enrich_catalog_perception_output(
+                database_context_profile,
+                ex,
+                tool,
+                args,
+                out,
+            )
+            if enrichment_audit is not None:
+                database_context_audit[
+                    "perception_enrichment_events"
+                ].append({
+                    "step_id": step_id,
+                    **enrichment_audit,
+                })
             turn["tool_output"] = out
             steps.append({
                 "step_id": step_id,
@@ -1222,9 +1254,9 @@ def main() -> int:
         choices=DATABASE_CONTEXT_PROFILES,
         default=CATALOG_CONTEXT_PROFILE,
         help=(
-            "model-visible database context; full-bird-schema-samples-v1 reveals complete "
-            "BIRD schema/column semantics/live examples; profile names specify whether only "
-            "describe_table or both describe_table/inspect_column are removed"
+            "model-visible database context; catalog-bird-semantics-on-demand-v1 keeps the lazy "
+            "catalog but adds BIRD semantic_name to describe_table and column_description to "
+            "inspect_column; full-context profiles reveal complete schema/semantics/examples"
         ),
     )
     parser.add_argument(
@@ -1243,12 +1275,12 @@ def main() -> int:
     if args.schema_value_count < 0:
         parser.error("--schema-value-count must be non-negative")
     if (
-        args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
+        args.database_context_profile != CATALOG_CONTEXT_PROFILE
         and not args.diagnostic_only
     ):
         parser.error(
-            "full-bird-schema-samples-v1 is an unpromoted diagnostic profile; "
-            "pass --diagnostic-only"
+            "non-default database context profiles are unpromoted diagnostics; pass "
+            "--diagnostic-only"
         )
     if (
         args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
@@ -1279,7 +1311,10 @@ def main() -> int:
     student_prompt = (
         build_full_context_student_prompt(args.database_context_profile)
         if args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
-        else get_system_prompt()
+        else catalog_profile_student_prompt(
+            get_system_prompt(),
+            args.database_context_profile,
+        )
     )
     if args.context_mode == "rolling-legal-history":
         student_prompt = rolling_system_prompt(
