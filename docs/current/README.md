@@ -7,9 +7,12 @@ sources of truth.
 - `overview.md`: research objective and non-negotiable method boundary.
 - `architecture.md`: active code layout and ownership.
 - `tool_schemes.md`: the three exclusive model action schemes and their train/eval boundaries.
-- `tool_protocol.md`: model-visible action and context protocol.
+- `tool_protocol.md`: model-visible action and context protocol, including the version39 default
+  and isolated version40 no-plan/`inspect_rows` diagnostic.
 - `atomic_tool_interface_zh.md`: standalone Chinese reference for the atomic version39 public
   tools, strict argument shapes, error contract, and full-context/F profile differences.
+- `atomic_version40_prompt_diagnostic_zh.md`: isolated no-plan/`inspect_rows` external-teacher
+  prompt diagnostic, prompt-size audit, and undecided next ablations.
 - `relation_derivation.md`: fact-only semantics attached to every derived table handle.
 - `execution_contract.md`: harness semantics and error handling.
 - `data_generation.md`: causal SFT-1/SFT-2 data construction.

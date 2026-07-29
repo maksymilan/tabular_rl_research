@@ -36,8 +36,9 @@ Start at `docs/current/README.md`.
 
 - Shared prompt semantics: `src/sft/prompt_contract.py`; protocol/validation:
   `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current atomic local diagnostic implementation: `version39`. The production checkpoint-560
-  evaluation chain remains frozen on `version26`; version39 has not received an accuracy promotion and must
+- Current atomic local diagnostic default: `version39`; `version40` is an opt-in prompt/tool-name
+  diagnostic. The production checkpoint-560 evaluation chain remains frozen on `version26`;
+  neither version39 nor version40 has received an accuracy promotion and they must
   not be mixed into its result directories. Version26 retains version25's prompt-role and
   public-contract refactor, but replaces the model-visible tagged action carrier with one
   non-empty `<think>` block followed directly by a strict raw JSON action object. The former
@@ -184,6 +185,14 @@ Start at `docs/current/README.md`.
   read, or singleton empty handles stay fully rendered. Version39 is diagnostic-only pending a
   context-efficiency and behavior-preservation gate; frozen version26 runs and artifacts remain
   unchanged.
+  `version40` is an isolated external-teacher diagnostic selected with
+  `--atomic-protocol-version version40 --diagnostic-only`. It keeps version39 execution, state,
+  grounding, feedback, carrier, and the exact multi-edge `join_tables` rule. It removes `plan`
+  from its public surface, renames the read-only row observer to `inspect_rows`, and replaces the
+  appended teacher/runtime prompt stack with one 7.45k-character layered prompt. Its recent-4
+  successful history retains complete provider-native reasoning, exact calls, and unabridged tool
+  results; rejected text is still excluded. It is catalog-only, has no accuracy promotion, and is
+  ineligible for SFT/RL pending a paired gate.
   Future versions increment numerically.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may
@@ -199,6 +208,8 @@ Start at `docs/current/README.md`.
 - Current tools: `plan`, `describe_table`, `inspect_column`, `read_subtable`,
   `condition_filter`, `project`, `scalar_compute`, `join_tables`, `group_aggregate`,
   `extreme_value_select`, `set_op`, and `answer_from_context`.
+- Version40 exposes the same set except that `plan` is absent and `read_subtable` is named
+  `inspect_rows`; all other signatures and execution semantics are unchanged.
 - The frozen experimental `action-block-v32` scheme does not change that atomic contract. A
   work turn is one top-level `action_block` with one to five ordered nonterminal primitive calls;
   termination is one separate top-level `answer_from_context`. Terminal calls cannot be nested or

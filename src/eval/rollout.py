@@ -578,6 +578,7 @@ def validate_tool_arguments_against_state(h: Harness, tool: str, args: dict) -> 
     if tool in {
         "inspect_column",
         "read_subtable",
+        "inspect_rows",
         "condition_filter",
         "project",
         "group_aggregate",
@@ -596,11 +597,12 @@ def validate_tool_arguments_against_state(h: Harness, tool: str, args: dict) -> 
             h, tool, args, table, columns, args.get("column"),
             argument_path="inspect_column.column",
         )
-    elif tool == "read_subtable":
+    elif tool in {"read_subtable", "inspect_rows"}:
+        tool_path = tool
         for index, column in enumerate(args.get("columns") or []):
             _validated_column(
                 h, tool, args, table, columns, column,
-                argument_path=f"read_subtable.columns[{index}]",
+                argument_path=f"{tool_path}.columns[{index}]",
             )
         if args.get("conditions") is not None:
             _validate_condition_against_table(
@@ -610,7 +612,7 @@ def validate_tool_arguments_against_state(h: Harness, tool: str, args: dict) -> 
                 table,
                 columns,
                 args["conditions"],
-                argument_path="read_subtable.conditions",
+                argument_path=f"{tool_path}.conditions",
             )
         for index, item in enumerate(args.get("order_by") or []):
             order_column = re.sub(
@@ -623,7 +625,7 @@ def validate_tool_arguments_against_state(h: Harness, tool: str, args: dict) -> 
                 table,
                 columns,
                 order_column,
-                argument_path=f"read_subtable.order_by[{index}]",
+                argument_path=f"{tool_path}.order_by[{index}]",
             )
     elif tool == "condition_filter":
         _validate_condition_against_table(
@@ -798,9 +800,10 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
         ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
         return output, None
 
-    if tool in ("describe_table", "inspect_column", "read_subtable"):   # read-only perception; no table
+    if tool in ("describe_table", "inspect_column", "read_subtable", "inspect_rows"):
+        # read-only perception; no table
         perception_args = dict(args)
-        if tool == "read_subtable" and perception_args.get("conditions") is not None:
+        if tool in {"read_subtable", "inspect_rows"} and perception_args.get("conditions") is not None:
             values = {
                 ref: extract_scalar(ctx["history"], ref)
                 for ref in _value_ref_ids(perception_args["conditions"])
@@ -808,10 +811,11 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
             perception_args["conditions"] = resolve_cond(
                 perception_args["conditions"], {}, values
             )
-        out = getattr(h, tool)(**perception_args)
+        executor_tool = "read_subtable" if tool == "inspect_rows" else tool
+        out = getattr(h, executor_tool)(**perception_args)
         output = out if isinstance(out, dict) else {"rows": [list(r) for r in out], "row_count": len(out)}
         history_record = {"tool": tool, "arguments": args, "output": output, "references": references}
-        if tool == "read_subtable":
+        if tool in {"read_subtable", "inspect_rows"}:
             table = args.get("table")
             requested_columns = args.get("columns")
             output.update({

@@ -52,6 +52,7 @@ from public_tool_contract import (
     ROW_DATE_EXPRESSION_OPERATIONS,
     SCALAR_OPERAND_KEYSETS,
     SCALAR_OPERATIONS,
+    VERSION40_PUBLIC_TOOL_ARGUMENTS,
 )
 
 # Teacher-only elaborations for the same public tools. These descriptions may explain edge cases
@@ -172,7 +173,9 @@ TOOLS = set(TOOL_SPECS)
 # explicit prevents old data compatibility from quietly widening the live agent interface.
 LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
-ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
+# inspect_rows is the version40 public alias for the same read-only executor operation. It is
+# replay/execution-compatible here but remains absent from the default version39 model surface.
+ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS | {"inspect_rows"}
 
 PROTOCOL_VERSION = "version39"  # model-visible resident-state compaction
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
@@ -234,6 +237,10 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
         {"table"},
         {"limit", "columns", "conditions", "order_by", "offset"},
     ),
+    "inspect_rows": (
+        {"table"},
+        {"limit", "columns", "conditions", "order_by", "offset"},
+    ),
     "answer_from_context": (set(), {"answer", "evidence", "reason"}),
 }
 
@@ -243,6 +250,10 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
 MODEL_ARG_SCHEMA: dict[str, tuple[set[str], set[str]]] = {
     tool: (set(required), set(optional))
     for tool, (required, optional) in PUBLIC_TOOL_ARGUMENTS.items()
+}
+VERSION40_MODEL_ARG_SCHEMA: dict[str, tuple[set[str], set[str]]] = {
+    tool: (set(required), set(optional))
+    for tool, (required, optional) in VERSION40_PUBLIC_TOOL_ARGUMENTS.items()
 }
 ACTION_BLOCK_MODEL_ARG_SCHEMA: dict[str, tuple[set[str], set[str]]] = {
     tool: (set(required), set(optional))
@@ -511,10 +522,10 @@ def _validate_model_group_aggregate(args: dict) -> None:
             raise ProtocolError("group_aggregate.output_columns must be unique")
 
 
-def _validate_read_subtable(args: dict) -> None:
+def _validate_row_inspection(args: dict, *, tool: str) -> None:
     limit = args.get("limit", 20)
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
-        raise ProtocolError("read_subtable: limit must be an integer from 1 to 20")
+        raise ProtocolError(f"{tool}: limit must be an integer from 1 to 20")
     columns = args.get("columns")
     if columns is not None and (
         not isinstance(columns, list)
@@ -522,14 +533,14 @@ def _validate_read_subtable(args: dict) -> None:
         or not all(isinstance(item, str) and item.strip() for item in columns)
     ):
         raise ProtocolError(
-            "read_subtable: columns must be a non-empty list of non-empty column names"
+            f"{tool}: columns must be a non-empty list of non-empty column names"
         )
     conditions = args.get("conditions")
     if conditions is not None and (
         not isinstance(conditions, (dict, list)) or not conditions
     ):
         raise ProtocolError(
-            "read_subtable: conditions must be a non-empty condition predicate"
+            f"{tool}: conditions must be a non-empty condition predicate"
         )
     order_by = args.get("order_by")
     if order_by is not None and (
@@ -538,14 +549,14 @@ def _validate_read_subtable(args: dict) -> None:
         or not all(isinstance(item, str) and item.strip() for item in order_by)
     ):
         raise ProtocolError(
-            "read_subtable: order_by must be a non-empty list of column strings"
+            f"{tool}: order_by must be a non-empty list of column strings"
         )
     offset = args.get("offset", 0)
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-        raise ProtocolError("read_subtable: offset must be a non-negative integer")
+        raise ProtocolError(f"{tool}: offset must be a non-negative integer")
     if offset and not order_by:
         raise ProtocolError(
-            "read_subtable: positive offset requires order_by for deterministic pagination"
+            f"{tool}: positive offset requires order_by for deterministic pagination"
         )
 
 
@@ -652,8 +663,8 @@ def _validate_common_model_arguments(
         _validate_model_join(args)
     if tool == "group_aggregate":
         _validate_model_group_aggregate(args)
-    if tool == "read_subtable":
-        _validate_read_subtable(args)
+    if tool in {"read_subtable", "inspect_rows"}:
+        _validate_row_inspection(args, tool=tool)
     if tool == "project":
         _validate_project(args, allow_typed_date_rows=allow_typed_date_rows)
     if tool == "extreme_value_select":
@@ -705,6 +716,12 @@ def _validate_common_model_arguments(
 def validate_model_arguments(tool: str, args: dict) -> None:
     """Validate the current atomic action API, excluding replay compatibility."""
     _validate_argument_keys(tool, args, MODEL_ARG_SCHEMA)
+    _validate_common_model_arguments(tool, args, allow_typed_date_rows=True)
+
+
+def validate_version40_model_arguments(tool: str, args: dict) -> None:
+    """Validate the isolated version40 public action API."""
+    _validate_argument_keys(tool, args, VERSION40_MODEL_ARG_SCHEMA)
     _validate_common_model_arguments(tool, args, allow_typed_date_rows=True)
 
 

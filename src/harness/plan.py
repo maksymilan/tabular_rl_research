@@ -25,6 +25,7 @@ TABLE_REF_ARGS: dict[str, list[str]] = {
     "extreme_value_select": ["table"],
     "aggregate": ["table"],
     "read_subtable": ["table"],
+    "inspect_rows": ["table"],
     "window": ["table"],
     "join_tables": ["left", "right", "tables", "base"],
     "set_op": ["left", "right"],

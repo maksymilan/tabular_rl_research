@@ -18,6 +18,7 @@ spaces are never merged in one prompt.
   - `TOOL_SPECS`
   - `MODEL_ARG_SCHEMA`
   - message rendering/parsing
+- Isolated atomic version40 diagnostic: `src/sft/atomic_version40.py`
 - Harness provenance sidecars: `src/harness/provenance.py`
 - Visible-cell binding semantics: `src/harness/observation_binding.py`
 - Scalar `value_ref` grounding: `src/harness/scalar_grounding.py`
@@ -236,7 +237,16 @@ Public version mapping:
   into a fact-only summary retaining their handles, creator steps, predicates, input, and columns.
   Referenced, observed, or singleton empty handles remain fully expanded. It is diagnostic-only
   pending context-efficiency and behavior-preservation gates;
-- future changes increment only the integer (`version40`, `version41`, ...).
+- `version40`: an opt-in external-teacher diagnostic selected with
+  `--atomic-protocol-version version40 --diagnostic-only`. It keeps version39 relational
+  execution and the exact `join_tables(base, joins[], base_role?)` contract, removes `plan` from
+  the public surface, and renames the read-only row observer to `inspect_rows`. Its single layered
+  prompt states each policy once and has no appended teacher-policy duplicate. Recent history is
+  fixed at four successful pairs; each retained pair carries complete provider-native reasoning,
+  the exact action, and the unabridged tool result. Rejected assistant text remains excluded and
+  only its structured error is resident. Version40 currently supports only the lazy catalog
+  profile and is ineligible for SFT/RL pending a paired gate;
+- future changes increment only the integer (`version41`, `version42`, ...).
 
 The current version39 diagnostic tool set remains the one in
 `src/sft/protocol.py::TOOL_SPECS`:
@@ -253,6 +263,12 @@ The current version39 diagnostic tool set remains the one in
 - `inspect_column`
 - `read_subtable`
 - `answer_from_context`
+
+The separate version40 public set is defined by
+`src/sft/atomic_version40.py::TOOL_SPECS`. It removes `plan`, replaces
+`read_subtable` with `inspect_rows`, and leaves every other signature—including `join_tables`—
+unchanged. The executor keeps `read_subtable` only as a private/replay-compatible implementation
+name.
 
 The model-visible relation derivation schema is indexed separately in
 `docs/current/relation_derivation.md`.

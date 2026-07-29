@@ -33,7 +33,12 @@ from observation_binding import (
 from plan import TABLE_REF_ARGS
 
 
-PERCEPTION_TOOLS = frozenset({"describe_table", "inspect_column", "read_subtable"})
+PERCEPTION_TOOLS = frozenset({
+    "describe_table",
+    "inspect_column",
+    "read_subtable",
+    "inspect_rows",
+})
 
 
 @dataclass(frozen=True)

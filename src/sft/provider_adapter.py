@@ -22,6 +22,7 @@ DEEPSEEK_CARRIER_CHOICES = (
     DEEPSEEK_CARRIER_JSON_OUTPUT,
     DEEPSEEK_CARRIER_TOOL_CALL,
 )
+VERSION40_RESPONSE_CONTRACT_PLACEHOLDER = "{{VERSION40_RESPONSE_CONTRACT}}"
 _CANONICAL_SYSTEM_RESPONSE_RULE = CANONICAL_ACTION_RULE
 _SPLIT_SYSTEM_RESPONSE_RULE = (
     "1. Produce exactly one tool action per turn using the provider-specific response envelope "
@@ -139,16 +140,65 @@ def provider_system_prompt(
     )
 
 
+def provider_system_prompt_version40(
+    model: str,
+    prompt_template: str,
+    *,
+    example_visible_content: str | None = None,
+    carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
+) -> str:
+    """Fill version40's single response-contract slot without duplicating prompt rules."""
+    if prompt_template.count(VERSION40_RESPONSE_CONTRACT_PLACEHOLDER) != 1:
+        raise ValueError("version40 prompt must contain exactly one response-contract placeholder")
+    example = example_visible_content or (
+        '{"tool":"describe_table","arguments":{"tables":["Document"]}}'
+    )
+    if not is_deepseek_split_model(model):
+        contract = (
+            "Use one non-empty <think> block for the reasoning required above, followed directly "
+            'by one raw JSON object with exactly the keys "tool" and "arguments". Emit nothing '
+            "else."
+        )
+    elif carrier == DEEPSEEK_CARRIER_JSON_OUTPUT:
+        contract = (
+            "Use the API's native reasoning field for the reasoning required above. The entire "
+            'visible response must be one complete JSON object with exactly the keys "tool" and '
+            '"arguments"; JSON Output is enabled. Put every parameter inside arguments. Emit no '
+            "Markdown, XML, explanation, or second action.\n"
+            "Shape example (replace values only):\n"
+            f"{example}"
+        )
+    elif carrier == DEEPSEEK_CARRIER_TOOL_CALL:
+        contract = (
+            "Use the API's native reasoning field for the reasoning required above. The entire "
+            "visible response must be one complete <tool_call>{...}</tool_call> block containing "
+            'a JSON object with exactly the keys "tool" and "arguments". Put every parameter '
+            "inside arguments. Emit no Markdown, explanation, or second action.\n"
+            "Shape example (replace values only):\n"
+            f"<tool_call>{example}</tool_call>"
+        )
+    else:
+        raise ValueError(f"unknown DeepSeek carrier {carrier!r}")
+    return prompt_template.replace(
+        VERSION40_RESPONSE_CONTRACT_PLACEHOLDER,
+        contract,
+        1,
+    )
+
+
 def provider_request_messages(
     model: str,
     messages: list[dict],
     carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
+    *,
+    preserve_reasoning: bool = False,
 ) -> list[dict]:
     """Render canonical legal-history actions in the provider's API-facing carrier.
 
-    DeepSeek receives prior assistant actions as one raw JSON action object. Their old reasoning is
-    deliberately omitted: resident state and tool observations are authoritative, and replaying a
-    ``<think>`` content in visible history contradicts the current split-field contract.
+    By default DeepSeek receives prior assistant actions as one raw JSON action object and old
+    reasoning is omitted, preserving the promoted contract. The isolated version40 diagnostic may
+    instead copy the complete prior canonical reason into the provider-native
+    ``reasoning_content`` field while keeping the visible action carrier unchanged.
     The returned list is a copy; canonical audit/history records are not mutated.
     """
     rendered = [dict(message) for message in messages]
@@ -164,6 +214,11 @@ def provider_request_messages(
             raise ValueError("DeepSeek assistant history content must be a string")
         match = _CANONICAL_ASSISTANT_HISTORY_RE.fullmatch(content)
         if match:
+            if preserve_reasoning:
+                reasoning = match.group("reasoning").strip()
+                if not reasoning:
+                    raise ValueError("DeepSeek assistant history reasoning must be non-empty")
+                message["reasoning_content"] = reasoning
             call_json = match.group("call_json").strip()
             if carrier == DEEPSEEK_CARRIER_TOOL_CALL:
                 message["content"] = f"<tool_call>{call_json}</tool_call>"

@@ -291,7 +291,7 @@ class EnvironmentState:
                 }
             return
 
-        if tool == "read_subtable":
+        if tool in {"read_subtable", "inspect_rows"}:
             table = args.get("table") or output.get("table")
             if table:
                 entry = self._ensure_table(table)

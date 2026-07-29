@@ -179,6 +179,34 @@ PUBLIC_TOOL_ARGUMENTS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     for tool, contract in PUBLIC_TOOL_CONTRACTS.items()
 }
 
+# Atomic version40 is an isolated prompt/tool-surface diagnostic. It keeps every version39
+# execution semantic, including the join contract, but removes the model-visible plan tool and
+# renames the read-only row observer to align with inspect_column. The executor retains a
+# replay-only read_subtable alias; it is not exposed through this public contract.
+VERSION40_PUBLIC_TOOL_CONTRACTS: dict[str, ToolContract] = {}
+for _tool, _contract in PUBLIC_TOOL_CONTRACTS.items():
+    if _tool == "plan":
+        continue
+    if _tool == "read_subtable":
+        VERSION40_PUBLIC_TOOL_CONTRACTS["inspect_rows"] = ToolContract(
+            _contract.required,
+            _contract.optional,
+            "observe up to 20 matching rows without deriving a table. conditions uses the same "
+            "typed predicate shape as condition_filter, including on_date for calendar-date "
+            "matching. order_by is a list of exact columns optionally ending in ASC or DESC. "
+            "offset is a non-negative row offset and requires order_by so pagination is "
+            "deterministic. Omitted columns means all columns.",
+        )
+        continue
+    VERSION40_PUBLIC_TOOL_CONTRACTS[_tool] = _contract
+
+VERSION40_PUBLIC_TOOL_ARGUMENTS: dict[
+    str, tuple[tuple[str, ...], tuple[str, ...]]
+] = {
+    tool: (contract.required, contract.optional)
+    for tool, contract in VERSION40_PUBLIC_TOOL_CONTRACTS.items()
+}
+
 
 def _choices(values: tuple[str, ...]) -> str:
     return "|".join(values)

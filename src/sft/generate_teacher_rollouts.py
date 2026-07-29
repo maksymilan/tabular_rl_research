@@ -41,6 +41,14 @@ from atomic_database_context import (  # noqa: E402
     validate_profile_tool,
 )
 from provider_client import load_api_config  # noqa: E402
+from atomic_version40 import (  # noqa: E402
+    PROTOCOL_VERSION as VERSION40_PROTOCOL_VERSION,
+    STUDENT_SYSTEM_PROMPT as VERSION40_STUDENT_SYSTEM_PROMPT,
+    parse_assistant_strict as parse_assistant_strict_version40,
+    protocol_hash as protocol_hash_version40,
+    provider_system_prompt as provider_system_prompt_version40,
+    tool_schema_hash as tool_schema_hash_version40,
+)
 from prompt_contract import TEACHER_ONE_ACTION_RULE  # noqa: E402
 from provider_adapter import (  # noqa: E402
     DEEPSEEK_CARRIER_CHOICES,
@@ -73,7 +81,7 @@ from protocol import (  # noqa: E402
     AdjacentActionGuard,
     POLICY_PROMPT_CANONICAL,
     POLICY_PROMPT_VARIANTS,
-    PROTOCOL_VERSION,
+    PROTOCOL_VERSION as DEFAULT_PROTOCOL_VERSION,
     ProtocolError,
     assistant_message,
     first_user_message,
@@ -105,6 +113,10 @@ MIN_CONTEXT_RETRY_TOKENS = 256
 MAX_COMPLETION_RETRY_TOKENS = 8192
 DIAGNOSTIC_TRAINING_ADMISSION = "diagnostic_only_pending_protocol_scale_gate"
 ELIGIBLE_TRAINING_ADMISSION = "eligible_by_current_context_contract"
+ATOMIC_PROTOCOL_VERSIONS = (
+    DEFAULT_PROTOCOL_VERSION,
+    VERSION40_PROTOCOL_VERSION,
+)
 DATA_GENERATION_SUFFIX = (
     "\n\nDATA GENERATION STRICTNESS\n"
     + TEACHER_ONE_ACTION_RULE
@@ -116,6 +128,22 @@ DATA_GENERATION_SUFFIX = (
     "rows are needed. If a plan item has no evidence yet, omit the evidence "
     "field or set it to null; never use an empty string for evidence."
 )
+
+
+def selected_protocol_hash(protocol_version: str, system_prompt: str) -> str:
+    if protocol_version == VERSION40_PROTOCOL_VERSION:
+        return protocol_hash_version40(system_prompt)
+    if protocol_version == DEFAULT_PROTOCOL_VERSION:
+        return protocol_hash(system_prompt)
+    raise ValueError(f"unknown atomic protocol version {protocol_version!r}")
+
+
+def selected_tool_schema_hash(protocol_version: str) -> str:
+    if protocol_version == VERSION40_PROTOCOL_VERSION:
+        return tool_schema_hash_version40()
+    if protocol_version == DEFAULT_PROTOCOL_VERSION:
+        return tool_schema_hash()
+    raise ValueError(f"unknown atomic protocol version {protocol_version!r}")
 
 
 def sft_export_eligible(
@@ -646,7 +674,25 @@ def run_rollout(
     database_context_profile: str = CATALOG_CONTEXT_PROFILE,
     schema_value_count: int = 2,
     schema_metadata_json: str | None = None,
+    atomic_protocol_version: str = DEFAULT_PROTOCOL_VERSION,
 ) -> dict:
+    if atomic_protocol_version not in ATOMIC_PROTOCOL_VERSIONS:
+        raise ValueError(f"unknown atomic protocol version {atomic_protocol_version!r}")
+    version40 = atomic_protocol_version == VERSION40_PROTOCOL_VERSION
+    if version40:
+        if not diagnostic_only:
+            raise ValueError("version40 is diagnostic-only")
+        if context_mode != "rolling-legal-history" or history_turns != 4:
+            raise ValueError("version40 requires rolling legal history with exactly four turns")
+        if rolling_prompt_variant != "full":
+            raise ValueError("version40 uses one fixed full prompt")
+        if policy_prompt_variant != POLICY_PROMPT_CANONICAL:
+            raise ValueError("version40 does not combine with policy prompt ablations")
+        if plan_policy != PLAN_POLICY_OPTIONAL:
+            raise ValueError("version40 removes plan and cannot use a required plan policy")
+        if database_context_profile != CATALOG_CONTEXT_PROFILE:
+            raise ValueError("version40 currently supports only the catalog-v1 context profile")
+    effective_plan_policy = "disabled-by-protocol" if version40 else plan_policy
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
     if not gold_sql:
@@ -677,6 +723,10 @@ def run_rollout(
             f"unknown database context profile: {database_context_profile!r}"
         )
     disabled_model_tools = disabled_tools_for_profile(database_context_profile)
+    if version40:
+        database_context_audit["model_visible_tool_schema_sha256"] = (
+            tool_schema_hash_version40()
+        )
     external_knowledge = ex.get("external_knowledge") or None
     messages = [
         {"role": "system", "content": system_prompt},
@@ -694,7 +744,9 @@ def run_rollout(
     error_events: list[dict] = []
     legal_history: list[dict] = []
     adjacent_guard = AdjacentActionGuard()
-    plan_tracker = ResidentPlanPolicyTracker(plan_policy)
+    plan_tracker = ResidentPlanPolicyTracker(
+        PLAN_POLICY_OPTIONAL if version40 else plan_policy
+    )
     successful_tool_steps = 0
     usage = collections.Counter()
     started = time.time()
@@ -702,8 +754,11 @@ def run_rollout(
         "tool_scheme": ATOMIC_TOOL_SCHEME,
         "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
         "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
-        "protocol_version": PROTOCOL_VERSION,
-        "protocol_hash": protocol_hash(system_prompt),
+        "protocol_version": atomic_protocol_version,
+        "protocol_hash": selected_protocol_hash(
+            atomic_protocol_version,
+            system_prompt,
+        ),
         "example_index": example_index,
         "trajectory_id": trajectory_id(split, example_index, ex),
         "db_id": ex["db_id"],
@@ -719,7 +774,13 @@ def run_rollout(
         "turns": turns,
         "error_events": error_events,
         "outcome": None,
-        "plan_policy": plan_policy,
+        "plan_policy": effective_plan_policy,
+        "history_reasoning": (
+            "provider-native-complete-recent-4" if version40 else "omitted-from-provider-history"
+        ),
+        "history_observations": (
+            "unabridged-recent-4" if version40 else "compact-resident"
+        ),
         "policy_prompt_variant": policy_prompt_variant,
         "denotation_comparison": denotation_comparison,
         "training_admission": training_admission(diagnostic_only=diagnostic_only),
@@ -748,6 +809,7 @@ def run_rollout(
                 external_knowledge,
                 legal_history,
                 history_turns,
+                compact_observations=not version40,
             )
         else:
             model_input = model_context_messages(
@@ -762,6 +824,7 @@ def run_rollout(
             model,
             model_input,
             carrier=deepseek_carrier,
+            preserve_reasoning=version40,
         )
         turn = {
             "turn_index": len(turns),
@@ -851,7 +914,12 @@ def run_rollout(
                 adjacent_guard.clear()
                 raise ProtocolError(rejection)
             step_id = f"step_{action_count}"
-            think, tool, args = parse_assistant_strict(
+            parser = (
+                parse_assistant_strict_version40
+                if version40
+                else parse_assistant_strict
+            )
+            think, tool, args = parser(
                 text,
                 adjacent_guard=adjacent_guard,
                 step_id=step_id,
@@ -1015,8 +1083,11 @@ def run_rollout(
             "tool_scheme": ATOMIC_TOOL_SCHEME,
             "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
             "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
-            "protocol_version": PROTOCOL_VERSION,
-            "protocol_hash": protocol_hash(system_prompt),
+            "protocol_version": atomic_protocol_version,
+            "protocol_hash": selected_protocol_hash(
+                atomic_protocol_version,
+                system_prompt,
+            ),
             "trajectory_id": rec["trajectory_id"],
             "schema_version": "v4-external-rollout",
             "source": {
@@ -1049,16 +1120,27 @@ def run_rollout(
                 "tool_scheme": ATOMIC_TOOL_SCHEME,
                 "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
                 "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
-                "protocol_version": PROTOCOL_VERSION,
+                "protocol_version": atomic_protocol_version,
                 "method": "external_llm_closed_loop",
                 "model": model,
-                "protocol_hash": protocol_hash(system_prompt),
+                "protocol_hash": selected_protocol_hash(
+                    atomic_protocol_version,
+                    system_prompt,
+                ),
                 "prompt_contract": dict(prompt_audit or {}),
                 "context_mode": context_mode,
                 "history_turns": history_turns,
                 "rolling_prompt_variant": rolling_prompt_variant,
                 "policy_prompt_variant": policy_prompt_variant,
-                "plan_policy": plan_policy,
+                "plan_policy": effective_plan_policy,
+                "history_reasoning": (
+                    "provider-native-complete-recent-4"
+                    if version40
+                    else "omitted-from-provider-history"
+                ),
+                "history_observations": (
+                    "unabridged-recent-4" if version40 else "compact-resident"
+                ),
                 "deepseek_carrier": deepseek_carrier,
                 "denotation_comparison": denotation_comparison,
                 "database_context_profile": database_context_profile,
@@ -1191,6 +1273,15 @@ def main() -> int:
     parser.add_argument("--rolling-prompt-variant", choices=["full", "compact"], default="full",
                         help="rolling-only prompt ablation; full preserves existing runs")
     parser.add_argument(
+        "--atomic-protocol-version",
+        choices=ATOMIC_PROTOCOL_VERSIONS,
+        default=DEFAULT_PROTOCOL_VERSION,
+        help=(
+            "version39 preserves the current default; version40 enables the isolated no-plan, "
+            "inspect_rows, full-reasoning recent-4 prompt diagnostic"
+        ),
+    )
+    parser.add_argument(
         "--policy-prompt-variant",
         choices=POLICY_PROMPT_VARIANTS,
         default=POLICY_PROMPT_CANONICAL,
@@ -1257,6 +1348,21 @@ def main() -> int:
         parser.error(
             "full-bird-schema-samples-v1 requires --rolling-prompt-variant full"
         )
+    if args.atomic_protocol_version == VERSION40_PROTOCOL_VERSION:
+        if not args.diagnostic_only:
+            parser.error("version40 is diagnostic-only; pass --diagnostic-only")
+        if args.context_mode != "rolling-legal-history":
+            parser.error("version40 requires --context-mode rolling-legal-history")
+        if args.history_turns != 4:
+            parser.error("version40 requires --history-turns 4")
+        if args.rolling_prompt_variant != "full":
+            parser.error("version40 has one fixed layered prompt; use --rolling-prompt-variant full")
+        if args.policy_prompt_variant != POLICY_PROMPT_CANONICAL:
+            parser.error("version40 does not combine with policy prompt ablations")
+        if args.plan_policy != PLAN_POLICY_OPTIONAL:
+            parser.error("version40 removes plan; do not select a required plan policy")
+        if args.database_context_profile != CATALOG_CONTEXT_PROFILE:
+            parser.error("version40 currently supports only --database-context-profile catalog-v1")
     if args.max_tokens is None:
         args.max_tokens = provider_default_max_tokens(args.model, DEFAULT_MAX_TOKENS)
 
@@ -1276,37 +1382,46 @@ def main() -> int:
         (i, ex) for i, ex in examples
         if trajectory_id(args.split, i, ex) not in completed
     ]
-    student_prompt = (
-        build_full_context_student_prompt(args.database_context_profile)
-        if args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
-        else get_system_prompt()
-    )
-    if args.context_mode == "rolling-legal-history":
-        student_prompt = rolling_system_prompt(
-            student_prompt,
-            compact=args.rolling_prompt_variant == "compact",
+    version40 = args.atomic_protocol_version == VERSION40_PROTOCOL_VERSION
+    if version40:
+        student_prompt = VERSION40_STUDENT_SYSTEM_PROMPT
+        canonical_teacher_prompt = VERSION40_STUDENT_SYSTEM_PROMPT
+        system_prompt = provider_system_prompt_version40(
+            args.model,
+            carrier=args.deepseek_carrier,
         )
-    base_system_prompt = (
-        build_full_context_teacher_prompt(
-            student_prompt,
-            args.database_context_profile,
+    else:
+        student_prompt = (
+            build_full_context_student_prompt(args.database_context_profile)
+            if args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
+            else get_system_prompt()
         )
-        if args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
-        else teacher_system_prompt(student_prompt)
-    )
-    base_system_prompt = policy_system_prompt(
-        base_system_prompt,
-        args.policy_prompt_variant,
-    )
-    prompt_suffix = DATA_GENERATION_SUFFIX
-    if args.plan_policy == PLAN_POLICY_REQUIRED_RESIDENT:
-        prompt_suffix += REQUIRED_RESIDENT_PLAN_SUFFIX
-    canonical_teacher_prompt = base_system_prompt + prompt_suffix
-    system_prompt = provider_system_prompt(
-        args.model,
-        canonical_teacher_prompt,
-        carrier=args.deepseek_carrier,
-    )
+        if args.context_mode == "rolling-legal-history":
+            student_prompt = rolling_system_prompt(
+                student_prompt,
+                compact=args.rolling_prompt_variant == "compact",
+            )
+        base_system_prompt = (
+            build_full_context_teacher_prompt(
+                student_prompt,
+                args.database_context_profile,
+            )
+            if args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
+            else teacher_system_prompt(student_prompt)
+        )
+        base_system_prompt = policy_system_prompt(
+            base_system_prompt,
+            args.policy_prompt_variant,
+        )
+        prompt_suffix = DATA_GENERATION_SUFFIX
+        if args.plan_policy == PLAN_POLICY_REQUIRED_RESIDENT:
+            prompt_suffix += REQUIRED_RESIDENT_PLAN_SUFFIX
+        canonical_teacher_prompt = base_system_prompt + prompt_suffix
+        system_prompt = provider_system_prompt(
+            args.model,
+            canonical_teacher_prompt,
+            carrier=args.deepseek_carrier,
+        )
     prompt_audit = {
         "teacher_prompt_role": "teacher-generation",
         "teacher_canonical_prompt_sha256": hashlib.sha256(
@@ -1318,9 +1433,13 @@ def main() -> int:
         "student_runtime_prompt_sha256": hashlib.sha256(
             student_prompt.encode("utf-8")
         ).hexdigest(),
-        "tool_schema_sha256": tool_schema_hash(),
-        "model_visible_tool_schema_sha256": model_visible_tool_schema_hash(
-            args.database_context_profile
+        "tool_schema_sha256": selected_tool_schema_hash(
+            args.atomic_protocol_version
+        ),
+        "model_visible_tool_schema_sha256": (
+            tool_schema_hash_version40()
+            if version40
+            else model_visible_tool_schema_hash(args.database_context_profile)
         ),
         "database_context_profile": args.database_context_profile,
         "disabled_model_tools": sorted(
@@ -1361,6 +1480,7 @@ def main() -> int:
             database_context_profile=args.database_context_profile,
             schema_value_count=args.schema_value_count,
             schema_metadata_json=args.schema_metadata_json or None,
+            atomic_protocol_version=args.atomic_protocol_version,
         )
         rec["attempt_index"] = attempt_index
         rec["attempts_per_example"] = max(1, args.attempts_per_example)
@@ -1423,7 +1543,7 @@ def main() -> int:
         "tool_scheme": ATOMIC_TOOL_SCHEME,
         "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
         "assistant_carrier": ATOMIC_ASSISTANT_CARRIER,
-        "protocol_version": PROTOCOL_VERSION,
+        "protocol_version": args.atomic_protocol_version,
         "method": "external_llm_closed_loop",
         "model": args.model,
         "split": args.split,
@@ -1434,7 +1554,10 @@ def main() -> int:
         "output": str(out_path),
         "failures_output": str(failure_path),
         "all_output": str(all_path),
-        "protocol_hash": protocol_hash(system_prompt),
+        "protocol_hash": selected_protocol_hash(
+            args.atomic_protocol_version,
+            system_prompt,
+        ),
         **prompt_audit,
         "max_steps": args.max_steps,
         "workers": max(1, args.workers),
@@ -1446,7 +1569,17 @@ def main() -> int:
         "history_turns": args.history_turns,
         "rolling_prompt_variant": args.rolling_prompt_variant,
         "policy_prompt_variant": args.policy_prompt_variant,
-        "plan_policy": args.plan_policy,
+        "plan_policy": (
+            "disabled-by-protocol" if version40 else args.plan_policy
+        ),
+        "history_reasoning": (
+            "provider-native-complete-recent-4"
+            if version40
+            else "omitted-from-provider-history"
+        ),
+        "history_observations": (
+            "unabridged-recent-4" if version40 else "compact-resident"
+        ),
         "deepseek_carrier": args.deepseek_carrier,
         "denotation_comparison": args.denotation_comparison,
         "database_context_profile": args.database_context_profile,
