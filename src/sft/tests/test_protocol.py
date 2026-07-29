@@ -34,8 +34,8 @@ from protocol import (  # noqa: E402
 
 
 class ProtocolParseTests(unittest.TestCase):
-    def test_version38_separates_student_contract_from_teacher_guidance(self):
-        self.assertEqual(PROTOCOL_VERSION, "version38")
+    def test_version39_separates_student_contract_from_teacher_guidance(self):
+        self.assertEqual(PROTOCOL_VERSION, "version39")
         self.assertEqual(set(TOOL_SPECS), set(MODEL_ARG_SCHEMA))
         self.assertNotIn("<tool_call>", SYSTEM_PROMPT)
         for spec in TOOL_SPECS.values():

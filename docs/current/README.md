@@ -8,6 +8,8 @@ sources of truth.
 - `architecture.md`: active code layout and ownership.
 - `tool_schemes.md`: the three exclusive model action schemes and their train/eval boundaries.
 - `tool_protocol.md`: model-visible action and context protocol.
+- `atomic_tool_interface_zh.md`: standalone Chinese reference for the atomic version39 public
+  tools, strict argument shapes, error contract, and full-context/F profile differences.
 - `relation_derivation.md`: fact-only semantics attached to every derived table handle.
 - `execution_contract.md`: harness semantics and error handling.
 - `data_generation.md`: causal SFT-1/SFT-2 data construction.

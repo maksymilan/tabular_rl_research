@@ -174,7 +174,7 @@ LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version38"  # teacher-only semantic fidelity discipline
+PROTOCOL_VERSION = "version39"  # model-visible resident-state compaction
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 POLICY_PROMPT_CANONICAL = "canonical"
@@ -1209,6 +1209,189 @@ def tool_error_message(
     return _compact(envelope)
 
 
+def _visible_read_key(read: dict) -> str:
+    """Return a semantic+payload identity for one model-visible read.
+
+    ``read_subtable`` defaults to ``limit=20``. Canonical state deliberately preserves whether
+    that default was authored explicitly, but the two forms expose the same observation and need
+    not duplicate all rows in every later prompt. Inline previews retain their own limit semantics
+    because their ``note`` distinguishes them from an actual read call.
+    """
+    comparable = deepcopy(read)
+    comparable.pop("from_step", None)
+    comparable.pop("equivalent_from_steps", None)
+    comparable["columns"] = list(comparable.get("columns") or [])
+    comparable["conditions"] = deepcopy(comparable.get("conditions"))
+    comparable["order_by"] = list(comparable.get("order_by") or [])
+    comparable["offset"] = comparable.get("offset") or 0
+    if comparable.get("note") is None and comparable.get("limit") is None:
+        comparable["limit"] = 20
+    return json.dumps(
+        comparable,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _deduplicate_visible_reads(entry: dict) -> None:
+    """Keep the latest copy of completely equivalent reads and retain their source steps."""
+    reads = entry.get("reads")
+    if not isinstance(reads, list) or len(reads) < 2:
+        return
+    latest_by_key: dict[str, tuple[dict, list[str]]] = {}
+    order: list[str] = []
+    for raw_read in reads:
+        if not isinstance(raw_read, dict):
+            # Malformed historical state is rendered unchanged rather than guessed into a group.
+            key = f"non_object:{len(order)}"
+            order.append(key)
+            latest_by_key[key] = (deepcopy(raw_read), [])
+            continue
+        read = deepcopy(raw_read)
+        key = _visible_read_key(read)
+        observed_steps = [
+            step
+            for step in read.pop("equivalent_from_steps", [])
+            if isinstance(step, str) and step
+        ]
+        if isinstance(read.get("from_step"), str) and read["from_step"]:
+            observed_steps.append(read["from_step"])
+        if key not in latest_by_key:
+            order.append(key)
+            latest_by_key[key] = (read, observed_steps)
+            continue
+        _previous, previous_steps = latest_by_key[key]
+        latest_by_key[key] = (read, previous_steps + observed_steps)
+
+    compacted = []
+    for key in order:
+        read, steps = latest_by_key[key]
+        unique_steps = list(dict.fromkeys(steps))
+        if len(unique_steps) > 1:
+            read["equivalent_from_steps"] = unique_steps
+        compacted.append(read)
+    entry["reads"] = compacted
+
+
+def _contains_exact_string(value: object, target: str) -> bool:
+    """Conservatively detect a resident reference without interpreting model-authored text."""
+    if isinstance(value, str):
+        return value == target
+    if isinstance(value, dict):
+        return any(_contains_exact_string(item, target) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_exact_string(item, target) for item in value)
+    return False
+
+
+def _zero_filter_summary_candidate(
+    name: str,
+    entry: object,
+    visible: dict,
+) -> tuple[str, str] | None:
+    """Return a grouping key for an unobserved, unreferenced zero-row filter handle."""
+    if not isinstance(entry, dict):
+        return None
+    derivation = entry.get("derivation")
+    if (
+        entry.get("row_count") != 0
+        or entry.get("reads")
+        or entry.get("inspected_columns")
+        or not isinstance(derivation, dict)
+        or derivation.get("operator") != "condition_filter"
+    ):
+        return None
+    inputs = derivation.get("inputs")
+    if not isinstance(inputs, list):
+        return None
+    source = next(
+        (
+            item.get("ref")
+            for item in inputs
+            if isinstance(item, dict)
+            and item.get("kind") == "table"
+            and item.get("role") == "input"
+            and isinstance(item.get("ref"), str)
+        ),
+        None,
+    )
+    if not source:
+        return None
+
+    # A handle remains fully rendered whenever any other resident fact depends on it.
+    if _contains_exact_string(visible.get("plan"), name) or _contains_exact_string(
+        visible.get("values"), name
+    ):
+        return None
+    for other_name, other_entry in (visible.get("tables") or {}).items():
+        if other_name != name and _contains_exact_string(other_entry, name):
+            return None
+
+    output_shape = {
+        key: deepcopy(entry[key])
+        for key in ("columns", "column_namespaces")
+        if entry.get(key) is not None
+    }
+    return source, json.dumps(
+        output_shape,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _fold_unreferenced_zero_row_filters(visible: dict) -> None:
+    """Fold repeated empty filter branches into fact-only model-visible summaries.
+
+    A singleton stays expanded, as do handles that were read, inspected, or referenced by another
+    resident fact. Canonical state is not touched, so every handle remains available to execution,
+    replay, and audit.
+    """
+    tables = visible.get("tables")
+    if not isinstance(tables, dict):
+        return
+    groups: dict[tuple[str, str], list[str]] = {}
+    for name, entry in tables.items():
+        candidate = _zero_filter_summary_candidate(name, entry, visible)
+        if candidate is not None:
+            groups.setdefault(candidate, []).append(name)
+
+    runs = []
+    folded_names = set()
+    for (source, _shape_key), names in groups.items():
+        if len(names) < 2:
+            continue
+        first = tables[names[0]]
+        shape = {
+            key: deepcopy(first[key])
+            for key in ("columns", "column_namespaces")
+            if first.get(key) is not None
+        }
+        attempts = []
+        for name in names:
+            entry = tables[name]
+            semantics = (entry.get("derivation") or {}).get("semantics") or {}
+            attempts.append({
+                "table": name,
+                "from_step": entry.get("created_by"),
+                "predicate": deepcopy(semantics.get("predicate")),
+            })
+        runs.append({
+            "input": source,
+            **shape,
+            "attempts": attempts,
+        })
+        folded_names.update(names)
+
+    if not runs:
+        return
+    for name in folded_names:
+        tables.pop(name, None)
+    summaries = visible.setdefault("fact_summaries", {})
+    summaries["unreferenced_zero_row_filter_runs"] = runs
+
+
 def _compact_state_columns(state: dict | None) -> dict:
     """Compact only the model-visible rendering; canonical harness snapshots stay unchanged."""
     visible = deepcopy(state or {"plan": [], "tables": {}, "values": {}})
@@ -1216,7 +1399,9 @@ def _compact_state_columns(state: dict | None) -> dict:
     if isinstance(tables, dict):
         for name, entry in list(tables.items()):
             if isinstance(entry, dict):
+                _deduplicate_visible_reads(entry)
                 tables[name] = _compact_output_columns(entry)
+        _fold_unreferenced_zero_row_filters(visible)
     for item in visible.get("plan") or []:
         if not isinstance(item, dict):
             continue

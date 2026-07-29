@@ -29,6 +29,17 @@ sys.path.insert(0, str(ROOT / "src" / "harness"))
 sys.path.insert(0, str(ROOT / "src" / "sft"))
 
 from denotation import add_denotation_comparison_argument  # noqa: E402
+from atomic_database_context import (  # noqa: E402
+    CATALOG_CONTEXT_PROFILE,
+    DATABASE_CONTEXT_PROFILES,
+    FULL_BIRD_CONTEXT_PROFILES,
+    build_full_bird_database_context,
+    build_full_context_student_prompt,
+    build_full_context_teacher_prompt,
+    disabled_tools_for_profile,
+    model_visible_tool_schema_hash,
+    validate_profile_tool,
+)
 from provider_client import load_api_config  # noqa: E402
 from prompt_contract import TEACHER_ONE_ACTION_RULE  # noqa: E402
 from provider_adapter import (  # noqa: E402
@@ -632,20 +643,49 @@ def run_rollout(
     deepseek_carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
     denotation_comparison: str = "bird-set",
     diagnostic_only: bool = False,
+    database_context_profile: str = CATALOG_CONTEXT_PROFILE,
+    schema_value_count: int = 2,
+    schema_metadata_json: str | None = None,
 ) -> dict:
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
     if not gold_sql:
         raise ValueError(f"task has no gold SQL: {ex.get('db_id')} / {ex.get('question')}")
     h = Harness(task_path)
-    dataset_overview = overview(h)
+    execution_catalog = overview(h)
+    if database_context_profile in FULL_BIRD_CONTEXT_PROFILES:
+        dataset_overview, database_context_audit = build_full_bird_database_context(
+            h,
+            ex,
+            execution_catalog,
+            value_count=schema_value_count,
+            schema_metadata_json=schema_metadata_json,
+            profile=database_context_profile,
+        )
+    elif database_context_profile == CATALOG_CONTEXT_PROFILE:
+        dataset_overview = execution_catalog
+        database_context_audit = {
+            "context_profile": CATALOG_CONTEXT_PROFILE,
+            "schema_value_count": None,
+            "disabled_model_tools": [],
+            "model_visible_tool_schema_sha256": model_visible_tool_schema_hash(
+                CATALOG_CONTEXT_PROFILE
+            ),
+        }
+    else:
+        raise ValueError(
+            f"unknown database context profile: {database_context_profile!r}"
+        )
+    disabled_model_tools = disabled_tools_for_profile(database_context_profile)
     external_knowledge = ex.get("external_knowledge") or None
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": first_user_message(dataset_overview, ex["question"])},
     ]
     created: set[str] = set()
-    ctx = new_ctx(dataset_overview)
+    # Model-visible full schema is an input ablation, not a mutation of canonical resident state.
+    # Execution and state tracking therefore retain the ordinary lazy catalog.
+    ctx = new_ctx(execution_catalog)
     last_error: dict | None = None
     turns: list[dict] = []
     steps: list[dict] = []
@@ -683,6 +723,9 @@ def run_rollout(
         "policy_prompt_variant": policy_prompt_variant,
         "denotation_comparison": denotation_comparison,
         "training_admission": training_admission(diagnostic_only=diagnostic_only),
+        "database_context_profile": database_context_profile,
+        "database_context_audit": database_context_audit,
+        "disabled_model_tools": sorted(disabled_model_tools),
         "sft_export_eligible": sft_export_eligible(
             context_mode=context_mode,
             history_turns=history_turns,
@@ -813,6 +856,7 @@ def run_rollout(
                 adjacent_guard=adjacent_guard,
                 step_id=step_id,
             )
+            validate_profile_tool(database_context_profile, tool, args)
             think_source = "model"
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
             turn["think_source"] = think_source
@@ -997,7 +1041,9 @@ def run_rollout(
                 denotation_comparison=denotation_comparison,
                 diagnostic_only=diagnostic_only,
             ),
-            "initial_state": {"dataset_overview": dataset_overview},
+            # Canonical replay starts from the ordinary execution catalog. The distinct
+            # model-visible full-context payload is independently hashed in database_context_audit.
+            "initial_state": {"dataset_overview": execution_catalog},
             "steps": steps,
             "rollout_generation": {
                 "tool_scheme": ATOMIC_TOOL_SCHEME,
@@ -1015,6 +1061,9 @@ def run_rollout(
                 "plan_policy": plan_policy,
                 "deepseek_carrier": deepseek_carrier,
                 "denotation_comparison": denotation_comparison,
+                "database_context_profile": database_context_profile,
+                "database_context_audit": database_context_audit,
+                "disabled_model_tools": sorted(disabled_model_tools),
                 "sft_export_eligible": sft_export_eligible(
                     context_mode=context_mode,
                     history_turns=history_turns,
@@ -1168,8 +1217,46 @@ def main() -> int:
             "while preserving the same causal generation protocol"
         ),
     )
+    parser.add_argument(
+        "--database-context-profile",
+        choices=DATABASE_CONTEXT_PROFILES,
+        default=CATALOG_CONTEXT_PROFILE,
+        help=(
+            "model-visible database context; full-bird-schema-samples-v1 reveals complete "
+            "BIRD schema/column semantics/live examples; profile names specify whether only "
+            "describe_table or both describe_table/inspect_column are removed"
+        ),
+    )
+    parser.add_argument(
+        "--schema-value-count",
+        type=int,
+        default=2,
+        help="representative distinct live values per source column for full-context diagnostics",
+    )
+    parser.add_argument(
+        "--schema-metadata-json",
+        default="",
+        help="optional BIRD tables metadata JSON; otherwise resolved from each task database path",
+    )
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
+    if args.schema_value_count < 0:
+        parser.error("--schema-value-count must be non-negative")
+    if (
+        args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
+        and not args.diagnostic_only
+    ):
+        parser.error(
+            "full-bird-schema-samples-v1 is an unpromoted diagnostic profile; "
+            "pass --diagnostic-only"
+        )
+    if (
+        args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
+        and args.rolling_prompt_variant != "full"
+    ):
+        parser.error(
+            "full-bird-schema-samples-v1 requires --rolling-prompt-variant full"
+        )
     if args.max_tokens is None:
         args.max_tokens = provider_default_max_tokens(args.model, DEFAULT_MAX_TOKENS)
 
@@ -1189,13 +1276,24 @@ def main() -> int:
         (i, ex) for i, ex in examples
         if trajectory_id(args.split, i, ex) not in completed
     ]
-    student_prompt = get_system_prompt()
+    student_prompt = (
+        build_full_context_student_prompt(args.database_context_profile)
+        if args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
+        else get_system_prompt()
+    )
     if args.context_mode == "rolling-legal-history":
         student_prompt = rolling_system_prompt(
             student_prompt,
             compact=args.rolling_prompt_variant == "compact",
         )
-    base_system_prompt = teacher_system_prompt(student_prompt)
+    base_system_prompt = (
+        build_full_context_teacher_prompt(
+            student_prompt,
+            args.database_context_profile,
+        )
+        if args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
+        else teacher_system_prompt(student_prompt)
+    )
     base_system_prompt = policy_system_prompt(
         base_system_prompt,
         args.policy_prompt_variant,
@@ -1221,6 +1319,13 @@ def main() -> int:
             student_prompt.encode("utf-8")
         ).hexdigest(),
         "tool_schema_sha256": tool_schema_hash(),
+        "model_visible_tool_schema_sha256": model_visible_tool_schema_hash(
+            args.database_context_profile
+        ),
+        "database_context_profile": args.database_context_profile,
+        "disabled_model_tools": sorted(
+            disabled_tools_for_profile(args.database_context_profile)
+        ),
     }
     started = time.time()
     counts = collections.Counter()
@@ -1253,6 +1358,9 @@ def main() -> int:
             deepseek_carrier=args.deepseek_carrier,
             denotation_comparison=args.denotation_comparison,
             diagnostic_only=args.diagnostic_only,
+            database_context_profile=args.database_context_profile,
+            schema_value_count=args.schema_value_count,
+            schema_metadata_json=args.schema_metadata_json or None,
         )
         rec["attempt_index"] = attempt_index
         rec["attempts_per_example"] = max(1, args.attempts_per_example)
@@ -1341,6 +1449,16 @@ def main() -> int:
         "plan_policy": args.plan_policy,
         "deepseek_carrier": args.deepseek_carrier,
         "denotation_comparison": args.denotation_comparison,
+        "database_context_profile": args.database_context_profile,
+        "schema_value_count": (
+            args.schema_value_count
+            if args.database_context_profile in FULL_BIRD_CONTEXT_PROFILES
+            else None
+        ),
+        "schema_metadata_json": args.schema_metadata_json or None,
+        "disabled_model_tools": sorted(
+            disabled_tools_for_profile(args.database_context_profile)
+        ),
         "sft_export_eligible": sft_export_eligible(
             context_mode=args.context_mode,
             history_turns=args.history_turns,
