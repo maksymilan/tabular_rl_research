@@ -25,6 +25,7 @@ from schema_context_ablation import (  # noqa: E402
     FULL_SCHEMA_SEMANTIC_VALUES_PROFILE,
     INITIAL_CONTEXT_PROFILES,
     LAZY_CATALOG_PROFILE,
+    LAZY_DESCRIPTIONS_DESCRIBE_PROFILE,
     LAZY_SEMANTIC_DESCRIBE_PROFILE,
     align_base_system_prompt,
     align_tool_output,
@@ -175,6 +176,7 @@ class SchemaContextAblationTest(unittest.TestCase):
         expected = build_catalog(self.harness)
         self.assertEqual(expected, self.build(LAZY_CATALOG_PROFILE))
         self.assertEqual(expected, self.build(LAZY_SEMANTIC_DESCRIBE_PROFILE))
+        self.assertEqual(expected, self.build(LAZY_DESCRIPTIONS_DESCRIBE_PROFILE))
         self.assertEqual("", context_prompt_suffix(LAZY_CATALOG_PROFILE))
 
     def test_full_schema_arm_has_raw_schema_but_no_semantics_or_values(self):
@@ -246,6 +248,28 @@ class SchemaContextAblationTest(unittest.TestCase):
         self.assertEqual("employee name", name["semantic_name"])
         self.assertNotIn("semantic_name", raw["tables"][0]["columns"][2])
 
+    def test_lazy_description_profile_enriches_only_describe_feedback(self):
+        raw = self.harness.describe_table(["staff"])
+        aligned = align_tool_output(
+            self.harness,
+            "describe_table",
+            raw,
+            self.example,
+            profile=LAZY_DESCRIPTIONS_DESCRIBE_PROFILE,
+        )
+        name = next(
+            column
+            for column in aligned["tables"][0]["columns"]
+            if column["name"] == "nm"
+        )
+        self.assertEqual("full name of the employee", name["description"])
+        self.assertNotIn("semantic_name", name)
+        self.assertNotIn("example_values", name)
+        self.assertNotIn(
+            "description",
+            next(column for column in raw["tables"][0]["columns"] if column["name"] == "nm"),
+        )
+
     def test_every_arm_has_unique_auditable_contract(self):
         hashes = {context_contract_sha256(profile) for profile in INITIAL_CONTEXT_PROFILES}
         self.assertEqual(len(INITIAL_CONTEXT_PROFILES), len(hashes))
@@ -261,6 +285,10 @@ class SchemaContextAblationTest(unittest.TestCase):
         self.assertEqual(
             base,
             align_base_system_prompt(base, LAZY_SEMANTIC_DESCRIBE_PROFILE),
+        )
+        self.assertEqual(
+            base,
+            align_base_system_prompt(base, LAZY_DESCRIPTIONS_DESCRIBE_PROFILE),
         )
         for profile in (
             FULL_SCHEMA_PROFILE,

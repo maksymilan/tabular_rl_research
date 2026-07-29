@@ -29,6 +29,7 @@ FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE = (
 )
 FULL_SCHEMA_SEMANTIC_VALUES_PROFILE = "full-schema-bird-semantic-values2-v1"
 LAZY_SEMANTIC_DESCRIBE_PROFILE = "lazy-catalog-semantic-describe-v1"
+LAZY_DESCRIPTIONS_DESCRIBE_PROFILE = "lazy-catalog-sql-astra-describe-v1"
 
 INITIAL_CONTEXT_PROFILES = (
     LAZY_CATALOG_PROFILE,
@@ -37,6 +38,7 @@ INITIAL_CONTEXT_PROFILES = (
     FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE,
     FULL_SCHEMA_SEMANTIC_VALUES_PROFILE,
     LAZY_SEMANTIC_DESCRIBE_PROFILE,
+    LAZY_DESCRIPTIONS_DESCRIBE_PROFILE,
 )
 
 _SEMANTIC_PROFILES = {
@@ -45,6 +47,11 @@ _SEMANTIC_PROFILES = {
     FULL_SCHEMA_SEMANTIC_VALUES_PROFILE,
     LAZY_SEMANTIC_DESCRIBE_PROFILE,
 }
+_DESCRIPTION_PROFILES = {
+    FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE,
+    LAZY_DESCRIPTIONS_DESCRIBE_PROFILE,
+}
+_ENRICHED_DESCRIBE_PROFILES = _SEMANTIC_PROFILES | _DESCRIPTION_PROFILES
 _FULL_SCHEMA_PROFILES = {
     FULL_SCHEMA_PROFILE,
     FULL_SCHEMA_SEMANTIC_PROFILE,
@@ -106,6 +113,17 @@ _PROFILE_PROMPT_SUFFIXES = {
         "Semantic names are understanding hints only. Every later tool argument must use the "
         "exact raw table_name and raw column name. Values still require inspect_column or "
         "read_subtable."
+    ),
+    LAZY_DESCRIPTIONS_DESCRIBE_PROFILE: (
+        "\n\nINITIAL CONTEXT PROFILE: lazy-catalog-sql-astra-describe-v1\n"
+        "The opening DATASET OVERVIEW remains the historical lazy catalog: table names, row "
+        "counts, and foreign-key relations only, with no columns, aliases, descriptions, or "
+        "values. Acquire needed source schemas through describe_table. Its returned columns "
+        "include the executable raw name, SQLite type, key information, and BIRD's "
+        "column_description in the description field. Descriptions are task-understanding "
+        "metadata only: they are not executable identifiers, observed database values, or "
+        "evidence that a predicate is true. Every later tool argument must use the exact raw "
+        "table_name and raw column name. Values still require inspect_column or read_subtable."
     ),
 }
 
@@ -433,7 +451,7 @@ def _enrich_describe_output(
     for table in visible.get("tables", []):
         raw_table = str(table.get("table_name", ""))
         table_key = raw_table.lower()
-        if table_key not in table_aliases:
+        if add_semantics and table_key not in table_aliases:
             continue
         if add_semantics:
             table["semantic_table_name"] = table_aliases[table_key]
@@ -468,7 +486,11 @@ def build_initial_context(
     if profile not in INITIAL_CONTEXT_PROFILES:
         raise ValueError(f"unknown initial context profile: {profile}")
     lazy_catalog = build_catalog(harness)
-    if profile in {LAZY_CATALOG_PROFILE, LAZY_SEMANTIC_DESCRIBE_PROFILE}:
+    if profile in {
+        LAZY_CATALOG_PROFILE,
+        LAZY_SEMANTIC_DESCRIBE_PROFILE,
+        LAZY_DESCRIPTIONS_DESCRIBE_PROFILE,
+    }:
         return lazy_catalog
 
     table_names = [table["table_name"] for table in lazy_catalog["tables"]]
@@ -531,26 +553,30 @@ def align_tool_output(
     value_count: int = 2,
 ) -> dict:
     """Align describe_table feedback with the semantic contract of one experimental arm."""
-    if tool != "describe_table" or profile not in _SEMANTIC_PROFILES:
+    if tool != "describe_table" or profile not in _ENRICHED_DESCRIBE_PROFILES:
         return output
-    schema_path = resolve_schema_metadata_path(
-        example,
-        explicit_path=schema_metadata_json,
-    )
-    db_schema = load_database_schema(schema_path, example["db_id"])
+    add_semantics = profile in _SEMANTIC_PROFILES
+    if add_semantics:
+        schema_path = resolve_schema_metadata_path(
+            example,
+            explicit_path=schema_metadata_json,
+        )
+        db_schema = load_database_schema(schema_path, example["db_id"])
+    else:
+        db_schema = {}
     column_descriptions = (
         _resolve_column_descriptions(
             resolve_database_description_dir(example),
             output,
         )
-        if profile == FULL_SCHEMA_SEMANTIC_DESCRIPTIONS_PROFILE
+        if profile in _DESCRIPTION_PROFILES
         else None
     )
     return _enrich_describe_output(
         harness,
         output,
         db_schema,
-        add_semantics=True,
+        add_semantics=add_semantics,
         column_descriptions=column_descriptions,
         value_count=(
             value_count if profile == FULL_SCHEMA_SEMANTIC_VALUES_PROFILE else 0
