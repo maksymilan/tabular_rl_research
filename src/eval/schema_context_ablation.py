@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 from copy import deepcopy
 from functools import lru_cache
@@ -269,7 +270,12 @@ def _load_column_descriptions(directory: str) -> dict[tuple[str, str], str]:
     descriptions: dict[tuple[str, str], str] = {}
     for csv_path in sorted(root.glob("*.csv"), key=lambda path: path.name.lower()):
         table_key = csv_path.stem.lower()
-        with csv_path.open(encoding="utf-8-sig", newline="") as handle:
+        raw = csv_path.read_bytes()
+        try:
+            decoded = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            decoded = raw.decode("cp1252")
+        with io.StringIO(decoded, newline="") as handle:
             reader = csv.DictReader(handle)
             required = {"original_column_name", "column_description"}
             if not reader.fieldnames or not required.issubset(reader.fieldnames):

@@ -125,6 +125,13 @@ class SchemaContextAblationTest(unittest.TestCase):
                     "value_description": "not model-visible in this arm",
                 }
             )
+        (description_dir / "departments.csv").write_bytes(
+            (
+                "original_column_name,column_name,column_description,data_format,"
+                "value_description\r\n"
+                "dept_code,department code,code du département,text,\r\n"
+            ).encode("cp1252")
+        )
         self.example = {
             "db_id": "toy",
             "db_path": str(self.db_path),
@@ -186,6 +193,13 @@ class SchemaContextAblationTest(unittest.TestCase):
         self.assertNotIn("example_values", name)
         rendered = json.dumps(overview, ensure_ascii=False)
         self.assertNotIn("not model-visible in this arm", rendered)
+        departments = next(
+            table for table in overview["tables"] if table["table_name"] == "departments"
+        )
+        code = next(
+            column for column in departments["columns"] if column["name"] == "dept_code"
+        )
+        self.assertEqual("code du département", code["description"])
 
     def test_describe_feedback_is_aligned_only_for_semantic_profiles(self):
         raw = self.harness.describe_table(["staff"])
