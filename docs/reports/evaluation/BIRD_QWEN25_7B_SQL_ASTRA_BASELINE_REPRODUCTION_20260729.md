@@ -1,6 +1,6 @@
 # SQL-ASTRA Qwen2.5-7B-Instruct BIRD Baseline Reproduction
 
-Date: 2026-07-29
+Date: 2026-07-29, completed 2026-07-30
 
 ## Current conclusion
 
@@ -10,11 +10,19 @@ The apparent gap is smaller than 47.5 versus 38.98:
 | --- | --- | ---: |
 | Historical local result | old `strict-multiset`, canonical JSON schema prompt | 598/1534 = 38.98% |
 | Current comparable local result | `bird-set`, canonical JSON schema prompt | 650/1534 = 42.37% |
-| SQL-ASTRA table | labelled greedy; stronger disclosed schema/value prompt | 47.5% |
+| Reproduced ASTRA-style input | `bird-set`, Appendix-F DDL/descriptions/values | **679/1534 = 44.26%** |
+| SQL-ASTRA table | labelled greedy; undisclosed exact baseline implementation | 47.5% |
 
-The current like-for-like gap to investigate is therefore **5.13 percentage points**, not 8.52.
+The reproduced disclosed input closes **1.89 percentage points** of the comparable 5.13-point gap.
+It remains **3.24 points below** the paper's rounded 47.5 result, so this is a partial, not exact,
+reproduction. The apparent starting gap was 5.13 points, not 8.52.
 The 38.98 artifact counts duplicate multiplicity while released BIRD EX uses set equality; it must
 not be compared directly with SQL-ASTRA's number.
+
+The paired result is not statistically decisive: the ASTRA-style prompt gains 178 tasks and
+regresses 149, for an exact two-sided McNemar/binomial `p=0.1214`. Its clearest measurable effect is
+schema grounding: generated-SQL execution errors fall from 370 to 334, while executable
+wrong-result cases rise from 514 to 521.
 
 SQL-ASTRA cites the generic Qwen2.5 release for its 47.5 row, but the Qwen2.5 technical report does
 not contain a BIRD or Text-to-SQL evaluation. The SQL-ASTRA paper and its public landing pages do
@@ -93,35 +101,71 @@ The queued run uses:
 This is intentionally a direct-SQL baseline. It does not use SQL-ASTRA's three-turn execution
 agent, CSMR, ATR, training data, or RL checkpoint.
 
-## Runtime status and artifacts
+## Completed result and paired analysis
 
-Both table_rl GPUs were occupied by independent process-RL runs when the reproduction was prepared,
-so no running experiment was interrupted. An isolated runtime passed all tests and the baseline was
-queued for GPU 0:
+The first queued smoke reached the server after GPU 0 was released, but failed before inference
+because the copied task JSONL contained macOS absolute SQLite paths. This failure is preserved in
+the original directory. The v2 launcher explicitly uses the server's verified remote task export:
 
-- queue PID: `3068106`;
+- tasks:
+  `/home/dengyan/tabular_rl_project/data/eval_inputs/bird_dev_20240627.remote.jsonl`;
+- validation: 1,534 tasks, 1,534 unique ids, zero missing database paths;
 - runtime:
   `/home/dengyan/tabular_rl_outputs/sql_astra_baseline_runtime_20260729`;
 - queue log:
-  `/home/dengyan/tabular_rl_outputs/logs/qwen2.5-7b-instruct_sql-astra-appendix-v1_greedy_bird-set.queue.log`;
+  `/home/dengyan/tabular_rl_outputs/logs/qwen2.5-7b-instruct_sql-astra-appendix-v1_greedy_bird-set_remoteinput-v2.queue.log`;
 - smoke result:
-  `/home/dengyan/tabular_rl_outputs/evaluations/qwen2.5-7b-instruct_sql-astra-appendix-v1_greedy_bird-set_smoke32`;
+  `/home/dengyan/tabular_rl_outputs/evaluations/qwen2.5-7b-instruct_sql-astra-appendix-v1_greedy_bird-set_remoteinput-v2_smoke32`;
 - full result:
-  `/home/dengyan/tabular_rl_outputs/evaluations/qwen2.5-7b-instruct_sql-astra-appendix-v1_greedy_bird-set_dev1534`.
+  `/home/dengyan/tabular_rl_outputs/evaluations/qwen2.5-7b-instruct_sql-astra-appendix-v1_greedy_bird-set_remoteinput-v2_dev1534`.
 
-The queue first runs a 32-task transport/context smoke and launches the complete 1,534-task
-evaluation only if the smoke has no API, context-overflow, or incomplete-response failures.
-This section must be updated with the observed score and paired task analysis after completion.
+The 32-task transport/context smoke completed with no API, context-overflow, or incomplete-response
+failures and scored 6/32; the canonical control is 4/32 on the same nonrepresentative contiguous
+prefix.
 
-## Interpretation gate
+The complete paired result is:
 
-The outcome separates three cases:
+| Outcome | Tasks |
+| --- | ---: |
+| Both correct | 501 |
+| ASTRA-style only correct | 178 |
+| Canonical only correct | 149 |
+| Both wrong | 706 |
+| Net | **+29** |
 
-1. **Near 47.5:** most of the prior gap was schema/value prompt strength, not model weights.
-2. **Near 42.4:** 47.5 depends on an undisclosed decode, prompt detail, database snapshot, or
-   evaluation implementation.
-3. **Between them:** run a paired ablation that adds column descriptions and live values
-   independently to measure which component supplies the gain.
+By official BIRD difficulty:
 
-No 47.5 reproduction claim should be made until the full artifact is complete and every task is
-checked under `bird-set`.
+| Difficulty | ASTRA-style | Canonical | Difference |
+| --- | ---: | ---: | ---: |
+| Simple, n=925 | 499/925 = 53.95% | 473/925 = 51.14% | +2.81pp |
+| Moderate, n=464 | 144/464 = 31.03% | 146/464 = 31.47% | -0.43pp |
+| Challenging, n=145 | 36/145 = 24.83% | 31/145 = 21.38% | +3.45pp |
+
+One infrastructure exception is fully audited. `bird_dev_00701` was the last unfinished task
+because its gold SQL occupied one CPU core for more than 13 minutes; the old canonical artifact
+also records 105.9 seconds for that gold query. After the other 1,533 tasks were durable, the stuck
+worker was terminated. The same live model and identical greedy request regenerated q701
+deterministically; its output omitted the required carrier, the unchanged parser extracted invalid
+SQL, and it was recorded as an execution failure. The recovery metadata is stored directly in that
+task record. Its hidden denotation was not needed to decide the failure.
+
+The local mirrored artifacts are:
+
+- `data/results/qwen2.5_7b_sql_astra_appendix_v1_greedy_dev1534_bird_ex_remoteinput_v2/`;
+- paired analysis: `paired_analysis.json`;
+- reproducible analyzer: `src/eval/analyze_sql_astra_baseline.py`.
+
+## Interpretation
+
+The disclosed SQL-ASTRA input recipe is genuinely useful, but it does not reproduce the paper's
+47.5:
+
+1. DDL, BIRD descriptions, representative values, and stronger output instructions improve the
+   local baseline from 42.37 to 44.26 and reduce execution errors by 36.
+2. The prompt also causes substantial policy churn: 149 previously correct tasks regress, moderate
+   difficulty is slightly worse, and the paired gain is not significant at 0.05.
+3. The remaining 3.24-point gap can depend on undisclosed prompt details, model snapshot,
+   generation defaults, baseline construction, or evaluation implementation. The paper provides no
+   public baseline code sufficient to distinguish them.
+4. A controlled follow-up should separate descriptions from live values on the same task ids. The
+   current result must not be reported as an exact 47.5 reproduction.
