@@ -124,9 +124,10 @@ TOOL_SPECS: dict[str, str] = {
         'read_subtable(table, limit=20, columns=None, order_by=None, offset=0) -> one deterministic '
         'page of actual rows without creating or changing a table. limit is an integer from 1 to '
         '20 inclusive and can never exceed 20. columns optionally limits observed columns. '
-        'order_by is a non-empty list of exact "column" or "column DESC" terms. offset is a '
-        'non-negative integer; offset>0 requires order_by so pagination is stable. The harness '
-        'adds remaining columns as deterministic tie-breakers and returns has_more plus '
+        'order_by is an optional non-empty list of exact "column" or "column DESC" terms when the '
+        'question needs a semantic order. offset is a non-negative integer. The harness owns '
+        'pagination stability: when order_by is omitted it orders by all available columns '
+        'ascending; otherwise it adds remaining columns as deterministic tie-breakers. It returns has_more plus '
         'next_offset. Use that exact next_offset with the same columns/order_by to read the next '
         'page. Tool results otherwise show only table metadata; reading rows never projects or '
         'changes the evidence table.',
@@ -456,10 +457,6 @@ def validate_model_arguments(tool: str, args: dict) -> None:
         ):
             raise ProtocolError(
                 'read_subtable: order_by must be a non-empty list of "column" or "column DESC"'
-            )
-        if offset > 0 and order_by is None:
-            raise ProtocolError(
-                "read_subtable: offset>0 requires order_by for deterministic pagination"
             )
     if tool == "search_values":
         table = args.get("table")

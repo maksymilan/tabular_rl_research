@@ -505,6 +505,20 @@ def run():
         and second_page["offset"] == 2,
         str((first_page, second_page)),
     )
+    canonical_first = h.read_subtable("employees", columns=["id"], limit=2)
+    canonical_second = h.read_subtable(
+        "employees",
+        columns=["id"],
+        limit=2,
+        offset=canonical_first["next_offset"],
+    )
+    t.check(
+        "environment owns stable pagination when order_by is omitted",
+        canonical_first["rows"] == [[1], [2]]
+        and canonical_second["rows"] == [[3], [4]]
+        and canonical_second["order_by"] == [],
+        str((canonical_first, canonical_second)),
+    )
     try:
         h.read_subtable("employees", limit=21)
     except ValueError as exc:
