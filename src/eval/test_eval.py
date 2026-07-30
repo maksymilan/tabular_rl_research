@@ -72,7 +72,7 @@ class EvalTests(unittest.TestCase):
             "answer_from_context",
         }
         self.assertEqual(
-            SUPPORTED_TABLE_OPERATORS - {"pivot"},
+            SUPPORTED_TABLE_OPERATORS - {"pivot", "join_tables"},
             TOOLS - non_table_tools,
         )
 
@@ -521,14 +521,12 @@ class EvalTests(unittest.TestCase):
 
         joined, _ = execute_tool(
             harness,
-            "join_tables",
+            "join",
             {
-                "base": "people",
-                "joins": [{
-                    "table": "badges",
-                    "type": "left",
-                    "on": [{"left": "people.id", "right": "person_id"}],
-                }],
+                "left": "people",
+                "right": "badges",
+                "how": "left",
+                "on": [{"left": "people.id", "right": "badges.person_id"}],
             },
             ctx,
             "step_3",
@@ -539,7 +537,7 @@ class EvalTests(unittest.TestCase):
             1,
         )
         self.assertEqual(
-            joined["derivation"]["semantics"]["edges"][0]["namespace"],
+            joined["derivation"]["semantics"]["edges"][0]["right_namespace"],
             "badges",
         )
 

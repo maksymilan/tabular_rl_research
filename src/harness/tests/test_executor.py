@@ -126,6 +126,49 @@ def run():
         )),
         str(component),
     )
+    symmetric = h.join(
+        left="employees",
+        right="depts",
+        on=[{"left": "employees.dept", "right": "depts.dept"}],
+    )
+    t.check(
+        "symmetric join resolves qualified columns independently",
+        symmetric["columns"] == [
+            "employees.id", "employees.name", "employees.dept",
+            "employees.salary", "employees.age",
+            "depts.dept", "depts.location", "depts.budget",
+        ]
+        and norm(h.rows(symmetric["table_name"])) == norm(h.gold(
+            "SELECT e.*,d.* FROM employees e JOIN depts d ON e.dept=d.dept"
+        )),
+        str(symmetric),
+    )
+    chained = h.join(
+        left=symmetric["table_name"],
+        right="sales",
+        on=[{"left": "depts.dept", "right": "sales.dept"}],
+    )
+    t.check(
+        "symmetric join chains through a derived left input without handle prefixes",
+        "employees.id" in chained["columns"]
+        and "depts.location" in chained["columns"]
+        and "sales.item" in chained["columns"]
+        and not any(column.startswith(f"{symmetric['table_name']}.") for column in chained["columns"]),
+        str(chained),
+    )
+    symmetric_self = h.join(
+        left="employees",
+        right="employees",
+        left_alias="employee",
+        right_alias="manager",
+        on=[{"left": "employee.dept", "right": "manager.dept"}],
+    )
+    t.check(
+        "symmetric self join uses explicit aliases",
+        "employee.id" in symmetric_self["columns"]
+        and "manager.id" in symmetric_self["columns"],
+        str(symmetric_self),
+    )
     dotted_project = h.project(component["table_name"], ["employees.name", "depts.location"])
     t.check(
         "project resolves exact dotted logical columns",
@@ -417,5 +460,35 @@ def run():
     t.check("join_tables quotes nonstandard identifiers",
             joined_weird["row_count"] == 2 and "18_49_Rating_Share" in joined_weird["columns"],
             str((weird, joined_weird)))
+
+    first_page = h.read_subtable(
+        "employees",
+        columns=["id", "name"],
+        order_by=["id"],
+        limit=2,
+    )
+    second_page = h.read_subtable(
+        "employees",
+        columns=["id", "name"],
+        order_by=["id"],
+        limit=2,
+        offset=first_page["next_offset"],
+    )
+    t.check(
+        "read_subtable returns deterministic non-overlapping pages",
+        first_page["rows"] == [[1, "A"], [2, "B"]]
+        and first_page["has_more"]
+        and first_page["next_offset"] == 2
+        and second_page["rows"] == [[3, "C"], [4, "D"]]
+        and second_page["offset"] == 2,
+        str((first_page, second_page)),
+    )
+    try:
+        h.read_subtable("employees", limit=21)
+    except ValueError as exc:
+        bounded_read = "1 to 20" in str(exc)
+    else:
+        bounded_read = False
+    t.check("read_subtable enforces the limit cap in the executor", bounded_read)
 
     return t.result()

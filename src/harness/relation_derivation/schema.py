@@ -9,6 +9,7 @@ SUPPORTED_TABLE_OPERATORS = frozenset({
     "condition_filter",
     "project",
     "scalar_compute",
+    "join",
     "join_tables",
     "group_aggregate",
     "extreme_value_select",
@@ -39,6 +40,9 @@ _SEMANTIC_CONTRACTS = {
     "scalar_compute": {
         "row_operation", "column_operation", "operation", "result_column",
     },
+    "join": {
+        "row_operation", "column_operation", "edges",
+    },
     "join_tables": {
         "row_operation", "column_operation", "edges",
     },
@@ -61,6 +65,7 @@ _OPERATOR_OPERATIONS = {
     "condition_filter": ({"filter"}, {"preserve", "project"}),
     "project": ({"preserve", "deduplicate"}, {"project"}),
     "scalar_compute": ({"scalar"}, {"create"}),
+    "join": ({"join"}, {"concatenate_namespaced"}),
     "join_tables": ({"join"}, {"concatenate_namespaced", "project", "merge_legacy"}),
     "group_aggregate": (
         {"aggregate", "deduplicate", "preserve"},
@@ -157,7 +162,7 @@ def validate_relation_derivation(
             raise ValueError(
                 "project derivation lineage must cover the output schema in order"
             )
-    if operator == "join_tables":
+    if operator in {"join", "join_tables"}:
         edges = semantics.get("edges")
         if not isinstance(edges, list) or any(
             not isinstance(edge, dict)
@@ -167,8 +172,15 @@ def validate_relation_derivation(
             for index, edge in enumerate(edges)
         ):
             raise ValueError("join derivation requires ordered, typed edge semantics")
-        joined_inputs = [item for item in inputs if item.get("role") == "joined"]
-        if len(edges) != len(joined_inputs):
-            raise ValueError("join derivation requires one ordered edge per joined input")
+        if operator == "join":
+            roles = [item.get("role") for item in inputs]
+            if len(edges) != 1 or roles != ["left", "right"]:
+                raise ValueError(
+                    "symmetric join derivation requires one edge and left/right inputs"
+                )
+        else:
+            joined_inputs = [item for item in inputs if item.get("role") == "joined"]
+            if len(edges) != len(joined_inputs):
+                raise ValueError("join derivation requires one ordered edge per joined input")
     if _contains_policy_key(derivation):
         raise ValueError("relation derivation must contain facts only, never advice")

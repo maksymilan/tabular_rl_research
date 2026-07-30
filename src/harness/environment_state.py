@@ -318,9 +318,13 @@ class EnvironmentState:
                 entry = self._ensure_table(table)
                 read = {
                     "from_step": step_id,
-                    "columns": deepcopy(args.get("columns")),
-                    "limit": args.get("limit"),
+                    "columns": deepcopy(output.get("columns", args.get("columns"))),
+                    "limit": output.get("limit", args.get("limit", 20)),
+                    "offset": output.get("offset", args.get("offset", 0)),
+                    "order_by": deepcopy(output.get("order_by", args.get("order_by"))),
                     "row_count": output.get("row_count"),
+                    "has_more": output.get("has_more"),
+                    "next_offset": output.get("next_offset"),
                     "rows": deepcopy(output.get("rows", [])),
                 }
                 self._upsert_read(entry, read)
@@ -386,12 +390,16 @@ class EnvironmentState:
         key = (
             tuple(read.get("columns") or []),
             read.get("limit"),
+            read.get("offset", 0),
+            tuple(read.get("order_by") or []),
             read.get("note"),
         )
         for idx, old in enumerate(reads):
             old_key = (
                 tuple(old.get("columns") or []),
                 old.get("limit"),
+                old.get("offset", 0),
+                tuple(old.get("order_by") or []),
                 old.get("note"),
             )
             if old_key == key:

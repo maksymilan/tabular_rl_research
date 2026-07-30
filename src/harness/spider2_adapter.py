@@ -213,7 +213,7 @@ def smoke_local_tools(root: Path, limit: int) -> dict[str, Any]:
                 continue
             described = h.describe_table(tables[: min(3, len(tables))])
             first = tables[0]
-            rows = h.read_subtable(first, limit=3)
+            rows = h.read_subtable(first, limit=3)["rows"]
             counts["ok"] += 1
             counts["tables_seen"] += len(tables)
             counts["sample_rows_seen"] += len(rows)

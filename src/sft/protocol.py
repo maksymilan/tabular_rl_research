@@ -67,21 +67,18 @@ TOOL_SPECS: dict[str, str] = {
         'a plan, describe_table, inspect_column, or read_subtable observation step. If you read a '
         'one-row table at step_5 that was produced at step_4, cite step_4. Cite the resulting '
         'scalar table directly or reuse its producing step as value_ref.',
-    "join_tables":
-        'join_tables(base, joins, base_role=None) -> ONE new table for a connected join component. '
-        '`base` is a source table or earlier handle. `joins` is an ordered list of '
-        '{"table": T, "on": [{"left": "known_relation.column", "right": "new_column"}], '
-        '"type": "inner|left|cross"?, "role": "semantic_role"?}. `left` must be an exact logical '
-        'column already introduced; `right` is a bare column of the newly attached table. `type` '
-        'defaults to inner; cross uses on=[]. Output columns use a flat relation.column namespace, '
-        'never recursively nest a join handle. Derived-handle state may group exact names as '
-        'column_namespaces={relation:[column,..]}; reconstruct each as relation.column and never '
-        'prefix it with the derived handle. Omit roles normally; use `base_role`/`role` only when '
-        'the same relation occurs more than once (self-join). Put a whole consecutive join chain in '
-        'ONE call; use project separately if the result must be narrowed. Per-edge keys are only '
-        'table, on, optional type, and optional role; type never belongs at the top level. In every '
-        'on pair, left is the exact introduced logical column and right has NO dot: use '
-        '{"left":"orders.customer_id","right":"id"}, never right="customers.id".',
+    "join":
+        'join(left, right, on, how="inner", left_alias=None, right_alias=None) -> ONE new table '
+        'for exactly one SQL-style join edge. left and right are symmetric source tables or earlier '
+        'handles. on is a non-empty list of equality pairs '
+        '[{"left":"column","right":"column"}]; each side is resolved only against its own input '
+        'and may be an exact logical column, a SQL-style qualified column, or a bare column that is '
+        'unique within that input. how is inner|left|cross; cross requires on=[]. Output columns '
+        'keep existing logical names and namespace bare source columns as relation.column. Call '
+        'join again for another edge. Use left_alias/right_alias only for a repeated relation '
+        '(self-join) or a genuine output-name collision; aliases contain letters, digits, and '
+        'underscores. There are no base/joins/role arguments and neither side has a special bare-'
+        'column rule.',
     "group_aggregate":
         'group_aggregate(table, group_by, aggregations, passthrough=None, output_layout="rows", '
         'category_values=None, output_columns=None) -> new table grouped by '
@@ -123,11 +120,15 @@ TOOL_SPECS: dict[str, str] = {
         'saturated and the query should be narrowed rather than treated as exhaustive. Exact or '
         'case-insensitive exact hits suppress broader fuzzy alternatives.',
     "read_subtable":
-        'read_subtable(table, limit=20, columns=None) -> up to 20 actual rows of a table '
-        '(limit must be 1..20); columns optionally limits which columns are observed. Tool results otherwise '
-        'show only a table handle (name, columns, row_count); read_subtable is how you SEE rows, e.g. '
-        'the evidence rows before answering. Reading columns does not project or change the table. '
-        'Arguments are only table, optional limit, and optional columns; there is no offset.',
+        'read_subtable(table, limit=20, columns=None, order_by=None, offset=0) -> one deterministic '
+        'page of actual rows without creating or changing a table. limit is an integer from 1 to '
+        '20 inclusive and can never exceed 20. columns optionally limits observed columns. '
+        'order_by is a non-empty list of exact "column" or "column DESC" terms. offset is a '
+        'non-negative integer; offset>0 requires order_by so pagination is stable. The harness '
+        'adds remaining columns as deterministic tie-breakers and returns has_more plus '
+        'next_offset. Use that exact next_offset with the same columns/order_by to read the next '
+        'page. Tool results otherwise show only table metadata; reading rows never projects or '
+        'changes the evidence table.',
     "answer_from_context":
         'answer_from_context(evidence, reason="") -> TERMINAL. evidence must be {"table": name} '
         'for a grounded table holding the exact answer rows, columns, and column order. This same '
@@ -140,11 +141,11 @@ TOOLS = set(TOOL_SPECS)
 # ``aggregate`` and the parser repairs below exist only to read historical trajectory artifacts.
 # New model turns must use ``TOOLS`` through ``parse_assistant_strict``.  Keeping this distinction
 # explicit prevents old data compatibility from quietly widening the live agent interface.
-LEGACY_TOOLS = {"aggregate", "pivot"}
+LEGACY_TOOLS = {"aggregate", "pivot", "join_tables"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version24-search-values-output-slots-v1"
+PROTOCOL_VERSION = "version24-sql-aligned-join-pagination-v1"
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 POLICY_PROMPT_CANONICAL = "canonical"
@@ -174,6 +175,10 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "condition_filter": ({"table", "conditions"}, {"return_columns", "preview_k"}),
     "project": ({"table", "expressions"}, {"distinct"}),
     "scalar_compute": ({"operation", "operands"}, {"result_name"}),
+    "join": (
+        {"left", "right", "on"},
+        {"how", "left_alias", "right_alias"},
+    ),
     "join_tables": (set(), {"base", "joins", "base_role",
                             "tables", "on", "join_types", "prefixes",
                             "left", "right", "join_type", "left_prefix", "right_prefix",
@@ -189,7 +194,7 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "describe_table": ({"tables"}, set()),
     "inspect_column": ({"table", "column"}, {"top_k"}),
     "search_values": ({"table", "query"}, {"column", "limit", "offset"}),
-    "read_subtable": ({"table"}, {"limit", "columns"}),
+    "read_subtable": ({"table"}, {"limit", "columns", "order_by", "offset"}),
     "answer_from_context": (set(), {"answer", "evidence", "reason"}),
 }
 
@@ -205,13 +210,15 @@ CANONICAL_CALL_COOKBOOK = (
     '"expressions":["first_name","middle_name","last_name"],"distinct":true}}\n'
     'Compute a column with project: {"tool":"project","arguments":{"table":"sales",'
     '"expressions":["product","price * quantity AS revenue"]}}\n'
-    'Join a three-table path: {"tool":"join_tables","arguments":'
-    '{"base":"orders","joins":['
-    '{"table":"customers","on":[{"left":"orders.customer_id","right":"id"}]},'
-    '{"table":"regions","on":[{"left":"customers.region_id","right":"id"}]}]}}\n'
-    'Self-join with roles: {"tool":"join_tables","arguments":{"base":"employees",'
-    '"base_role":"employee","joins":[{"table":"employees","role":"manager",'
-    '"on":[{"left":"employee.manager_id","right":"id"}]}]}}\n'
+    'Join one edge: {"tool":"join","arguments":{"left":"orders","right":"customers",'
+    '"on":[{"left":"orders.customer_id","right":"customers.id"}],"how":"inner"}}\n'
+    'Continue a path with the prior result: {"tool":"join","arguments":{"left":"join_001",'
+    '"right":"regions","on":[{"left":"customers.region_id","right":"regions.id"}]}}\n'
+    'Self-join with aliases: {"tool":"join","arguments":{"left":"employees","right":"employees",'
+    '"left_alias":"employee","right_alias":"manager",'
+    '"on":[{"left":"employee.manager_id","right":"manager.id"}]}}\n'
+    'Read a stable next page: {"tool":"read_subtable","arguments":{"table":"project_003",'
+    '"columns":["name"],"order_by":["name"],"limit":20,"offset":20}}\n'
     'Aggregate: {"tool":"group_aggregate","arguments":{"table":"filter_001","group_by":["department"],'
     '"aggregations":[{"op":"sum","column":"salary","as":"total_salary"}]}}\n'
     'Scalar aggregate: {"tool":"group_aggregate","arguments":{"table":"filter_001","group_by":[],'
@@ -251,10 +258,6 @@ CANONICAL_CALL_COOKBOOK = (
 _MODEL_FORBIDDEN_ARGUMENTS: dict[str, set[str]] = {
     "condition_filter": {"preview_k"},
     "answer_from_context": {"answer"},
-    "join_tables": {
-        "tables", "on", "join_types", "prefixes", "return_columns",
-        "left", "right", "join_type", "left_prefix", "right_prefix",
-    },
 }
 
 
@@ -293,67 +296,39 @@ def validate_arguments(tool: str, args: dict) -> None:
 
 
 def _validate_model_join(args: dict) -> None:
-    base = args.get("base")
-    joins = args.get("joins")
-    if not isinstance(base, str) or not base.strip():
-        raise ProtocolError("join_tables.base must be a non-empty table or handle")
-    if not isinstance(joins, list) or not joins:
-        raise ProtocolError("join_tables.joins must be a non-empty list")
-
+    left = args.get("left")
+    right = args.get("right")
+    for key, value in (("left", left), ("right", right)):
+        if not isinstance(value, str) or not value.strip():
+            raise ProtocolError(f"join.{key} must be a non-empty table or handle")
     role_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-    def namespace(table: str, role, where: str) -> str:
-        if role is not None:
-            if not isinstance(role, str) or not role_pattern.fullmatch(role):
-                raise ProtocolError(
-                    f"{where} must be an identifier containing only letters, digits, and underscores"
-                )
-            return role
-        return table
-
-    namespaces = [namespace(base, args.get("base_role"), "join_tables.base_role")]
-    for index, item in enumerate(joins):
-        where = f"join_tables.joins[{index}]"
-        if not isinstance(item, dict):
-            raise ProtocolError(f"{where} must be an object")
-        extra = sorted(set(item) - {"table", "on", "type", "role"})
-        missing = sorted({"table", "on"} - set(item))
-        if missing:
-            raise ProtocolError(f"{where}: missing fields {missing}")
-        if extra:
-            raise ProtocolError(f"{where}: unexpected fields {extra}")
-        table = item.get("table")
-        if not isinstance(table, str) or not table.strip():
-            raise ProtocolError(f"{where}.table must be a non-empty table or handle")
-        join_type = item.get("type", "inner")
-        if join_type not in {"inner", "left", "cross"}:
-            raise ProtocolError(f"{where}.type must be inner, left, or cross")
-        edges = item.get("on")
-        if not isinstance(edges, list):
-            raise ProtocolError(f"{where}.on must be a list")
-        if join_type != "cross" and not edges:
-            raise ProtocolError(f"{where}.on must contain at least one equality edge")
-        if join_type == "cross" and edges:
-            raise ProtocolError(f"{where}.on must be [] for a cross join")
-        for edge_index, edge in enumerate(edges):
-            edge_where = f"{where}.on[{edge_index}]"
-            if not isinstance(edge, dict) or set(edge) != {"left", "right"}:
-                raise ProtocolError(f"{edge_where} must contain exactly left and right")
-            left, right = edge.get("left"), edge.get("right")
-            if not isinstance(left, str) or "." not in left:
-                raise ProtocolError(
-                    f"{edge_where}.left must be an exact known_relation.column reference"
-                )
-            if not isinstance(right, str) or not right or "." in right:
-                raise ProtocolError(f"{edge_where}.right must be a bare column of the new table")
-        namespaces.append(namespace(table, item.get("role"), f"{where}.role"))
-    folded = [item.casefold() for item in namespaces]
-    duplicates = sorted({name for name in folded if folded.count(name) > 1})
-    if duplicates:
-        raise ProtocolError(
-            "join_tables relation namespaces must be unique; add semantic base_role/role for "
-            f"repeated relations: {duplicates}"
-        )
+    for key in ("left_alias", "right_alias"):
+        alias = args.get(key)
+        if alias is not None and (
+            not isinstance(alias, str) or not role_pattern.fullmatch(alias)
+        ):
+            raise ProtocolError(
+                f"join.{key} must contain only letters, digits, and underscores and start "
+                "with a letter or underscore"
+            )
+    how = args.get("how", "inner")
+    if how not in {"inner", "left", "cross"}:
+        raise ProtocolError("join.how must be inner, left, or cross")
+    edges = args.get("on")
+    if not isinstance(edges, list):
+        raise ProtocolError("join.on must be a list")
+    if how == "cross" and edges:
+        raise ProtocolError("join.on must be [] when how=cross")
+    if how != "cross" and not edges:
+        raise ProtocolError("join.on must contain at least one equality pair")
+    for index, edge in enumerate(edges):
+        where = f"join.on[{index}]"
+        if not isinstance(edge, dict) or set(edge) != {"left", "right"}:
+            raise ProtocolError(f"{where} must contain exactly left and right")
+        for side in ("left", "right"):
+            column = edge.get(side)
+            if not isinstance(column, str) or not column.strip():
+                raise ProtocolError(f"{where}.{side} must be a non-empty column reference")
 
 
 def _validate_model_group_aggregate(args: dict) -> None:
@@ -451,7 +426,7 @@ def validate_model_arguments(tool: str, args: dict) -> None:
     forbidden = sorted(set(args) & _MODEL_FORBIDDEN_ARGUMENTS.get(tool, set()))
     if forbidden:
         raise ProtocolError(f"{tool}: legacy arguments are not valid in new episodes: {forbidden}")
-    if tool == "join_tables":
+    if tool == "join":
         _validate_model_join(args)
     if tool == "group_aggregate":
         _validate_model_group_aggregate(args)
@@ -459,6 +434,31 @@ def validate_model_arguments(tool: str, args: dict) -> None:
         limit = args.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
             raise ProtocolError("read_subtable: limit must be an integer from 1 to 20")
+        offset = args.get("offset", 0)
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ProtocolError("read_subtable: offset must be a non-negative integer")
+        columns = args.get("columns")
+        if columns is not None and (
+            not isinstance(columns, list)
+            or not columns
+            or not all(isinstance(item, str) and item.strip() for item in columns)
+        ):
+            raise ProtocolError(
+                "read_subtable: columns must be a non-empty list of column names"
+            )
+        order_by = args.get("order_by")
+        if order_by is not None and (
+            not isinstance(order_by, list)
+            or not order_by
+            or not all(isinstance(item, str) and item.strip() for item in order_by)
+        ):
+            raise ProtocolError(
+                'read_subtable: order_by must be a non-empty list of "column" or "column DESC"'
+            )
+        if offset > 0 and order_by is None:
+            raise ProtocolError(
+                "read_subtable: offset>0 requires order_by for deterministic pagination"
+            )
     if tool == "search_values":
         table = args.get("table")
         query = args.get("query")
@@ -620,10 +620,11 @@ SYSTEM_PROMPT_COMPACT = (
     "TOOLS\n"
     "plan(ops), describe_table(tables), inspect_column(table,column,top_k?), condition_filter(table,conditions,return_columns?), "
     "project(table,expressions,distinct?), scalar_compute(operation,operands,result_name?), "
-    "join_tables(base,joins,base_role?), "
+    "join(left,right,on,how?,left_alias?,right_alias?), "
     "group_aggregate(table,group_by,aggregations,passthrough?,output_layout?,category_values?,output_columns?), "
     "extreme_value_select(table,order_by,top_k?,return_columns?), set_op(left,right,op), "
-    "read_subtable(table,limit?,columns?), answer_from_context(evidence,reason?).\n"
+    "read_subtable(table,limit?,columns?,order_by?,offset?), "
+    "answer_from_context(evidence,reason?).\n"
 )
 
 ROLLING_HISTORY_SYSTEM_SUFFIX = (
@@ -657,21 +658,22 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
     "plan(ops); describe_table(tables); inspect_column(table,column,top_k?); "
     "condition_filter(table,conditions,return_columns?); project(table,expressions,distinct?); "
     "scalar_compute(operation,operands,result_name?); "
-    "join_tables(base,joins,base_role?); "
+    "join(left,right,on,how?,left_alias?,right_alias?); "
     "group_aggregate(table,group_by,aggregations,passthrough?,output_layout?,category_values?,output_columns?); "
     "extreme_value_select(table,order_by,top_k?,return_columns?); set_op(left,right,op); "
-    "read_subtable(table,limit?,columns?); answer_from_context(evidence,reason?).\n\n"
+    "read_subtable(table,limit?,columns?,order_by?,offset?); "
+    "answer_from_context(evidence,reason?).\n\n"
     "RULES\n"
     "plan is control only: goals/status/evidence may cite prior step ids, never results or answer "
     "values. Inspect text domains before literal filters unless already inspected. conditions support "
     "comparisons, like, in, between, null, and/or/not; cite a scalar as value_ref:step_id or a "
-    "computed table as in_table. Use existing handles rather than restarting from sources. For an "
-    "n-way join, base starts the component and each joins item attaches one new table. Each on.left "
-    "is an exact already-visible relation.column and on.right is a bare column of the new table. "
-    "When base is a derived handle, copy on.left from its column_namespaces as namespace.column; "
-    "never invent handle.column. Use semantic roles only for repeated relations; never emit SQL "
-    "aliases such as L. or R. Downstream scalar expressions may use these exact logical columns; "
-    "the harness quotes them as single identifiers. "
+    "computed table as in_table. Use existing handles rather than restarting from sources. A join "
+    "call represents one edge between symmetric left and right inputs. Each on.left resolves "
+    "only within left and each on.right only within right; use an exact logical column, a SQL-style "
+    "qualified column, or a bare name unique in that input. Chain multiple joins by passing the "
+    "prior join handle as left. Use aliases only for repeated relations or real name collisions. "
+    "Downstream expressions may use the exact logical output columns; the harness quotes them as "
+    "single identifiers. "
     "For every answer, read the evidence handle then call answer_from_context with that evidence. "
     "Scalar answers also cite their grounded 1x1 result table. Every evidence table is scored "
     "exactly: project away helper columns and fix column order before citing it. Never put answer "

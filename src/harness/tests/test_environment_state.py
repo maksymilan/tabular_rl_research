@@ -99,7 +99,7 @@ def run():
     state.apply_tool_result(
         "read_subtable",
         {"table": f["table_name"], "limit": 2},
-        {"rows": [list(r) for r in rows], "row_count": f["row_count"]},
+        rows,
         "step_5",
     )
     snap = state.snapshot()
@@ -113,7 +113,7 @@ def run():
     state.apply_tool_result(
         "read_subtable",
         {"table": f["table_name"], "limit": 2},
-        {"rows": [["replacement"]], "row_count": f["row_count"]},
+        {**rows, "rows": [["replacement"]], "row_count": 1},
         "step_5b",
     )
     snap = state.snapshot()

@@ -88,8 +88,10 @@ DATA_GENERATION_SUFFIX = (
     "not as plain text before the tool call. The reason should be specific to the current question, "
     "visible schema/observations, and the next tool arguments. After the first turn, do not restate "
     "the original user question; continue from the current environment state or error feedback. "
-    "Do not call read_subtable again for the same table, columns, and limit if that read is already "
-    "present in CURRENT ENVIRONMENT STATE. If a plan item has no evidence yet, omit the evidence "
+    "Do not call read_subtable again for the same table, columns, order_by, and offset if that page "
+    "is already present in CURRENT ENVIRONMENT STATE. To continue, use the returned next_offset "
+    "with the same columns and order_by; limit can never exceed 20. If a plan item has no evidence "
+    "yet, omit the evidence "
     "field or set it to null; never use an empty string for evidence."
 )
 PLAN_POLICY_OPTIONAL = "optional"

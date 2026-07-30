@@ -142,7 +142,7 @@ def smoke_tools(root: Path, limit: int) -> dict[str, Any]:
                 counts["empty_database"] += 1
                 continue
             described = harness.describe_table(tables[: min(3, len(tables))])
-            rows = harness.read_subtable(tables[0], limit=3)
+            rows = harness.read_subtable(tables[0], limit=3)["rows"]
             counts["ok"] += 1
             counts["tables_seen"] += len(tables)
             counts["sample_rows_seen"] += len(rows)

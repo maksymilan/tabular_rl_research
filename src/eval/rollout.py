@@ -463,6 +463,12 @@ def _safe_cols(h: Harness, table: str) -> list[str]:
 
 
 def _join_identifier_hint(h: Harness, args: dict | None) -> str | None:
+    if isinstance(args, dict) and {"left", "right", "on"} <= set(args):
+        return (
+            "join is symmetric: every on.left resolves only against the left input and every "
+            "on.right resolves only against the right input. Either side may use an exact logical "
+            "column, its input/alias-qualified form, or a bare name unique within that input."
+        )
     if isinstance(args, dict) and isinstance(args.get("joins"), list):
         return (
             "join_tables uses flat logical column names: on.left must exactly match an already "
@@ -508,7 +514,7 @@ def format_tool_error(exc: Exception, h: Harness, tool: str | None, args: dict |
                 refs.append({"table": table, "columns": cols})
         if refs:
             hints.append(f"available columns for referenced tables: {refs}")
-        if tool == "join_tables":
+        if tool in {"join", "join_tables"}:
             join_hint = _join_identifier_hint(h, args)
             if join_hint:
                 hints.append(join_hint)

@@ -282,7 +282,8 @@ class ProviderAdapterTests(unittest.TestCase):
             '{"tool":"describe_table","arguments":{"tables":["Document"]}}',
             prompt,
         )
-        self.assertIn('"base":"orders"', prompt)
+        self.assertIn('"left":"orders"', prompt)
+        self.assertIn('"right":"customers"', prompt)
         self.assertIn('"left":"orders.customer_id"', prompt)
         self.assertNotIn('"prefixes"', prompt)
 

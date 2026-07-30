@@ -34,6 +34,7 @@ def run():
             "condition_filter",
             "project",
             "scalar_compute",
+            "join",
             "join_tables",
             "group_aggregate",
             "extreme_value_select",
@@ -131,6 +132,23 @@ def run():
         "left join measured fact is tied to its edge",
         join_derivation["semantics"]["edges"][0]["null_extended_output_rows"] == 0,
         str(join_derivation),
+    )
+
+    symmetric_args = {
+        "left": "employees",
+        "right": "depts",
+        "on": [{"left": "employees.dept", "right": "depts.dept"}],
+        "how": "left",
+    }
+    symmetric = h.join(**symmetric_args)
+    symmetric_derivation = _derive(h, "join", symmetric_args, symmetric)
+    t.check(
+        "symmetric join derivation records both inputs and one edge",
+        symmetric_derivation["inputs"][0]["role"] == "left"
+        and symmetric_derivation["inputs"][1]["role"] == "right"
+        and symmetric_derivation["semantics"]["edges"][0]["on"]
+        == [{"left": "employees.dept", "right": "depts.dept"}],
+        str(symmetric_derivation),
     )
 
     nway_args = {

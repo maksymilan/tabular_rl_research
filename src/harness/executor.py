@@ -636,6 +636,161 @@ class Harness:
 
         return self._new("join", last_sql)
 
+    def join(self, left, right, on, how="inner", left_alias=None, right_alias=None) -> dict:
+        """Execute one symmetric SQL-style equality join edge.
+
+        This is the active public join surface. ``join_tables`` below is retained only for
+        deterministic replay of historical trajectories. Each authored join column is resolved
+        independently against its own input, so neither side has a special "bare new table"
+        convention.
+        """
+        if not isinstance(left, str) or not left:
+            raise ValueError("join.left must be a non-empty table or handle")
+        if not isinstance(right, str) or not right:
+            raise ValueError("join.right must be a non-empty table or handle")
+        if how not in {"inner", "left", "cross"}:
+            raise ValueError("join.how must be inner, left, or cross")
+        if not isinstance(on, list):
+            raise ValueError("join.on must be a list")
+        if how == "cross" and on:
+            raise ValueError("join.on must be [] when how=cross")
+        if how != "cross" and not on:
+            raise ValueError("join.on must contain at least one equality pair")
+
+        alias_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+        for key, alias in (("left_alias", left_alias), ("right_alias", right_alias)):
+            if alias is not None and (
+                not isinstance(alias, str) or alias_pattern.fullmatch(alias) is None
+            ):
+                raise ValueError(f"join.{key} must be a SQL-style identifier")
+
+        left_cols = self._cols(left)
+        right_cols = self._cols(right)
+
+        def resolve_input_column(
+            columns: list[str],
+            requested: str,
+            table: str,
+            alias: str | None,
+            where: str,
+        ) -> str:
+            if not isinstance(requested, str) or not requested.strip():
+                raise ValueError(f"{where} must be a non-empty column reference")
+            exact = [item for item in columns if item.casefold() == requested.casefold()]
+            if len(exact) == 1:
+                return exact[0]
+
+            qualifier = None
+            base = requested
+            if "." in requested:
+                qualifier, base = requested.rsplit(".", 1)
+                allowed_qualifiers = {table.casefold()}
+                if alias:
+                    allowed_qualifiers.add(alias.casefold())
+                physical_namespaces = {
+                    item.rsplit(".", 1)[0].casefold()
+                    for item in columns
+                    if "." in item
+                }
+                allowed_qualifiers.update(physical_namespaces)
+                if qualifier.casefold() not in allowed_qualifiers:
+                    raise ValueError(
+                        f"{where} qualifier {qualifier!r} does not name input {table!r}; "
+                        f"available columns: {columns}"
+                    )
+            matches = [
+                item for item in columns
+                if item.casefold() == base.casefold()
+                or item.casefold().endswith("." + base.casefold())
+                or item.casefold().endswith("__" + base.casefold())
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            if not matches:
+                raise ValueError(
+                    f"{where} {requested!r} is not a column of input {table!r}; "
+                    f"available columns: {columns}"
+                )
+            raise ValueError(
+                f"{where} {requested!r} is ambiguous within input {table!r}; "
+                f"matching columns: {matches}"
+            )
+
+        def logical_pairs(
+            table: str,
+            columns: list[str],
+            alias: str | None,
+        ) -> list[tuple[str, str]]:
+            if alias:
+                pairs = [(f"{alias}.{column.rsplit('.', 1)[-1]}", column) for column in columns]
+            else:
+                pairs = [
+                    (column if "." in column else f"{table}.{column}", column)
+                    for column in columns
+                ]
+            lowered = [logical.casefold() for logical, _ in pairs]
+            if len(lowered) != len(set(lowered)):
+                raise ValueError(
+                    f"join alias {alias!r} collapses distinct columns of {table!r}; "
+                    "use the existing exact logical column names"
+                )
+            return pairs
+
+        predicates = []
+        resolved_edges: list[tuple[str, str]] = []
+        for index, edge in enumerate(on):
+            where = f"join.on[{index}]"
+            if not isinstance(edge, dict) or set(edge) != {"left", "right"}:
+                raise ValueError(f"{where} must contain exactly left and right")
+            left_column = resolve_input_column(
+                left_cols, edge.get("left"), left, left_alias, f"{where}.left"
+            )
+            right_column = resolve_input_column(
+                right_cols, edge.get("right"), right, right_alias, f"{where}.right"
+            )
+            resolved_edges.append((left_column, right_column))
+            predicates.append(f"L.{_qid(left_column)} = R.{_qid(right_column)}")
+
+        left_pairs = logical_pairs(left, left_cols, left_alias)
+        right_pairs = logical_pairs(right, right_cols, right_alias)
+        left_by_physical = {physical: logical for logical, physical in left_pairs}
+        right_by_physical = {physical: logical for logical, physical in right_pairs}
+        joined_equal_names = {
+            left_by_physical[left_column].casefold()
+            for left_column, right_column in resolved_edges
+            if left_by_physical[left_column].casefold()
+            == right_by_physical[right_column].casefold()
+        }
+        left_names = {logical.casefold() for logical, _ in left_pairs}
+        kept_right_pairs = []
+        collisions = []
+        for logical, physical in right_pairs:
+            folded = logical.casefold()
+            if folded not in left_names:
+                kept_right_pairs.append((logical, physical))
+            elif folded not in joined_equal_names:
+                collisions.append(logical)
+        if collisions:
+            raise ValueError(
+                f"join outputs have colliding logical columns {collisions}; "
+                "use left_alias/right_alias to distinguish repeated relations"
+            )
+
+        select_items = [
+            f"L.{_qid(physical)} AS {_qid(logical)}"
+            for logical, physical in left_pairs
+        ] + [
+            f"R.{_qid(physical)} AS {_qid(logical)}"
+            for logical, physical in kept_right_pairs
+        ]
+        join_sql = {"inner": "JOIN", "left": "LEFT JOIN", "cross": "CROSS JOIN"}[how]
+        on_clause = f" ON {' AND '.join(predicates)}" if predicates else ""
+        sql = (
+            f"SELECT {', '.join(select_items)} "
+            f"FROM {self._src(left)} AS L {join_sql} {self._src(right)} AS R{on_clause}"
+        )
+        return self._new("join", sql)
+
     def join_tables(self, left=None, right=None, on=None, join_type="inner",
                     return_columns=None, left_prefix=None, right_prefix=None,
                     tables=None, join_types=None, prefixes=None,
@@ -1011,15 +1166,102 @@ class Harness:
             out["note"] = f"showing first {len(rows)} of {total} rows (exceeds {cell_limit}-cell preview budget)"
         return out
 
-    def read_subtable(self, table, columns=None, limit=20):
-        if columns:
-            available = self._cols(table)
-            cols = ", ".join(self._col_sql(available, col) for col in columns)
+    def read_subtable(
+        self,
+        table,
+        columns=None,
+        limit=20,
+        order_by=None,
+        offset=0,
+    ):
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+            raise ValueError("read_subtable.limit must be an integer from 1 to 20")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("read_subtable.offset must be a non-negative integer")
+        if offset > 0 and not order_by:
+            raise ValueError(
+                "read_subtable.offset>0 requires order_by for deterministic pagination"
+            )
+
+        available = self._cols(table)
+        if columns is not None:
+            if (
+                not isinstance(columns, list)
+                or not columns
+                or not all(isinstance(item, str) and item for item in columns)
+            ):
+                raise ValueError(
+                    "read_subtable.columns must be a non-empty list of column names"
+                )
+            selected = []
+            for requested in columns:
+                resolved = self._resolve_col(available, requested)
+                if resolved not in available:
+                    raise ValueError(
+                        f"read_subtable.columns contains unknown column {requested!r}; "
+                        f"available columns: {available}"
+                    )
+                selected.append(resolved)
+            if len({item.casefold() for item in selected}) != len(selected):
+                raise ValueError("read_subtable.columns must not contain duplicates")
         else:
-            cols = "*"
-        return self.conn.execute(
-            f"SELECT {cols} FROM {self._src(table)} LIMIT {int(limit)}"
+            selected = list(available)
+
+        authored_order = []
+        if order_by is not None:
+            if (
+                not isinstance(order_by, list)
+                or not order_by
+                or not all(isinstance(item, str) and item.strip() for item in order_by)
+            ):
+                raise ValueError(
+                    'read_subtable.order_by must be a non-empty list of "column" or "column DESC"'
+                )
+            for item in order_by:
+                match = re.fullmatch(r"\s*(.+?)(?:\s+(ASC|DESC))?\s*", item, re.I)
+                requested = match.group(1)
+                direction = (match.group(2) or "ASC").upper()
+                resolved = self._resolve_col(available, requested)
+                if resolved not in available:
+                    raise ValueError(
+                        f"read_subtable.order_by contains unknown column {requested!r}; "
+                        f"available columns: {available}"
+                    )
+                authored_order.append((resolved, direction))
+
+        # Always make the page order total and reproducible. Authored ordering has priority; every
+        # remaining column is an ascending tie-breaker. Truly duplicate rows are interchangeable.
+        ordered_names = {column.casefold() for column, _ in authored_order}
+        total_order = authored_order + [
+            (column, "ASC")
+            for column in available
+            if column.casefold() not in ordered_names
+        ]
+        select_sql = ", ".join(_qid(column) for column in selected)
+        order_sql = ", ".join(
+            f"{_qid(column)} {direction}" for column, direction in total_order
+        )
+        fetched = self.conn.execute(
+            f"SELECT {select_sql} FROM {self._src(table)} "
+            f"ORDER BY {order_sql} LIMIT ? OFFSET ?",
+            (limit + 1, offset),
         ).fetchall()
+        page = fetched[:limit]
+        has_more = len(fetched) > limit
+        return {
+            "table": table,
+            "columns": selected,
+            "rows": [list(row) for row in page],
+            "row_count": len(page),
+            "limit": limit,
+            "offset": offset,
+            "order_by": [
+                f"{column} {direction}" if direction == "DESC" else column
+                for column, direction in authored_order
+            ],
+            "has_more": has_more,
+            "next_offset": offset + len(page) if has_more else None,
+        }
 
     # ---- resident perception (context-management layer: structure + value-domain, no row dump) ----
     def describe_table(self, tables) -> dict:

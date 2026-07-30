@@ -186,6 +186,58 @@ def _public_join(args: dict, output_table: str, inspector: RelationInspector) ->
     }
 
 
+def _symmetric_join(
+    args: dict,
+    output_table: str,
+    inspector: RelationInspector,
+) -> dict:
+    left = args.get("left")
+    right = args.get("right")
+    left_namespace = args.get("left_alias") or left
+    right_namespace = args.get("right_alias") or right
+    how = args.get("how", "inner")
+    on = deepcopy(args.get("on") or [])
+    edge = {
+        "index": 0,
+        "left_input": left,
+        "right_input": right,
+        "left_namespace": left_namespace,
+        "right_namespace": right_namespace,
+        "join_type": how,
+        "on": on,
+    }
+    if how == "left" and on and isinstance(on[0], dict):
+        right_key = on[0].get("right")
+        if isinstance(right_key, str):
+            base = right_key.rsplit(".", 1)[-1]
+            candidates = [
+                column
+                for column in inspector.table_columns(output_table)
+                if column.casefold() == right_key.casefold()
+                or column.casefold() == f"{right_namespace}.{base}".casefold()
+                or column.casefold().endswith("." + base.casefold())
+            ]
+            if len(candidates) == 1:
+                try:
+                    edge["null_extended_output_rows"] = inspector.count_null_rows(
+                        output_table,
+                        candidates[0],
+                    )
+                except (KeyError, ValueError):
+                    pass
+    return {
+        "inputs": [
+            _table_input("left", left, namespace=left_namespace),
+            _table_input("right", right, namespace=right_namespace),
+        ],
+        "semantics": {
+            "row_operation": "join",
+            "column_operation": "concatenate_namespaced",
+            "edges": [edge],
+        },
+    }
+
+
 def _historical_join(args: dict) -> dict:
     tables = args.get("tables")
     if not isinstance(tables, list):
@@ -243,6 +295,15 @@ def _join_tables(
     if args.get("base") is not None or args.get("joins") is not None:
         return _public_join(args, output_table, inspector)
     return _historical_join(args)
+
+
+def _join(
+    args: dict,
+    _columns: list[str],
+    inspector: RelationInspector,
+    output_table: str,
+) -> dict:
+    return _symmetric_join(args, output_table, inspector)
 
 
 def _group_aggregate(
@@ -372,6 +433,7 @@ _BUILDERS = {
     "condition_filter": _condition_filter,
     "project": _project,
     "scalar_compute": _scalar_compute,
+    "join": _join,
     "join_tables": _join_tables,
     "group_aggregate": _group_aggregate,
     "extreme_value_select": _extreme_value_select,

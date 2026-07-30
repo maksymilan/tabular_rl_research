@@ -58,7 +58,8 @@ class RollingLegalHistoryTests(unittest.TestCase):
         compact = rolling_system_prompt(SYSTEM_PROMPT, compact=True)
         self.assertLess(len(compact), len(full))
         for required in (
-            "value_ref", "relation.column", "base_role", "LAST TOOL ERROR", "answer_from_context",
+            "value_ref", "symmetric left and right", "left_alias",
+            "LAST TOOL ERROR", "answer_from_context",
         ):
             self.assertIn(required, compact)
 

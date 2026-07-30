@@ -24,17 +24,17 @@ from protocol import (  # noqa: E402
 
 class ProtocolParseTests(unittest.TestCase):
     def test_current_prompt_has_canonical_calls_and_exact_final_shape(self):
-        self.assertEqual(PROTOCOL_VERSION, "version24-search-values-output-slots-v1")
+        self.assertEqual(PROTOCOL_VERSION, "version24-sql-aligned-join-pagination-v1")
         for tool in (
-            "condition_filter", "project", "join_tables", "group_aggregate",
+            "condition_filter", "project", "join", "group_aggregate",
             "scalar_compute", "set_op", "answer_from_context",
         ):
             self.assertIn(f'"tool":"{tool}"', SYSTEM_PROMPT)
         self.assertIn("evidence table's rows, columns, and column order exactly", SYSTEM_PROMPT)
         self.assertIn("project first", SYSTEM_PROMPT)
-        self.assertIn('"base":"orders"', SYSTEM_PROMPT)
+        self.assertIn('"left":"orders"', SYSTEM_PROMPT)
+        self.assertIn('"right":"customers"', SYSTEM_PROMPT)
         self.assertIn('"left":"orders.customer_id"', SYSTEM_PROMPT)
-        self.assertIn("column_namespaces", SYSTEM_PROMPT)
         self.assertNotIn("Call this first", SYSTEM_PROMPT)
         self.assertIn("A simple direct task may omit it", SYSTEM_PROMPT)
         self.assertIn("do not concatenate names", SYSTEM_PROMPT)
@@ -47,12 +47,13 @@ class ProtocolParseTests(unittest.TestCase):
         self.assertIn('"return_columns":["label"]', SYSTEM_PROMPT)
         self.assertIn('"return_columns":["label","review"]', SYSTEM_PROMPT)
         self.assertIn("Project preserves the input row orientation", SYSTEM_PROMPT)
-        self.assertIn('right has NO dot', SYSTEM_PROMPT)
-        self.assertIn('never right="customers.id"', SYSTEM_PROMPT)
+        self.assertIn("left and right are symmetric", SYSTEM_PROMPT)
+        self.assertIn('"right":"customers.id"', SYSTEM_PROMPT)
         self.assertIn("never a plan, describe_table, inspect_column, or read_subtable", SYSTEM_PROMPT)
         self.assertIn("Put where only inside the aggregation", SYSTEM_PROMPT)
         self.assertIn("project has no limit argument", SYSTEM_PROMPT)
-        self.assertIn("there is no offset", SYSTEM_PROMPT)
+        self.assertIn("offset>0 requires order_by", SYSTEM_PROMPT)
+        self.assertIn("can never exceed 20", SYSTEM_PROMPT)
 
     def test_tool_output_compacts_contiguous_logical_namespaces(self):
         message = tool_output_message(
@@ -180,21 +181,20 @@ class ProtocolParseTests(unittest.TestCase):
                 '<think>Join.</think><tool_call>{"tool":"join_tables",'
                 '"arguments":{"left":"a","right":"b","on":[{"left":"id","right":"id"}]}}</tool_call>'
             )
-        with self.assertRaisesRegex(ProtocolError, "legacy arguments"):
+        with self.assertRaisesRegex(ProtocolError, "unknown tool"):
             parse_assistant_strict(
                 '<think>Join.</think><tool_call>{"tool":"join_tables","arguments":'
                 '{"tables":["a","b"],"on":[[{"left":"id","right":"id"}]]}}</tool_call>'
             )
 
-    def test_version5_join_shape_and_replay_compatibility(self):
+    def test_symmetric_join_shape_and_replay_compatibility(self):
         _, tool, args = parse_assistant_strict(
-            '<think>Join the connected component.</think><tool_call>{"tool":"join_tables",'
-            '"arguments":{"base":"orders","joins":[{"table":"customers","on":'
-            '[{"left":"orders.customer_id","right":"id"}]},{"table":"regions","on":'
-            '[{"left":"customers.region_id","right":"id"}]}]}}</tool_call>'
+            '<think>Join one edge.</think><tool_call>{"tool":"join",'
+            '"arguments":{"left":"orders","right":"customers","on":'
+            '[{"left":"orders.customer_id","right":"customers.id"}]}}</tool_call>'
         )
-        self.assertEqual(tool, "join_tables")
-        self.assertEqual(args["joins"][1]["table"], "regions")
+        self.assertEqual(tool, "join")
+        self.assertEqual(args["right"], "customers")
 
         _, replay_tool, replay_args = parse_assistant(
             '<tool_call>{"tool":"join_tables","arguments":{"tables":["a","b"],'
@@ -203,33 +203,33 @@ class ProtocolParseTests(unittest.TestCase):
         self.assertEqual(replay_tool, "join_tables")
         self.assertEqual(replay_args["prefixes"], ["A", "B"])
 
-    def test_version5_join_requires_unambiguous_namespaces(self):
-        with self.assertRaisesRegex(ProtocolError, "semantic base_role/role"):
+    def test_symmetric_join_alias_validation(self):
+        with self.assertRaisesRegex(ProtocolError, "left_alias"):
             parse_assistant_strict(
-                '<think>Self join.</think><tool_call>{"tool":"join_tables","arguments":'
-                '{"base":"employees","joins":[{"table":"employees","on":'
-                '[{"left":"employees.manager_id","right":"id"}]}]}}</tool_call>'
+                '<think>Self join.</think><tool_call>{"tool":"join","arguments":'
+                '{"left":"employees","right":"employees","left_alias":"bad alias","on":'
+                '[{"left":"manager_id","right":"id"}]}}</tool_call>'
             )
         _, _, args = parse_assistant_strict(
-            '<think>Self join with semantic roles.</think><tool_call>{"tool":"join_tables",'
-            '"arguments":{"base":"employees","base_role":"employee","joins":'
-            '[{"table":"employees","role":"manager","on":'
-            '[{"left":"employee.manager_id","right":"id"}]}]}}</tool_call>'
+            '<think>Self join with aliases.</think><tool_call>{"tool":"join",'
+            '"arguments":{"left":"employees","right":"employees","left_alias":"employee",'
+            '"right_alias":"manager","on":'
+            '[{"left":"employee.manager_id","right":"manager.id"}]}}</tool_call>'
         )
-        self.assertEqual(args["base_role"], "employee")
+        self.assertEqual(args["left_alias"], "employee")
 
-    def test_version5_join_rejects_noncanonical_edge_identifiers(self):
-        with self.assertRaisesRegex(ProtocolError, "known_relation.column"):
+    def test_symmetric_join_requires_complete_equality_pairs(self):
+        with self.assertRaisesRegex(ProtocolError, "exactly left and right"):
             parse_assistant_strict(
-                '<think>Join.</think><tool_call>{"tool":"join_tables","arguments":'
-                '{"base":"a","joins":[{"table":"b","on":[{"left":"id","right":"id"}]}]}}'
+                '<think>Join.</think><tool_call>{"tool":"join","arguments":'
+                '{"left":"a","right":"b","on":[{"left":"id"}]}}'
                 '</tool_call>'
             )
-        with self.assertRaisesRegex(ProtocolError, "bare column"):
+        with self.assertRaisesRegex(ProtocolError, "must be \\[\\]"):
             parse_assistant_strict(
-                '<think>Join.</think><tool_call>{"tool":"join_tables","arguments":'
-                '{"base":"a","joins":[{"table":"b","on":'
-                '[{"left":"a.id","right":"b.id"}]}]}}</tool_call>'
+                '<think>Join.</think><tool_call>{"tool":"join","arguments":'
+                '{"left":"a","right":"b","how":"cross","on":'
+                '[{"left":"a.id","right":"b.id"}]}}</tool_call>'
             )
 
     def test_strict_parser_rejects_unbounded_read_limit(self):
@@ -244,6 +244,17 @@ class ProtocolParseTests(unittest.TestCase):
         )
         self.assertEqual(tool, "read_subtable")
         self.assertEqual(args["limit"], 20)
+        with self.assertRaisesRegex(ProtocolError, "requires order_by"):
+            parse_assistant_strict(
+                '<think>Read the next page.</think><tool_call>{"tool":"read_subtable",'
+                '"arguments":{"table":"items","limit":20,"offset":20}}</tool_call>'
+            )
+        _, _, page_args = parse_assistant_strict(
+            '<think>Read the next stable page.</think><tool_call>{"tool":"read_subtable",'
+            '"arguments":{"table":"items","limit":20,"order_by":["id"],'
+            '"offset":20}}</tool_call>'
+        )
+        self.assertEqual(page_args["offset"], 20)
 
     def test_strict_parser_rejects_retired_filter_preview_argument(self):
         with self.assertRaisesRegex(ProtocolError, "not valid in new episodes"):
