@@ -680,6 +680,18 @@ class Harness:
             if len(exact) == 1:
                 return exact[0]
 
+            if alias and requested.casefold().startswith(alias.casefold() + "."):
+                # SQL aliases qualify the complete column name of a derived relation. A derived
+                # logical column may itself contain dots, e.g. ``filter_001.order_id``; therefore
+                # ``g.filter_001.order_id`` strips only the leading alias, not every qualifier.
+                aliased_column = requested[len(alias) + 1:]
+                alias_matches = [
+                    item for item in columns
+                    if item.casefold() == aliased_column.casefold()
+                ]
+                if len(alias_matches) == 1:
+                    return alias_matches[0]
+
             qualifier = None
             base = requested
             if "." in requested:
@@ -722,7 +734,7 @@ class Harness:
             alias: str | None,
         ) -> list[tuple[str, str]]:
             if alias:
-                pairs = [(f"{alias}.{column.rsplit('.', 1)[-1]}", column) for column in columns]
+                pairs = [(f"{alias}.{column}", column) for column in columns]
             else:
                 pairs = [
                     (column if "." in column else f"{table}.{column}", column)
