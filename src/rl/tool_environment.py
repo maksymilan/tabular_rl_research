@@ -36,6 +36,7 @@ from protocol import (  # noqa: E402
 from rollout import (  # noqa: E402
     MAX_ERRORS_PER_TYPE,
     execute_tool,
+    lower_terminal_evidence,
     new_ctx,
     overview,
     protocol_failure_type,
@@ -177,8 +178,13 @@ class ToolUseEnv:
             think, tool, args = parse_assistant_strict(text)
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
             if tool == "answer_from_context":
+                score_args, terminal_projection = lower_terminal_evidence(
+                    self.harness,
+                    args,
+                )
+                turn["terminal_projection"] = terminal_projection
                 self.correct, turn["pred_sample"], turn["gold_sample"] = score(
-                    self.harness, task_gold_sql(self.example), args, self.created
+                    self.harness, task_gold_sql(self.example), score_args, self.created
                 )
                 self.legal = True
                 if not self.correct:

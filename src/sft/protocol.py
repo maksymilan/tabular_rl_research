@@ -130,11 +130,12 @@ TOOL_SPECS: dict[str, str] = {
         'page. Tool results otherwise show only table metadata; reading rows never projects or '
         'changes the evidence table.',
     "answer_from_context":
-        'answer_from_context(evidence, reason="") -> TERMINAL. evidence must be {"table": name} '
-        'for a grounded table holding the exact answer rows, columns, and column order. This same '
-        'rule covers scalar answers: cite the 1x1 table produced by group_aggregate or '
-        'scalar_compute. The model never writes answer data in the terminal call. Use project first '
-        'when helper columns remain or column order is wrong; think/reason text cannot repair data.',
+        'answer_from_context(evidence, reason="") -> TERMINAL. evidence must be exactly '
+        '{"table":name,"columns":[...]} for one grounded table and a non-empty ordered list of its '
+        'exact existing logical columns. The harness deterministically projects only those columns '
+        'in that order before scoring; it never infers columns from the question, reason, or gold. '
+        'This also covers scalar answers: cite the 1x1 table and its one column. The model never '
+        'writes answer data in the terminal call. Column selection cannot change rows or values.',
 }
 
 TOOLS = set(TOOL_SPECS)
@@ -145,7 +146,7 @@ LEGACY_TOOLS = {"aggregate", "pivot", "join_tables"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version24-sql-aligned-join-pagination-v1"
+PROTOCOL_VERSION = "version24-sql-aligned-join-pagination-terminal-columns-v1"
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 POLICY_PROMPT_CANONICAL = "canonical"
@@ -250,7 +251,7 @@ CANONICAL_CALL_COOKBOOK = (
     'Set operation after aligning both inputs with project: {"tool":"set_op","arguments":'
     '{"left":"project_001","right":"project_002","op":"union"}}\n'
     'Any final answer, including a scalar: {"tool":"answer_from_context","arguments":'
-    '{"evidence":{"table":"project_003"},'
+    '{"evidence":{"table":"project_003","columns":["name","email"]},'
     '"reason":"The evidence table has exactly the requested rows and columns."}}\n'
 )
 
@@ -518,13 +519,25 @@ def validate_model_arguments(tool: str, args: dict) -> None:
         evidence = args.get("evidence")
         if (
             not isinstance(evidence, dict)
-            or set(evidence) != {"table"}
+            or set(evidence) != {"table", "columns"}
             or not isinstance(evidence.get("table"), str)
             or not evidence["table"].strip()
+            or not isinstance(evidence.get("columns"), list)
+            or not evidence["columns"]
+            or not all(
+                isinstance(column, str) and column.strip()
+                for column in evidence["columns"]
+            )
         ):
             raise ProtocolError(
-                'answer_from_context: evidence must be exactly {"table":"result_handle"}; '
-                "scalar answers also cite a grounded 1x1 table"
+                'answer_from_context: evidence must be exactly '
+                '{"table":"result_handle","columns":["exact_column",...]}; '
+                "scalar answers also cite one exact column of a grounded 1x1 table"
+            )
+        folded = [column.casefold() for column in evidence["columns"]]
+        if len(folded) != len(set(folded)):
+            raise ProtocolError(
+                "answer_from_context: evidence.columns must not contain duplicates"
             )
 
 
@@ -566,10 +579,11 @@ SYSTEM_PROMPT = (
     "that producing 1x1 table as terminal evidence; never copy its value into the final call. "
     "For arithmetic over a one-row table containing several named metrics, reuse the same producing "
     'step with {"value_ref":step_id,"column":"metric"} for each operand.\n'
-    "5. For every answer, make the evidence table's rows, columns, and column order exactly match "
-    "the requested output. read_subtable only observes rows; it does not change table shape. If "
-    "extra/helper columns remain, project first, then cite that table. Never write answer data "
-    "inside answer_from_context.\n"
+    "5. For every answer, make the evidence rows exact and list exactly the requested output "
+    "columns, in order, in answer_from_context.evidence.columns. The harness projects only those "
+    "declared existing columns; it never guesses from the question or gold. read_subtable only "
+    "observes rows and never changes table shape. Never write answer data inside "
+    "answer_from_context.\n"
     "6. If a derived handle exposes column_namespaces, form exact references as namespace.column. "
     "The handle is the table argument, never a replacement column namespace.\n"
     "7. In downstream filters, projections, grouping, and ordering, prefer namespace.column; a "
@@ -610,9 +624,9 @@ SYSTEM_PROMPT_COMPACT = (
     "POLICY\n"
     "Inspect a text column before filtering by a literal unless that column was already inspected. "
     "Avoid repeating the same observation. Use read_subtable only when row values are needed. Every "
-    "final answer, including a scalar aggregate, cites its exact result table as evidence; never "
-    "write answer values in the terminal call. The cited table must contain exactly the requested "
-    "rows and columns; project first if it does not. Compute several conditional metrics that share "
+    "final answer, including a scalar aggregate, cites its exact result table and an ordered list "
+    "of exact output columns; never write answer values in the terminal call. The harness projects "
+    "only those declared columns and cannot repair incorrect rows. Compute several conditional metrics that share "
     "one population in one group_aggregate call using per-aggregation where predicates. Use "
     "group_aggregate output_layout=columns, not project, to turn grouped category rows into one row "
     "of separate metric columns. scalar_compute may cite a named metric from a one-row table with "
@@ -674,9 +688,9 @@ ROLLING_SYSTEM_PROMPT_COMPACT = (
     "prior join handle as left. Use aliases only for repeated relations or real name collisions. "
     "Downstream expressions may use the exact logical output columns; the harness quotes them as "
     "single identifiers. "
-    "For every answer, read the evidence handle then call answer_from_context with that evidence. "
-    "Scalar answers also cite their grounded 1x1 result table. Every evidence table is scored "
-    "exactly: project away helper columns and fix column order before citing it. Never put answer "
+    "For every answer, read the evidence handle then call answer_from_context with its exact ordered "
+    "output columns. Scalar answers also cite their grounded 1x1 result table and one column. The "
+    "harness projects only declared columns and scores the rows exactly. Never put answer "
     "values in the terminal call; think/reason cannot repair incorrect answer data. Keep separate "
     "database fields separate; do not replace "
     "IDs/codes with labels, normalize stored text, or round computed values unless explicitly "

@@ -35,6 +35,7 @@ from rollout import (  # noqa: E402
     chat,
     execute_tool,
     fewshot_text,
+    lower_terminal_evidence,
     new_ctx,
     projected_row_candidates,
     protocol_failure_type,
@@ -307,6 +308,34 @@ class EvalTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(pred, [["Village"]])
         self.assertEqual(gold, [["Village"]])
+
+    def test_terminal_columns_are_projected_in_declared_order(self):
+        harness = Harness(":memory:")
+        harness.conn.executescript(
+            "CREATE TABLE items(id INT, name TEXT, helper INT);"
+            "INSERT INTO items VALUES (1,'A',9),(2,'B',8);"
+        )
+        harness.register_sources()
+        lowered, audit = lower_terminal_evidence(
+            harness,
+            {
+                "evidence": {
+                    "table": "items",
+                    "columns": ["name", "id"],
+                },
+                "reason": "exact output",
+            },
+        )
+        self.assertEqual(
+            harness.rows(lowered["evidence"]["table"]),
+            [("A", 1), ("B", 2)],
+        )
+        self.assertEqual(audit["resolved_columns"], ["name", "id"])
+        with self.assertRaisesRegex(ProtocolError, "not one exact column"):
+            lower_terminal_evidence(
+                harness,
+                {"evidence": {"table": "items", "columns": ["missing"]}},
+            )
 
     def test_score_can_use_bird_set_semantics_without_changing_default(self):
         harness = FakeHarness([["Village"]], {"project_001": [["Village"], ["Village"]]})

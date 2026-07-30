@@ -289,6 +289,41 @@ def _evidence_table(evidence) -> str | None:
     return None
 
 
+def lower_terminal_evidence(h: Harness, args: dict) -> tuple[dict, dict]:
+    """Project model-declared terminal columns without consulting question text or gold."""
+    evidence = args.get("evidence") or {}
+    table = evidence.get("table")
+    requested = list(evidence.get("columns") or [])
+    available = list(h._cols(table))
+    by_fold: dict[str, list[str]] = {}
+    for column in available:
+        by_fold.setdefault(column.casefold(), []).append(column)
+    resolved = []
+    for index, column in enumerate(requested):
+        matches = by_fold.get(column.casefold(), [])
+        if len(matches) != 1:
+            raise ProtocolError(
+                f"answer_from_context.evidence.columns[{index}] {column!r} is not one exact "
+                f"column of {table!r}; available columns: {available}"
+            )
+        resolved.append(matches[0])
+    projected = h.project(table, resolved, False)
+    lowered = {
+        "evidence": {"table": projected["table_name"]},
+        "reason": args.get("reason", ""),
+    }
+    audit = {
+        "schema": "terminal-column-projection-v1",
+        "source_table": table,
+        "requested_columns": requested,
+        "resolved_columns": resolved,
+        "projected_table": projected["table_name"],
+        "row_count": projected.get("row_count"),
+        "columns": projected.get("columns"),
+    }
+    return lowered, audit
+
+
 def _gold_width(gold: list) -> int | None:
     if not gold:
         return None
@@ -761,11 +796,13 @@ def run_live(
             turn["feedback_recovery"] = bool(last_error)
             turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
             if tool == "answer_from_context":
+                score_args, terminal_projection = lower_terminal_evidence(h, args)
+                turn["terminal_projection"] = terminal_projection
                 rec["legal"] = True
                 rec["steps"] = action_count
                 rec["errors"] = errors
                 rec["correct"], rec["pred_sample"], rec["gold_sample"] = score(
-                    h, gold_sql, args, created, denotation_comparison
+                    h, gold_sql, score_args, created, denotation_comparison
                 )
                 if not rec["correct"]:
                     rec["failure_type"] = "wrong_answer"

@@ -46,6 +46,7 @@ from rollout import (  # noqa: E402
     execute_tool,
     format_tool_error,
     is_context_overflow,
+    lower_terminal_evidence,
     new_ctx,
     overview,
     score,
@@ -702,13 +703,15 @@ def run_rollout(
             turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
             plan_tracker.validate_before_execution(tool, args)
             if tool == "answer_from_context":
+                score_args, terminal_projection = lower_terminal_evidence(h, args)
+                turn["terminal_projection"] = terminal_projection
                 rec["legal"] = True
                 rec["steps"] = action_count
                 rec["errors"] = errors
                 correct, pred_sample, gold_sample = score(
                     h,
                     gold_sql,
-                    args,
+                    score_args,
                     created,
                     denotation_comparison=denotation_comparison,
                 )
@@ -725,7 +728,10 @@ def run_rollout(
                     "think": think,
                     "think_source": think_source,
                     "tool_call": {"tool": tool, "arguments": args},
-                    "tool_output": {"final_answer": args.get("answer")},
+                    "tool_output": {
+                        "final_answer": args.get("answer"),
+                        "terminal_projection": terminal_projection,
+                    },
                     "environment_state_before": state_before,
                     "environment_state": ctx["environment"].snapshot(),
                     "last_tool_error_before": last_error,

@@ -24,14 +24,17 @@ from protocol import (  # noqa: E402
 
 class ProtocolParseTests(unittest.TestCase):
     def test_current_prompt_has_canonical_calls_and_exact_final_shape(self):
-        self.assertEqual(PROTOCOL_VERSION, "version24-sql-aligned-join-pagination-v1")
+        self.assertEqual(
+            PROTOCOL_VERSION,
+            "version24-sql-aligned-join-pagination-terminal-columns-v1",
+        )
         for tool in (
             "condition_filter", "project", "join", "group_aggregate",
             "scalar_compute", "set_op", "answer_from_context",
         ):
             self.assertIn(f'"tool":"{tool}"', SYSTEM_PROMPT)
-        self.assertIn("evidence table's rows, columns, and column order exactly", SYSTEM_PROMPT)
-        self.assertIn("project first", SYSTEM_PROMPT)
+        self.assertIn("make the evidence rows exact", SYSTEM_PROMPT)
+        self.assertIn("answer_from_context.evidence.columns", SYSTEM_PROMPT)
         self.assertIn('"left":"orders"', SYSTEM_PROMPT)
         self.assertIn('"right":"customers"', SYSTEM_PROMPT)
         self.assertIn('"left":"orders.customer_id"', SYSTEM_PROMPT)
@@ -378,14 +381,18 @@ class ProtocolParseTests(unittest.TestCase):
         )
         self.assertEqual(replay_tool, "pivot")
 
-    def test_version13_terminal_requires_grounded_table_only(self):
+    def test_terminal_requires_grounded_table_and_exact_columns(self):
         _, tool, args = parse_assistant_strict(
             '<think>Cite the exact result table.</think><tool_call>'
             '{"tool":"answer_from_context","arguments":'
-            '{"evidence":{"table":"project_003"},"reason":"Exact result."}}</tool_call>'
+            '{"evidence":{"table":"project_003","columns":["name","email"]},'
+            '"reason":"Exact result."}}</tool_call>'
         )
         self.assertEqual(tool, "answer_from_context")
-        self.assertEqual(args["evidence"], {"table": "project_003"})
+        self.assertEqual(
+            args["evidence"],
+            {"table": "project_003", "columns": ["name", "email"]},
+        )
 
         with self.assertRaisesRegex(ProtocolError, "legacy arguments"):
             parse_assistant_strict(
@@ -393,10 +400,17 @@ class ProtocolParseTests(unittest.TestCase):
                 '{"tool":"answer_from_context","arguments":'
                 '{"evidence":null,"answer":[42]}}</tool_call>'
             )
-        with self.assertRaisesRegex(ProtocolError, "grounded 1x1 table"):
+        with self.assertRaisesRegex(ProtocolError, "exact_column"):
             parse_assistant_strict(
                 '<think>A scalar still needs evidence.</think><tool_call>'
                 '{"tool":"answer_from_context","arguments":{"evidence":null}}</tool_call>'
+            )
+        with self.assertRaisesRegex(ProtocolError, "must not contain duplicates"):
+            parse_assistant_strict(
+                '<think>Columns must be unique.</think><tool_call>'
+                '{"tool":"answer_from_context","arguments":'
+                '{"evidence":{"table":"project_003","columns":["name","name"]}}}'
+                "</tool_call>"
             )
 
 

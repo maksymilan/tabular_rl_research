@@ -32,7 +32,10 @@ class Version24SearchValuesTest(unittest.TestCase):
         self.harness.conn.close()
 
     def test_surface_keeps_search_with_sql_aligned_tools(self) -> None:
-        self.assertEqual(PROTOCOL_VERSION, "version24-sql-aligned-join-pagination-v1")
+        self.assertEqual(
+            PROTOCOL_VERSION,
+            "version24-sql-aligned-join-pagination-terminal-columns-v1",
+        )
         self.assertIn("plan", TOOLS)
         self.assertIn("join", TOOLS)
         self.assertNotIn("join_tables", TOOLS)
