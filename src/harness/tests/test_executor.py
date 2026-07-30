@@ -169,6 +169,28 @@ def run():
         and "manager.id" in symmetric_self["columns"],
         str(symmetric_self),
     )
+    grouped_for_alias = h.group_aggregate(
+        symmetric["table_name"],
+        ["employees.dept"],
+        [{"op": "max", "column": "employees.salary", "as": "max_salary"}],
+    )
+    derived_alias_join = h.join(
+        left=grouped_for_alias["table_name"],
+        right=symmetric["table_name"],
+        left_alias="g",
+        right_alias="rows",
+        on=[{
+            "left": "g.employees.dept",
+            "right": "rows.employees.dept",
+        }],
+    )
+    t.check(
+        "derived input alias qualifies the complete existing logical column",
+        "g.employees.dept" in derived_alias_join["columns"]
+        and "g.max_salary" in derived_alias_join["columns"]
+        and "rows.employees.id" in derived_alias_join["columns"],
+        str(derived_alias_join),
+    )
     dotted_project = h.project(component["table_name"], ["employees.name", "depts.location"])
     t.check(
         "project resolves exact dotted logical columns",

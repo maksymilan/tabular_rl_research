@@ -77,8 +77,9 @@ TOOL_SPECS: dict[str, str] = {
         'keep existing logical names and namespace bare source columns as relation.column. Call '
         'join again for another edge. Use left_alias/right_alias only for a repeated relation '
         '(self-join) or a genuine output-name collision; aliases contain letters, digits, and '
-        'underscores. There are no base/joins/role arguments and neither side has a special bare-'
-        'column rule.',
+        'underscores. An alias qualifies the complete existing logical column: if input g has '
+        '`filter_001.order_id`, refer to it as `g.filter_001.order_id`. There are no '
+        'base/joins/role arguments and neither side has a special bare-column rule.',
     "group_aggregate":
         'group_aggregate(table, group_by, aggregations, passthrough=None, output_layout="rows", '
         'category_values=None, output_columns=None) -> new table grouped by '
