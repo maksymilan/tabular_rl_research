@@ -56,6 +56,7 @@ from executor import Harness  # noqa: E402
 from protocol import (  # noqa: E402
     POLICY_PROMPT_CANONICAL,
     POLICY_PROMPT_VARIANTS,
+    PROTOCOL_VERSION,
     ProtocolError,
     assistant_message,
     first_user_message,
@@ -846,7 +847,9 @@ def run_rollout(
             "rollout_generation": {
                 "method": "external_llm_closed_loop",
                 "model": model,
+                "protocol_version": PROTOCOL_VERSION,
                 "protocol_hash": protocol_hash(system_prompt),
+                "value_search_policy": "bounded-sql-candidate-v1",
                 "context_mode": context_mode,
                 "history_turns": history_turns,
                 "rolling_prompt_variant": rolling_prompt_variant,
@@ -1126,7 +1129,10 @@ def main() -> int:
         "output": str(out_path),
         "failures_output": str(failure_path),
         "all_output": str(all_path),
+        "protocol_version": PROTOCOL_VERSION,
         "protocol_hash": protocol_hash(system_prompt),
+        "value_search_policy": "bounded-sql-candidate-v1",
+        "workers": args.workers,
         "max_steps": args.max_steps,
         "max_errors_per_type": args.max_errors_per_type,
         "attempts_per_example": max(1, args.attempts_per_example),

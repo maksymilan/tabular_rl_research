@@ -67,6 +67,7 @@ class EvalTests(unittest.TestCase):
             "plan",
             "describe_table",
             "inspect_column",
+            "search_values",
             "read_subtable",
             "answer_from_context",
         }

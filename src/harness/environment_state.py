@@ -8,6 +8,7 @@ facts; this layer only organizes what has already been exposed to the model:
 - source and derived table handles;
 - schemas observed through describe_table;
 - column domains observed through inspect_column;
+- bounded stored-value searches observed through search_values;
 - bounded row reads observed through read_subtable.
 - fact-only relation derivation metadata bound to each derived table handle.
 
@@ -130,6 +131,7 @@ class EnvironmentState:
                 "row_count": table.get("num_rows", table.get("row_count")),
                 "schema": None,
                 "inspected_columns": {},
+                "value_searches": [],
                 "reads": [],
                 "created_by": None,
                 "columns": None,
@@ -157,6 +159,7 @@ class EnvironmentState:
                 table.get("kind") == "source"
                 and table.get("schema") is None
                 and not table.get("inspected_columns")
+                and not table.get("value_searches")
                 and not table.get("reads")
                 and table.get("columns") is None
                 and table.get("created_by") is None
@@ -286,6 +289,29 @@ class EnvironmentState:
                 }
             return
 
+        if tool == "search_values":
+            table = args.get("table") or output.get("table")
+            if table:
+                entry = self._ensure_table(table)
+                searches = entry.setdefault("value_searches", [])
+                searches.append({
+                    "from_step": step_id,
+                    "query": output.get("query", args.get("query")),
+                    "column": output.get("column", args.get("column")),
+                    "offset": output.get("offset", args.get("offset", 0)),
+                    "limit": output.get("limit", args.get("limit", 20)),
+                    "total_matches": output.get("total_matches"),
+                    "total_matches_scope": output.get("total_matches_scope"),
+                    "candidate_count": output.get("candidate_count"),
+                    "candidate_truncated": output.get("candidate_truncated"),
+                    "has_more": output.get("has_more"),
+                    "next_offset": output.get("next_offset"),
+                    "matches": deepcopy(output.get("matches", [])),
+                })
+                if len(searches) > 2:
+                    del searches[:-2]
+            return
+
         if tool == "read_subtable":
             table = args.get("table") or output.get("table")
             if table:
@@ -347,6 +373,7 @@ class EnvironmentState:
                 "row_count": None,
                 "schema": None,
                 "inspected_columns": {},
+                "value_searches": [],
                 "reads": [],
                 "created_by": None,
                 "columns": None,

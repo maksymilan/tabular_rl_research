@@ -12,16 +12,115 @@ tools, answer_from_context, provenance/row-id bookkeeping. This module is the re
 """
 from __future__ import annotations
 
+import bisect
 from datetime import date, datetime
+from difflib import SequenceMatcher
 import math
 import re
 import sqlite3
 from typing import Any
+import unicodedata
 
 _AGG = {
     "sum": "SUM", "count": "COUNT", "count_distinct": "COUNT", "mean": "AVG",
     "avg": "AVG", "min": "MIN", "max": "MAX", "total": "TOTAL",
 }
+_BOUNDED_VALUE_SEARCH_CANDIDATES_PER_COLUMN = 4_096
+
+
+def _normalize_search_text(value: Any) -> str:
+    """Deterministic lexical normalization used only for value discovery ranking."""
+    text = unicodedata.normalize("NFKC", str(value)).casefold()
+    return " ".join(re.sub(r"[\W_]+", " ", text, flags=re.UNICODE).split())
+
+
+def _character_ngrams(text: str, size: int = 3) -> set[str]:
+    compact = text.replace(" ", "")
+    if len(compact) < size:
+        return {compact} if compact else set()
+    return {
+        compact[index:index + size]
+        for index in range(len(compact) - size + 1)
+    }
+
+
+def _value_search_candidate_anchors(query: str) -> tuple[str, ...]:
+    """Return a small deterministic set of SQL-recall anchors for bounded fuzzy search."""
+    normalized = _normalize_search_text(query)
+    tokens = sorted(
+        {token for token in normalized.split() if len(token) >= 3},
+        key=lambda token: (-len(token), token),
+    )
+    anchors = list(tokens[:4])
+    compact = normalized.replace(" ", "")
+    trigrams = [
+        compact[index:index + 3]
+        for index in range(max(0, len(compact) - 2))
+    ]
+    if trigrams:
+        for index in (0, len(trigrams) // 2, len(trigrams) - 1):
+            trigram = trigrams[index]
+            if trigram and trigram not in anchors:
+                anchors.append(trigram)
+    if len(compact) >= 3:
+        for trigram in (compact[:3], compact[-3:]):
+            if trigram not in anchors:
+                anchors.append(trigram)
+    elif normalized and not anchors:
+        anchors.append(normalized)
+    return tuple(anchors[:8])
+
+
+def _escaped_like_contains(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _value_search_match(query: str, value: Any) -> tuple[int, float, str] | None:
+    """Return an ascending match tier, descending score, and auditable match kind."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return None
+    value_text = str(value)
+    query_normalized = _normalize_search_text(query)
+    value_normalized = _normalize_search_text(value_text)
+    if not query_normalized or not value_normalized:
+        return None
+    if query == value_text:
+        return 0, 1.0, "exact"
+    if query_normalized == value_normalized:
+        return 1, 1.0, "normalized_exact"
+    if value_normalized.startswith(query_normalized):
+        score = len(query_normalized) / max(1, len(value_normalized))
+        return 2, score, "prefix"
+    query_tokens = query_normalized.split()
+    value_tokens = value_normalized.split()
+    if query_tokens and all(token in value_tokens for token in query_tokens):
+        score = len(query_tokens) / max(1, len(value_tokens))
+        return 3, score, "token"
+    if query_normalized in value_normalized:
+        score = len(query_normalized) / max(1, len(value_normalized))
+        return 4, score, "substring"
+    if len(query_normalized) < 3 or len(value_normalized) > 256:
+        return None
+    ratio = SequenceMatcher(
+        None,
+        query_normalized,
+        value_normalized,
+        autojunk=False,
+    ).ratio()
+    query_ngrams = _character_ngrams(query_normalized)
+    value_ngrams = _character_ngrams(value_normalized)
+    union = query_ngrams | value_ngrams
+    trigram = (
+        len(query_ngrams & value_ngrams) / len(union)
+        if union
+        else 0.0
+    )
+    score = max(ratio, trigram)
+    threshold = 0.72 if len(query_normalized) >= 5 else 0.80
+    if score < threshold:
+        return None
+    return 5, score, "fuzzy"
 
 
 def _qid(name: str) -> str:
@@ -962,6 +1061,158 @@ class Harness:
         ).fetchall()
         return {"column": column, "distinct_count": n_distinct, "has_null": bool(n_null),
                 "frequent_values": [v for v, _ in freq], "truncated": n_distinct > limit}
+
+    def search_values(
+        self,
+        table: str,
+        query: str,
+        column: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict:
+        """Search a deterministic bounded candidate pool of stored values in one table."""
+        if not isinstance(table, str) or not table.strip():
+            raise ValueError("search_values.table must be a non-empty table name")
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("search_values.query must be a non-empty string")
+        if len(query) > 256:
+            raise ValueError("search_values.query cannot exceed 256 characters")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or limit < 1
+            or limit > 20
+        ):
+            raise ValueError("search_values.limit must be an integer from 1 to 20")
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or offset < 0
+        ):
+            raise ValueError("search_values.offset must be a non-negative integer")
+
+        available = self._cols(table)
+        if column is None:
+            searched_columns = list(available)
+        else:
+            resolved = self._resolve_col(available, column)
+            if resolved not in available:
+                raise ValueError(
+                    f"unknown column {column!r} for {table!r}; "
+                    f"available columns: {available}"
+                )
+            searched_columns = [resolved]
+
+        source = self._src(table)
+        anchors = _value_search_candidate_anchors(query)
+        candidate_limit = _BOUNDED_VALUE_SEARCH_CANDIDATES_PER_COLUMN
+        candidates: dict[tuple[str, str, str], tuple[Any, int, str]] = {}
+        truncated_columns: list[str] = []
+
+        def add_candidate(value: Any, frequency: Any, searched_column: str) -> None:
+            key = (searched_column, type(value).__name__, repr(value))
+            candidates[key] = (value, int(frequency), searched_column)
+
+        for searched_column in searched_columns:
+            quoted = _qid(searched_column)
+            exact_rows = self.conn.execute(
+                f"SELECT {quoted}, COUNT(*) AS frequency "
+                f"FROM {source} "
+                f"WHERE {quoted} IS NOT NULL "
+                f"AND CAST({quoted} AS TEXT) = ? COLLATE NOCASE "
+                f"GROUP BY {quoted}",
+                (query,),
+            ).fetchall()
+            for value, frequency in exact_rows:
+                add_candidate(value, frequency, searched_column)
+
+        has_exact_candidate = any(
+            (
+                (matched := _value_search_match(query, value)) is not None
+                and matched[0] <= 1
+            )
+            for value, _, _ in candidates.values()
+        )
+
+        if not has_exact_candidate and anchors:
+            for searched_column in searched_columns:
+                quoted = _qid(searched_column)
+                conditions = " OR ".join(
+                    f"LOWER(CAST({quoted} AS TEXT)) LIKE ? ESCAPE '\\'"
+                    for _ in anchors
+                )
+                parameters = [
+                    *(_escaped_like_contains(anchor.lower()) for anchor in anchors),
+                    len(query),
+                    candidate_limit + 1,
+                ]
+                recalled = self.conn.execute(
+                    f"SELECT {quoted}, COUNT(*) AS frequency "
+                    f"FROM {source} "
+                    f"WHERE {quoted} IS NOT NULL AND ({conditions}) "
+                    f"GROUP BY {quoted} "
+                    f"ORDER BY ABS(LENGTH(CAST({quoted} AS TEXT)) - ?) ASC, "
+                    f"COUNT(*) DESC, LOWER(CAST({quoted} AS TEXT)) ASC, "
+                    f"TYPEOF({quoted}) ASC, CAST({quoted} AS TEXT) COLLATE BINARY ASC "
+                    f"LIMIT ?",
+                    parameters,
+                ).fetchall()
+                if len(recalled) > candidate_limit:
+                    truncated_columns.append(searched_column)
+                    recalled = recalled[:candidate_limit]
+                for value, frequency in recalled:
+                    add_candidate(value, frequency, searched_column)
+
+        retain = offset + limit + 1
+        ranked: list[tuple[tuple, dict]] = []
+        total_matches = 0
+        for value, frequency, searched_column in candidates.values():
+            matched = _value_search_match(query, value)
+            if matched is None:
+                continue
+            tier, score, match_type = matched
+            total_matches += 1
+            item = {
+                "table": table,
+                "column": searched_column,
+                "value": value,
+                "frequency": frequency,
+                "match_type": match_type,
+                "score": round(float(score), 6),
+            }
+            sort_key = (
+                tier,
+                -float(score),
+                -frequency,
+                searched_column.casefold(),
+                _normalize_search_text(value),
+                type(value).__name__,
+                str(value),
+            )
+            bisect.insort(ranked, (sort_key, item))
+            if len(ranked) > retain:
+                ranked.pop()
+
+        matches = [item for _, item in ranked[offset:offset + limit]]
+        consumed = offset + len(matches)
+        has_more = consumed < total_matches
+        return {
+            "table": table,
+            "query": query,
+            "column": column,
+            "searched_columns": searched_columns,
+            "matches": matches,
+            "total_matches": total_matches,
+            "total_matches_scope": "bounded_candidate_pool",
+            "candidate_count": len(candidates),
+            "candidate_limit_per_column": candidate_limit,
+            "candidate_truncated": bool(truncated_columns),
+            "truncated_columns": truncated_columns,
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": consumed if has_more else None,
+        }
 
     # ---- verification ----
     def gold(self, sql: str) -> list[tuple]:

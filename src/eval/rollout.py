@@ -190,7 +190,8 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
         ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
         return output, None
 
-    if tool in ("describe_table", "inspect_column", "read_subtable"):   # read-only perception; no table
+    if tool in ("describe_table", "inspect_column", "search_values", "read_subtable"):
+        # Read-only perception; no table handle is created.
         out = getattr(h, tool)(**args)
         output = out if isinstance(out, dict) else {"rows": [list(r) for r in out], "row_count": len(out)}
         history_record = {"tool": tool, "arguments": args, "output": output, "references": references}

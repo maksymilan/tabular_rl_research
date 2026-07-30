@@ -24,7 +24,12 @@ from __future__ import annotations
 from plan import TABLE_REF_ARGS
 
 
-PERCEPTION_TOOLS = frozenset({"describe_table", "inspect_column", "read_subtable"})
+PERCEPTION_TOOLS = frozenset({
+    "describe_table",
+    "inspect_column",
+    "search_values",
+    "read_subtable",
+})
 
 
 def _base_col(col):
@@ -485,6 +490,35 @@ def build_grounding_references(tool: str, args: dict, history: dict[str, dict]) 
                 "role": "domain_observation",
                 "target": {"table": table, "column": column, "values": matched},
             })
+
+        elif prior_tool == "search_values":
+            table = prior_args.get("table") or output.get("table")
+            if table not in table_refs:
+                continue
+            matches = output.get("matches") or []
+            for match in matches:
+                if not isinstance(match, dict):
+                    continue
+                column = _base_col(match.get("column"))
+                value = match.get("value")
+                key = (str(table), str(column))
+                if (
+                    key in domain_linked
+                    or column not in action_columns
+                    or not any(_same_value(value, literal) for literal in literals)
+                ):
+                    continue
+                domain_linked.add(key)
+                refs.append({
+                    "type": "grounding",
+                    "step": step_id,
+                    "role": "domain_observation",
+                    "target": {
+                        "table": table,
+                        "column": column,
+                        "values": [value],
+                    },
+                })
 
         elif prior_tool == "read_subtable" and literal_targets:
             columns = record.get("observed_columns") or output.get("columns")

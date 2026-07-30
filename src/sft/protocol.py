@@ -113,6 +113,15 @@ TOOL_SPECS: dict[str, str] = {
         'inspect_column(table, column) -> the distinct count, most frequent values and NULL flag of a '
         'column. Use it to ground a filter literal (does "France" exist? what is the exact spelling?) '
         'before condition_filter.',
+    "search_values":
+        'search_values(table, query, column=None, limit=20, offset=0) -> search a deterministic '
+        'bounded pool of actual stored values in exactly one table without deriving a table. '
+        'column optionally restricts the search; when omitted every column is searched. limit '
+        'defaults to 20 and cannot exceed 20. offset reads the next page in one stable candidate-'
+        'pool relevance ordering. Each match identifies its exact table, column, stored value, '
+        'frequency, and lexical match kind. candidate_truncated=true means candidate recall '
+        'saturated and the query should be narrowed rather than treated as exhaustive. Exact or '
+        'case-insensitive exact hits suppress broader fuzzy alternatives.',
     "read_subtable":
         'read_subtable(table, limit=20, columns=None) -> up to 20 actual rows of a table '
         '(limit must be 1..20); columns optionally limits which columns are observed. Tool results otherwise '
@@ -135,7 +144,7 @@ LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version24"  # table-bound fact-only relation derivation metadata
+PROTOCOL_VERSION = "version24-search-values-v1"
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 POLICY_PROMPT_CANONICAL = "canonical"
@@ -179,12 +188,15 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
     "set_op": ({"left", "right", "op"}, set()),
     "describe_table": ({"tables"}, set()),
     "inspect_column": ({"table", "column"}, {"top_k"}),
+    "search_values": ({"table", "query"}, {"column", "limit", "offset"}),
     "read_subtable": ({"table"}, {"limit", "columns"}),
     "answer_from_context": (set(), {"answer", "evidence", "reason"}),
 }
 
 CANONICAL_CALL_COOKBOOK = (
     "CANONICAL CALLS (copy these argument shapes; replace names and values only)\n"
+    'Search a known table for a stored literal: {"tool":"search_values","arguments":'
+    '{"table":"teams","query":"Avangard Omsk","limit":20}}\n'
     'Filter: {"tool":"condition_filter","arguments":{"table":"people","conditions":'
     '{"and":[{"column":"city","op":"=","value":"Paris"},{"column":"age","op":">=","value":18}]}}}\n'
     'Project exact final columns: {"tool":"project","arguments":{"table":"filter_001",'
@@ -441,6 +453,26 @@ def validate_model_arguments(tool: str, args: dict) -> None:
         limit = args.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
             raise ProtocolError("read_subtable: limit must be an integer from 1 to 20")
+    if tool == "search_values":
+        table = args.get("table")
+        query = args.get("query")
+        column = args.get("column")
+        limit = args.get("limit", 20)
+        offset = args.get("offset", 0)
+        if not isinstance(table, str) or not table.strip():
+            raise ProtocolError("search_values.table must be a non-empty table name")
+        if not isinstance(query, str) or not query.strip():
+            raise ProtocolError("search_values.query must be a non-empty string")
+        if len(query) > 256:
+            raise ProtocolError("search_values.query cannot exceed 256 characters")
+        if column is not None and (
+            not isinstance(column, str) or not column.strip()
+        ):
+            raise ProtocolError("search_values.column must be a non-empty column name")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+            raise ProtocolError("search_values.limit must be an integer from 1 to 20")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ProtocolError("search_values.offset must be a non-negative integer")
     if tool == "project" and not isinstance(args.get("distinct", False), bool):
         raise ProtocolError("project: distinct must be true or false")
     if tool == "scalar_compute":
@@ -518,7 +550,11 @@ SYSTEM_PROMPT = (
     '<tool_call>{"tool": "<name>", "arguments": {...}}</tool_call>. Nothing else.\n'
     "2. Use plan for multi-step tasks to break the question into subgoals; update it when a subgoal "
     "starts, completes, or changes. Simple direct tasks may proceed without plan.\n"
-    "3. describe_table the needed tables first; inspect_column before filtering by a text value.\n"
+    "3. describe_table the needed tables first; inspect_column before filtering by a text value. "
+    "Use search_values when the table is known but the stored literal or its column is uncertain. "
+    "A search observes values but never filters rows or creates a relation. If "
+    "candidate_truncated=true, narrow table, column, or query rather than treating the candidate "
+    "pool as exhaustive.\n"
     "4. To use a computed scalar as a threshold, set the predicate's "
     '{"value_ref": step_id} to the step that produced that scalar. To answer with a scalar, cite '
     "that producing 1x1 table as terminal evidence; never copy its value into the final call. "
