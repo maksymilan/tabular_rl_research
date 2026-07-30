@@ -52,7 +52,7 @@ class ProtocolParseTests(unittest.TestCase):
         self.assertIn("never a plan, describe_table, inspect_column, or read_subtable", SYSTEM_PROMPT)
         self.assertIn("Put where only inside the aggregation", SYSTEM_PROMPT)
         self.assertIn("project has no limit argument", SYSTEM_PROMPT)
-        self.assertIn("offset>0 requires order_by", SYSTEM_PROMPT)
+        self.assertIn("harness owns pagination stability", SYSTEM_PROMPT.lower())
         self.assertIn("can never exceed 20", SYSTEM_PROMPT)
 
     def test_tool_output_compacts_contiguous_logical_namespaces(self):
@@ -244,11 +244,12 @@ class ProtocolParseTests(unittest.TestCase):
         )
         self.assertEqual(tool, "read_subtable")
         self.assertEqual(args["limit"], 20)
-        with self.assertRaisesRegex(ProtocolError, "requires order_by"):
-            parse_assistant_strict(
-                '<think>Read the next page.</think><tool_call>{"tool":"read_subtable",'
-                '"arguments":{"table":"items","limit":20,"offset":20}}</tool_call>'
-            )
+        _, _, automatic_page_args = parse_assistant_strict(
+            '<think>Read the next canonical page.</think><tool_call>{"tool":"read_subtable",'
+            '"arguments":{"table":"items","limit":20,"offset":20}}</tool_call>'
+        )
+        self.assertEqual(automatic_page_args["offset"], 20)
+        self.assertNotIn("order_by", automatic_page_args)
         _, _, page_args = parse_assistant_strict(
             '<think>Read the next stable page.</think><tool_call>{"tool":"read_subtable",'
             '"arguments":{"table":"items","limit":20,"order_by":["id"],'

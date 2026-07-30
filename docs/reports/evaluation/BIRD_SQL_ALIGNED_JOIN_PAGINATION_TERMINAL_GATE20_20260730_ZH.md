@@ -41,10 +41,15 @@ read_subtable(
 
 - `limit` 必须是整数 `1..20`，绝不能超过 20。
 - `offset` 必须是非负整数。
-- `offset > 0` 时必须显式给出非空 `order_by`。
-- executor 在模型给出的排序项之后追加其余列作为稳定 tie-breaker。
+- `offset > 0` 不要求模型提供 `order_by`；分页稳定性由环境负责。
+- 未给 `order_by` 时，环境按全部可用列升序形成 canonical order；给出语义排序时，
+  executor 在模型排序项之后追加其余列作为稳定 tie-breaker。
 - 返回 `has_more` 和 `next_offset`；下一页复用相同的 `columns/order_by`。
 - 工具只观察行，不创建或修改关系。
+
+Gate20 运行时使用的是更严格的“`offset>0` 必须给 `order_by`”接口。Gate20 后将该责任
+下沉到环境：模型可直接使用 `next_offset`，省略排序时 executor 自动使用 canonical
+order。这个后续变化经过 deterministic pagination tests，但没有事后改写 Gate20 结果。
 
 ### SQL 风格单边 join
 

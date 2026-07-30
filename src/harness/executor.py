@@ -1190,11 +1190,6 @@ class Harness:
             raise ValueError("read_subtable.limit must be an integer from 1 to 20")
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise ValueError("read_subtable.offset must be a non-negative integer")
-        if offset > 0 and not order_by:
-            raise ValueError(
-                "read_subtable.offset>0 requires order_by for deterministic pagination"
-            )
-
         available = self._cols(table)
         if columns is not None:
             if (

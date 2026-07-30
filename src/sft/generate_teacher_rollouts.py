@@ -90,7 +90,8 @@ DATA_GENERATION_SUFFIX = (
     "the original user question; continue from the current environment state or error feedback. "
     "Do not call read_subtable again for the same table, columns, order_by, and offset if that page "
     "is already present in CURRENT ENVIRONMENT STATE. To continue, use the returned next_offset "
-    "with the same columns and order_by; limit can never exceed 20. If a plan item has no evidence "
+    "with the same columns and order_by (including leaving order_by omitted when the harness chose "
+    "the canonical order); limit can never exceed 20. If a plan item has no evidence "
     "yet, omit the evidence "
     "field or set it to null; never use an empty string for evidence."
 )
