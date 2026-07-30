@@ -24,7 +24,7 @@ from protocol import (  # noqa: E402
 
 class ProtocolParseTests(unittest.TestCase):
     def test_current_prompt_has_canonical_calls_and_exact_final_shape(self):
-        self.assertEqual(PROTOCOL_VERSION, "version24-search-values-v1")
+        self.assertEqual(PROTOCOL_VERSION, "version24-search-values-output-slots-v1")
         for tool in (
             "condition_filter", "project", "join_tables", "group_aggregate",
             "scalar_compute", "set_op", "answer_from_context",
@@ -43,6 +43,9 @@ class ProtocolParseTests(unittest.TestCase):
         self.assertIn('"as":"female_count","where"', SYSTEM_PROMPT)
         self.assertIn("same population", SYSTEM_PROMPT)
         self.assertIn('"output_layout":"columns"', SYSTEM_PROMPT)
+        self.assertIn("classify every candidate output column", SYSTEM_PROMPT)
+        self.assertIn('"return_columns":["label"]', SYSTEM_PROMPT)
+        self.assertIn('"return_columns":["label","review"]', SYSTEM_PROMPT)
         self.assertIn("Project preserves the input row orientation", SYSTEM_PROMPT)
         self.assertIn('right has NO dot', SYSTEM_PROMPT)
         self.assertIn('never right="customers.id"', SYSTEM_PROMPT)

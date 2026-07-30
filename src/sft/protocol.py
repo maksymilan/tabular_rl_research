@@ -144,7 +144,7 @@ LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
 ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS
 
-PROTOCOL_VERSION = "version24-search-values-v1"
+PROTOCOL_VERSION = "version24-search-values-output-slots-v1"
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
 ROLLING_COMPACT_PROMPT_VERSION = "v1-safe-compact"
 POLICY_PROMPT_CANONICAL = "canonical"
@@ -234,6 +234,12 @@ CANONICAL_CALL_COOKBOOK = (
     '{"value_ref":"step_7","column":"total_nominees"}],"result_name":"percentage"}}\n'
     'Top 3 with exact output: {"tool":"extreme_value_select","arguments":{"table":"employees",'
     '"order_by":["sick_leave_hours DESC"],"top_k":3,"return_columns":["job_title"]}}\n'
+    'Highest entity only ("Which restaurant has the highest review?"): '
+    '{"tool":"extreme_value_select","arguments":{"table":"restaurants",'
+    '"order_by":["review DESC"],"top_k":1,"return_columns":["label"]}}\n'
+    'Highest entity and metric ("Which restaurant has the highest review, and what is its review?"): '
+    '{"tool":"extreme_value_select","arguments":{"table":"restaurants",'
+    '"order_by":["review DESC"],"top_k":1,"return_columns":["label","review"]}}\n'
     'Set operation after aligning both inputs with project: {"tool":"set_op","arguments":'
     '{"left":"project_001","right":"project_002","op":"union"}}\n'
     'Any final answer, including a scalar: {"tool":"answer_from_context","arguments":'
@@ -580,6 +586,11 @@ SYSTEM_PROMPT = (
     "A group_by category produces one row per category; if the requested comparison instead needs "
     "one row with one column per category, set output_layout=columns and give category_values in "
     "the requested order.\n"
+    "10. Immediately before the final answer, classify every candidate output column as either "
+    "(a) an answer field explicitly requested by the question or EXTERNAL KNOWLEDGE, or (b) a "
+    "helper used only for filtering, joining, grouping, ranking, or calculation. Remove every "
+    "helper field with return_columns or project. In particular, \"Which X has the highest Y?\" "
+    "returns X only; return both X and Y only when the question also asks for the value of Y.\n"
 )
 
 SYSTEM_PROMPT_COMPACT = (

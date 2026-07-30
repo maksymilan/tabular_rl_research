@@ -32,7 +32,7 @@ class Version24SearchValuesTest(unittest.TestCase):
         self.harness.conn.close()
 
     def test_surface_keeps_version24_tools_and_adds_only_search(self) -> None:
-        self.assertEqual(PROTOCOL_VERSION, "version24-search-values-v1")
+        self.assertEqual(PROTOCOL_VERSION, "version24-search-values-output-slots-v1")
         self.assertIn("plan", TOOLS)
         self.assertIn("read_subtable", TOOLS)
         self.assertIn("search_values", TOOLS)
