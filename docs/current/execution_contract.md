@@ -33,6 +33,11 @@ tool syntax, argument normalization, or silent parameter rewrite.
 
 ### Provider Transport Adapters
 
+For new DeepSeek episodes, the only active external endpoint is the official
+`https://api.deepseek.com` Chat Completions service. AimixHub/AIHubMix is deprecated and must not be
+used as a provider, proxy, or fallback. The Beta FIM completion endpoint is outside this tool-use
+execution contract; see `provider_api.md`.
+
 A provider adapter is allowed only before the strict parser when an API explicitly transports a
 model-authored action across separate fields. For example, the DS Flash adapter accepts exactly
 `reasoning_content` plus the one visible action shape selected for that experiment: either one raw

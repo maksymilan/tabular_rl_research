@@ -16,6 +16,10 @@ therefore follows a fixed order:
 Gold SQL is harness-only.  It may score terminal denotation but must never enter a model input,
 teacher prompt, reasoning target, or correction explanation.
 
+All new DeepSeek teacher calls use the official `https://api.deepseek.com` Chat Completions
+service. AimixHub/AIHubMix is deprecated and must not be used as a provider, proxy, or fallback.
+Provider configuration and the FIM boundary are defined in `provider_api.md`.
+
 ## Data lanes
 
 The complete second-stage mixture is:

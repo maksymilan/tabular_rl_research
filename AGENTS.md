@@ -19,6 +19,21 @@ Start at `docs/current/README.md`.
 
 ## Non-negotiable current decisions
 
+### External provider: official DeepSeek only
+
+- New DeepSeek teacher, evaluation, audit, and recovery requests must use the official OpenAI-
+  compatible base URL `https://api.deepseek.com` and the repository's existing
+  `/chat/completions` transport.
+- AimixHub/AIHubMix (`aihubmix.com`) is deprecated as of 2026-08-05. Do not use it as a primary
+  endpoint, fallback, proxy, credential source, or source for copied API examples. If the official
+  service is unavailable, fail explicitly rather than silently routing through a third party.
+- The current agent loop is Chat Completions, not FIM. The official `/beta/completions` FIM API may
+  be used only by a separately scoped code-completion feature and must not replace the tool-use
+  provider loop.
+- Runtime credentials remain only in ignored `api.md` with
+  `BASE_URL=https://api.deepseek.com`. Never copy keys into documentation, tracked configuration,
+  commands, logs, or chat. See `docs/current/provider_api.md`.
+
 ### Causal data generation only
 
 - New SFT data comes from a real model↔harness loop.

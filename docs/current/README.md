@@ -6,6 +6,8 @@ sources of truth.
 
 - `overview.md`: research objective and non-negotiable method boundary.
 - `architecture.md`: active code layout and ownership.
+- `provider_api.md`: official DeepSeek endpoint and credential contract, AimixHub/AIHubMix
+  deprecation, Chat Completions versus FIM boundary, and migration verification.
 - `tool_schemes.md`: the four exclusive model action schemes and their train/eval boundaries.
 - `direct_sql_search_tool_scheme_zh.md`: two-tool out-of-band value search + direct-SQL feedback
   diagnostic, frozen v1 Gate16, optimized v2 prompt/feedback/context protocol, completed paired
