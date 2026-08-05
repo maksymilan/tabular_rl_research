@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Stable evaluation launcher for one explicitly selected table-tool scheme.
 
-The selected scheme is exclusive: a model sees either the atomic top-level tools or the
-action-block top-level tools, never a merged action space. Existing runner CLIs remain available
-for artifact reproduction; this launcher is the preferred entry point for paired future runs.
+The selected scheme is exclusive: a model sees exactly one registered top-level action space,
+never a merged combination. Existing runner CLIs remain available for artifact reproduction; this
+launcher is the preferred entry point for paired future runs.
 """
 from __future__ import annotations
 
@@ -21,9 +21,11 @@ sys.path.insert(0, str(ROOT / "src" / "sft"))
 from tool_schemes import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
+    DIRECT_SQL_SEARCH_TOOL_SCHEME,
     RELATIONAL_PROGRAM_TOOL_SCHEME,
     TOOL_SCHEME_NAMES,
 )
+from direct_sql_search_protocol import DIRECT_SQL_SEARCH_INTERFACE  # noqa: E402
 
 
 def runner_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
@@ -38,6 +40,15 @@ def runner_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
     if tool_scheme == RELATIONAL_PROGRAM_TOOL_SCHEME:
         script = HERE / "evaluate_relational_program.py"
         return [sys.executable, str(script), *forwarded]
+    if tool_scheme == DIRECT_SQL_SEARCH_TOOL_SCHEME:
+        script = HERE / "iterative_sql.py"
+        return [
+            sys.executable,
+            str(script),
+            *forwarded,
+            "--interface",
+            DIRECT_SQL_SEARCH_INTERFACE,
+        ]
     raise ValueError(f"unsupported tool scheme: {tool_scheme}")
 
 

@@ -7,12 +7,14 @@ import unittest
 from pathlib import Path
 
 from atomic_database_context import (
+    CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
     CATALOG_CONTEXT_PROFILE,
     FULL_BIRD_CONTEXT_PROFILE,
     FULL_BIRD_CONTEXT_WITH_INSPECT_PROFILE,
     build_full_bird_database_context,
     build_full_context_student_prompt,
     build_full_context_teacher_prompt,
+    enrich_catalog_perception_output,
     disabled_tools_for_profile,
     enabled_tools_for_profile,
     model_visible_tool_schema_hash,
@@ -198,6 +200,54 @@ class AtomicDatabaseContextTest(unittest.TestCase):
             FULL_BIRD_CONTEXT_WITH_INSPECT_PROFILE,
         )
         self.assertEqual(audit["disabled_model_tools"], ["describe_table"])
+
+    def test_inspect_only_profile_enriches_only_inspect_column(self) -> None:
+        example = {"db_id": "toy", "db_path": str(self.db_path)}
+        canonical_describe = {
+            "tables": [{
+                "table_name": "people",
+                "columns": [{"name": "id"}, {"name": "city"}],
+            }]
+        }
+        visible_describe, describe_audit = enrich_catalog_perception_output(
+            CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
+            example,
+            "describe_table",
+            {"tables": ["people"]},
+            canonical_describe,
+        )
+        self.assertIs(visible_describe, canonical_describe)
+        self.assertIsNone(describe_audit)
+        self.assertNotIn(
+            "semantic_name",
+            visible_describe["tables"][0]["columns"][0],
+        )
+
+        canonical_inspect = {
+            "column": "city",
+            "distinct_count": 2,
+            "has_null": False,
+            "frequent_values": ["Paris", "London"],
+            "truncated": False,
+        }
+        visible_inspect, inspect_audit = enrich_catalog_perception_output(
+            CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
+            example,
+            "inspect_column",
+            {"table": "people", "column": "city"},
+            canonical_inspect,
+        )
+        self.assertEqual(visible_inspect["semantic_name"], "CITY")
+        self.assertEqual(
+            visible_inspect["column_description"],
+            "the city where the person lives",
+        )
+        self.assertNotIn("semantic_name", canonical_inspect)
+        self.assertEqual(inspect_audit["enriched_field_count"], 2)
+        self.assertNotEqual(
+            inspect_audit["canonical_output_sha256"],
+            inspect_audit["model_visible_output_sha256"],
+        )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,50 @@
+schema_version: rtx3090-24gb-hardware-profile-v1
+scope: qwen2.5-coder-7b-instruct-plus-lora
+
+safety:
+  free_memory_threshold_mib: 512
+  shared_host_free_samples: 10
+  shared_host_free_poll_seconds: 30
+  one_heavy_process_per_gpu: true
+
+interactive_rollout:
+  scheduler: dynamic
+  question_window: 8
+  group_size: 4
+  max_active_trajectories: 32
+  gpu_memory_utilization: 0.82
+  max_model_len: 8192
+  max_num_batched_tokens: 8192
+  max_new_tokens: 1024
+  enable_prefix_caching: true
+  enforce_eager: true
+  oom_fallback_question_window: 4
+  stable_seed_scheme: sha256-task-sample-turn-v1
+
+evaluation:
+  gpu_memory_utilization: 0.90
+  max_model_len: 8192
+  max_num_batched_tokens: 8192
+  max_inflight: 24
+  max_num_seqs: 24
+  greedy_workers: 24
+  greedy_sample_workers: 1
+  k4_workers: 6
+  k4_sample_workers: 4
+
+online_rl:
+  gpu_count: 2
+  role_separation: rollout-one-gpu-trainer-one-gpu
+  vllm_gpu_memory_utilization: 0.82
+  transition_micro_batch_size: 1
+
+fixed_pool_rl:
+  experiments_per_gpu: 1
+  initialization: independent-sft2
+
+evidence:
+  dynamic_validation: rtx3090_agent_rollout_dynamic_window8_validated_20260801
+  static_seeded_comparator: rtx3090_agent_rollout_static_seeded_batch8_20260801
+  dynamic_tasks_per_hour: 125.76104309090744
+  static_tasks_per_hour: 77.58063390690234
+  throughput_gain_percent: 62.1

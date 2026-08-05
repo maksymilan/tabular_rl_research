@@ -243,6 +243,42 @@ class BirdTaskAdapterTests(unittest.TestCase):
             ["task_a1", "task_b", "task_a2"],
         )
 
+    def test_include_task_ids_filters_before_database_catalog_loading(self):
+        tasks = [
+            {
+                "example_index": 1,
+                "example_id": "task_selected",
+                "db_id": "selected",
+                "db_path": "/tmp/selected.sqlite",
+                "question": "selected",
+                "gold_sql": "SELECT 1",
+            },
+            {
+                "example_index": 2,
+                "example_id": "task_unavailable",
+                "db_id": "unavailable",
+                "db_path": "/tmp/unavailable.sqlite",
+                "question": "unavailable",
+                "gold_sql": "SELECT 1",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "tasks.json")
+            path.write_text(json.dumps({"examples": tasks}), encoding="utf-8")
+            with patch("task_loader.Harness", side_effect=FakeHarness) as harness, patch(
+                "task_loader.build_catalog", return_value={"tables": []}
+            ) as build_catalog:
+                records = load_rl_task_records(
+                    Path(directory),
+                    split="train",
+                    examples_json=path,
+                    include_task_ids={"task_selected"},
+                )
+
+        self.assertEqual([record["environment"]["task_id"] for record in records], ["task_selected"])
+        harness.assert_called_once_with("/tmp/selected.sqlite")
+        self.assertEqual(build_catalog.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

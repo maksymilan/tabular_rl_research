@@ -18,10 +18,12 @@ from batch_plan_protocol import (  # noqa: E402
 from tool_schemes import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
+    DIRECT_SQL_SEARCH_TOOL_SCHEME,
     RELATIONAL_PROGRAM_TOOL_SCHEME,
     assert_record_tool_scheme,
     build_action_block_tool_scheme,
     build_atomic_tool_scheme,
+    build_direct_sql_search_tool_scheme,
     build_relational_program_tool_scheme,
     parse_scheme_action,
     render_scheme_action,
@@ -81,6 +83,17 @@ class ToolSchemeRegistryTests(unittest.TestCase):
             relational_program.protocol_hash,
             block.protocol_hash,
         )
+
+        direct_sql_search = build_direct_sql_search_tool_scheme()
+        self.assertEqual(direct_sql_search.name, DIRECT_SQL_SEARCH_TOOL_SCHEME)
+        self.assertEqual(
+            direct_sql_search.top_level_tools,
+            ("execute_sql", "search_values"),
+        )
+        self.assertNotIn("submit_sql", direct_sql_search.system_prompt)
+        self.assertNotIn("condition_filter", direct_sql_search.system_prompt)
+        self.assertEqual(direct_sql_search.protocol_version, "direct-sql-search-v2")
+        self.assertIn("SEMANTIC DECISION DISCIPLINE", direct_sql_search.system_prompt)
 
     def test_each_scheme_round_trips_its_native_student_action(self):
         atomic = build_atomic_tool_scheme()
@@ -152,6 +165,23 @@ class ToolSchemeRegistryTests(unittest.TestCase):
             ),
         )
 
+        direct_sql_search = build_direct_sql_search_tool_scheme()
+        sql_arguments = {"sql": "SELECT name FROM items", "mode": "inspect"}
+        sql_text = render_scheme_action(
+            direct_sql_search,
+            "Inspect the exact output.",
+            "execute_sql",
+            sql_arguments,
+        )
+        self.assertEqual(
+            parse_scheme_action(direct_sql_search, sql_text),
+            (
+                "Inspect the exact output.",
+                "execute_sql",
+                sql_arguments,
+            ),
+        )
+
     def test_record_scheme_guard_prevents_dataset_mixing(self):
         assert_record_tool_scheme(
             {"tool_scheme": ATOMIC_TOOL_SCHEME},
@@ -181,6 +211,15 @@ class ToolSchemeRegistryTests(unittest.TestCase):
             relational_program[1].endswith(
                 "/evaluate_relational_program.py"
             )
+        )
+        direct_sql_search = runner_argv(
+            DIRECT_SQL_SEARCH_TOOL_SCHEME,
+            ["--", "--n", "1"],
+        )
+        self.assertTrue(direct_sql_search[1].endswith("/iterative_sql.py"))
+        self.assertEqual(
+            direct_sql_search[-2:],
+            ["--interface", "search-values-execute-sql-v2"],
         )
 
 

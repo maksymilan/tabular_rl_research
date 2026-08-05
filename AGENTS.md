@@ -36,9 +36,9 @@ Start at `docs/current/README.md`.
 
 - Shared prompt semantics: `src/sft/prompt_contract.py`; protocol/validation:
   `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current atomic local diagnostic default: `version39`; `version40`-`version43` are opt-in
+- Current atomic local diagnostic default: `version39`; `version40`-`version49` are opt-in
   prompt/interface diagnostics. The production checkpoint-560 evaluation chain remains frozen on
-  `version26`; none of version39-version43 has received an accuracy promotion and they must
+  `version26`; none of version39-version49 has received an accuracy promotion and they must
   not be mixed into its result directories. Version26 retains version25's prompt-role and
   public-contract refactor, but replaces the model-visible tagged action carrier with one
   non-empty `<think>` block followed directly by a strict raw JSON action object. The former
@@ -232,7 +232,74 @@ Start at `docs/current/README.md`.
   17.7% more actions than version24's single-attempt 42/50. Do not expand version43 K=2.
   See
   `docs/reports/evaluation/BIRD_ATOMIC_VERSION43_UNIQUE_BARE_TERMINAL_COLUMNS_20260729_ZH.md`.
-  Future versions increment numerically.
+  `version44` returns to version39's full prompt/recent-4/exact-table terminal semantics, removes
+  public `plan`, renames the row observer to `inspect_rows`, adds deterministic read-only
+  `search_values(table, query, column?, limit?, offset?)`, and exposes BIRD semantic name and
+  description only through `inspect_column`. Its frozen DeepSeek v4 Flash paired Gate50 scored
+  **38/50** versus version39 at **39/50**, with four gains, five regressions, 50/50 legal
+  termination, and three versus two process errors. Search was used on 19 tasks, but both protocols
+  scored 16/19 on that subset. The current implementation also scans every distinct value before
+  fuzzy ranking; two approximately 1.98M-distinct-title searches took about 380 seconds each.
+  Do not run the remaining 150 or use version44 for SFT/RL before bounded candidate retrieval is
+  implemented and the same Gate50 is rerun. See
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION44_SEARCH_VALUES_PAIRED_GATE50_20260730_ZH.md`.
+  `version45` keeps version44's public calls and all non-search semantics but routes search through
+  isolated deterministic `bounded-v1`: SQLite exact/case-insensitive-exact recall first, otherwise
+  at most 4,096 stable token/trigram candidates per column before fuzzy ranking. Exact hits suppress
+  broader alternatives; observations expose candidate scope and truncation. Offline replay of all
+  22 version44 Gate50 searches retained 22/22 top candidates and cut their total search time to
+  1.033 seconds; the two approximately 1.98M-distinct-title cases fell from about 380 seconds each
+  to 0.374 and 0.132 seconds. After provider recovery, the current-hash fresh Gate50 scored
+  **37/50** versus frozen version39 at **39/50**, with two gains, four regressions, 50/50 legal
+  termination, and three versus two process errors. All four regressions were non-search
+  semantic/output failures. Wall time fell from version44's 405.83 seconds to 317.21 seconds, so
+  the latency defect is fixed but accuracy is not promoted. Do not run the remaining 150 or use
+  version45 for SFT/RL. See
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION45_BOUNDED_SEARCH_PAIRED_GATE50_20260730_ZH.md`.
+  `version46` returns to version39's public tools and behavior and changes only model-visible
+  resident derivations into Harness-authored single-line handle cards. `version47` additionally
+  keeps the latest successful observation full while replacing resident row payloads with read
+  cards that require re-observation for exact values. `version48` adds only external-teacher
+  interpret-before-act guidance. Their frozen read-heavy Gate16 used the updated DeepSeek v4 Flash;
+  one task with an unresolved version46 provider failure was excluded from every arm, leaving 15
+  semantic pairs. Version39/version46/version47/version48 scored **8/15, 8/15, 9/15, 9/15**.
+  Version47 had two target gains and one control regression versus version46 (`p=1.0`) but legal
+  termination fell to 13/15; reads rose from baseline 27 to 71 with 24 exact re-reads. Version48
+  had one gain and one regression versus version47, used 1.49x baseline actions and 1.62x tokens,
+  and produced 35 exact re-reads. Offline fixed-200 rendering saved only 478/233 characters on the
+  final turn for version46/version47, while version48 added 145. `version49` implements the next
+  dependency-aware variant without model-authored branch parameters: it derives active handles
+  from references in the retained recent-4 action/observation/error structures, recursively keeps
+  exact rows for their derivation dependencies, and archives rows only outside that closure. Its
+  raw Gate16 scored 9/16 with 15/16 legal termination. On the same 15-task semantic subset it
+  scored **8/15**, exactly matching every version39 outcome, retaining all 8/8 controls and
+  recovering 0/7 targets. It used 138 actions, 26 reads, zero exact re-reads, and 1,169,008 tokens
+  versus baseline 146, 27, zero, and 1,201,127. It fixed the version47/48 churn cases but had no
+  capability gain. Offline fixed-200 next-action literal loss fell from version47's 12 turns/20
+  values to one dormant-branch turn/four values; that raw version49 task was correct but still used
+  10 reads and two exact re-reads. A later frozen Gate8 K=3 stability check rejected the apparent
+  single-run efficiency: version39 and version49 had identical per-run correct counts and both
+  totaled 20/24, with all 15/15 controls retained, but version49 used 23.0% more mean actions,
+  71.9% more row reads, and 28.7% more tokens. It produced three max-step failures versus zero for
+  version39; on the two hard context-sensitive tasks, reads repeatedly revisited the same evidence
+  and failed to advance the relational program. Version49 failed five of nine preregistered
+  stability checks. Do not expand version46-version49 to Gate50, use them for SFT/RL, or preserve
+  version49 as a candidate renderer. Further work should first establish an evidence-sufficiency
+  invariant or target semantic/output errors rather than compressing more resident rows. See
+  `docs/reports/evaluation/BIRD_ATOMIC_CONTEXT_HANDLE_CARD_ABLATION_GATE16_20260731_ZH.md` and
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION49_CONTEXT_STABILITY_K3_GATE8_20260731_ZH.md`.
+  A later strict single-variable audit rebuilt historical `version24` from commit `22196e2`:
+  its current-hash fresh Gate50 reproduced **41/50** versus the original **42/50**, with 47/50
+  identical task outcomes. On that isolated branch, adding only bounded
+  `search_values(table, query, column?, limit?, offset?)` while retaining `plan`,
+  `read_subtable`, raw schema, and exact-table terminal scored **39/50**. It had two gains and
+  four regressions versus the fresh baseline (exact paired `p=0.6875`), used search on 13 tasks
+  with 10/13 correct versus 11/13 for baseline, and increased actions 9.4% and tokens 14.3%.
+  Search recall itself had no execution errors or candidate truncation; the only search-used
+  paired regression returned the correct exact literal but kept an extra ranking column. Do not
+  promote or expand this ablation. See
+  `docs/reports/evaluation/BIRD_VERSION24_BOUNDED_SEARCH_SINGLE_VARIABLE_GATE50_20260730_ZH.md`.
+  Future versions increment numerically from `version50`.
 - The canonical model action contains exactly one non-empty `<think>` block followed by one strict
   raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may
   carry the same authored reason in a separate API field, but its API-facing prompt and history
@@ -321,8 +388,30 @@ Start at `docs/current/README.md`.
   `base_role`; the bug fix is covered by deterministic SQLite tests only. Stop further prompt/schema
   expansion, and do not use v6 for SFT/RL; see
   `docs/reports/evaluation/BIRD_RELATIONAL_PROGRAM_V6_BASE_ROLE_GATE4_20260727_ZH.md`.
-  The scheme has evaluation and causal-rollout plumbing only, uses `tool-scheme-registry-v3`, and remains
+  The scheme has evaluation and causal-rollout plumbing only, uses `tool-scheme-registry-v4`, and remains
   `diagnostic_only_pending_protocol_scale_gate`; it has no SFT exporter or RL environment.
+- The separate direct-SQL-search scheme is the fourth registry-v4 action scheme and exposes
+  exactly `search_values(query, table?, column?, limit?, offset?)` plus
+  `execute_sql(sql, mode)`. Search is deterministic out-of-band bounded lexical retrieval over
+  exact stored database values; it is not claimed to be theoretically inexpressible in SQL and
+  does not create a relation. `execute_sql(mode="inspect")` returns read-only SQLite feedback;
+  `mode="final"` is terminal and must reuse a previously inspected SELECT/WITH. Its frozen paired
+  Gate16 on the first half of the version38 semantic cohort scored **7/16** with 14/16 legal
+  termination versus fresh atomic version39 at **10/16** and 16/16. It used 538,791 versus
+  1,359,421 tokens but 154 versus 141 actions, and had two max-step failures versus zero. Both
+  value-search calls occurred in those failures; the sole paired gain did not use search. All
+  seven successes freshly replayed and passed the independent structural audit. Keep it only as a
+  diagnostic low-token SQL control; do not expand it or use it for SFT/RL. The active diagnostic
+  `direct-sql-search-v2` preserves those two calls and the v1 compatibility path, but adds
+  external-teacher semantic decision discipline, structured fact-only errors, bounded preview
+  shape facts, a recent-exact-6/prior-cards-6 state renderer with resident-pointer history, and
+  rejection of any exact previously successful action on the immutable database. Its disjoint
+  Holdout Gate15 scored **6/15** versus fresh atomic version39 at **10/15**, with 15/15 legal
+  termination in both arms, 88 versus 115 actions, and 327,401 versus 854,227 tokens. V2 had zero
+  repeated actions and zero max-step failures, so its engineering optimizations worked, but it
+  missed the accuracy expansion threshold by four tasks. The single search call occurred in a
+  failure. Keep v2 as a diagnostic low-token SQL control; do not expand it or use it for SFT/RL. See
+  `docs/current/direct_sql_search_tool_scheme_zh.md`.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id
   `value_ref`.
@@ -348,12 +437,64 @@ Start at `docs/current/README.md`.
   negative/zero and credit later recovery separately.
 - Do not enable process-RL optimization until deterministic completeness and independent grounding
   edge-precision gates pass.
+- Both mandatory process-RL gates passed on 2026-07-30 for the frozen 23-task cohort. The promoted
+  `process-counterfactual-suite-v2` manifest binds 46 full-schema databases; known-correct replay
+  passed 102/105 with coverage on 23/23 tasks, all four shortcut regressions were rejected, and the
+  independent Codex audit labeled 63/63 grounding edges valid with no missing edge. The formal
+  audit SHA-256 is `6ba130933ec4ce20e58117b506d57cd80181f9b1c7c044765572ca8b04ba8e49`;
+  only configs marked `allowed_process_after_gates` may use it through strict
+  `counterfactual-completeness`. The historical `phase1_process_current` remains evaluation-only.
+
+### RTX 3090 long-context training memory profile (2026-08-04)
+
+- The reusable OOM-safe Action-DPO implementation is
+  `src/rl/action_dpo/train_fixed_prefix_action_dpo.py`. For long exact prefixes on a 24 GiB RTX
+  3090, enable the safeguards progressively rather than changing data, truncating sequences, or
+  changing the loss: selected tool-position logits, sequential positive/negative scoring,
+  single-graph exact-DPO derivative recomputation, and CPU-resident AdamW moments during
+  forward/backward. The moments move back to the parameter device only for the unchanged AdamW
+  update. The corresponding flags are `--selected-tool-logits`, `--sequential-pair-scoring`,
+  `--memory-safe-dpo-backward`, and `--cpu-offload-optimizer-state`.
+- On `table_rl`'s current PyTorch 2.9 / Transformers 4.57 Qwen2 stack, `sdpa` falls back to math
+  attention; its quadratic backward workspace requested 2.69 GiB at 5,078 tokens and still OOMed
+  at optimizer step 16 with both expandable segments and `cudaMallocAsync`. Use
+  `--attention-implementation flex_attention` with the checked-in conservative 32x32 forward and
+  backward blocks. Set
+  `TRITON_LIBCUDA_PATH=/home/dengyan/miniconda3/envs/trl-table/var/triton-libcuda`; do not create a
+  system `libcuda.so` symlink. The 5,827-token dataset maximum passed a post-Adam-state backward
+  stress test at 13.17 GiB allocated / 13.89 GiB reserved, and the real run passed the former step
+  16 OOM point with about 10 GiB free. The recovered run then completed 90/90 optimizer steps over
+  183 pairs / 90 questions at learning rate 1e-6 with zero gradient clipping. Recovery evidence is frozen in
+  `training/oom_recovery_audit.json` under the experiment root.
+- These options trade compute or PCIe time for memory. Selected logits may also save compute when
+  the loss mask is sparse; sequential pair scoring, graph recomputation, CPU optimizer offload,
+  and small Flex blocks usually reduce raw examples/second. Use the recovered memory to raise a
+  single job's micro-batch only after a measured smoke test proves higher end-to-end throughput.
+  Do not infer that lower memory alone permits more same-size training processes: two observed
+  approximately 13-15 GiB jobs do not fit safely on one 24 GiB card. Keep at least 2-3 GiB hard
+  headroom and measure peak allocated/reserved memory before adding a smaller concurrent job.
+- Apply this profile to training only. RTX 3090 evaluation/inference continues to use the separate
+  vLLM continuous/dynamic-batching policy below. Never change question grouping, optimizer-step
+  count, sequence length, beta, learning rate, or pair order merely to claim a memory optimization;
+  such changes are new experiments rather than systems-equivalent OOM fixes.
 
 ### Evaluation
 
 - Always name the denotation metric. All current/new BIRD evaluation, SFT replay, grounding gates,
   and RL/process audits use `bird-set`. `strict-multiset` remains only for immutable historical
   artifacts and explicitly named compatibility audits; never silently mix the two.
+- The promoted single-GPU full-BIRD-dev greedy inference configuration is dynamic rather than
+  statically sharded: `n=1534`, `n_samples=1`, `pass_k=1`, `temperature=0`, `top_p=1`,
+  `max_steps=30`, `max_tokens=1024`, `record_logprobs=true`, `top_logprobs=20`, protocol
+  `version36`, and denotation comparison `bird-set`. Run `rollout_passk.py` with `workers=24`,
+  `sample_workers=1`, and `max_inflight_requests=24`; completed questions dynamically release a
+  worker for the next question, while each question's tool/environment turns remain sequential.
+  Serve with vLLM continuous batching using `max_num_seqs=24`,
+  `max_num_batched_tokens=8192`, `max_model_len=8192`, BF16, and
+  `gpu_memory_utilization=0.90`. This is the preferred RTX 3090 evaluation setup unless a named
+  hardware test proves a safer or faster replacement; do not replace it with fixed question
+  batches or static worker partitions. This evaluation policy is separate from training batch
+  sizes and repair-generation microbatches.
 - Do not mix result directories across task selections, model/checkpoint, protocol, decoding,
   timeout, external knowledge, or denotation comparison.
 - Report API/transport failures separately from semantic policy failures.
@@ -381,6 +522,15 @@ Start at `docs/current/README.md`.
   legal termination, 29 process errors, 10 paired gains, and 8 paired regressions versus
   version20. It fails the 150/200 gate and is ineligible as an SFT source. See
   `docs/reports/evaluation/BIRD_VERSION24_RELATION_DERIVATION_FIXED200_20260724.md`.
+- A frozen model-capability ceiling follow-up first reproduced version24 on the fixed 20-task
+  DeepSeek v4 Flash gate at **16/20**, then ran DeepSeek v4 Pro on the same fixed 200 cohort.
+  Pro also scored **145/200**, with 15 Pro-only gains and 15 Flash-only regressions (`p=1.0`).
+  It improved legal termination from 197 to 199, reduced process errors from 29 to 22, actions
+  from 1,490 to 1,454, and tokens by 3.1%, but did not raise denotation accuracy. All 145 correct
+  Pro trajectories passed structural, fresh-replay, and provider-payload no-leak audits. Current
+  evidence therefore does not support raw model capacity as the version24 accuracy bottleneck;
+  keep the result diagnostic-only. See
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION24_FLASH20_PRO200_CAPABILITY_CEILING_20260803_ZH.md`.
 - The version40 concise-prompt/full-reasoning-history diagnostic stopped after the frozen first
   50 tasks: **37/50** versus paired version24 **42/50**, with 50/50 legal termination, zero gains,
   five output-shape regressions, and nine process errors. Do not expand it to the remaining 150.

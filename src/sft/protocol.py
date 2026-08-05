@@ -53,6 +53,7 @@ from public_tool_contract import (
     SCALAR_OPERAND_KEYSETS,
     SCALAR_OPERATIONS,
     VERSION40_PUBLIC_TOOL_ARGUMENTS,
+    VERSION44_PUBLIC_TOOL_ARGUMENTS,
 )
 
 # Teacher-only elaborations for the same public tools. These descriptions may explain edge cases
@@ -173,9 +174,10 @@ TOOLS = set(TOOL_SPECS)
 # explicit prevents old data compatibility from quietly widening the live agent interface.
 LEGACY_TOOLS = {"aggregate", "pivot"}
 REPLAY_COMPAT_TOOLS = TOOLS | LEGACY_TOOLS
-# inspect_rows is the version40 public alias for the same read-only executor operation. It is
-# replay/execution-compatible here but remains absent from the default version39 model surface.
-ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS | {"inspect_rows"}
+# inspect_rows is a public alias in isolated later protocols, and search_values is version44's
+# read-only value-discovery tool. They are executable/replay-compatible here but remain absent
+# from the default version39 model surface.
+ACCEPTED_TOOLS = REPLAY_COMPAT_TOOLS | {"inspect_rows", "search_values"}
 
 PROTOCOL_VERSION = "version39"  # model-visible resident-state compaction
 ROLLING_CONTEXT_VERSION = "v2-bounded-legal-history-resident-observations"
@@ -241,6 +243,10 @@ _ARG_SCHEMA: dict[str, tuple[set, set]] = {
         {"table"},
         {"limit", "columns", "conditions", "order_by", "offset"},
     ),
+    "search_values": (
+        {"table", "query"},
+        {"column", "limit", "offset"},
+    ),
     "answer_from_context": (set(), {"answer", "evidence", "reason"}),
 }
 
@@ -254,6 +260,10 @@ MODEL_ARG_SCHEMA: dict[str, tuple[set[str], set[str]]] = {
 VERSION40_MODEL_ARG_SCHEMA: dict[str, tuple[set[str], set[str]]] = {
     tool: (set(required), set(optional))
     for tool, (required, optional) in VERSION40_PUBLIC_TOOL_ARGUMENTS.items()
+}
+VERSION44_MODEL_ARG_SCHEMA: dict[str, tuple[set[str], set[str]]] = {
+    tool: (set(required), set(optional))
+    for tool, (required, optional) in VERSION44_PUBLIC_TOOL_ARGUMENTS.items()
 }
 ACTION_BLOCK_MODEL_ARG_SCHEMA: dict[str, tuple[set[str], set[str]]] = {
     tool: (set(required), set(optional))
@@ -653,6 +663,39 @@ def _validate_extreme_value_select(args: dict) -> None:
         )
 
 
+def _validate_search_values(args: dict) -> None:
+    table = args.get("table")
+    if not isinstance(table, str) or not table.strip():
+        raise ProtocolError("search_values: table must be a non-empty table name")
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise ProtocolError("search_values: query must be a non-empty string")
+    if len(query) > 256:
+        raise ProtocolError("search_values: query cannot exceed 256 characters")
+    column = args.get("column")
+    if column is not None and (
+        not isinstance(column, str) or not column.strip()
+    ):
+        raise ProtocolError(
+            "search_values: column must be a non-empty column name when supplied"
+        )
+    limit = args.get("limit", 20)
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or limit < 1
+        or limit > 20
+    ):
+        raise ProtocolError("search_values: limit must be an integer from 1 to 20")
+    offset = args.get("offset", 0)
+    if (
+        isinstance(offset, bool)
+        or not isinstance(offset, int)
+        or offset < 0
+    ):
+        raise ProtocolError("search_values: offset must be a non-negative integer")
+
+
 def _validate_common_model_arguments(
     tool: str,
     args: dict,
@@ -665,6 +708,8 @@ def _validate_common_model_arguments(
         _validate_model_group_aggregate(args)
     if tool in {"read_subtable", "inspect_rows"}:
         _validate_row_inspection(args, tool=tool)
+    if tool == "search_values":
+        _validate_search_values(args)
     if tool == "project":
         _validate_project(args, allow_typed_date_rows=allow_typed_date_rows)
     if tool == "extreme_value_select":
@@ -722,6 +767,12 @@ def validate_model_arguments(tool: str, args: dict) -> None:
 def validate_version40_model_arguments(tool: str, args: dict) -> None:
     """Validate the isolated version40 public action API."""
     _validate_argument_keys(tool, args, VERSION40_MODEL_ARG_SCHEMA)
+    _validate_common_model_arguments(tool, args, allow_typed_date_rows=True)
+
+
+def validate_version44_model_arguments(tool: str, args: dict) -> None:
+    """Validate the isolated version44 checkpoint-candidate action API."""
+    _validate_argument_keys(tool, args, VERSION44_MODEL_ARG_SCHEMA)
     _validate_common_model_arguments(tool, args, allow_typed_date_rows=True)
 
 
@@ -1438,16 +1489,275 @@ def _compact_state_columns(state: dict | None) -> dict:
     return visible
 
 
-def environment_state_message(state: dict | None, last_error: dict | None = None) -> str:
-    text = "CURRENT ENVIRONMENT STATE\n" + _compact(_compact_state_columns(state))
+RESIDENT_STATE_PROFILE_VERSION39 = "version39-flat-v1"
+RESIDENT_STATE_PROFILE_HANDLE_CARDS = "handle-cards-v1"
+RESIDENT_STATE_PROFILE_HANDLE_CARDS_ARCHIVED_READS = (
+    "handle-cards-archived-reads-v1"
+)
+RESIDENT_STATE_PROFILE_HANDLE_CARDS_ACTIVE_ARCHIVE = (
+    "handle-cards-active-archive-v1"
+)
+RESIDENT_STATE_PROFILES = frozenset({
+    RESIDENT_STATE_PROFILE_VERSION39,
+    RESIDENT_STATE_PROFILE_HANDLE_CARDS,
+    RESIDENT_STATE_PROFILE_HANDLE_CARDS_ARCHIVED_READS,
+    RESIDENT_STATE_PROFILE_HANDLE_CARDS_ACTIVE_ARCHIVE,
+})
+
+
+def _derivation_table_refs(derivation: dict) -> list[dict]:
+    return [
+        {
+            key: deepcopy(item[key])
+            for key in ("role", "ref", "namespace")
+            if item.get(key) is not None
+        }
+        for item in derivation.get("inputs") or []
+        if isinstance(item, dict) and item.get("kind") == "table"
+    ]
+
+
+def _relation_handle_card(entry: dict) -> str:
+    """Render one fact-only sentence from canonical relation derivation metadata."""
+    derivation = entry.get("derivation")
+    if not isinstance(derivation, dict):
+        raise ValueError("a derived handle card requires relation derivation metadata")
+    operator = derivation.get("operator")
+    semantics = derivation.get("semantics") or {}
+    inputs = _derivation_table_refs(derivation)
+    detail: dict = {"inputs": inputs}
+
+    if operator == "condition_filter":
+        detail.update({
+            "predicate": deepcopy(semantics.get("predicate")),
+            "columns": semantics.get("column_operation"),
+        })
+    elif operator == "project":
+        lineage = semantics.get("column_lineage") or []
+        if lineage and all(
+            isinstance(item, dict) and item.get("expression") == "*"
+            for item in lineage
+        ):
+            detail["select"] = "*"
+        else:
+            detail["select"] = [
+                {
+                    "as": item.get("output"),
+                    "expression": deepcopy(item.get("expression")),
+                }
+                for item in lineage
+                if isinstance(item, dict)
+            ]
+        if semantics.get("row_operation") == "deduplicate":
+            detail["distinct"] = True
+    elif operator == "scalar_compute":
+        detail.update({
+            "operation": semantics.get("operation"),
+            "operands": [
+                deepcopy(item)
+                for item in derivation.get("inputs") or []
+                if isinstance(item, dict)
+            ],
+            "result": semantics.get("result_column"),
+        })
+        detail.pop("inputs", None)
+    elif operator == "join_tables":
+        detail["edges"] = deepcopy(semantics.get("edges") or [])
+    elif operator == "group_aggregate":
+        detail.update({
+            "group_by": deepcopy(semantics.get("row_grain") or []),
+            "aggregations": deepcopy(semantics.get("aggregations") or []),
+            "layout": semantics.get("layout"),
+        })
+        for key in ("passthrough", "category_axis"):
+            if semantics.get(key) is not None:
+                detail[key] = deepcopy(semantics[key])
+    elif operator == "extreme_value_select":
+        detail.update({
+            "order_by": deepcopy(semantics.get("order_by") or []),
+            "top_k": semantics.get("top_k"),
+            "columns": semantics.get("column_operation"),
+        })
+    elif operator == "set_op":
+        detail.update({
+            "operation": semantics.get("operation"),
+            "duplicates": semantics.get("duplicate_semantics"),
+        })
+    elif operator == "pivot":
+        detail.update({
+            "key": semantics.get("key_column"),
+            "value": semantics.get("value_column"),
+            "key_values": deepcopy(semantics.get("key_values") or []),
+        })
+    else:
+        # Canonical validation prevents this in active state. Preserve a deterministic factual
+        # fallback for historical replay instead of inventing an operator interpretation.
+        detail["row_operation"] = semantics.get("row_operation")
+        detail["column_operation"] = semantics.get("column_operation")
+
+    return (
+        f"created by {operator} {_compact(detail)}; "
+        f"producer={entry.get('created_by')}"
+    )
+
+
+def _replace_derivations_with_handle_cards(visible: dict) -> None:
+    tables = visible.get("tables")
+    if not isinstance(tables, dict):
+        return
+    for entry in tables.values():
+        if not isinstance(entry, dict) or not isinstance(entry.get("derivation"), dict):
+            continue
+        entry["handle_card"] = _relation_handle_card(entry)
+        entry.pop("derivation", None)
+
+
+def _archive_resident_read_rows(
+    visible: dict,
+    *,
+    table_names: set[str] | None = None,
+) -> None:
+    """Keep deterministic read descriptors while removing old resident cell payloads."""
+    tables = visible.get("tables")
+    if not isinstance(tables, dict):
+        return
+    for name, entry in tables.items():
+        if table_names is not None and name not in table_names:
+            continue
+        if not isinstance(entry, dict) or not isinstance(entry.get("reads"), list):
+            continue
+        archived = []
+        for raw_read in entry["reads"]:
+            if not isinstance(raw_read, dict):
+                archived.append(deepcopy(raw_read))
+                continue
+            read = deepcopy(raw_read)
+            rows = read.pop("rows", None)
+            if isinstance(rows, list):
+                read["returned_row_count"] = len(rows)
+                read["row_values"] = "archived; call the row observer again for exact cells"
+            archived.append(read)
+        entry["reads"] = archived
+
+
+def _active_dependency_closure(state: dict | None, seeds: set[str]) -> set[str]:
+    tables = (state or {}).get("tables") or {}
+    if not isinstance(tables, dict):
+        return set()
+    active = {name for name in seeds if name in tables}
+    pending = list(active)
+    while pending:
+        name = pending.pop()
+        entry = tables.get(name)
+        derivation = entry.get("derivation") if isinstance(entry, dict) else None
+        if not isinstance(derivation, dict):
+            continue
+        for item in derivation.get("inputs") or []:
+            dependency = item.get("ref") if isinstance(item, dict) else None
+            if (
+                isinstance(dependency, str)
+                and dependency in tables
+                and dependency not in active
+            ):
+                active.add(dependency)
+                pending.append(dependency)
+    return active
+
+
+def _apply_active_archive_focus(
+    visible: dict,
+    canonical_state: dict | None,
+    active_relation_refs: set[str],
+) -> None:
+    tables = visible.get("tables")
+    if not isinstance(tables, dict):
+        return
+    active = _active_dependency_closure(canonical_state, active_relation_refs)
+    archived = set(tables) - active
+    _archive_resident_read_rows(visible, table_names=archived)
+    visible["relation_focus"] = {
+        "active_dependency_closure": [name for name in tables if name in active],
+        "archived_relations": [name for name in tables if name in archived],
+    }
+    visible["tables"] = {
+        name: tables[name]
+        for name in (*visible["relation_focus"]["active_dependency_closure"],
+                     *visible["relation_focus"]["archived_relations"])
+    }
+
+
+def model_visible_environment_state(
+    state: dict | None,
+    profile: str = RESIDENT_STATE_PROFILE_VERSION39,
+    *,
+    active_relation_refs: set[str] | None = None,
+) -> dict:
+    """Render one model-visible state profile without mutating canonical harness state."""
+    if profile not in RESIDENT_STATE_PROFILES:
+        raise ValueError(f"unknown resident state profile {profile!r}")
+    visible = _compact_state_columns(state)
+    if profile in {
+        RESIDENT_STATE_PROFILE_HANDLE_CARDS,
+        RESIDENT_STATE_PROFILE_HANDLE_CARDS_ARCHIVED_READS,
+        RESIDENT_STATE_PROFILE_HANDLE_CARDS_ACTIVE_ARCHIVE,
+    }:
+        _replace_derivations_with_handle_cards(visible)
+    if profile == RESIDENT_STATE_PROFILE_HANDLE_CARDS_ARCHIVED_READS:
+        _archive_resident_read_rows(visible)
+    elif profile == RESIDENT_STATE_PROFILE_HANDLE_CARDS_ACTIVE_ARCHIVE:
+        _apply_active_archive_focus(
+            visible,
+            state,
+            set(active_relation_refs or ()),
+        )
+    return visible
+
+
+def environment_state_message(
+    state: dict | None,
+    last_error: dict | None = None,
+    *,
+    resident_state_profile: str = RESIDENT_STATE_PROFILE_VERSION39,
+    active_relation_refs: set[str] | None = None,
+) -> str:
+    heading = "CURRENT ENVIRONMENT STATE"
+    if resident_state_profile == RESIDENT_STATE_PROFILE_HANDLE_CARDS:
+        heading += " (Harness-authored handle cards)"
+    elif resident_state_profile == RESIDENT_STATE_PROFILE_HANDLE_CARDS_ARCHIVED_READS:
+        heading += (
+            " (Harness-authored handle cards; archived row values must be observed again "
+            "before exact reuse)"
+        )
+    elif resident_state_profile == RESIDENT_STATE_PROFILE_HANDLE_CARDS_ACTIVE_ARCHIVE:
+        heading += (
+            " (Harness-authored active dependency closure; only inactive row values are archived)"
+        )
+    text = heading + "\n" + _compact(
+        model_visible_environment_state(
+            state,
+            resident_state_profile,
+            active_relation_refs=active_relation_refs,
+        )
+    )
     if last_error:
         text += "\n\nLAST TOOL ERROR\n" + _compact(last_error)
     return text
 
 
-def state_context_message(state: dict | None, last_error: dict | None = None) -> str:
+def state_context_message(
+    state: dict | None,
+    last_error: dict | None = None,
+    *,
+    resident_state_profile: str = RESIDENT_STATE_PROFILE_VERSION39,
+    active_relation_refs: set[str] | None = None,
+) -> str:
     """Model-visible mutable context between assistant turns."""
-    return environment_state_message(state, last_error=last_error)
+    return environment_state_message(
+        state,
+        last_error=last_error,
+        resident_state_profile=resident_state_profile,
+        active_relation_refs=active_relation_refs,
+    )
 
 
 def _state_is_empty(state: dict | None) -> bool:
@@ -1486,6 +1796,55 @@ def model_context_messages(system: str, overview: dict, question: str, state: di
     ]
 
 
+def _collect_known_table_refs(value: object, known_tables: set[str], refs: set[str]) -> None:
+    if isinstance(value, str):
+        if value in known_tables:
+            refs.add(value)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _collect_known_table_refs(item, known_tables, refs)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_known_table_refs(item, known_tables, refs)
+
+
+def recent_active_relation_refs(
+    state: dict | None,
+    retained_legal_history: list[dict],
+    last_error: dict | None,
+) -> set[str]:
+    """Derive current relation focus only from already-visible structured history."""
+    tables = (state or {}).get("tables") or {}
+    if not isinstance(tables, dict):
+        return set()
+    known_tables = set(tables)
+    refs: set[str] = set()
+    for item in retained_legal_history:
+        assistant = item.get("assistant")
+        if isinstance(assistant, str):
+            action_text = (
+                assistant.rsplit("</think>", 1)[1].strip()
+                if "</think>" in assistant
+                else assistant.strip()
+            )
+            try:
+                action = json.loads(action_text)
+            except json.JSONDecodeError:
+                action = None
+            _collect_known_table_refs(action, known_tables, refs)
+        observation = item.get("observation")
+        if isinstance(observation, str):
+            try:
+                envelope = json.loads(observation)
+            except json.JSONDecodeError:
+                envelope = None
+            _collect_known_table_refs(envelope, known_tables, refs)
+    _collect_known_table_refs(last_error, known_tables, refs)
+    return refs
+
+
 def rolling_legal_history_messages(
     system: str,
     overview: dict,
@@ -1501,6 +1860,8 @@ def rolling_legal_history_messages(
     reasoning_history: list[dict] | None = None,
     history_policy: str = HISTORY_POLICY_RECENT,
     history_head_turns: int = 0,
+    resident_state_profile: str = RESIDENT_STATE_PROFILE_VERSION39,
+    latest_observation_full: bool = False,
 ) -> list[dict]:
     """Render a bounded transcript of harness-successful assistant/tool pairs.
 
@@ -1534,6 +1895,11 @@ def rolling_legal_history_messages(
         tail_start = max(history_head_turns, len(legal_history) - history_turns)
         retained = [*head, *legal_history[tail_start:]]
         older = []
+    active_relation_refs = (
+        recent_active_relation_refs(state, retained, last_error)
+        if resident_state_profile == RESIDENT_STATE_PROFILE_HANDLE_CARDS_ACTIVE_ARCHIVE
+        else None
+    )
     continuity_events = []
     if preserve_all_reasoning and reasoning_history is not None:
         retained_success_steps = {
@@ -1599,7 +1965,12 @@ def rolling_legal_history_messages(
     if not retained:
         content = initial
         if state or last_error:
-            content += "\n\n" + state_context_message(state, last_error)
+            content += "\n\n" + state_context_message(
+                state,
+                last_error,
+                resident_state_profile=resident_state_profile,
+                active_relation_refs=active_relation_refs,
+            )
         return [{"role": "system", "content": system}, {"role": "user", "content": content}]
     messages = [{"role": "system", "content": system}, {"role": "user", "content": initial}]
     for index, item in enumerate(retained):
@@ -1610,10 +1981,17 @@ def rolling_legal_history_messages(
         if not isinstance(observation, str) or not observation.strip():
             raise ValueError("rolling legal history has an empty tool observation")
         messages.append({"role": "assistant", "content": assistant})
-        if compact_observations:
+        if compact_observations and not (
+            latest_observation_full and index == len(retained) - 1
+        ):
             observation = compact_resident_observation(observation)
         if index == len(retained) - 1:
-            observation += "\n\n" + state_context_message(state, last_error)
+            observation += "\n\n" + state_context_message(
+                state,
+                last_error,
+                resident_state_profile=resident_state_profile,
+                active_relation_refs=active_relation_refs,
+            )
         messages.append({"role": "user", "content": observation})
     return messages
 

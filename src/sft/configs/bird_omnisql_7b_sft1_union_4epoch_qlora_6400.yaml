@@ -1,0 +1,53 @@
+# Teach the SQL-specialized OmniSQL-7B checkpoint the atomic table-tool protocol
+# with the complete, task-disjoint union of the original SFT1 and SFT2 batches.
+# The merged dataset is rebuilt only after an exact OmniSQL-tokenizer audit.
+# Both sources use atomic version26, history_turns=4, think-json-v1, and student
+# prompt SHA-256 848598074e653648d52b58dfa1a54dd777beabae16cb91d83c4ba1a54b5d7316.
+
+### model
+model_name_or_path: /home/dengyan/models/OmniSQL-7B-af4eed67
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: bird_omnisql_sft1_union_sft1_sft2_6400_training_view
+dataset_dir: /home/dengyan/tabular_rl_outputs/data/omnisql_sft1_union_sft1_sft2_20260801
+template: qwen
+cutoff_len: 6400
+mask_history: true
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/checkpoints/omnisql-7b-bird-sft1-union-sft1-sft2-6400-4epoch-qlora
+logging_steps: 2
+save_strategy: epoch
+save_total_limit: 5
+eval_strategy: "no"
+report_to: none
+plot_loss: true
+overwrite_output_dir: false
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 5.0e-5
+num_train_epochs: 4.0
+optim: paged_adamw_8bit
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+seed: 42
+data_seed: 42

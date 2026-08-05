@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,13 @@ from protocol import (
 )
 
 CATALOG_CONTEXT_PROFILE = "catalog-v1"
+CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE = (
+    "catalog-bird-semantics-inspect-only-v1"
+)
+CATALOG_CONTEXT_PROFILES = (
+    CATALOG_CONTEXT_PROFILE,
+    CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
+)
 FULL_BIRD_CONTEXT_PROFILE = "full-bird-schema-samples-v1"
 FULL_BIRD_CONTEXT_WITH_INSPECT_PROFILE = (
     "full-bird-schema-samples-with-inspect-v1"
@@ -41,14 +49,14 @@ FULL_BIRD_CONTEXT_PROFILES = (
     FULL_BIRD_CONTEXT_WITH_INSPECT_PROFILE,
 )
 DATABASE_CONTEXT_PROFILES = (
-    CATALOG_CONTEXT_PROFILE,
+    *CATALOG_CONTEXT_PROFILES,
     *FULL_BIRD_CONTEXT_PROFILES,
 )
 FULL_CONTEXT_DISABLED_TOOLS = frozenset({"describe_table", "inspect_column"})
 FULL_CONTEXT_WITH_INSPECT_DISABLED_TOOLS = frozenset({"describe_table"})
 
 def disabled_tools_for_profile(profile: str) -> frozenset[str]:
-    if profile == CATALOG_CONTEXT_PROFILE:
+    if profile in CATALOG_CONTEXT_PROFILES:
         return frozenset()
     if profile == FULL_BIRD_CONTEXT_PROFILE:
         return FULL_CONTEXT_DISABLED_TOOLS
@@ -196,6 +204,90 @@ def _bird_column_semantics(
             if entry:
                 semantics[(table_name.casefold(), original_name.casefold())] = entry
     return semantics, sources
+
+
+_CATALOG_BIRD_INSPECT_SEMANTICS_PROMPT_SUFFIX = """
+
+INSPECT-ONLY BIRD COLUMN SEMANTICS
+The source catalog remains lazy, and describe_table returns only the ordinary raw schema without
+BIRD semantic names or descriptions. A successful inspect_column observation may attach both
+semantic_name and column_description to the one inspected raw column. These BIRD annotations are
+meaning hints only: tool arguments must still copy the exact raw table and column names. They are
+neither executable aliases nor evidence that a value occurs in the database. Ground literals from
+the ordinary inspect_column value-domain fields, search_values matches, or inspect_rows.
+""".rstrip()
+
+
+def catalog_profile_student_prompt(base_prompt: str, profile: str) -> str:
+    """Apply only the model-visible prompt delta required by a lazy-catalog profile."""
+    if profile == CATALOG_CONTEXT_PROFILE:
+        return base_prompt
+    if profile == CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE:
+        return base_prompt + _CATALOG_BIRD_INSPECT_SEMANTICS_PROMPT_SUFFIX
+    raise ValueError(f"not a lazy catalog context profile: {profile!r}")
+
+
+def enrich_catalog_perception_output(
+    profile: str,
+    example: dict,
+    tool: str,
+    arguments: dict,
+    output: dict,
+) -> tuple[dict, dict | None]:
+    """Attach BIRD semantics only to one successful inspect_column observation.
+
+    The overlay is model-visible and audited but never mutates canonical executor output,
+    resident state, provenance, or verifier behavior. It exposes neither metadata sample values
+    nor ``data_format``/``value_description`` fields.
+    """
+    if (
+        profile != CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE
+        or tool != "inspect_column"
+    ):
+        return output, None
+
+    table_name = str(arguments.get("table") or "").strip()
+    column_name = str(
+        output.get("column") or arguments.get("column") or ""
+    ).strip()
+    if not table_name or not column_name:
+        return output, None
+    semantics, sources = _bird_column_semantics(
+        example,
+        [table_name],
+        {table_name.casefold(): {column_name}},
+    )
+    annotation = semantics.get(
+        (table_name.casefold(), column_name.casefold()),
+        {},
+    )
+    visible = deepcopy(output)
+    enriched_fields = 0
+    if annotation.get("column_name"):
+        visible["semantic_name"] = annotation["column_name"]
+        enriched_fields += 1
+    if annotation.get("column_description"):
+        visible["column_description"] = annotation["column_description"]
+        enriched_fields += 1
+
+    def stable_hash(value: dict) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+
+    return visible, {
+        "tool": tool,
+        "enriched_field_count": enriched_fields,
+        "metadata_sources": sources,
+        "canonical_output_sha256": stable_hash(output),
+        "model_visible_output_sha256": stable_hash(visible),
+    }
 
 
 def _format_identifier(identifier: str) -> str:

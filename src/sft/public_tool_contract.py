@@ -207,6 +207,83 @@ VERSION40_PUBLIC_TOOL_ARGUMENTS: dict[
     for tool, contract in VERSION40_PUBLIC_TOOL_CONTRACTS.items()
 }
 
+# Atomic version44 starts a new isolated checkpoint candidate from version39. It deliberately
+# keeps the version39 relational and terminal semantics while changing only the public perception
+# surface approved for the next SFT generation round:
+# - plan is absent;
+# - read_subtable is exposed only as inspect_rows;
+# - search_values performs one-table, paginated fuzzy value discovery.
+VERSION44_PUBLIC_TOOL_CONTRACTS: dict[str, ToolContract] = {}
+for _tool, _contract in PUBLIC_TOOL_CONTRACTS.items():
+    if _tool == "plan":
+        continue
+    if _tool == "read_subtable":
+        VERSION44_PUBLIC_TOOL_CONTRACTS["inspect_rows"] = ToolContract(
+            _contract.required,
+            _contract.optional,
+            "observe up to 20 matching rows without deriving a table. conditions uses the same "
+            "typed predicate shape as condition_filter, including on_date for calendar-date "
+            "matching. order_by is a list of exact columns optionally ending in ASC or DESC. "
+            "offset is a non-negative row offset and requires order_by so pagination is "
+            "deterministic. Omitted columns means all columns.",
+        )
+        continue
+    VERSION44_PUBLIC_TOOL_CONTRACTS[_tool] = _contract
+
+_version44_items = list(VERSION44_PUBLIC_TOOL_CONTRACTS.items())
+_version44_inspect_index = next(
+    index for index, (tool, _) in enumerate(_version44_items)
+    if tool == "inspect_column"
+)
+_version44_items.insert(
+    _version44_inspect_index + 1,
+    (
+        "search_values",
+        ToolContract(
+            ("table", "query"),
+            ("column", "limit", "offset"),
+            "fuzzily search actual stored values in exactly one table without deriving a table. "
+            "column optionally restricts the search; when omitted every column is searched. "
+            "limit defaults to 20 and cannot exceed 20. offset reads the next page in one stable "
+            "relevance ordering. Each match identifies its exact table, column, stored value, "
+            "frequency, and deterministic lexical match kind.",
+        ),
+    ),
+)
+VERSION44_PUBLIC_TOOL_CONTRACTS = dict(_version44_items)
+
+VERSION44_PUBLIC_TOOL_ARGUMENTS: dict[
+    str, tuple[tuple[str, ...], tuple[str, ...]]
+] = {
+    tool: (contract.required, contract.optional)
+    for tool, contract in VERSION44_PUBLIC_TOOL_CONTRACTS.items()
+}
+
+# Version45 keeps version44's public calls and changes only search execution/observation semantics:
+# SQL recalls a deterministic bounded candidate pool before lexical fuzzy ranking. Saturation is
+# explicit so the model can narrow table/column/query instead of mistaking bounded recall for an
+# exhaustive domain scan.
+VERSION45_PUBLIC_TOOL_CONTRACTS = dict(VERSION44_PUBLIC_TOOL_CONTRACTS)
+_version45_search = VERSION45_PUBLIC_TOOL_CONTRACTS["search_values"]
+VERSION45_PUBLIC_TOOL_CONTRACTS["search_values"] = ToolContract(
+    _version45_search.required,
+    _version45_search.optional,
+    "search a deterministic bounded pool of actual stored values in exactly one table without "
+    "deriving a table. column optionally restricts the search; when omitted every column is "
+    "searched. limit defaults to 20 and cannot exceed 20. offset reads the next page in one stable "
+    "candidate-pool relevance ordering. Each match identifies its exact table, column, stored "
+    "value, frequency, and lexical match kind. candidate_truncated=true means candidate recall "
+    "saturated and the query should be narrowed rather than treated as exhaustive. Exact or "
+    "case-insensitive exact hits suppress broader fuzzy alternatives.",
+)
+
+VERSION45_PUBLIC_TOOL_ARGUMENTS: dict[
+    str, tuple[tuple[str, ...], tuple[str, ...]]
+] = {
+    tool: (contract.required, contract.optional)
+    for tool, contract in VERSION45_PUBLIC_TOOL_CONTRACTS.items()
+}
+
 
 def _choices(values: tuple[str, ...]) -> str:
     return "|".join(values)

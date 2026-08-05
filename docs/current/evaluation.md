@@ -33,6 +33,19 @@ a 10-second generated-query timeout, and `bird-set` for that optional Arctic set
 `src/eval/text2sql_passk.py` are direct-SQL controls. Result directories and manifests must not mix
 different denotation contracts.
 
+`src/eval/iterative_sql.py --interface search-values-execute-sql-v2` evaluates the active separate
+two-tool diagnostic; `search-values-execute-sql-v1` remains selectable only for frozen reproduction.
+It uses the same causal provider loop and hidden
+`bird-set` scorer, but the model sees only bounded database-level `search_values` and
+`execute_sql(sql, mode)`. A final SQL must first succeed in inspect mode. Frozen v1 Gate16 scored
+7/16 versus fresh atomic version39 at 10/16. V2 preserves the tools while adding
+prompt/feedback/context/no-progress optimizations. Its disjoint Holdout Gate15 scored 6/15 versus
+fresh atomic version39 at 10/15; both arms were 15/15 legal, while v2 used 38.3% of atomic's tokens
+and 76.5% of its actions. V2 passed engineering stability but failed the preregistered accuracy
+expansion threshold. Keep both diagnostic-only and do not infer SFT/RL admission from replayed
+successes.
+`src/eval/audit_direct_sql_search.py` independently audits both versioned interfaces.
+
 Direct-SQL input construction is separately versioned in `src/eval/direct_sql_prompt.py`.
 `canonical-json-v1` preserves the historical JSON full-schema control. The diagnostic
 `sql-astra-appendix-v1` profile renders DDL with BIRD column descriptions, deterministic live
@@ -74,6 +87,13 @@ The Arctic-compatible direct-SQL settings are:
 Transport failures must be reported separately from semantic policy failures. A run may resume only
 when its manifest, task selection, protocol, model, decoding parameters, and denotation comparison
 match exactly.
+
+For the current controlled RL candidates, the routine checkpoint-selection evaluation is the full
+1,534-question BIRD-dev greedy run (`n=1`, `temperature=0`, `top_p=1`). The former equal-difficulty
+300-question K=4 screen produces about 1,200 trajectories but covers only 300 questions; a full-dev
+greedy run produces 1,534 trajectories at comparable order of compute and is the more representative
+primary comparison. Fixed-prefix scoring remains a secondary behavioral diagnostic. K=4 sampling is
+deferred to at most the final selected method and must never replace the full-dev greedy result.
 
 `src/eval/evaluate_relational_program.py` is the diagnostic evaluator for the separate
 `relational-program-v6` scheme. It uses the same hidden `bird-set` terminal scorer and causal

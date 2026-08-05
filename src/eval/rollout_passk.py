@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -160,6 +161,8 @@ def chat_sample(
     temperature: float,
     top_p: float,
     retries: int,
+    record_logprobs: bool = False,
+    top_logprobs: int = 0,
     min_context_retry_tokens: int = MIN_CONTEXT_RETRY_TOKENS,
     retry_stats: dict | None = None,
 ) -> str:
@@ -169,6 +172,9 @@ def chat_sample(
         "temperature": temperature,
         "top_p": top_p,
     }
+    if record_logprobs:
+        payload["logprobs"] = True
+        payload["top_logprobs"] = top_logprobs
     think = os.environ.get("EVAL_ENABLE_THINKING")
     if think is not None:
         payload["chat_template_kwargs"] = {"enable_thinking": think == "1"}
@@ -187,13 +193,19 @@ def chat_sample(
         try:
             with urllib.request.urlopen(req, timeout=600) as response:
                 data = json.loads(response.read())
+            choice = data["choices"][0]
             if retry_stats is not None:
                 retry_stats.update({
                     "api_request_attempts": transient_attempts + context_retries + 1,
                     "api_transport_retries": transient_attempts,
                     "api_context_retries": context_retries,
                 })
-            return data["choices"][0]["message"]["content"]
+                if record_logprobs:
+                    retry_stats["generation_stats"] = completion_generation_stats(
+                        choice,
+                        requested_top_logprobs=top_logprobs,
+                    )
+            return choice["message"]["content"]
         except urllib.error.HTTPError as exc:
             body_text = exc.read().decode("utf-8", errors="replace")
             if is_context_overflow(body_text):
@@ -220,6 +232,112 @@ def chat_sample(
             raise ChatAPIError(f"{type(exc).__name__}: {exc}") from exc
 
 
+def completion_generation_stats(
+    choice: dict,
+    *,
+    requested_top_logprobs: int,
+) -> dict:
+    """Reduce OpenAI-compatible token logprobs without retaining the large payload."""
+    content = (choice.get("logprobs") or {}).get("content")
+    if not isinstance(content, list):
+        raise ChatAPIError(
+            "record_logprobs was requested but the server omitted choice.logprobs.content"
+        )
+
+    sampled_logprobs = []
+    entropy_lower_bounds = []
+    for token_index, token in enumerate(content):
+        try:
+            sampled_logprob = float(token["logprob"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ChatAPIError(
+                f"invalid sampled token logprob at index {token_index}"
+            ) from exc
+        if not math.isfinite(sampled_logprob):
+            raise ChatAPIError(
+                f"non-finite sampled token logprob at index {token_index}"
+            )
+        sampled_logprobs.append(sampled_logprob)
+
+        candidate_logprobs = []
+        for candidate in token.get("top_logprobs") or []:
+            try:
+                value = float(candidate["logprob"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ChatAPIError(
+                    f"invalid top token logprob at index {token_index}"
+                ) from exc
+            if math.isfinite(value):
+                candidate_logprobs.append(min(value, 0.0))
+        probabilities = [math.exp(value) for value in candidate_logprobs]
+        retained_mass = min(sum(probabilities), 1.0)
+        tail_mass = max(0.0, 1.0 - retained_mass)
+        entropy = -sum(
+            probability * logprob
+            for probability, logprob in zip(
+                probabilities,
+                candidate_logprobs,
+                strict=True,
+            )
+        )
+        if tail_mass > 0.0:
+            # Treating the unobserved tail as one bucket is a lower bound on
+            # the true categorical entropy.
+            entropy -= tail_mass * math.log(tail_mass)
+        entropy_lower_bounds.append(entropy)
+
+    token_count = len(sampled_logprobs)
+    action_logprob = sum(sampled_logprobs)
+    return {
+        "schema_version": "completion-generation-stats-v1",
+        "completion_token_count": token_count,
+        "action_logprob": action_logprob,
+        "mean_token_logprob": (
+            action_logprob / token_count if token_count else None
+        ),
+        "mean_token_surprisal": (
+            -action_logprob / token_count if token_count else None
+        ),
+        "mean_token_entropy_lower_bound": (
+            sum(entropy_lower_bounds) / token_count if token_count else None
+        ),
+        "requested_top_logprobs": requested_top_logprobs,
+    }
+
+
+def attach_trajectory_generation_stats(record: dict) -> None:
+    """Attach sample-level policy diagnostics from all authored turns."""
+    turn_stats = [
+        turn["generation_stats"]
+        for turn in record.get("turns") or []
+        if turn.get("generation_stats") is not None
+    ]
+    if not turn_stats:
+        return
+    token_count = sum(item["completion_token_count"] for item in turn_stats)
+    action_logprob = sum(item["action_logprob"] for item in turn_stats)
+    entropy_mass = sum(
+        item["mean_token_entropy_lower_bound"] * item["completion_token_count"]
+        for item in turn_stats
+        if item["mean_token_entropy_lower_bound"] is not None
+    )
+    record["generation_stats"] = {
+        "schema_version": "trajectory-generation-stats-v1",
+        "turn_count": len(turn_stats),
+        "completion_token_count": token_count,
+        "trajectory_action_logprob": action_logprob,
+        "mean_token_logprob": (
+            action_logprob / token_count if token_count else None
+        ),
+        "mean_token_surprisal": (
+            -action_logprob / token_count if token_count else None
+        ),
+        "mean_token_entropy_lower_bound": (
+            entropy_mass / token_count if token_count else None
+        ),
+    }
+
+
 def run_sample(
     ex: dict,
     sample_index: int,
@@ -232,6 +350,8 @@ def run_sample(
     max_tokens: int,
     temperature: float,
     top_p: float,
+    record_logprobs: bool,
+    top_logprobs: int,
     api_retries: int,
     tool_execution_timeout_seconds: float,
     context_mode: str,
@@ -306,6 +426,8 @@ def run_sample(
                     temperature=temperature,
                     top_p=top_p,
                     retries=api_retries,
+                    record_logprobs=record_logprobs,
+                    top_logprobs=top_logprobs,
                     retry_stats=retry_stats,
                 )
             else:
@@ -318,6 +440,8 @@ def run_sample(
                         temperature=temperature,
                         top_p=top_p,
                         retries=api_retries,
+                        record_logprobs=record_logprobs,
+                        top_logprobs=top_logprobs,
                         retry_stats=retry_stats,
                     )
         except ContextOverflowError as exc:
@@ -330,6 +454,9 @@ def run_sample(
             break
 
         turn["model_output"] = text
+        generation_stats = retry_stats.pop("generation_stats", None)
+        if generation_stats is not None:
+            turn["generation_stats"] = generation_stats
         turn["api_retry_stats"] = retry_stats
         rec["api_transport_retries"] += retry_stats["api_transport_retries"]
         rec["api_context_retries"] += retry_stats["api_context_retries"]
@@ -345,18 +472,19 @@ def run_sample(
             turn["recovered_from_error_type"] = (last_error or {}).get("error", {}).get("type")
             if tool == "answer_from_context":
                 validate_tool_arguments_against_state(h, tool, args)
-                rec["legal"] = True
                 rec["steps"] = action_count
                 rec["errors"] = errors
                 with bounded_harness_execution(h, tool_execution_timeout_seconds):
                     rec["correct"], rec["pred_sample"], rec["gold_sample"] = score(
                         h, gold_sql, args, created, denotation_comparison
                     )
+                rec["legal"] = True
                 if not rec["correct"]:
                     rec["failure_type"] = "wrong_answer"
                 else:
                     rec["outcome"] = "recovered_success" if error_events else "clean_success"
                 turns.append(turn)
+                attach_trajectory_generation_stats(rec)
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
 
@@ -403,6 +531,7 @@ def run_sample(
                 rec["error"] = error
                 rec["errors"] = errors
                 rec["steps"] = action_count
+                attach_trajectory_generation_stats(rec)
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
             error_counts[error_type] = error_counts.get(error_type, 0) + 1
@@ -415,6 +544,7 @@ def run_sample(
                 rec["error"] = f"aborted after {error_counts[error_type]} {error_type} events: {error}"
                 rec["errors"] = errors
                 rec["steps"] = action_count
+                attach_trajectory_generation_stats(rec)
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
             last_error = json.loads(tool_error_message(
@@ -443,6 +573,7 @@ def run_sample(
         rec["failure_type"] = "max_steps"
     rec["steps"] = action_count
     rec["errors"] = errors
+    attach_trajectory_generation_stats(rec)
     rec["elapsed_seconds"] = round(time.time() - started, 3)
     return rec
 
@@ -517,6 +648,8 @@ def run_one(
     max_tokens: int,
     temperature: float,
     top_p: float,
+    record_logprobs: bool,
+    top_logprobs: int,
     api_retries: int,
     tool_execution_timeout_seconds: float,
     context_mode: str,
@@ -561,6 +694,8 @@ def run_one(
         "pass_k": list(pass_k),
         "temperature": temperature,
         "top_p": top_p,
+        "record_logprobs": record_logprobs,
+        "top_logprobs": top_logprobs,
         "max_steps": max_steps,
         "max_tokens": max_tokens,
         "denotation_comparison": denotation_comparison,
@@ -575,6 +710,8 @@ def run_one(
         "max_tokens": max_tokens,
         "temperature": temperature,
         "top_p": top_p,
+        "record_logprobs": record_logprobs,
+        "top_logprobs": top_logprobs,
         "api_retries": api_retries,
         "tool_execution_timeout_seconds": tool_execution_timeout_seconds,
         "context_mode": context_mode,
@@ -707,6 +844,17 @@ def main() -> int:
                         help="rewrite summary.json every N completed examples; 0 disables interim summaries")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument(
+        "--record-logprobs",
+        action="store_true",
+        help="record compact per-turn/action logprob and entropy diagnostics",
+    )
+    parser.add_argument(
+        "--top-logprobs",
+        type=int,
+        default=20,
+        help="top candidates per token used for the entropy lower bound (0..20)",
+    )
     parser.add_argument("--api-retries", type=int, default=3)
     parser.add_argument(
         "--tool-execution-timeout-seconds",
@@ -768,6 +916,8 @@ def main() -> int:
         parser.error("--summary-every must be non-negative")
     if args.history_turns < 0:
         parser.error("--history-turns must be non-negative")
+    if not 0 <= args.top_logprobs <= 20:
+        parser.error("--top-logprobs must be in [0, 20]")
     if args.context_mode == "rolling-legal-history" and args.few_shot:
         parser.error("few-shot examples are not supported with rolling history")
     is_eval_tasks = bool(args.examples_json and "dev" in args.examples_json.lower())
@@ -811,6 +961,8 @@ def main() -> int:
         "summary_every": args.summary_every,
         "temperature": args.temperature,
         "top_p": args.top_p,
+        "record_logprobs": args.record_logprobs,
+        "top_logprobs": args.top_logprobs if args.record_logprobs else None,
         "max_tokens": args.max_tokens,
         "max_steps": args.max_steps,
         "api_retries": args.api_retries,
@@ -931,6 +1083,8 @@ def main() -> int:
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 top_p=args.top_p,
+                record_logprobs=args.record_logprobs,
+                top_logprobs=args.top_logprobs,
                 api_retries=args.api_retries,
                 tool_execution_timeout_seconds=args.tool_execution_timeout_seconds,
                 denotation_comparison=args.denotation_comparison,

@@ -183,6 +183,15 @@ def run_summary(
         "rollouts": len(rollouts),
         "correct": sum(bool(row.get("correct")) for row in rollouts),
         "updated_training_steps": sum(bool(row.get("updated")) for row in metrics),
+        "process_update_trajectories": sum(
+            bool(value)
+            for row in metrics
+            for value in row.get("process_update", [])
+        ),
+        "all_group_advantages_zero": all(
+            all(float(value) == 0.0 for value in row.get("advantages", []))
+            for row in metrics
+        ),
         "optimization_errors": [
             {
                 "step": row.get("step"),
@@ -262,7 +271,7 @@ def build_report(
         "# SFT2 简化 Process RL：逐轨迹逐动作奖励分配报告",
         "",
         f"- 生成时间：{now.isoformat(timespec='seconds')}",
-        "- 快照性质：训练中间快照；只包含当时已经完整落盘的 step。",
+        "- 快照性质：训练快照；只包含输入文件中已经完整落盘的 step。",
         "- 评分口径：`bird-set`；任务参考结果已在 rollout 前过滤为空/NULL/标量零。",
         "- 安全说明：报告不包含 gold SQL，也不把模型推理当作事实依据。",
         "",
@@ -293,6 +302,29 @@ def build_report(
             f"{summary['updated_training_steps']} | "
             f"{total['positive']}/{total['zero']}/{total['negative']} | "
             f"{total['mean']:.6f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "### 优化执行审计",
+            "",
+            "这里的组级 `advantages` 只对应粗粒度结果奖励；Process RL 的实际更新使用"
+            "逐动作 `step_rewards`。因此组级 advantage 全为0并不等于没有梯度更新。",
+            "",
+            "| 训练组 | 标记process_update的轨迹 | 组级advantages是否全0 | 未更新step及原因 |",
+            "|---|---:|---|---|",
+        ]
+    )
+    for summary in summaries:
+        errors = "；".join(
+            f"step {item['step']}: {item['error']}"
+            for item in summary["optimization_errors"]
+        ) or "无"
+        lines.append(
+            f"| {md_text(summary['label'])} | "
+            f"{summary['process_update_trajectories']} | "
+            f"{'是' if summary['all_group_advantages_zero'] else '否'} | "
+            f"{md_text(errors)} |"
         )
     lines.extend(
         [

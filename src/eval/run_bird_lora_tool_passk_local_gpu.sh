@@ -42,6 +42,8 @@ HISTORY_TURNS="${HISTORY_TURNS:-4}"
 MODEL_READY_TIMEOUT_SECONDS="${MODEL_READY_TIMEOUT_SECONDS:-600}"
 MODEL_READY_POLL_SECONDS="${MODEL_READY_POLL_SECONDS:-3}"
 EVAL_ENABLE_THINKING="${EVAL_ENABLE_THINKING:-0}"
+RECORD_LOGPROBS="${RECORD_LOGPROBS:-0}"
+TOP_LOGPROBS="${TOP_LOGPROBS:-20}"
 SERVER_CONFIG_ID="${SERVER_CONFIG_ID:-vllm-generation-config-vllm}"
 MODEL_MODE="${MODEL_MODE:-adapter}"
 ALLOW_OPERATIONAL_CONCURRENCY_RESUME="${ALLOW_OPERATIONAL_CONCURRENCY_RESUME:-0}"
@@ -59,7 +61,7 @@ case "$MODEL_MODE" in
 esac
 for name in GPU_ID PORT N N_SAMPLES MAX_STEPS MAX_TOKENS WORKERS SAMPLE_WORKERS \
   MAX_INFLIGHT MAX_NUM_SEQS MAX_NUM_BATCHED_TOKENS MAX_MODEL_LEN HISTORY_TURNS \
-  MODEL_READY_TIMEOUT_SECONDS MODEL_READY_POLL_SECONDS; do
+  MODEL_READY_TIMEOUT_SECONDS MODEL_READY_POLL_SECONDS TOP_LOGPROBS; do
   value="${!name}"
   is_uint "$value" || die "${name} must be a non-negative integer, got: ${value}"
 done
@@ -79,6 +81,11 @@ case "$ALLOW_MISSING_TASK_DATABASES" in
   0 | 1) ;;
   *) die "ALLOW_MISSING_TASK_DATABASES must be 0 or 1" ;;
 esac
+case "$RECORD_LOGPROBS" in
+  0 | 1) ;;
+  *) die "RECORD_LOGPROBS must be 0 or 1" ;;
+esac
+test "$TOP_LOGPROBS" -le 20 || die "TOP_LOGPROBS must be at most 20"
 
 cd "$PROJECT_DIR"
 test -x "$VLLM_PYTHON" || die "vLLM Python not executable: $VLLM_PYTHON"
@@ -172,6 +179,7 @@ curl --noproxy '*' -fsS --max-time 5 \
 
 operational_resume_args=()
 selection_args=()
+logprob_args=()
 if test -n "$INDICES_FILE"; then
   selection_args+=(--indices-file "$INDICES_FILE")
 fi
@@ -183,6 +191,9 @@ if test "$ALLOW_OPERATIONAL_TOOL_TIMEOUT_RESUME" -eq 1; then
 fi
 if test "$ALLOW_MISSING_TASK_DATABASES" -eq 1; then
   operational_resume_args+=(--allow-missing-task-databases)
+fi
+if test "$RECORD_LOGPROBS" -eq 1; then
+  logprob_args+=(--record-logprobs --top-logprobs "$TOP_LOGPROBS")
 fi
 
 printf 'Starting evaluation model=%s gpu=%s concurrency=%s result=%s\n' \
@@ -207,6 +218,7 @@ no_proxy=127.0.0.1,localhost \
     --tool-execution-timeout-seconds "$TOOL_EXECUTION_TIMEOUT_SECONDS" \
     --temperature "$TEMPERATURE" \
     --top-p "$TOP_P" \
+    "${logprob_args[@]}" \
     --server-config-id "$SERVER_CONFIG_ID" \
     --sample-detail full \
     --summary-every 10 \
@@ -230,4 +242,5 @@ if test "$eval_status" -ne 0; then
   exit "$eval_status"
 fi
 
+"$PYTHON_BIN" src/eval/build_experiment_eval_metrics.py "$RESULT_DIR"
 printf 'Evaluation complete: model=%s result=%s\n' "$SERVED_MODEL" "$RESULT_DIR"

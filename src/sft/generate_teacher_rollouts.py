@@ -30,13 +30,16 @@ sys.path.insert(0, str(ROOT / "src" / "sft"))
 
 from denotation import add_denotation_comparison_argument  # noqa: E402
 from atomic_database_context import (  # noqa: E402
+    CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE,
     CATALOG_CONTEXT_PROFILE,
+    CATALOG_CONTEXT_PROFILES,
     DATABASE_CONTEXT_PROFILES,
     FULL_BIRD_CONTEXT_PROFILES,
     build_full_bird_database_context,
     build_full_context_student_prompt,
     build_full_context_teacher_prompt,
     disabled_tools_for_profile,
+    enrich_catalog_perception_output,
     model_visible_tool_schema_hash,
     validate_profile_tool,
 )
@@ -75,6 +78,49 @@ from atomic_version43 import (  # noqa: E402
     provider_system_prompt as provider_system_prompt_version43,
     tool_schema_hash as tool_schema_hash_version43,
 )
+from atomic_version44 import (  # noqa: E402
+    PROTOCOL_VERSION as VERSION44_PROTOCOL_VERSION,
+    STUDENT_SYSTEM_PROMPT as VERSION44_STUDENT_SYSTEM_PROMPT,
+    parse_assistant_strict as parse_assistant_strict_version44,
+    protocol_hash as protocol_hash_version44,
+    provider_system_prompt as provider_system_prompt_version44,
+    teacher_system_prompt as teacher_system_prompt_version44,
+    tool_schema_hash as tool_schema_hash_version44,
+)
+from atomic_version45 import (  # noqa: E402
+    PROTOCOL_VERSION as VERSION45_PROTOCOL_VERSION,
+    STUDENT_SYSTEM_PROMPT as VERSION45_STUDENT_SYSTEM_PROMPT,
+    parse_assistant_strict as parse_assistant_strict_version45,
+    protocol_hash as protocol_hash_version45,
+    provider_system_prompt as provider_system_prompt_version45,
+    teacher_system_prompt as teacher_system_prompt_version45,
+    tool_schema_hash as tool_schema_hash_version45,
+)
+from atomic_version46 import (  # noqa: E402
+    LATEST_OBSERVATION_FULL as VERSION46_LATEST_OBSERVATION_FULL,
+    PROTOCOL_VERSION as VERSION46_PROTOCOL_VERSION,
+    RESIDENT_STATE_PROFILE as VERSION46_RESIDENT_STATE_PROFILE,
+    protocol_hash as protocol_hash_version46,
+)
+from atomic_version47 import (  # noqa: E402
+    LATEST_OBSERVATION_FULL as VERSION47_LATEST_OBSERVATION_FULL,
+    PROTOCOL_VERSION as VERSION47_PROTOCOL_VERSION,
+    RESIDENT_STATE_PROFILE as VERSION47_RESIDENT_STATE_PROFILE,
+    protocol_hash as protocol_hash_version47,
+)
+from atomic_version48 import (  # noqa: E402
+    INTERPRET_BEFORE_ACT_SUFFIX,
+    LATEST_OBSERVATION_FULL as VERSION48_LATEST_OBSERVATION_FULL,
+    PROTOCOL_VERSION as VERSION48_PROTOCOL_VERSION,
+    RESIDENT_STATE_PROFILE as VERSION48_RESIDENT_STATE_PROFILE,
+    protocol_hash as protocol_hash_version48,
+)
+from atomic_version49 import (  # noqa: E402
+    LATEST_OBSERVATION_FULL as VERSION49_LATEST_OBSERVATION_FULL,
+    PROTOCOL_VERSION as VERSION49_PROTOCOL_VERSION,
+    RESIDENT_STATE_PROFILE as VERSION49_RESIDENT_STATE_PROFILE,
+    protocol_hash as protocol_hash_version49,
+)
 from prompt_contract import TEACHER_ONE_ACTION_RULE  # noqa: E402
 from provider_adapter import (  # noqa: E402
     DEEPSEEK_CARRIER_CHOICES,
@@ -109,6 +155,7 @@ from protocol import (  # noqa: E402
     POLICY_PROMPT_VARIANTS,
     PROTOCOL_VERSION as DEFAULT_PROTOCOL_VERSION,
     ProtocolError,
+    RESIDENT_STATE_PROFILE_VERSION39,
     assistant_message,
     first_user_message,
     get_system_prompt,
@@ -145,6 +192,12 @@ ATOMIC_PROTOCOL_VERSIONS = (
     VERSION41_PROTOCOL_VERSION,
     VERSION42_PROTOCOL_VERSION,
     VERSION43_PROTOCOL_VERSION,
+    VERSION44_PROTOCOL_VERSION,
+    VERSION45_PROTOCOL_VERSION,
+    VERSION46_PROTOCOL_VERSION,
+    VERSION47_PROTOCOL_VERSION,
+    VERSION48_PROTOCOL_VERSION,
+    VERSION49_PROTOCOL_VERSION,
 )
 FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS = frozenset({
     VERSION40_PROTOCOL_VERSION,
@@ -152,6 +205,45 @@ FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS = frozenset({
     VERSION42_PROTOCOL_VERSION,
     VERSION43_PROTOCOL_VERSION,
 })
+NO_PLAN_PROTOCOL_VERSIONS = frozenset({
+    *FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS,
+    VERSION44_PROTOCOL_VERSION,
+    VERSION45_PROTOCOL_VERSION,
+})
+CONTEXT_ABLATION_PROTOCOL_VERSIONS = frozenset({
+    VERSION46_PROTOCOL_VERSION,
+    VERSION47_PROTOCOL_VERSION,
+    VERSION48_PROTOCOL_VERSION,
+    VERSION49_PROTOCOL_VERSION,
+})
+
+
+def selected_resident_context(protocol_version: str) -> tuple[str, bool]:
+    if protocol_version == VERSION49_PROTOCOL_VERSION:
+        return VERSION49_RESIDENT_STATE_PROFILE, VERSION49_LATEST_OBSERVATION_FULL
+    if protocol_version == VERSION48_PROTOCOL_VERSION:
+        return VERSION48_RESIDENT_STATE_PROFILE, VERSION48_LATEST_OBSERVATION_FULL
+    if protocol_version == VERSION47_PROTOCOL_VERSION:
+        return VERSION47_RESIDENT_STATE_PROFILE, VERSION47_LATEST_OBSERVATION_FULL
+    if protocol_version == VERSION46_PROTOCOL_VERSION:
+        return VERSION46_RESIDENT_STATE_PROFILE, VERSION46_LATEST_OBSERVATION_FULL
+    return RESIDENT_STATE_PROFILE_VERSION39, False
+
+
+def selected_history_observation_policy(
+    protocol_version: str,
+    *,
+    full_reasoning_no_plan: bool,
+) -> str:
+    if full_reasoning_no_plan:
+        return "unabridged-recent-4"
+    if protocol_version == VERSION49_PROTOCOL_VERSION:
+        return "compact-recent-4-active-exact-rows-inactive-read-cards"
+    if protocol_version in {VERSION47_PROTOCOL_VERSION, VERSION48_PROTOCOL_VERSION}:
+        return "latest-unabridged-older-compact-resident-read-cards"
+    if protocol_version == VERSION46_PROTOCOL_VERSION:
+        return "compact-recent-4-resident-handle-cards"
+    return "compact-resident"
 DATA_GENERATION_SUFFIX = (
     "\n\nDATA GENERATION STRICTNESS\n"
     + TEACHER_ONE_ACTION_RULE
@@ -163,9 +255,31 @@ DATA_GENERATION_SUFFIX = (
     "rows are needed. If a plan item has no evidence yet, omit the evidence "
     "field or set it to null; never use an empty string for evidence."
 )
+VERSION44_DATA_GENERATION_SUFFIX = (
+    "\n\nDATA GENERATION STRICTNESS\n"
+    + TEACHER_ONE_ACTION_RULE
+    + " The reason should be specific to the current question, visible schema/observations, and "
+    "the next tool arguments. After the first turn, do not restate the original user question; "
+    "continue from the current environment state or error feedback. Do not repeat the exact same "
+    "inspect_rows or search_values arguments when that observation is already present in CURRENT "
+    "ENVIRONMENT STATE; change conditions, order_by, offset, columns/column, limit, or query when "
+    "different evidence is needed."
+)
 
 
 def selected_protocol_hash(protocol_version: str, system_prompt: str) -> str:
+    if protocol_version == VERSION49_PROTOCOL_VERSION:
+        return protocol_hash_version49(system_prompt)
+    if protocol_version == VERSION48_PROTOCOL_VERSION:
+        return protocol_hash_version48(system_prompt)
+    if protocol_version == VERSION47_PROTOCOL_VERSION:
+        return protocol_hash_version47(system_prompt)
+    if protocol_version == VERSION46_PROTOCOL_VERSION:
+        return protocol_hash_version46(system_prompt)
+    if protocol_version == VERSION45_PROTOCOL_VERSION:
+        return protocol_hash_version45(system_prompt)
+    if protocol_version == VERSION44_PROTOCOL_VERSION:
+        return protocol_hash_version44(system_prompt)
     if protocol_version == VERSION43_PROTOCOL_VERSION:
         return protocol_hash_version43(system_prompt)
     if protocol_version == VERSION42_PROTOCOL_VERSION:
@@ -180,6 +294,12 @@ def selected_protocol_hash(protocol_version: str, system_prompt: str) -> str:
 
 
 def selected_tool_schema_hash(protocol_version: str) -> str:
+    if protocol_version in CONTEXT_ABLATION_PROTOCOL_VERSIONS:
+        return tool_schema_hash()
+    if protocol_version == VERSION45_PROTOCOL_VERSION:
+        return tool_schema_hash_version45()
+    if protocol_version == VERSION44_PROTOCOL_VERSION:
+        return tool_schema_hash_version44()
     if protocol_version == VERSION43_PROTOCOL_VERSION:
         return tool_schema_hash_version43()
     if protocol_version == VERSION42_PROTOCOL_VERSION:
@@ -729,6 +849,9 @@ def run_rollout(
     version41 = atomic_protocol_version == VERSION41_PROTOCOL_VERSION
     version42 = atomic_protocol_version == VERSION42_PROTOCOL_VERSION
     version43 = atomic_protocol_version == VERSION43_PROTOCOL_VERSION
+    version44 = atomic_protocol_version == VERSION44_PROTOCOL_VERSION
+    version45 = atomic_protocol_version == VERSION45_PROTOCOL_VERSION
+    context_ablation = atomic_protocol_version in CONTEXT_ABLATION_PROTOCOL_VERSIONS
     full_reasoning_no_plan = (
         atomic_protocol_version in FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS
     )
@@ -754,8 +877,48 @@ def run_rollout(
             raise ValueError(
                 f"{version_label} currently supports only the catalog-v1 context profile"
             )
+    if version44 or version45:
+        version_label = atomic_protocol_version
+        if not diagnostic_only:
+            raise ValueError(f"{version_label} is diagnostic-only")
+        if context_mode != "rolling-legal-history" or history_turns != 4:
+            raise ValueError(
+                f"{version_label} requires rolling legal history with exactly four turns"
+            )
+        if rolling_prompt_variant != "full":
+            raise ValueError(f"{version_label} uses the full version39-style prompt")
+        if policy_prompt_variant != POLICY_PROMPT_CANONICAL:
+            raise ValueError(f"{version_label} does not combine with policy prompt ablations")
+        if plan_policy != PLAN_POLICY_OPTIONAL:
+            raise ValueError(
+                f"{version_label} removes plan and cannot use a required plan policy"
+            )
+        if database_context_profile != CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE:
+            raise ValueError(
+                f"{version_label} requires catalog-bird-semantics-inspect-only-v1"
+            )
+    if context_ablation:
+        version_label = atomic_protocol_version
+        if not diagnostic_only:
+            raise ValueError(f"{version_label} is diagnostic-only")
+        if context_mode != "rolling-legal-history" or history_turns != 4:
+            raise ValueError(
+                f"{version_label} requires rolling legal history with exactly four turns"
+            )
+        if rolling_prompt_variant != "full":
+            raise ValueError(f"{version_label} uses the full version39 prompt")
+        if policy_prompt_variant != POLICY_PROMPT_CANONICAL:
+            raise ValueError(
+                f"{version_label} does not combine with policy prompt ablations"
+            )
+        if plan_policy != PLAN_POLICY_OPTIONAL:
+            raise ValueError(f"{version_label} requires the optional plan policy")
+        if database_context_profile != CATALOG_CONTEXT_PROFILE:
+            raise ValueError(f"{version_label} supports only catalog-v1")
     effective_plan_policy = (
-        "disabled-by-protocol" if full_reasoning_no_plan else plan_policy
+        "disabled-by-protocol"
+        if atomic_protocol_version in NO_PLAN_PROTOCOL_VERSIONS
+        else plan_policy
     )
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
@@ -772,22 +935,34 @@ def run_rollout(
             schema_metadata_json=schema_metadata_json,
             profile=database_context_profile,
         )
-    elif database_context_profile == CATALOG_CONTEXT_PROFILE:
+    elif database_context_profile in CATALOG_CONTEXT_PROFILES:
         dataset_overview = execution_catalog
         database_context_audit = {
-            "context_profile": CATALOG_CONTEXT_PROFILE,
+            "context_profile": database_context_profile,
             "schema_value_count": None,
             "disabled_model_tools": [],
             "model_visible_tool_schema_sha256": model_visible_tool_schema_hash(
-                CATALOG_CONTEXT_PROFILE
+                database_context_profile
             ),
         }
+        if database_context_profile == CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE:
+            database_context_audit.update({
+                "perception_enrichment": {
+                    "describe_table": "ordinary atomic output; no BIRD annotations",
+                    "inspect_column": (
+                        "BIRD column_name as semantic_name plus column_description; "
+                        "live value-domain fields unchanged"
+                    ),
+                    "canonical_state_mutated": False,
+                },
+                "perception_enrichment_events": [],
+            })
     else:
         raise ValueError(
             f"unknown database context profile: {database_context_profile!r}"
         )
     disabled_model_tools = disabled_tools_for_profile(database_context_profile)
-    if full_reasoning_no_plan:
+    if atomic_protocol_version in NO_PLAN_PROTOCOL_VERSIONS:
         database_context_audit["model_visible_tool_schema_sha256"] = (
             selected_tool_schema_hash(atomic_protocol_version)
         )
@@ -800,6 +975,8 @@ def run_rollout(
     # Model-visible full schema is an input ablation, not a mutation of canonical resident state.
     # Execution and state tracking therefore retain the ordinary lazy catalog.
     ctx = new_ctx(execution_catalog)
+    if version45:
+        ctx["search_values_mode"] = "bounded-v1"
     last_error: dict | None = None
     turns: list[dict] = []
     steps: list[dict] = []
@@ -810,11 +987,16 @@ def run_rollout(
     reasoning_history: list[dict] = []
     adjacent_guard = AdjacentActionGuard()
     plan_tracker = ResidentPlanPolicyTracker(
-        PLAN_POLICY_OPTIONAL if full_reasoning_no_plan else plan_policy
+        PLAN_POLICY_OPTIONAL
+        if atomic_protocol_version in NO_PLAN_PROTOCOL_VERSIONS
+        else plan_policy
     )
     successful_tool_steps = 0
     usage = collections.Counter()
     started = time.time()
+    resident_state_profile, latest_observation_full = selected_resident_context(
+        atomic_protocol_version
+    )
     rec = {
         "tool_scheme": ATOMIC_TOOL_SCHEME,
         "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
@@ -823,6 +1005,18 @@ def run_rollout(
         "protocol_hash": selected_protocol_hash(
             atomic_protocol_version,
             system_prompt,
+        ),
+        "resident_state_profile": resident_state_profile,
+        "latest_observation_full": latest_observation_full,
+        "active_relation_policy": (
+            "recent-4-references-plus-dependency-closure-v1"
+            if atomic_protocol_version == VERSION49_PROTOCOL_VERSION
+            else None
+        ),
+        "value_search_policy": (
+            "bounded-sql-candidate-v1"
+            if version45
+            else ("exhaustive-distinct-v1" if version44 else None)
         ),
         "example_index": example_index,
         "trajectory_id": trajectory_id(split, example_index, ex),
@@ -846,10 +1040,9 @@ def run_rollout(
             else "omitted-from-provider-history"
         ),
         "reasoning_history_events": reasoning_history,
-        "history_observations": (
-            "unabridged-recent-4"
-            if full_reasoning_no_plan
-            else "compact-resident"
+        "history_observations": selected_history_observation_policy(
+            atomic_protocol_version,
+            full_reasoning_no_plan=full_reasoning_no_plan,
         ),
         "terminal_evidence_policy": (
             "explicit-columns-unique-bare-deterministic-project-v2"
@@ -893,6 +1086,8 @@ def run_rollout(
                 reasoning_history=(
                     reasoning_history if full_reasoning_no_plan else None
                 ),
+                resident_state_profile=resident_state_profile,
+                latest_observation_full=latest_observation_full,
             )
         else:
             model_input = model_context_messages(
@@ -1005,6 +1200,10 @@ def run_rollout(
                 parser = parse_assistant_strict_version41
             elif version40:
                 parser = parse_assistant_strict_version40
+            elif version45:
+                parser = parse_assistant_strict_version45
+            elif version44:
+                parser = parse_assistant_strict_version44
             else:
                 parser = parse_assistant_strict
             think, tool, args = parser(
@@ -1082,6 +1281,21 @@ def run_rollout(
                 step_id,
                 table_output_rows=table_output_rows,
             )
+            out, enrichment_audit = enrich_catalog_perception_output(
+                database_context_profile,
+                ex,
+                tool,
+                args,
+                out,
+            )
+            if enrichment_audit is not None:
+                database_context_audit.setdefault(
+                    "perception_enrichment_events",
+                    [],
+                ).append({
+                    "step_id": step_id,
+                    **enrichment_audit,
+                })
             turn["tool_output"] = out
             steps.append({
                 "step_id": step_id,
@@ -1270,10 +1484,16 @@ def run_rollout(
                     if full_reasoning_no_plan
                     else "omitted-from-provider-history"
                 ),
-                "history_observations": (
-                    "unabridged-recent-4"
-                    if full_reasoning_no_plan
-                    else "compact-resident"
+                "history_observations": selected_history_observation_policy(
+                    atomic_protocol_version,
+                    full_reasoning_no_plan=full_reasoning_no_plan,
+                ),
+                "resident_state_profile": resident_state_profile,
+                "latest_observation_full": latest_observation_full,
+                "active_relation_policy": (
+                    "recent-4-references-plus-dependency-closure-v1"
+                    if atomic_protocol_version == VERSION49_PROTOCOL_VERSION
+                    else None
                 ),
                 "terminal_evidence_policy": (
                     "explicit-columns-unique-bare-deterministic-project-v2"
@@ -1424,7 +1644,14 @@ def main() -> int:
             "inspect_rows, full-reasoning recent-4 diagnostic; version41 changes only its prompt "
             "by adding one consolidated output contract and Gate50 error corrections; version42 "
             "requires explicit terminal evidence columns and deterministically projects them; "
-            "version43 additionally resolves only unique bare terminal-column suffixes"
+            "version43 additionally resolves only unique bare terminal-column suffixes; version44 "
+            "starts a version39-style checkpoint candidate with no plan, inspect_rows, fuzzy "
+            "search_values, and inspect-only BIRD column semantics; version45 changes only that "
+            "search to bounded SQL candidate recall before fuzzy ranking; version46 replaces "
+            "verbose derivations with Harness handle cards; version47 additionally archives "
+            "resident row values while keeping the latest observation full; version48 adds only "
+            "brief interpret-before-act teacher guidance; version49 keeps exact rows for the "
+            "Harness-derived active dependency closure and archives only inactive relations"
         ),
     )
     parser.add_argument(
@@ -1459,9 +1686,9 @@ def main() -> int:
         choices=DATABASE_CONTEXT_PROFILES,
         default=CATALOG_CONTEXT_PROFILE,
         help=(
-            "model-visible database context; full-bird-schema-samples-v1 reveals complete "
-            "BIRD schema/column semantics/live examples; profile names specify whether only "
-            "describe_table or both describe_table/inspect_column are removed"
+            "model-visible database context; catalog-bird-semantics-inspect-only-v1 keeps the "
+            "lazy catalog and enriches only inspect_column; full-bird-schema-samples-v1 reveals "
+            "complete BIRD schema/column semantics/live examples"
         ),
     )
     parser.add_argument(
@@ -1485,6 +1712,15 @@ def main() -> int:
     ):
         parser.error(
             "full-bird-schema-samples-v1 is an unpromoted diagnostic profile; "
+            "pass --diagnostic-only"
+        )
+    if (
+        args.database_context_profile
+        == CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE
+        and not args.diagnostic_only
+    ):
+        parser.error(
+            "catalog-bird-semantics-inspect-only-v1 is diagnostic-only; "
             "pass --diagnostic-only"
         )
     if (
@@ -1522,6 +1758,70 @@ def main() -> int:
                 f"{version_label} currently supports only "
                 "--database-context-profile catalog-v1"
             )
+    if args.atomic_protocol_version == VERSION44_PROTOCOL_VERSION:
+        if not args.diagnostic_only:
+            parser.error("version44 is diagnostic-only; pass --diagnostic-only")
+        if args.context_mode != "rolling-legal-history":
+            parser.error("version44 requires --context-mode rolling-legal-history")
+        if args.history_turns != 4:
+            parser.error("version44 requires --history-turns 4")
+        if args.rolling_prompt_variant != "full":
+            parser.error(
+                "version44 uses the full version39-style prompt; "
+                "use --rolling-prompt-variant full"
+            )
+        if args.policy_prompt_variant != POLICY_PROMPT_CANONICAL:
+            parser.error("version44 does not combine with policy prompt ablations")
+        if args.plan_policy != PLAN_POLICY_OPTIONAL:
+            parser.error("version44 removes plan; do not select a required plan policy")
+        if (
+            args.database_context_profile
+            != CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE
+        ):
+            parser.error(
+                "version44 requires --database-context-profile "
+                "catalog-bird-semantics-inspect-only-v1"
+            )
+    if args.atomic_protocol_version == VERSION45_PROTOCOL_VERSION:
+        if not args.diagnostic_only:
+            parser.error("version45 is diagnostic-only; pass --diagnostic-only")
+        if args.context_mode != "rolling-legal-history":
+            parser.error("version45 requires --context-mode rolling-legal-history")
+        if args.history_turns != 4:
+            parser.error("version45 requires --history-turns 4")
+        if args.rolling_prompt_variant != "full":
+            parser.error(
+                "version45 uses the full version39-style prompt; "
+                "use --rolling-prompt-variant full"
+            )
+        if args.policy_prompt_variant != POLICY_PROMPT_CANONICAL:
+            parser.error("version45 does not combine with policy prompt ablations")
+        if args.plan_policy != PLAN_POLICY_OPTIONAL:
+            parser.error("version45 removes plan; do not select a required plan policy")
+        if (
+            args.database_context_profile
+            != CATALOG_BIRD_INSPECT_SEMANTICS_PROFILE
+        ):
+            parser.error(
+                "version45 requires --database-context-profile "
+                "catalog-bird-semantics-inspect-only-v1"
+            )
+    if args.atomic_protocol_version in CONTEXT_ABLATION_PROTOCOL_VERSIONS:
+        version_label = args.atomic_protocol_version
+        if not args.diagnostic_only:
+            parser.error(f"{version_label} is diagnostic-only; pass --diagnostic-only")
+        if args.context_mode != "rolling-legal-history":
+            parser.error(f"{version_label} requires --context-mode rolling-legal-history")
+        if args.history_turns != 4:
+            parser.error(f"{version_label} requires --history-turns 4")
+        if args.rolling_prompt_variant != "full":
+            parser.error(f"{version_label} uses the full version39 prompt")
+        if args.policy_prompt_variant != POLICY_PROMPT_CANONICAL:
+            parser.error(f"{version_label} does not combine with policy prompt ablations")
+        if args.plan_policy != PLAN_POLICY_OPTIONAL:
+            parser.error(f"{version_label} requires --plan-policy optional")
+        if args.database_context_profile != CATALOG_CONTEXT_PROFILE:
+            parser.error(f"{version_label} supports only --database-context-profile catalog-v1")
     if args.max_tokens is None:
         args.max_tokens = provider_default_max_tokens(args.model, DEFAULT_MAX_TOKENS)
 
@@ -1545,10 +1845,40 @@ def main() -> int:
     version41 = args.atomic_protocol_version == VERSION41_PROTOCOL_VERSION
     version42 = args.atomic_protocol_version == VERSION42_PROTOCOL_VERSION
     version43 = args.atomic_protocol_version == VERSION43_PROTOCOL_VERSION
+    version44 = args.atomic_protocol_version == VERSION44_PROTOCOL_VERSION
+    version45 = args.atomic_protocol_version == VERSION45_PROTOCOL_VERSION
     full_reasoning_no_plan = (
         args.atomic_protocol_version in FULL_REASONING_NO_PLAN_PROTOCOL_VERSIONS
     )
-    if version43:
+    if version45:
+        student_prompt = rolling_system_prompt(
+            VERSION45_STUDENT_SYSTEM_PROMPT,
+            compact=False,
+        )
+        canonical_teacher_prompt = (
+            teacher_system_prompt_version45(student_prompt)
+            + VERSION44_DATA_GENERATION_SUFFIX
+        )
+        system_prompt = provider_system_prompt_version45(
+            args.model,
+            canonical_teacher_prompt,
+            carrier=args.deepseek_carrier,
+        )
+    elif version44:
+        student_prompt = rolling_system_prompt(
+            VERSION44_STUDENT_SYSTEM_PROMPT,
+            compact=False,
+        )
+        canonical_teacher_prompt = (
+            teacher_system_prompt_version44(student_prompt)
+            + VERSION44_DATA_GENERATION_SUFFIX
+        )
+        system_prompt = provider_system_prompt_version44(
+            args.model,
+            canonical_teacher_prompt,
+            carrier=args.deepseek_carrier,
+        )
+    elif version43:
         student_prompt = VERSION43_STUDENT_SYSTEM_PROMPT
         canonical_teacher_prompt = VERSION43_STUDENT_SYSTEM_PROMPT
         system_prompt = provider_system_prompt_version43(
@@ -1600,6 +1930,8 @@ def main() -> int:
             args.policy_prompt_variant,
         )
         prompt_suffix = DATA_GENERATION_SUFFIX
+        if args.atomic_protocol_version == VERSION48_PROTOCOL_VERSION:
+            prompt_suffix += INTERPRET_BEFORE_ACT_SUFFIX
         if args.plan_policy == PLAN_POLICY_REQUIRED_RESIDENT:
             prompt_suffix += REQUIRED_RESIDENT_PLAN_SUFFIX
         canonical_teacher_prompt = base_system_prompt + prompt_suffix
@@ -1624,10 +1956,21 @@ def main() -> int:
         ),
         "model_visible_tool_schema_sha256": (
             selected_tool_schema_hash(args.atomic_protocol_version)
-            if full_reasoning_no_plan
+            if args.atomic_protocol_version in NO_PLAN_PROTOCOL_VERSIONS
             else model_visible_tool_schema_hash(args.database_context_profile)
         ),
         "database_context_profile": args.database_context_profile,
+        "resident_state_profile": selected_resident_context(
+            args.atomic_protocol_version
+        )[0],
+        "latest_observation_full": selected_resident_context(
+            args.atomic_protocol_version
+        )[1],
+        "active_relation_policy": (
+            "recent-4-references-plus-dependency-closure-v1"
+            if args.atomic_protocol_version == VERSION49_PROTOCOL_VERSION
+            else None
+        ),
         "disabled_model_tools": sorted(
             disabled_tools_for_profile(args.database_context_profile)
         ),
@@ -1744,6 +2087,11 @@ def main() -> int:
             args.atomic_protocol_version,
             system_prompt,
         ),
+        "value_search_policy": (
+            "bounded-sql-candidate-v1"
+            if version45
+            else ("exhaustive-distinct-v1" if version44 else None)
+        ),
         **prompt_audit,
         "max_steps": args.max_steps,
         "workers": max(1, args.workers),
@@ -1757,7 +2105,7 @@ def main() -> int:
         "policy_prompt_variant": args.policy_prompt_variant,
         "plan_policy": (
             "disabled-by-protocol"
-            if full_reasoning_no_plan
+            if args.atomic_protocol_version in NO_PLAN_PROTOCOL_VERSIONS
             else args.plan_policy
         ),
         "history_reasoning": (
@@ -1765,10 +2113,9 @@ def main() -> int:
             if full_reasoning_no_plan
             else "omitted-from-provider-history"
         ),
-        "history_observations": (
-            "unabridged-recent-4"
-            if full_reasoning_no_plan
-            else "compact-resident"
+        "history_observations": selected_history_observation_policy(
+            args.atomic_protocol_version,
+            full_reasoning_no_plan=full_reasoning_no_plan,
         ),
         "terminal_evidence_policy": (
             "explicit-columns-unique-bare-deterministic-project-v2"

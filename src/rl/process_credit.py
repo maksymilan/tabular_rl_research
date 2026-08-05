@@ -84,6 +84,7 @@ ROWSET_TOOLS = frozenset(
         "join_tables",
         "set_op",
         "read_subtable",
+        "inspect_rows",
     }
 )
 MAX_GROUNDING_ROWS = 10_000
@@ -93,6 +94,7 @@ MAX_GROUNDING_ROWS = 10_000
 class ProcessRewardConfig:
     """Configurable weights; defaults are audit values, not tuned research conclusions."""
 
+    allocation_mode: str = "grounded_sparse"
     w_terminal_correct: float = 0.0
     w_back_slice: float = 1.0
     w_new_evidence: float = 1.0
@@ -113,32 +115,83 @@ class ProcessRewardConfig:
     lambda_unsupported_guess: float = 0.08
     lambda_empty_result: float = 0.10
     penalty_cap: float = 0.80
+    normalize_positive: bool = True
+    dense_correct_legal_weight: float = 1.0
+    dense_incorrect_legal_weight: float = 0.5
+    dense_severe_penalty_weight: float = 2.0
+    dense_observation_bonus_weight: float = 0.0
+    dense_backslice_bonus_weight: float = 0.0
 
     def validate(self) -> None:
         values = asdict(self)
-        if any(value < 0 for key, value in values.items() if key != "penalty_cap"):
+        if self.allocation_mode not in {
+            "grounded_sparse",
+            "dense_uniform",
+            "dense_strategic",
+        }:
+            raise ValueError(f"unsupported allocation_mode: {self.allocation_mode}")
+        if not isinstance(self.normalize_positive, bool):
+            raise ValueError("normalize_positive must be a boolean")
+        numeric_values = {
+            key: value
+            for key, value in values.items()
+            if key not in {"allocation_mode", "normalize_positive"}
+        }
+        if any(value < 0 for key, value in numeric_values.items() if key != "penalty_cap"):
             raise ValueError("all reward and penalty weights must be non-negative")
-        if not 0 < self.penalty_cap < 1:
-            raise ValueError("penalty_cap must satisfy 0 < P_max < 1")
+        if not 0 < self.penalty_cap <= 1.5:
+            raise ValueError("penalty_cap must satisfy 0 < P_max <= 1.5")
         omega = self.omega_target_table + self.omega_target_column + self.omega_target_row
         if not math.isclose(omega, 1.0, rel_tol=0.0, abs_tol=1e-9):
             raise ValueError("target-potential omega weights must sum to 1")
-        auxiliary_positive = self.eta_failure_progress + self.lambda_answer_format
-        if self.lambda_terminal_failure > 0:
-            if not (
-                0
-                < auxiliary_positive
-                < self.lambda_terminal_failure
-                <= self.penalty_cap
-                < 1
-            ):
+        if self.allocation_mode == "grounded_sparse":
+            auxiliary_positive = self.eta_failure_progress + self.lambda_answer_format
+            if self.lambda_terminal_failure > 0:
+                if not (
+                    0
+                    < auxiliary_positive
+                    < self.lambda_terminal_failure
+                    <= self.penalty_cap
+                    <= 1.5
+                ):
+                    raise ValueError(
+                        "reward bounds require "
+                        "0 < eta+lambda_A < lambda_fail <= P_max <= 1.5"
+                    )
+            elif auxiliary_positive != 0:
                 raise ValueError(
-                    "reward bounds require 0 < eta+lambda_A < lambda_fail <= P_max < 1"
+                    "eta_failure_progress and lambda_answer_format must both be zero "
+                    "when terminal-failure shaping is disabled"
                 )
-        elif auxiliary_positive != 0:
+            return
+
+        if not (
+            self.dense_correct_legal_weight > 0
+            and 0 < self.dense_incorrect_legal_weight
+            < self.dense_correct_legal_weight
+        ):
             raise ValueError(
-                "eta_failure_progress and lambda_answer_format must both be zero "
-                "when terminal-failure shaping is disabled"
+                "dense outcome weights require 0 < incorrect_legal < correct_legal"
+            )
+        maximum_legal_credit = self.dense_correct_legal_weight + max(
+            self.dense_observation_bonus_weight,
+            self.dense_backslice_bonus_weight,
+        )
+        if self.dense_severe_penalty_weight <= maximum_legal_credit:
+            raise ValueError(
+                "dense severe penalty must exceed every legal positive action weight"
+            )
+        if self.allocation_mode == "dense_uniform" and (
+            self.dense_observation_bonus_weight != 0
+            or self.dense_backslice_bonus_weight != 0
+        ):
+            raise ValueError("dense_uniform does not allow strategic bonuses")
+        if self.allocation_mode == "dense_strategic" and not (
+            self.dense_observation_bonus_weight > 0
+            and self.dense_backslice_bonus_weight > 0
+        ):
+            raise ValueError(
+                "dense_strategic requires positive observation and backslice bonuses"
             )
 
 
@@ -197,6 +250,9 @@ class StepReward:
     c_negative: float
     reward: float
     features: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
@@ -384,10 +440,10 @@ def _tool_columns(tool: str, arguments: dict[str, Any], output: dict[str, Any]) 
             for column in described.get("columns", []) or []:
                 if isinstance(column, dict) and isinstance(column.get("name"), str):
                     columns.add(column["name"])
-    elif tool == "inspect_column":
+    elif tool in {"inspect_column", "search_values"}:
         if isinstance(arguments.get("column"), str):
             columns.add(arguments["column"])
-    elif tool == "read_subtable":
+    elif tool in {"read_subtable", "inspect_rows"}:
         requested = arguments.get("columns")
         if isinstance(requested, list):
             columns.update(item for item in requested if isinstance(item, str))
@@ -463,6 +519,9 @@ def _visible_output_values(output: dict[str, Any]) -> list[Any]:
     for key in ("rows", "frequent_values", "result_sample"):
         if key in output:
             visit(output[key])
+    for match in output.get("matches", []) or []:
+        if isinstance(match, dict) and "value" in match:
+            visit(match["value"])
     return values
 
 
@@ -589,7 +648,10 @@ def _history_value_support(
     for step_id, record in history.items():
         output = record.get("output") or {}
         is_producer = output.get("table") == handle
-        is_read = record.get("tool") == "read_subtable" and (record.get("arguments") or {}).get("table") == handle
+        is_read = (
+            record.get("tool") in {"read_subtable", "inspect_rows"}
+            and (record.get("arguments") or {}).get("table") == handle
+        )
         if not (is_producer or is_read):
             continue
         rows = output.get("rows")
@@ -791,7 +853,13 @@ def replay_step_features(
                     created.add(output_table)
                     table_history.append((step_id, output_table, "produced_table"))
                     _lineage_for_output(tool, input_table, output_table, lineages)
-                elif input_table and tool in {"aggregate", "inspect_column", "read_subtable"}:
+                elif input_table and tool in {
+                    "aggregate",
+                    "inspect_column",
+                    "search_values",
+                    "read_subtable",
+                    "inspect_rows",
+                }:
                     table_history.append((step_id, input_table, tool))
 
             observation_changed = False
@@ -827,7 +895,10 @@ def replay_step_features(
             discovered_tables.update(step_roots & set(target_support.tables))
             column_output = dict(output)
             history_record = ctx["history"].get(step_id) or {}
-            if tool == "read_subtable" and history_record.get("observed_columns"):
+            if (
+                tool in {"read_subtable", "inspect_rows"}
+                and history_record.get("observed_columns")
+            ):
                 column_output["columns"] = history_record["observed_columns"]
             observed_columns = _tool_columns(tool, arguments, column_output)
             if tool != "describe_table":
@@ -869,7 +940,7 @@ def replay_step_features(
                 )
                 if not row_audit.get("rows_complete", True):
                     target_row_match_incomplete_steps.append(step_id)
-            elif tool == "read_subtable":
+            elif tool in {"read_subtable", "inspect_rows"}:
                 observed_rows = output.get("rows")
                 read_columns = history_record.get("observed_columns")
                 if isinstance(observed_rows, list) and isinstance(read_columns, list):
@@ -1254,6 +1325,169 @@ def replay_step_features(
         harness.conn.close()
 
 
+def _allocate_dense_outcome_rewards(
+    trajectory_id: str,
+    features: list[StepFeature],
+    *,
+    correct: bool,
+    config: ProcessRewardConfig,
+    diagnostics: dict[str, Any] | None,
+) -> EpisodeReward:
+    """Allocate smooth full-trajectory credit with one action-count normalizer.
+
+    Every authored turn receives non-zero credit.  Clean legal turns are positive
+    on correct trajectories and mildly negative on incorrect trajectories.  A
+    deterministic local bad event receives one non-stacking severe penalty,
+    independent of trajectory outcome.  Strategic bonuses are harness-grounded
+    and apply only to correct trajectories.
+    """
+    normalizer = float(len(features))
+    raw_values: list[float] = []
+    positive_values: list[float] = []
+    outcome_penalties: list[float] = []
+    local_penalties: list[float] = []
+    dense_flags: list[dict[str, Any]] = []
+
+    for feature in features:
+        severe_local_bad_event = bool(
+            not feature.legal_success
+            or feature.tool_error > 0
+            or feature.adjacent_repeat
+            or feature.legal_no_state_change > 0
+        )
+        observation_support = bool(
+            correct
+            and not severe_local_bad_event
+            and feature.tool in PERCEPTION_TOOLS
+            and feature.new_used_evidence > 0
+        )
+        operator_backslice = bool(
+            correct
+            and not severe_local_bad_event
+            and feature.tool in TABLE_PRODUCING_TOOLS
+            and feature.back_slice > 0
+        )
+
+        positive = 0.0
+        outcome_penalty = 0.0
+        local_penalty = 0.0
+        if severe_local_bad_event:
+            local_penalty = config.dense_severe_penalty_weight
+        elif correct:
+            positive = config.dense_correct_legal_weight
+            if config.allocation_mode == "dense_strategic":
+                positive += (
+                    config.dense_observation_bonus_weight
+                    * float(observation_support)
+                    + config.dense_backslice_bonus_weight
+                    * float(operator_backslice)
+                )
+        else:
+            outcome_penalty = config.dense_incorrect_legal_weight
+
+        positive_values.append(positive)
+        outcome_penalties.append(outcome_penalty)
+        local_penalties.append(local_penalty)
+        raw_values.append(positive - outcome_penalty - local_penalty)
+        dense_flags.append(
+            {
+                "dense_severe_local_bad_event": severe_local_bad_event,
+                "dense_observation_support_bonus": observation_support,
+                "dense_operator_backslice_bonus": operator_backslice,
+                "dense_raw_action_credit": positive - outcome_penalty - local_penalty,
+                "dense_action_count_normalizer": int(normalizer),
+            }
+        )
+
+    rewards = [value / normalizer for value in raw_values]
+    expected = sum(raw_values) / normalizer
+    if not math.isclose(sum(rewards), expected, rel_tol=0.0, abs_tol=1e-9):
+        raise AssertionError(f"dense reward conservation failed: {sum(rewards)} != {expected}")
+    if not correct and sum(rewards) >= 0:
+        raise AssertionError("a failed dense-outcome trajectory must receive negative reward")
+    if any(math.isclose(value, 0.0, abs_tol=1e-12) for value in rewards):
+        raise AssertionError("dense-outcome allocation cannot leave an authored turn neutral")
+
+    step_rewards = []
+    for feature, flags, positive, p_outcome, p_local, raw, reward in zip(
+        features,
+        dense_flags,
+        positive_values,
+        outcome_penalties,
+        local_penalties,
+        raw_values,
+        rewards,
+        strict=True,
+    ):
+        step_rewards.append(
+            StepReward(
+                action_index=feature.action_index,
+                step_id=feature.step_id,
+                tool=feature.tool,
+                g_positive=round(positive, 10),
+                p_outcome=round(p_outcome, 10),
+                p_local=round(p_local, 10),
+                p_raw=round(p_outcome + p_local, 10),
+                c_positive=round(positive / normalizer, 10),
+                c_negative=round((p_outcome + p_local) / normalizer, 10),
+                reward=round(reward, 10),
+                features={
+                    **{
+                        key: value
+                        for key, value in asdict(feature).items()
+                        if key not in {"references", "action_signature"}
+                    },
+                    **flags,
+                },
+            )
+        )
+
+    diagnostics = dict(diagnostics or {})
+    diagnostics.update(
+        {
+            "positive_allocation": config.allocation_mode,
+            "dense_credit_scope": "every_authored_turn",
+            "dense_normalization": "divide_each_action_by_trajectory_action_count",
+            "dense_non_stacking_severe_penalty": True,
+            "dense_clean_legal_turns": sum(
+                not flags["dense_severe_local_bad_event"] for flags in dense_flags
+            ),
+            "dense_severe_turns": sum(
+                flags["dense_severe_local_bad_event"] for flags in dense_flags
+            ),
+            "dense_observation_bonus_turns": sum(
+                flags["dense_observation_support_bonus"] for flags in dense_flags
+            ),
+            "dense_backslice_bonus_turns": sum(
+                flags["dense_operator_backslice_bonus"] for flags in dense_flags
+            ),
+            "outcome_penalty_mass": round(sum(outcome_penalties), 10),
+            "local_penalty_mass": round(sum(local_penalties), 10),
+            "process_update": True,
+            "expected_total_reward": round(expected, 10),
+        }
+    )
+    return EpisodeReward(
+        trajectory_id=trajectory_id,
+        correct=correct,
+        grounding_method=str(diagnostics.get("grounding_method", "unknown")),
+        grounding_handle=diagnostics.get("grounding_handle"),
+        back_slice_step_ids=list(diagnostics.get("back_slice_step_ids") or []),
+        used_evidence_units=list(diagnostics.get("used_evidence_units") or []),
+        positive_mass=round(sum(positive_values), 10),
+        raw_penalty_mass=round(sum(outcome_penalties) + sum(local_penalties), 10),
+        capped_penalty=round(
+            (sum(outcome_penalties) + sum(local_penalties)) / normalizer,
+            10,
+        ),
+        total_reward=round(sum(rewards), 10),
+        fallback_terminal_credit=False,
+        process_update=True,
+        steps=step_rewards,
+        diagnostics=diagnostics,
+    )
+
+
 def allocate_process_rewards(
     trajectory_id: str,
     features: list[StepFeature],
@@ -1275,6 +1509,15 @@ def allocate_process_rewards(
             config.omega_target_table * feature.target_table_delta
             + config.omega_target_column * feature.target_column_delta
             + config.omega_target_row * feature.target_row_delta
+        )
+
+    if config.allocation_mode != "grounded_sparse":
+        return _allocate_dense_outcome_rewards(
+            trajectory_id,
+            features,
+            correct=correct,
+            config=config,
+            diagnostics=diagnostics,
         )
 
     positive = [
@@ -1310,7 +1553,11 @@ def allocate_process_rewards(
     process_update = bool(not correct or positive_mass > 0)
     c_positive = [0.0] * len(features)
     if positive_mass > 0:
-        c_positive = [value / positive_mass for value in positive]
+        c_positive = (
+            [value / positive_mass for value in positive]
+            if config.normalize_positive
+            else [min(1.0, value) for value in positive]
+        )
     c_negative = (
         [value / raw_penalty_mass for value in penalties]
         if raw_penalty_mass > 0
@@ -1326,7 +1573,7 @@ def allocate_process_rewards(
         for feature, plus, minus in zip(features, c_positive, c_negative, strict=True)
     ]
     expected = (
-        float(correct and positive_mass > 0)
+        float(correct) * sum(c_positive)
         + float(not correct)
         * config.eta_failure_progress
         * sum(feature.target_potential_delta for feature in features)
@@ -1373,6 +1620,11 @@ def allocate_process_rewards(
         )
 
     diagnostics = dict(diagnostics or {})
+    diagnostics["positive_allocation"] = (
+        "normalized_unit_mass"
+        if config.normalize_positive
+        else "raw_clipped_per_step"
+    )
     diagnostics["failure_outcome_allocation"] = "terminal_boundary"
     diagnostics["fallback_positive_allocation"] = "disabled_exclude_correct_G0"
     diagnostics["outcome_penalty_mass"] = round(sum(outcome_penalties), 10)

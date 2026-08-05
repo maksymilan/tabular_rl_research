@@ -577,6 +577,7 @@ def validate_tool_arguments_against_state(h: Harness, tool: str, args: dict) -> 
     table = args.get("table")
     if tool in {
         "inspect_column",
+        "search_values",
         "read_subtable",
         "inspect_rows",
         "condition_filter",
@@ -597,6 +598,18 @@ def validate_tool_arguments_against_state(h: Harness, tool: str, args: dict) -> 
             h, tool, args, table, columns, args.get("column"),
             argument_path="inspect_column.column",
         )
+    elif tool == "search_values":
+        column = args.get("column")
+        if column is not None:
+            _validated_column(
+                h,
+                tool,
+                args,
+                table,
+                columns,
+                column,
+                argument_path="search_values.column",
+            )
     elif tool in {"read_subtable", "inspect_rows"}:
         tool_path = tool
         for index, column in enumerate(args.get("columns") or []):
@@ -800,7 +813,13 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
         ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
         return output, None
 
-    if tool in ("describe_table", "inspect_column", "read_subtable", "inspect_rows"):
+    if tool in (
+        "describe_table",
+        "inspect_column",
+        "search_values",
+        "read_subtable",
+        "inspect_rows",
+    ):
         # read-only perception; no table
         perception_args = dict(args)
         if tool in {"read_subtable", "inspect_rows"} and perception_args.get("conditions") is not None:
@@ -811,7 +830,10 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
             perception_args["conditions"] = resolve_cond(
                 perception_args["conditions"], {}, values
             )
-        executor_tool = "read_subtable" if tool == "inspect_rows" else tool
+        if tool == "search_values" and ctx.get("search_values_mode") == "bounded-v1":
+            executor_tool = "search_values_bounded"
+        else:
+            executor_tool = "read_subtable" if tool == "inspect_rows" else tool
         out = getattr(h, executor_tool)(**perception_args)
         output = out if isinstance(out, dict) else {"rows": [list(r) for r in out], "row_count": len(out)}
         history_record = {"tool": tool, "arguments": args, "output": output, "references": references}

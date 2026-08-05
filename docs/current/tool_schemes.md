@@ -2,22 +2,26 @@
 
 ## Contract
 
-The repository exposes three complete and independently selectable model action schemes:
+The repository exposes four complete and independently selectable model action schemes:
 
 | Scheme id | Model turn | Top-level actions | Student carrier |
 |---|---|---|---|
 | `atomic` | exactly one primitive tool | the original planning, perception, relational, and terminal tools | `<think>` followed directly by one raw JSON action |
 | `action-block` | one ordered work block of 1..8 primitive calls, or one terminal action | `action_block` for work; `answer_from_context` for termination | `<think>` followed directly by one raw JSON action |
 | `relational-program` | one interactive observation, one declarative relation program of 1..8 nodes, or one terminal action | `observe`; `relational_program`; `answer_from_context` | `<think>` followed directly by one raw JSON action |
+| `direct-sql-search` | one database-value retrieval or one read-only SQL inspection/final execution | `search_values`; `execute_sql` | `<think>` followed directly by one raw JSON action |
 
-The ids are defined by `tool-scheme-registry-v3` in `src/sft/tool_schemes.py`. A model sees exactly
+The ids are defined by `tool-scheme-registry-v4` in `src/sft/tool_schemes.py`. A model sees exactly
 one scheme. Do not combine top-level schemas from different schemes in one prompt and do not infer
 a scheme from trajectory shape. Registry v2 unifies both prior student schemes on the active
 `think-json-v1` carrier;
-registry v3 adds `relational-program` without changing either prior scheme. Registry v1's tagged
+registry v3 adds `relational-program` without changing either prior scheme; registry v4 adds the
+diagnostic-only `direct-sql-search` scheme without changing the first three. Registry v1's tagged
 atomic carrier is retired.
 
-All three schemes share the harness-owned primitive relational semantics and resident facts. They do
+The first three schemes share the harness-owned primitive relational semantics and resident facts.
+`direct-sql-search` instead shares the immutable SQLite database, provider transport, causal loop,
+and hidden terminal scorer, but exposes raw read-only SQL plus a bounded retrieval service. Schemes do
 not share:
 
 - model-visible system prompts;
@@ -61,6 +65,10 @@ PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
 PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
   .venv/bin/python src/eval/run_tool_scheme.py \
   --tool-scheme relational-program -- <relational-program evaluator arguments>
+
+PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
+  .venv/bin/python src/eval/run_tool_scheme.py \
+  --tool-scheme direct-sql-search -- <iterative_sql.py arguments>
 ```
 
 The active action-block diagnostic is `action-block-v35`. It keeps v34's short sequential
@@ -85,7 +93,8 @@ provider-native reasoning field.
 The matching causal generation entry is
 `src/sft/generate_tool_scheme_rollouts.py`. It dispatches to the original external-teacher loop for
 `atomic`, the real model↔harness action-block loop for `action-block`, and the separate
-model↔harness relational-program loop for `relational-program`.
+model↔harness relational-program loop for `relational-program`. `direct-sql-search` dispatches to
+the causal iterative-SQL loop with its active interface pinned to `search-values-execute-sql-v2`.
 
 Every new episode and manifest records:
 
@@ -94,6 +103,29 @@ Every new episode and manifest records:
 - protocol version/hash;
 - assistant carrier;
 - scheme-specific budgets.
+
+## Direct-SQL-search boundary
+
+The active diagnostic `direct-sql-search-v2` exposes exactly the same two top-level tools as the
+frozen v1. `search_values` is deterministic,
+read-only, and bounded; it retrieves exact stored literals across the database or a declared table/
+column using the version45 bounded candidate-recall engine, but it does not create a relation or
+choose answer rows. `execute_sql(sql, mode)` runs one read-only SQLite statement. `mode="inspect"`
+returns at most 20 rows; `mode="final"` is terminal and must reuse a SQL statement that already
+succeeded in inspect mode. There is no third submit or terminal tool.
+
+Frozen v1's paired DeepSeek v4 Flash Gate16 scored 7/16 with 14/16 legal termination, versus fresh atomic
+version39 at 10/16 and 16/16. All seven successes replayed and passed the scheme-specific structural
+audit. Only two searches were called and both occurred in max-step failures. Keep the scheme as a
+low-token diagnostic SQL control; do not expand it or use it for SFT/RL. V2 changes no public
+arguments: it adds external-teacher semantic discipline, structured state-preserving errors,
+bounded preview-shape facts, resident-pointer history with recent exact outputs, and rejection of
+any exact prior successful action on the immutable database. Its preregistered disjoint Holdout
+Gate15 scored 6/15 versus fresh atomic version39 at 10/15, with 15/15 legal termination in both
+arms, 88 versus 115 actions, and 327,401 versus 854,227 tokens. It passed engineering stability
+but failed the accuracy expansion threshold by four tasks. The only search call occurred in a
+failure. V2 therefore remains a low-token SQL control and has no accuracy promotion. See
+`docs/current/direct_sql_search_tool_scheme_zh.md`.
 
 ## Sequential action-block boundary
 
@@ -275,6 +307,9 @@ Relational-program diagnostics are never SFT sources. A future exporter would re
 fresh replay, graph/grounding audit, last-turn-only causal rendering, and a separate accuracy
 promotion; it must not reuse the action-block exporter by relabeling records.
 
+Direct-SQL-search diagnostics are also never SFT sources. They have distinct action semantics and
+an independent replay audit, and cannot be relabeled as atomic trajectories.
+
 ## RL
 
 `src/rl/tool_environment.py::create_tool_use_env` constructs either:
@@ -285,6 +320,9 @@ promotion; it must not reuse the action-block exporter by relabeling records.
 There is no `relational-program` RL environment in v3. This is deliberate: tool usability and the
 primitive-local graph credit boundary must pass evaluation before result-only or process RL is
 enabled.
+
+There is no `direct-sql-search` RL environment. Its Gate16 failed the accuracy/legal comparison with
+atomic and provided no positive search-use signal.
 
 `group_reinforce.py --tool-scheme ...` can therefore run matched result-only training for the two
 RL-enabled schemes. Checkpoint metadata, rollout logs, and metrics include the scheme and scheme-specific

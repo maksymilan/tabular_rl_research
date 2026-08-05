@@ -1,0 +1,49 @@
+# Two-step isolated smoke test for OmniSQL model loading, 4-bit kernels, the
+# merged dataset registry, and one backward/update cycle on a 24 GB GPU.
+# The data contract is atomic version26/recent-4/think-json-v1.
+
+### model
+model_name_or_path: /home/dengyan/models/OmniSQL-7B-af4eed67
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: bird_omnisql_sft1_union_sft1_sft2_6400_training_view
+dataset_dir: /home/dengyan/tabular_rl_outputs/data/omnisql_sft1_union_sft1_sft2_20260801
+template: qwen
+cutoff_len: 6400
+mask_history: true
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 2
+max_samples: 16
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/checkpoints/omnisql-7b-bird-sft1-union-smoke-qlora
+logging_steps: 1
+save_strategy: "no"
+eval_strategy: "no"
+report_to: none
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 5.0e-5
+max_steps: 2
+optim: paged_adamw_8bit
+bf16: true
+gradient_checkpointing: true
+seed: 42
+data_seed: 42

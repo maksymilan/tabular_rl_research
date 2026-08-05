@@ -1,0 +1,36 @@
+schema_version: table-agent-rl-experiment-v1
+experiment_name: phase7_process_rank_conservative_action_mean
+admission_status: allowed_process_after_gates
+reward_type: process
+process_reward_config: src/rl/configs/simple_process_reward_no_backslice.json
+process_admission_policy: counterfactual-completeness
+exclude_empty_reference_results: false
+trainable_part: all
+rank_loss:
+  enabled: true
+  coefficient: 0.5
+  beta: 0.1
+  score_tokens: tool_only
+  score_scope: conservative_legal
+  score_reduction: mean_action
+  update_scope: conservative_legal
+optimizer:
+  name: adamw_torch
+  learning_rate: 1.0e-6
+  weight_decay: 0.01
+  steps: 23
+  ppo_iterations: 1
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.03
+  kl_beta: 0.0
+  clip_epsilon: 0.2
+rollout:
+  prompts_per_update: 1
+  group_size: 4
+  max_agent_steps: 30
+  max_new_tokens: 1024
+  max_context_tokens: 8192
+  history_turns: 4
+  temperature: 0.7
+  top_p: 0.95
+  top_k: 0

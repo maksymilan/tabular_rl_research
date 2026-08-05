@@ -36,6 +36,7 @@ from plan import TABLE_REF_ARGS
 PERCEPTION_TOOLS = frozenset({
     "describe_table",
     "inspect_column",
+    "search_values",
     "read_subtable",
     "inspect_rows",
 })
@@ -403,6 +404,45 @@ def build_grounding_references(tool: str, args: dict, history: dict[str, dict]) 
                 "role": "domain_observation",
                 "target": {"table": table, "column": column, "values": matched},
             })
+
+        elif prior_tool == "search_values":
+            searched_table = prior_args.get("table")
+            if searched_table not in table_refs:
+                continue
+            for slot in literal_slots:
+                target_column = base_column(slot.column)
+                if not isinstance(target_column, str):
+                    continue
+                matching_items = [
+                    item
+                    for item in output.get("matches", []) or []
+                    if (
+                        isinstance(item, dict)
+                        and base_column(item.get("column")) == target_column
+                        and same_scalar(item.get("value"), slot.value)
+                    )
+                ]
+                if not matching_items:
+                    continue
+                refs.append({
+                    "type": "grounding",
+                    "step": step_id,
+                    "role": "domain_observation",
+                    "target": {
+                        "table": searched_table,
+                        "column": target_column,
+                        "values": [slot.value],
+                        "argument_path": list(slot.argument_path),
+                        "matches": [
+                            {
+                                "column": item.get("column"),
+                                "value": item.get("value"),
+                                "match_type": item.get("match_type"),
+                            }
+                            for item in matching_items
+                        ],
+                    },
+                })
 
         elif literal_slots:
             columns = record.get("observed_columns") or output.get("columns")

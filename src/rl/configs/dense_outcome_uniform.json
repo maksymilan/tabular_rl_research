@@ -1,0 +1,9 @@
+{
+  "_description": "Dense full-response action credit: every clean legal turn is rewarded on correct trajectories, every clean legal turn is mildly penalized on incorrect trajectories, and all deterministic local bad-event categories share one non-stacking maximum penalty.",
+  "allocation_mode": "dense_uniform",
+  "dense_correct_legal_weight": 1.0,
+  "dense_incorrect_legal_weight": 0.5,
+  "dense_severe_penalty_weight": 2.0,
+  "dense_observation_bonus_weight": 0.0,
+  "dense_backslice_bonus_weight": 0.0
+}

@@ -60,6 +60,7 @@ def load_rl_task_records(
     limit: int = 0,
     seed: int = 20260710,
     context_mode: str = "rolling-legal-history",
+    include_task_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Create generic hidden-label task records shared by both RL reward conditions."""
     if selection is not None and examples_json is not None:
@@ -90,6 +91,12 @@ def load_rl_task_records(
 
     if limit:
         indexed = indexed[:limit]
+    if include_task_ids is not None:
+        indexed = [
+            (index, example)
+            for index, example in indexed
+            if _task_id(example, split=split, index=index) in include_task_ids
+        ]
 
     records: list[dict[str, Any]] = []
     system_prompt = student_runtime_system_prompt(

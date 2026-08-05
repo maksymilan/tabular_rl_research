@@ -26,6 +26,7 @@ TABLE_REF_ARGS: dict[str, list[str]] = {
     "aggregate": ["table"],
     "read_subtable": ["table"],
     "inspect_rows": ["table"],
+    "search_values": ["table"],
     "window": ["table"],
     "join_tables": ["left", "right", "tables", "base"],
     "set_op": ["left", "right"],

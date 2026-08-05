@@ -1,0 +1,9 @@
+{
+  "_description": "Dense full-response action credit with harness-grounded positive bonuses: evidence-contributing observation turns and terminal-backslice operator turns receive an extra 0.5 before action-count normalization; failed-trajectory and severe penalties match dense uniform.",
+  "allocation_mode": "dense_strategic",
+  "dense_correct_legal_weight": 1.0,
+  "dense_incorrect_legal_weight": 0.5,
+  "dense_severe_penalty_weight": 2.0,
+  "dense_observation_bonus_weight": 0.5,
+  "dense_backslice_bonus_weight": 0.5
+}

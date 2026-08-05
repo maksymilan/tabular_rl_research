@@ -16,9 +16,11 @@ sys.path[:0] = [str(ROOT / "src" / "eval"), str(HERE)]
 from tool_schemes import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
+    DIRECT_SQL_SEARCH_TOOL_SCHEME,
     RELATIONAL_PROGRAM_TOOL_SCHEME,
     TOOL_SCHEME_NAMES,
 )
+from direct_sql_search_protocol import DIRECT_SQL_SEARCH_INTERFACE  # noqa: E402
 
 
 def generator_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
@@ -41,6 +43,14 @@ def generator_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
             sys.executable,
             str(ROOT / "src" / "eval" / "evaluate_relational_program.py"),
             *forwarded,
+        ]
+    if tool_scheme == DIRECT_SQL_SEARCH_TOOL_SCHEME:
+        return [
+            sys.executable,
+            str(ROOT / "src" / "eval" / "iterative_sql.py"),
+            *forwarded,
+            "--interface",
+            DIRECT_SQL_SEARCH_INTERFACE,
         ]
     raise ValueError(f"unsupported tool scheme: {tool_scheme}")
 

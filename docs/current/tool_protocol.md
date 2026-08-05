@@ -276,7 +276,69 @@ Public version mapping:
   zero terminal projection errors, and nine process errors. The resolver succeeded on all 12
   unique-bare columns exercised, but the protocol failed the overall accuracy, paired-regression,
   and process-error gates. Do not run the remaining 150 or use version43 for SFT/RL;
-- future changes increment only the integer (`version44`, `version45`, ...).
+- `version44`: returns to version39's full prompt, recent-4 legal history, exact-table terminal
+  evidence, execution, state, and grounding. It removes public `plan`, renames the public row
+  observer to `inspect_rows`, adds deterministic read-only
+  `search_values(table, query, column?, limit?, offset?)`, and exposes BIRD semantic name and
+  column description only through `inspect_column`. Its frozen DeepSeek v4 Flash paired Gate50
+  scored 38/50 versus version39 at 39/50, with four gains, five regressions, 50/50 legal
+  termination, and 3 versus 2 process errors. Search was used on 19 tasks, but both protocols
+  scored 16/19 on that subset. Million-distinct-value fuzzy scans also caused a severe latency
+  regression. Do not run the remaining 150 or use version44 for SFT/RL before bounded retrieval
+  is implemented and the same gate is rerun;
+- `version45`: keeps version44's public call signatures and all non-search behavior, but selects
+  an isolated `bounded-v1` executor path. SQLite first recalls exact/case-insensitive-exact values;
+  an exact hit suppresses broader fuzzy alternatives. Otherwise stable token/trigram anchors
+  recall at most 4,096 candidates per column before the existing lexical matcher runs.
+  Observations expose candidate count, scope, and truncation. Replaying all 22 searches from the
+  version44 Gate50 preserved 22/22 top candidates and reduced total search time to 1.033 seconds;
+  the two approximately 1.98M-distinct-title searches fell from about 380 seconds each to 0.374
+  and 0.132 seconds. After the provider recovered, its fresh full Gate50 scored 37/50 versus the
+  frozen version39 baseline at 39/50, with two gains, four regressions, 50/50 legal termination,
+  and three process errors. All four regressions were non-search semantic/output failures. Wall
+  time fell from version44's 405.83 seconds to 317.21 seconds, but accuracy did not improve. Keep
+  version45 diagnostic-only; do not run the remaining 150 or use it for SFT/RL;
+- `version46`: returns to the version39 tools, prompt, execution, canonical state, grounding,
+  recent-4, and exact-table terminal semantics. It changes only model-visible resident rendering:
+  every canonical relation derivation becomes one Harness-authored fact-only handle card. On the
+  15-task infrastructure-complete subset of a frozen read-heavy Gate16, it had exactly the same
+  outcomes as version39 at 8/15, but used 10.3% more actions, 38.6% more tokens, and 11 versus six
+  process errors. It has no accuracy promotion;
+- `version47`: adds to version46 a full latest successful observation while older successful
+  observations remain compact; resident row payloads become deterministic read cards requiring a
+  fresh row observation before exact reuse. It scored 9/15 versus version46 at 8/15, with two
+  gains and one control regression (`p=1.0`), but legal termination fell to 13/15, row reads rose
+  from baseline 27 to 71, and 24 reads exactly repeated earlier arguments. It is rejected;
+- `version48`: changes only version47's external-teacher prompt by requiring one brief
+  interpretation of the latest Harness output before the next action. It remained 9/15 with one
+  gain and one regression versus version47, while actions reached 1.49x baseline, tokens 1.62x,
+  row reads 101, and exact re-reads 35. It is rejected;
+- `version49`: returns to version46's compact successful-observation policy and adds automatic
+  Harness-owned relation focus. Exact resident rows remain only for table handles referenced by
+  recent-4 structured calls/observations/errors and their recursive derivation dependencies; rows
+  on all other branches become read cards. The model declares no branch id or lifecycle. Its raw
+  Gate16 scored 9/16 with 15/16 legal termination. On the 15-task infrastructure-complete subset,
+  it exactly matched version39 at 8/15 and retained 8/8 controls but recovered 0/7 targets. It used
+  138 actions, 26 reads, zero exact re-reads, and 1,169,008 tokens versus version39's 146, 27, zero,
+  and 1,201,127. It recovered both observed churn cases, but had no accuracy gain. Offline
+  fixed-200 rendering reduced next-action literal loss from 12 turns/20 values under version47 to
+  one dormant-branch turn/four values. That dormant-branch task was correct in the raw version49
+  run but still used 10 reads and two exact re-reads. A frozen Gate8 K=3 follow-up then scored
+  20/24 for both version39 and version49 with 15/15 controls retained, but version49 increased mean
+  steps 23.0%, reads 71.9%, and tokens 28.7%, and produced three max-step failures versus zero.
+  It failed five of nine preregistered stability checks and is rejected even as a candidate
+  engineering renderer. Do not expand version46-version49 to Gate50 or use their trajectories for
+  SFT/RL. See
+  `docs/reports/evaluation/BIRD_ATOMIC_CONTEXT_HANDLE_CARD_ABLATION_GATE16_20260731_ZH.md` and
+  `docs/reports/evaluation/BIRD_ATOMIC_VERSION49_CONTEXT_STABILITY_K3_GATE8_20260731_ZH.md`;
+- future changes increment only the integer (`version50`, `version51`, ...).
+
+Historical-control note: a separate branch at `deaa0e4` rebuilt original version24 and added only
+bounded `search_values`, retaining plan, `read_subtable`, raw schema, and exact-table terminal
+semantics. Fresh version24 reproduced 41/50 versus the original 42/50; the search-only arm scored
+39/50, with two gains and four regressions (`p=0.6875`) and 14.3% more tokens. This is a rejected
+historical ablation and not part of the current protocol progression. See
+`docs/reports/evaluation/BIRD_VERSION24_BOUNDED_SEARCH_SINGLE_VARIABLE_GATE50_20260730_ZH.md`.
 
 The current version39 diagnostic tool set remains the one in
 `src/sft/protocol.py::TOOL_SPECS`:

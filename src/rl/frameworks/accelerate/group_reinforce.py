@@ -17,7 +17,6 @@ import json
 import random
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -44,19 +43,18 @@ from tool_schemes import (  # noqa: E402
 )
 from task_loader import load_rl_task_records  # noqa: E402
 from reference_result_filter import filter_training_records  # noqa: E402
-from terminal_reward import terminal_result_reward  # noqa: E402
-from external_failure_adapter import normalize_failure_record  # noqa: E402
-from process_credit import (  # noqa: E402
-    ProcessRewardConfig,
-    score_rollout_trajectory,
-)
+from process_credit import ProcessRewardConfig  # noqa: E402
 from process_objective import sampled_turn_forward_kl  # noqa: E402
 from counterfactual_suite import (  # noqa: E402
     CounterfactualSuiteManifest,
     CounterfactualTaskSuite,
     load_counterfactual_suite_manifest,
 )
-from trajectory_replay import evaluate_counterfactual_suite  # noqa: E402
+from rollout_scoring import (  # noqa: E402
+    RolloutSample as Sample,
+    episode_example,
+    score_completed_rollout,
+)
 from frameworks.accelerate.turn_logprobs import (  # noqa: E402
     response_token_logprobs_batched,
     turn_padding_key,
@@ -69,17 +67,6 @@ from protocol import (  # noqa: E402
     student_runtime_system_prompt,
     tool_schema_hash,
 )
-
-
-@dataclass
-class Sample:
-    reward: float
-    correct: bool
-    failure_type: str | None
-    turns: list[tuple[list[int], list[int]]]
-    audit_record: dict[str, Any]
-    step_rewards: list[float] | None = None
-    process_update: bool = True
 
 
 def activate_adapter(model, adapter_name: str) -> None:
@@ -279,18 +266,6 @@ def _generate_rollout_chunk(model, tokenizer, chunk: list[tuple[int, list[int]]]
     ]
 
 
-def episode_example(metadata: dict[str, Any]) -> dict[str, Any]:
-    """Preserve dataset-adapter fields when constructing an interactive episode."""
-    return {
-        "db_id": metadata["db_id"],
-        "db_path": metadata.get("db_path"),
-        "question": metadata["question"],
-        "query": metadata["gold_sql"],
-        "gold_sql": metadata["gold_sql"],
-        "external_knowledge": metadata.get("external_knowledge"),
-    }
-
-
 @torch.inference_mode()
 def sample_group(
     model,
@@ -349,85 +324,19 @@ def sample_group(
 
     samples = []
     for sample_index, (env, sample_turns) in enumerate(zip(envs, turns, strict=True)):
-        record = env.record()
-        record["trajectory_id"] = (
-            f"rl_{metadata['example_index']}_sample_{sample_index}"
-        )
-        step_rewards = None
-        process_update = record["failure_type"] != "generation_oom"
-        scalar_reward = terminal_result_reward(record["correct"])
-        if not process_update:
-            record["optimization_exclusion"] = "nonsemantic_runtime_failure"
-        if args.reward_mode == "process":
-            normalized, exclusion = normalize_failure_record(
-                record,
-                {
-                    "example_id": record["trajectory_id"],
-                    "dataset": "bird-sql",
-                    "split": "train",
-                    "db_id": metadata["db_id"],
-                    "db_path": metadata.get("db_path"),
-                    "question": metadata["question"],
-                    "gold_sql": metadata["gold_sql"],
-                    "external_knowledge": metadata.get("external_knowledge"),
-                    "denotation_comparison": args.denotation_comparison,
-                },
+        samples.append(
+            score_completed_rollout(
+                env,
+                sample_turns,
+                metadata,
+                sample_index=sample_index,
+                reward_mode=args.reward_mode,
+                process_config=process_config,
+                process_admission_policy=args.process_admission_policy,
+                denotation_comparison=args.denotation_comparison,
+                counterfactual_suite=counterfactual_suite,
             )
-            if normalized is None:
-                step_rewards = []
-                process_update = False
-                scalar_reward = 0.0
-                record["process_reward_exclusion"] = exclusion
-            else:
-                reward = score_rollout_trajectory(
-                    normalized,
-                    process_config,
-                    denotation_comparison=args.denotation_comparison,
-                )
-                step_rewards = [step.reward for step in reward.steps]
-                if len(step_rewards) != len(sample_turns):
-                    raise RuntimeError(
-                        "generated turns and replayed process steps do not align: "
-                        f"{len(sample_turns)} != {len(step_rewards)}"
-                    )
-                process_update = reward.process_update
-                scalar_reward = reward.total_reward
-                record["process_reward"] = reward.to_dict()
-                record["process_admission_policy"] = args.process_admission_policy
-                if (
-                    reward.correct
-                    and process_update
-                    and args.process_admission_policy
-                    == "counterfactual-completeness"
-                ):
-                    if counterfactual_suite is None:
-                        raise RuntimeError(
-                            "correct process trajectory has no counterfactual task suite"
-                        )
-                    completeness = evaluate_counterfactual_suite(
-                        normalized,
-                        counterfactual_suite.database_paths,
-                        min_informative_databases=(
-                            counterfactual_suite.min_informative_databases
-                        ),
-                        denotation_comparison=args.denotation_comparison,
-                    )
-                    record["counterfactual_completeness"] = completeness.to_dict()
-                    if not completeness.passed:
-                        process_update = False
-                        scalar_reward = 0.0
-                        record["process_reward_exclusion"] = (
-                            f"counterfactual_completeness:{completeness.reason}"
-                        )
-        samples.append(Sample(
-            reward=scalar_reward,
-            correct=bool(record["correct"]),
-            failure_type=record["failure_type"],
-            turns=sample_turns,
-            audit_record=record,
-            step_rewards=step_rewards,
-            process_update=process_update,
-        ))
+        )
         env.close()
     return samples
 

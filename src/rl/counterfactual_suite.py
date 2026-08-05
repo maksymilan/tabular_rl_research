@@ -111,7 +111,11 @@ def _database_path(
     return path
 
 
-def load_counterfactual_suite_manifest(path: str | Path) -> CounterfactualSuiteManifest:
+def load_counterfactual_suite_manifest(
+    path: str | Path,
+    *,
+    allowed_quality_statuses: tuple[str, ...] = ("passed",),
+) -> CounterfactualSuiteManifest:
     manifest_path = Path(path).resolve()
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     if payload.get("schema_version") != SCHEMA_VERSION:
@@ -156,9 +160,13 @@ def load_counterfactual_suite_manifest(path: str | Path) -> CounterfactualSuiteM
     if not isinstance(generator, dict):
         raise ValueError("counterfactual manifest must record generator metadata")
     quality_gate = payload.get("quality_gate")
-    if not isinstance(quality_gate, dict) or quality_gate.get("status") != "passed":
+    if (
+        not isinstance(quality_gate, dict)
+        or quality_gate.get("status") not in allowed_quality_statuses
+    ):
         raise ValueError(
-            "counterfactual manifest quality_gate.status must be 'passed'"
+            "counterfactual manifest quality_gate.status must be one of "
+            f"{allowed_quality_statuses!r}"
         )
     audit_sha = quality_gate.get("audit_sha256")
     if (

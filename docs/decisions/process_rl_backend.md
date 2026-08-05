@@ -6,16 +6,27 @@ The research condition is turn-local process RL. Result-only RL is retained only
 coarse baseline.
 
 The active implementation continues to use transition-level assistant-turn samples over the causal
-table harness. It does not directly adopt a stock multi-turn GRPO trainer, because the inspected
-frameworks do not preserve the project's objective without changing reward semantics:
+table harness. Framework version changes after the original backend audit make TRL the current
+optimization backend, but not the owner of table-tool semantics. A thin adapter retains one exact
+rolling-state prefix per assistant action and maps the verified transition reward onto TRL's
+tokenwise clipped policy loss:
 
 ```text
-L = -(1/M) sum_t r_t log pi(a_t | s_t) + beta/M sum_t KL_t
+rho_ti = pi_theta(a_ti | s_t, a_t,<i) / pi_old(a_ti | s_t, a_t,<i)
+L = mean_ti[-min(rho_ti A_t, clip(rho_ti, 1-epsilon, 1+epsilon) A_t)
+             + beta KL_ti]
 ```
 
-Here `a_t` is the complete authored `think + tool_call` turn and `r_t` belongs only to that turn.
-There is no implicit return propagation, group normalization, learned critic, or terminal-reward
-broadcast in the process condition.
+Here `a_t` is the complete authored `think + tool_call` turn. In the process condition
+`A_t = r_t`, and that verified reward belongs only to that turn.
+There is no implicit return propagation, learned critic, or terminal-reward broadcast in the
+process condition. Result-only retains trajectory-group normalization as its deliberately coarse
+control. Process rewards remain turn-local.
+
+The former `frameworks/accelerate/group_reinforce.py` is frozen as an audit reference. Its direct
+Transformers generation, hand-written log-probability objective, single-GPU serialization, missing
+old-policy ratio/clipping, and rollout/training distribution mismatch make it unsuitable as the
+scaling backend.
 
 ## Open-source implementation findings
 
@@ -32,11 +43,13 @@ The following conclusions come from source inspection, not feature-list comparis
   `AgentLoopOutput` and reward managers still place one scalar at the final response token, so an
   exact process implementation needs a custom dense reward manager and a no-propagation advantage
   estimator.
-- [TRL](https://github.com/huggingface/trl) has a useful tool loop, QLoRA-friendly trainer stack,
-  prefix-preserving chat-template checks, per-token KL, and rollout importance-sampling support.
-  Its public custom reward contract returns one float per completion. Subclassing enough of
-  `GRPOTrainer` to accept one reward per assistant turn would be more invasive than the active
-  backend and would still require changing GRPO's reward normalization and loss reduction.
+- [TRL](https://github.com/huggingface/trl) now has an environment factory, custom rollout
+  function, dedicated vLLM server mode, QLoRA-friendly trainer stack, dropout control, per-token
+  old/reference log probabilities, clipping, KL, and rollout importance correction. Its public
+  reward contract still returns one scalar per completion, so the project adapter flattens completed
+  causal episodes into exact `(prefix, assistant action, r_t)` transitions before invoking the
+  framework loss. It does not use TRL's native tool parser because that would replace the frozen
+  raw-JSON action carrier.
 - [Agent Lightning](https://github.com/microsoft/agent-lightning) validates the transition-level
   data model used here: every LLM response can be represented as its own prompt/response/reward
   triplet, with only the new response active in the loss. Its current veRL bridge explicitly
@@ -47,22 +60,26 @@ The following conclusions come from source inspection, not feature-list comparis
   group-normalized trajectory/turn scalars across token masks; it is not the same as accepting an
   independently grounded reward vector `(r_1, ..., r_T)`.
 
-## Reused mechanisms
+## Framework-owned mechanisms
 
-The active backend deliberately reuses the mature mechanisms that do preserve the objective:
+The active backend delegates the following mature mechanisms to TRL:
 
 1. Exact rollout prompt and response token IDs are retained for every assistant turn. Training does
    not re-render or re-tokenize a completed trajectory.
-2. Environment/observation tokens are context only. The log probability is the sum over all tokens
-   in the current authored assistant turn.
-3. Fixed-reference KL is computed with a bounded k3 estimate per token and then summed within the
-   turn. Applying k3 to a sequence-summed log-ratio is prohibited because it is numerically unstable
-   on long actions.
-4. The optimizer uses a configurable scheduler and warmup and saves adapter, optimizer, scheduler,
-   Python RNG, Torch RNG, and CUDA RNG state together. Resume rejects changes to the task artifact,
-   reward condition, protocol-relevant rollout settings, or optimizer settings.
-5. The default process pilot uses learning rate `1e-6`, cosine scheduling, and 3% warmup. The
-   result-only baseline must use the identical initialization and optimizer configuration.
+2. Environment/observation tokens are context only; only the current authored assistant response is
+   active in the loss.
+3. vLLM sampled log probabilities are retained, actor old probabilities are recomputed at the same
+   temperature, and TRL applies bounded importance correction.
+4. PPO ratios, clip `0.2`, fixed-SFT-reference KL, entropy/clip/KL metrics, gradient clipping,
+   optimizer scheduling, and checkpoint state are framework-owned.
+5. Dropout is disabled and a zero-transition batch aborts before any optimizer or scheduler step.
+6. The default uses learning rate `3e-7`, constant scheduling, `beta=0.001`,
+   `temperature=1.0`, and `top_p=1.0`. Result-only and process controls must share these settings.
+
+Framework readiness and reward admission are separate decisions. The TRL backend is the active
+engineering implementation, but process-RL optimization remains disabled for production until the
+deterministic completeness and independent grounding edge-precision gates pass. Until then,
+result-only is the only admissible optimizer smoke/control; process rewards remain audit-only.
 
 ## Required equivalence gates
 

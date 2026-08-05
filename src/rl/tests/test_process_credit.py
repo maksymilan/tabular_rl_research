@@ -47,6 +47,76 @@ def feature(index: int, **kwargs) -> StepFeature:
 
 
 class ProcessRewardTests(unittest.TestCase):
+    def test_dense_uniform_rewards_every_clean_correct_turn(self):
+        config = ProcessRewardConfig(allocation_mode="dense_uniform")
+        result = allocate_process_rewards(
+            "dense-correct",
+            [feature(1), feature(2), feature(3), feature(4, tool="answer_from_context")],
+            correct=True,
+            config=config,
+        )
+        self.assertEqual([step.reward for step in result.steps], [0.25] * 4)
+        self.assertAlmostEqual(result.total_reward, 1.0)
+        self.assertTrue(result.process_update)
+        self.assertEqual(result.diagnostics["dense_credit_scope"], "every_authored_turn")
+
+    def test_dense_uniform_mildly_penalizes_every_clean_failed_turn(self):
+        config = ProcessRewardConfig(allocation_mode="dense_uniform")
+        result = allocate_process_rewards(
+            "dense-failed",
+            [feature(1), feature(2), feature(3), feature(4, tool="answer_from_context")],
+            correct=False,
+            config=config,
+        )
+        self.assertEqual([step.reward for step in result.steps], [-0.125] * 4)
+        self.assertAlmostEqual(result.total_reward, -0.5)
+        self.assertTrue(all(step.p_outcome == 0.5 for step in result.steps))
+
+    def test_dense_severe_categories_share_one_non_stacking_maximum_penalty(self):
+        config = ProcessRewardConfig(allocation_mode="dense_uniform")
+        result = allocate_process_rewards(
+            "dense-severe",
+            [
+                feature(1, legal_success=False, error_type="execution_error"),
+                feature(2, adjacent_repeat=True),
+                feature(3, legal_no_state_change=1.0),
+                feature(
+                    4,
+                    legal_success=False,
+                    error_type="execution_error",
+                    adjacent_repeat=True,
+                    legal_no_state_change=1.0,
+                ),
+            ],
+            correct=False,
+            config=config,
+        )
+        self.assertEqual([step.p_local for step in result.steps], [2.0] * 4)
+        self.assertEqual([step.reward for step in result.steps], [-0.5] * 4)
+        self.assertAlmostEqual(result.total_reward, -2.0)
+        self.assertEqual(result.diagnostics["dense_severe_turns"], 4)
+
+    def test_dense_strategic_adds_only_grounded_positive_bonuses(self):
+        config = ProcessRewardConfig(
+            allocation_mode="dense_strategic",
+            dense_observation_bonus_weight=0.5,
+            dense_backslice_bonus_weight=0.5,
+        )
+        result = allocate_process_rewards(
+            "dense-strategic",
+            [
+                feature(1, tool="read_subtable", new_used_evidence=1.0),
+                feature(2, tool="condition_filter", back_slice=1.0),
+                feature(3, tool="answer_from_context", is_terminal=True),
+            ],
+            correct=True,
+            config=config,
+        )
+        self.assertEqual([step.g_positive for step in result.steps], [1.5, 1.5, 1.0])
+        self.assertEqual(result.diagnostics["dense_observation_bonus_turns"], 1)
+        self.assertEqual(result.diagnostics["dense_backslice_bonus_turns"], 1)
+        self.assertAlmostEqual(result.total_reward, 4.0 / 3.0)
+
     def test_sql_expression_support_extracts_sources_and_domain_predicates(self):
         expression = (
             'CASE WHEN "SalesPerson.SalesQuota" > 300000 THEN 1 ELSE 0 END'
@@ -904,6 +974,23 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertEqual([step.c_positive for step in result.steps], [1.0, 0.0, 0.0])
         self.assertAlmostEqual(result.total_reward, 1.0)
 
+    def test_no_normalize_uses_clipped_raw_positive_credit(self):
+        result = allocate_process_rewards(
+            "t1-raw",
+            [
+                feature(1, back_slice=1, search_reduction=0.5),
+                feature(2, back_slice=0.25),
+            ],
+            correct=True,
+            config=ProcessRewardConfig(normalize_positive=False),
+        )
+        self.assertEqual([step.c_positive for step in result.steps], [1.0, 0.25])
+        self.assertAlmostEqual(result.total_reward, 1.25)
+        self.assertEqual(
+            result.diagnostics["positive_allocation"],
+            "raw_clipped_per_step",
+        )
+
     def test_simple_process_config_uses_only_declared_positive_and_penalty_terms(self):
         config_path = RL_DIR / "configs" / "simple_process_reward.json"
         values = {
@@ -1039,6 +1126,26 @@ class ProcessRewardTests(unittest.TestCase):
         )
         self.assertAlmostEqual(result.capped_penalty, 0.8)
         self.assertAlmostEqual(result.total_reward, 0.2)
+
+    def test_penalty_cap_allows_strong_local_ablation_up_to_one_point_five(self):
+        config = ProcessRewardConfig(penalty_cap=1.5, lambda_tool_error=10.0)
+        config.validate()
+        result = allocate_process_rewards(
+            "strong-local-cap",
+            [
+                feature(
+                    1,
+                    legal_success=False,
+                    error_type="execution_error",
+                )
+            ],
+            correct=False,
+            config=config,
+        )
+        self.assertAlmostEqual(result.capped_penalty, 1.5)
+        self.assertAlmostEqual(result.total_reward, -1.5)
+        with self.assertRaisesRegex(ValueError, "P_max <= 1.5"):
+            ProcessRewardConfig(penalty_cap=1.500001).validate()
 
     def test_failed_trajectory_puts_outcome_penalty_at_terminal_boundary(self):
         result = allocate_process_rewards(

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Public registry for the independently selectable table-tool schemes.
 
-The schemes share the active think-plus-raw-JSON carrier and harness-owned atomic relational
-semantics. They do not share a model-visible tool schema, action validator, prompt, trajectory
-identity, or training manifest. This module is deliberately a small adapter boundary so callers
-never infer a scheme from record shape or experimental flags.
+The schemes share the active think-plus-raw-JSON carrier. The relational schemes also share
+harness-owned atomic semantics; direct-sql-search instead shares only the immutable database,
+causal loop, and hidden scorer. Schemes do not share a model-visible tool schema, action validator,
+prompt, trajectory identity, or training manifest. This module is deliberately a small adapter
+boundary so callers never infer a scheme from record shape or experimental flags.
 """
 from __future__ import annotations
 
@@ -14,14 +15,16 @@ from typing import Any
 from action_carrier import ACTIVE_ACTION_CARRIER
 
 
-TOOL_SCHEME_REGISTRY_VERSION = "tool-scheme-registry-v3"
+TOOL_SCHEME_REGISTRY_VERSION = "tool-scheme-registry-v4"
 ATOMIC_TOOL_SCHEME = "atomic"
 ACTION_BLOCK_TOOL_SCHEME = "action-block"
 RELATIONAL_PROGRAM_TOOL_SCHEME = "relational-program"
+DIRECT_SQL_SEARCH_TOOL_SCHEME = "direct-sql-search"
 TOOL_SCHEME_NAMES = (
     ATOMIC_TOOL_SCHEME,
     ACTION_BLOCK_TOOL_SCHEME,
     RELATIONAL_PROGRAM_TOOL_SCHEME,
+    DIRECT_SQL_SEARCH_TOOL_SCHEME,
 )
 
 ATOMIC_ASSISTANT_CARRIER = ACTIVE_ACTION_CARRIER
@@ -175,6 +178,29 @@ def build_relational_program_tool_scheme(
     )
 
 
+def build_direct_sql_search_tool_scheme() -> ToolScheme:
+    """Build the exclusive two-tool search plus direct-SQL diagnostic scheme."""
+    from direct_sql_search_protocol import (
+        DIRECT_SQL_SEARCH_ASSISTANT_CARRIER,
+        DIRECT_SQL_SEARCH_PROTOCOL_VERSION,
+        DIRECT_SQL_SEARCH_TOOLS,
+        build_direct_sql_search_system_prompt,
+        direct_sql_search_protocol_hash,
+    )
+
+    prompt = build_direct_sql_search_system_prompt()
+    tools = tuple(sorted(DIRECT_SQL_SEARCH_TOOLS))
+    return ToolScheme(
+        name=DIRECT_SQL_SEARCH_TOOL_SCHEME,
+        protocol_version=DIRECT_SQL_SEARCH_PROTOCOL_VERSION,
+        protocol_hash=direct_sql_search_protocol_hash(prompt),
+        system_prompt=prompt,
+        assistant_carrier=DIRECT_SQL_SEARCH_ASSISTANT_CARRIER,
+        top_level_tools=tools,
+        atomic_tools=tools,
+    )
+
+
 def build_tool_scheme(
     name: str,
     *,
@@ -200,11 +226,17 @@ def build_tool_scheme(
             assistant_carrier=assistant_carrier,
             protocol_version=protocol_version,
         )
-    return build_relational_program_tool_scheme(
-        max_program_calls=max_batch_calls or 8,
-        assistant_carrier=assistant_carrier,
-        protocol_version=protocol_version,
-    )
+    if name == RELATIONAL_PROGRAM_TOOL_SCHEME:
+        return build_relational_program_tool_scheme(
+            max_program_calls=max_batch_calls or 8,
+            assistant_carrier=assistant_carrier,
+            protocol_version=protocol_version,
+        )
+    if max_batch_calls is not None or assistant_carrier is not None or protocol_version is not None:
+        raise ValueError(
+            "direct-sql-search scheme owns its carrier, version, and single-action boundary"
+        )
+    return build_direct_sql_search_tool_scheme()
 
 
 def render_scheme_action(
@@ -226,6 +258,10 @@ def render_scheme_action(
         from relational_program_protocol import render_relational_program_assistant
 
         return render_relational_program_assistant(reasoning, tool, arguments)
+    if scheme.name == DIRECT_SQL_SEARCH_TOOL_SCHEME:
+        from action_carrier import render_action_carrier
+
+        return render_action_carrier(reasoning, tool, arguments)
     raise ValueError(f"unsupported tool scheme: {scheme.name}")
 
 
@@ -252,6 +288,10 @@ def parse_scheme_action(
             text,
             max_batch_calls=int(scheme.max_batch_calls or 0),
         )
+    if scheme.name == DIRECT_SQL_SEARCH_TOOL_SCHEME:
+        from direct_sql_search_protocol import parse_direct_sql_search_action
+
+        return parse_direct_sql_search_action(text)
     raise ValueError(f"unsupported tool scheme: {scheme.name}")
 
 
