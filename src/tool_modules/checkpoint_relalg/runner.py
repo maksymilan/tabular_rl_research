@@ -39,7 +39,9 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     CARRIER_ABLATION_PROTOCOL_VERSION,
     CARRIER_NATIVE_TOOL_CALLS,
     CARRIER_POLICY_VERSION,
+    CHECKPOINT_GUIDANCE_PROFILES,
     CHECKPOINT_POLICY_VERSION,
+    DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
     DEFAULT_CARRIER,
     DIALECT,
     ENVIRONMENT_RENDERER_VERSION,
@@ -50,6 +52,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     capability_manifest,
     carrier_experiment_arm,
     get_system_prompt,
+    normalize_checkpoint_guidance_profile,
     normalize_carrier,
     prompt_hash,
     provider_tool_definitions,
@@ -1176,6 +1179,7 @@ def run_episode(
     mode: str,
     client: DeepSeekNativeClient,
     carrier: str = DEFAULT_CARRIER,
+    checkpoint_guidance_profile: str = DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
     experiment_arm: str | None = None,
     within_batch_order: str | None = None,
     runtime_config: RuntimeConfig,
@@ -1188,6 +1192,9 @@ def run_episode(
     batch_guard: BatchRequestGuard | None = None,
 ) -> dict[str, Any]:
     active_carrier = normalize_carrier(carrier)
+    active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
+        checkpoint_guidance_profile
+    )
     active_experiment_arm = experiment_arm or carrier_experiment_arm(active_carrier)
     if active_experiment_arm != carrier_experiment_arm(active_carrier):
         raise ValueError("experiment arm does not match the frozen carrier mapping")
@@ -1202,7 +1209,12 @@ def run_episode(
         mode=mode,
         config=runtime_config,
     )
-    system_prompt = get_system_prompt(mode, teacher=True, carrier=active_carrier)
+    system_prompt = get_system_prompt(
+        mode,
+        teacher=True,
+        carrier=active_carrier,
+        checkpoint_guidance_profile=active_checkpoint_guidance,
+    )
     tools = provider_tool_definitions(mode)
     phase_history: list[dict[str, Any]] = []
     turns: list[dict[str, Any]] = []
@@ -1532,6 +1544,7 @@ def run_episode(
         "dialect": DIALECT,
         "environment_renderer_version": ENVIRONMENT_RENDERER_VERSION,
         "checkpoint_policy_version": CHECKPOINT_POLICY_VERSION,
+        "checkpoint_guidance_profile": active_checkpoint_guidance,
         "executor_version": EXECUTOR_VERSION,
         "tool_schema_hash": tool_schema_hash(mode),
         "carrier_ablation_protocol_version": CARRIER_ABLATION_PROTOCOL_VERSION,
@@ -1539,7 +1552,12 @@ def run_episode(
         "experiment_arm": active_experiment_arm,
         "within_batch_order": within_batch_order,
         "carrier": active_carrier,
-        "prompt_hash": prompt_hash(mode, teacher=True, carrier=active_carrier),
+        "prompt_hash": prompt_hash(
+            mode,
+            teacher=True,
+            carrier=active_carrier,
+            checkpoint_guidance_profile=active_checkpoint_guidance,
+        ),
         "example_index": example_index,
         "task_position": task_position,
         "example_id": task.get("example_id") or task.get("instance_id"),
@@ -1551,6 +1569,7 @@ def run_episode(
             mode,
             teacher=True,
             carrier=active_carrier,
+            checkpoint_guidance_profile=active_checkpoint_guidance,
         ),
         "runtime_config": _runtime_config_payload(
             runtime_config,
@@ -1608,6 +1627,13 @@ def build_manifest(
     batch_limits: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     active_carrier = normalize_carrier(getattr(args, "carrier", DEFAULT_CARRIER))
+    active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
+        getattr(
+            args,
+            "checkpoint_guidance_profile",
+            DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
+        )
+    )
     experiment_arm = getattr(args, "experiment_arm", None) or carrier_experiment_arm(
         active_carrier
     )
@@ -1637,6 +1663,7 @@ def build_manifest(
         "dialect": DIALECT,
         "environment_renderer_version": ENVIRONMENT_RENDERER_VERSION,
         "checkpoint_policy_version": CHECKPOINT_POLICY_VERSION,
+        "checkpoint_guidance_profile": active_checkpoint_guidance,
         "executor_version": EXECUTOR_VERSION,
         "tool_schema_hash": tool_schema_hash(args.mode),
         "carrier_ablation_protocol_version": CARRIER_ABLATION_PROTOCOL_VERSION,
@@ -1648,6 +1675,7 @@ def build_manifest(
             args.mode,
             teacher=True,
             carrier=active_carrier,
+            checkpoint_guidance_profile=active_checkpoint_guidance,
         ),
         "runner": RUNNER_VERSION if strict_batch else LEGACY_RUNNER_VERSION,
         "run_started_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -1666,6 +1694,7 @@ def build_manifest(
             args.mode,
             teacher=True,
             carrier=active_carrier,
+            checkpoint_guidance_profile=active_checkpoint_guidance,
         ),
         "runtime_config": _runtime_config_payload(config, max_model_turns=args.max_model_turns),
         "max_tokens": args.max_tokens,
@@ -1702,6 +1731,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--mode", choices=MODES, required=True)
     parser.add_argument("--carrier", choices=CARRIERS, default=DEFAULT_CARRIER)
+    parser.add_argument(
+        "--checkpoint-guidance-profile",
+        choices=CHECKPOINT_GUIDANCE_PROFILES,
+        default=DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
+    )
     parser.add_argument("--experiment-arm", choices=("A", "B"))
     parser.add_argument(
         "--within-batch-order",
@@ -1827,6 +1861,7 @@ def main(argv: list[str] | None = None) -> int:
             "carrier": args.carrier,
             "carrier_ablation_protocol_version": CARRIER_ABLATION_PROTOCOL_VERSION,
             "carrier_policy_version": CARRIER_POLICY_VERSION,
+            "checkpoint_guidance_profile": args.checkpoint_guidance_profile,
             "experiment_arm": args.experiment_arm or expected_arm,
             "within_batch_order": args.within_batch_order,
             "tasks": [position for position, _ in selected],
@@ -1846,6 +1881,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.mode,
                 teacher=True,
                 carrier=args.carrier,
+                checkpoint_guidance_profile=args.checkpoint_guidance_profile,
             ),
             "result_dir": str(args.result_dir),
             "admission_status": ADMISSION_STATUS,
@@ -1953,6 +1989,7 @@ def main(argv: list[str] | None = None) -> int:
                     mode=args.mode,
                     client=client,
                     carrier=args.carrier,
+                    checkpoint_guidance_profile=args.checkpoint_guidance_profile,
                     experiment_arm=args.experiment_arm,
                     within_batch_order=args.within_batch_order,
                     runtime_config=runtime_config,

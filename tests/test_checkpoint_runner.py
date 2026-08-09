@@ -280,6 +280,48 @@ def test_causal_runner_hides_reference_and_resets_history_after_checkpoint(tmp_p
     )
 
 
+def test_checkpoint_stress_guidance_is_identity_bound_and_replayable(tmp_path):
+    task = _task(tmp_path)
+    client = FakeClient(
+        [
+            [("describe_table", {"tables": ["items"]})],
+            [
+                (
+                    "commit_checkpoint",
+                    {
+                        "progress_summary": ["Confirmed the item population."],
+                        "remaining_uncertainties": ["The final count remains."],
+                        "next_targets": ["Construct the exact count relation."],
+                    },
+                )
+            ],
+            [("execute_sql", {"sql": "SELECT COUNT(*) AS n FROM items"})],
+            [("answer", {"table": "sql_001"})],
+        ]
+    )
+    record = run_episode(
+        task,
+        task_position=0,
+        mode="direct",
+        client=client,
+        checkpoint_guidance_profile="checkpoint-stress-v1",
+        runtime_config=RuntimeConfig(),
+        max_model_turns=8,
+        max_tokens=128,
+        max_completion_tokens=256,
+        api_retries=2,
+    )
+    assert record["correct"] and record["legal"]
+    assert record["checkpoint_guidance_profile"] == "checkpoint-stress-v1"
+    assert "TEACHER CHECKPOINT STRESS GUIDANCE" in client.requests[0][0]["content"]
+    assert audit_record(record)["passed"]
+    assert fresh_replay_record(record, task)["passed"]
+
+    forged = deepcopy(record)
+    forged["checkpoint_guidance_profile"] = "adaptive-v1"
+    assert not audit_record(forged)["passed"]
+
+
 def test_multiple_native_calls_are_one_state_preserving_semantic_error(tmp_path):
     task = _task(tmp_path)
     client = FakeClient(

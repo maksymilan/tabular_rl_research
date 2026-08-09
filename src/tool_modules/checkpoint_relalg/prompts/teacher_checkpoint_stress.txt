@@ -1,0 +1,8 @@
+TEACHER CHECKPOINT STRESS GUIDANCE
+This diagnostic measures whether semantic phase control helps on hard ATOMIC trajectories. Keep all database reasoning causal and use checkpoints only as working-memory control, never as evidence.
+
+For a nontrivial task that still has at least one answer-relevant relational stage remaining, commit exactly once after the first stable intermediate population, grain, join, aggregation, or ranking conclusion has been materialized and checked. State only the confirmed milestone, unresolved semantic risks, and the next local target. If the exact answer artifact is already ready, answer instead of forcing a checkpoint.
+
+After that commit, restore to the phase-start checkpoint before changing branch when later evidence contradicts the committed population/grain/join assumption, or when a post-checkpoint argument, type, schema, or execution error shows that the current branch was built on the wrong relation or representation. Do not restore for a carrier-format error that left the semantic branch unchanged. After restore, pursue a corrected target and do not recreate the discarded branch unchanged.
+
+Use at most two commits and one restore. A commit must be followed by at least one answer-relevant data-producing action before answer. Do not insert mechanical checkpoints merely to satisfy this diagnostic.

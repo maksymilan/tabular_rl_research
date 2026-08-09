@@ -21,6 +21,7 @@ from .protocol import (
     CARRIER_ABLATION_PROTOCOL_VERSION,
     CARRIER_NATIVE_TOOL_CALLS,
     CARRIER_POLICY_VERSION,
+    DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
     DEFAULT_CARRIER,
     CHECKPOINT_POLICY_VERSION,
     DIALECT,
@@ -33,6 +34,7 @@ from .protocol import (
     get_system_prompt,
     prompt_hash,
     normalize_carrier,
+    normalize_checkpoint_guidance_profile,
     tool_schema_hash,
 )
 from .provider_tools import (
@@ -255,6 +257,16 @@ def _runtime_identity_issues(record: Mapping[str, Any], *, root: str) -> list[st
             issues.append(f"{root}.{field} does not match the current runtime")
     mode = record.get("mode")
     carrier = record.get("carrier", DEFAULT_CARRIER)
+    try:
+        checkpoint_guidance_profile = normalize_checkpoint_guidance_profile(
+            record.get(
+                "checkpoint_guidance_profile",
+                DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
+            )
+        )
+    except ValueError:
+        checkpoint_guidance_profile = DEFAULT_CHECKPOINT_GUIDANCE_PROFILE
+        issues.append(f"{root}.checkpoint_guidance_profile is invalid")
     if mode in {"direct", "atomic", "hybrid"} and carrier in CARRIERS:
         if _canonical(record.get("capability_manifest")) != _canonical(
             capability_manifest(mode, carrier)
@@ -279,7 +291,11 @@ def _runtime_identity_issues(record: Mapping[str, Any], *, root: str) -> list[st
                 carrier=carrier,
             ).manifest_fields()
             for field, expected in expected_scheme.items():
-                if field == "provider_response_envelope_version":
+                if field in {
+                    "provider_response_envelope_version",
+                    "prompt_hash",
+                    "teacher_prompt_sha256",
+                }:
                     continue
                 if _canonical(record.get(field)) != _canonical(expected):
                     issues.append(f"{root}.{field} does not match the current tool scheme")
@@ -289,6 +305,7 @@ def _runtime_identity_issues(record: Mapping[str, Any], *, root: str) -> list[st
                 mode,
                 teacher=True,
                 carrier=carrier,
+                checkpoint_guidance_profile=checkpoint_guidance_profile,
             ):
                 issues.append(f"{root}.prompt_hash does not match current protocol")
     return issues
@@ -309,6 +326,16 @@ def audit_record(record: Mapping[str, Any], *, record_index: int = 0) -> dict[st
     except ValueError:
         issues.append(f"{root}.carrier is invalid: {raw_carrier!r}")
         carrier = DEFAULT_CARRIER
+    try:
+        checkpoint_guidance_profile = normalize_checkpoint_guidance_profile(
+            record.get(
+                "checkpoint_guidance_profile",
+                DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
+            )
+        )
+    except ValueError:
+        issues.append(f"{root}.checkpoint_guidance_profile is invalid")
+        checkpoint_guidance_profile = DEFAULT_CHECKPOINT_GUIDANCE_PROFILE
     if carrier_declared:
         if record.get("carrier_ablation_protocol_version") != CARRIER_ABLATION_PROTOCOL_VERSION:
             issues.append(f"{root}.carrier_ablation_protocol_version is invalid")
@@ -328,6 +355,7 @@ def audit_record(record: Mapping[str, Any], *, record_index: int = 0) -> dict[st
             mode,
             teacher=True,
             carrier=carrier,
+            checkpoint_guidance_profile=checkpoint_guidance_profile,
         ):
             issues.append(f"{root}.teacher_prompt_sha256 does not match current protocol")
     issues.extend(_runtime_identity_issues(record, root=root))
@@ -407,6 +435,7 @@ def audit_record(record: Mapping[str, Any], *, record_index: int = 0) -> dict[st
                     mode,
                     teacher=True,
                     carrier=carrier,
+                    checkpoint_guidance_profile=checkpoint_guidance_profile,
                 ):
                     issues.append(f"{path}.model_input system prompt differs from current teacher prompt")
                 if (
@@ -1482,6 +1511,18 @@ def fresh_replay_record(
     except ValueError:
         carrier = DEFAULT_CARRIER
         issues.append(f"record[{record_index}].carrier is invalid under fresh replay")
+    try:
+        checkpoint_guidance_profile = normalize_checkpoint_guidance_profile(
+            record.get(
+                "checkpoint_guidance_profile",
+                DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
+            )
+        )
+    except ValueError:
+        checkpoint_guidance_profile = DEFAULT_CHECKPOINT_GUIDANCE_PROFILE
+        issues.append(
+            f"record[{record_index}].checkpoint_guidance_profile is invalid under fresh replay"
+        )
     db_path = task.get("db_path")
     if not isinstance(db_path, str) or not db_path:
         return {
@@ -1543,6 +1584,7 @@ def fresh_replay_record(
                         str(record.get("mode")),
                         teacher=True,
                         carrier=carrier,
+                        checkpoint_guidance_profile=checkpoint_guidance_profile,
                     ),
                 }
                 if _canonical(model_input[0]) != _canonical(expected_system):
@@ -1887,6 +1929,7 @@ def _manifest_binding_report(
         "dialect",
         "environment_renderer_version",
         "checkpoint_policy_version",
+        "checkpoint_guidance_profile",
         "executor_version",
         "tool_schema_hash",
         "carrier_ablation_protocol_version",

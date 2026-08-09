@@ -37,6 +37,13 @@ BACKEND = "sqlite"
 DIALECT = "sqlite"
 ENVIRONMENT_RENDERER_VERSION = "checkpoint-relalg-environment-renderer-v1"
 CHECKPOINT_POLICY_VERSION = "checkpoint-relalg-semantic-checkpoint-v1"
+CHECKPOINT_GUIDANCE_PROFILE_STANDARD = "adaptive-v1"
+CHECKPOINT_GUIDANCE_PROFILE_STRESS = "checkpoint-stress-v1"
+CHECKPOINT_GUIDANCE_PROFILES = (
+    CHECKPOINT_GUIDANCE_PROFILE_STANDARD,
+    CHECKPOINT_GUIDANCE_PROFILE_STRESS,
+)
+DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
 
 CANONICAL_TYPES = (
@@ -1283,6 +1290,17 @@ def normalize_carrier(carrier: str | None) -> str:
     return value
 
 
+def normalize_checkpoint_guidance_profile(profile: str | None) -> str:
+    value = (
+        DEFAULT_CHECKPOINT_GUIDANCE_PROFILE
+        if profile is None
+        else str(profile).strip().lower()
+    )
+    if value not in CHECKPOINT_GUIDANCE_PROFILES:
+        raise ValueError(f"unknown checkpoint guidance profile {profile!r}")
+    return value
+
+
 def assistant_carrier_protocol(carrier: str | None = None) -> str:
     active_carrier = normalize_carrier(carrier)
     if active_carrier == CARRIER_NATIVE_TOOL_CALLS:
@@ -1307,14 +1325,25 @@ def get_system_prompt(
     *,
     teacher: bool = False,
     carrier: str = DEFAULT_CARRIER,
+    checkpoint_guidance_profile: str = DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
 ) -> str:
     """Build Shared Core + one short mode clause + optional teacher-only guidance."""
     active_mode = normalize_mode(mode)
     active_carrier = normalize_carrier(carrier)
+    active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
+        checkpoint_guidance_profile
+    )
     shared_core = _prompt_fragment("shared_core")
     fragments = [shared_core, _prompt_fragment(active_mode)]
     if teacher:
-        fragments.append(_prompt_fragment("teacher_checkpoint"))
+        checkpoint_fragment = (
+            "teacher_checkpoint"
+            if active_checkpoint_guidance == CHECKPOINT_GUIDANCE_PROFILE_STANDARD
+            else "teacher_checkpoint_stress"
+        )
+        fragments.append(_prompt_fragment(checkpoint_fragment))
+    elif active_checkpoint_guidance != DEFAULT_CHECKPOINT_GUIDANCE_PROFILE:
+        raise ValueError("non-default checkpoint guidance is teacher-only")
     if active_carrier == CARRIER_TEXT_JSON:
         native_clause = "Make exactly one native tool call per turn."
         if shared_core.count(native_clause) != 1:
@@ -1351,9 +1380,13 @@ def prompt_hash(
     *,
     teacher: bool = False,
     carrier: str = DEFAULT_CARRIER,
+    checkpoint_guidance_profile: str = DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
 ) -> str:
     active_mode = normalize_mode(mode)
     active_carrier = normalize_carrier(carrier)
+    active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
+        checkpoint_guidance_profile
+    )
     payload = {
         "protocol_version": PROTOCOL_VERSION,
         "scheme": SCHEME,
@@ -1363,8 +1396,11 @@ def prompt_hash(
             active_mode,
             teacher=teacher,
             carrier=active_carrier,
+            checkpoint_guidance_profile=active_checkpoint_guidance,
         ),
     }
+    if active_checkpoint_guidance != DEFAULT_CHECKPOINT_GUIDANCE_PROFILE:
+        payload["checkpoint_guidance_profile"] = active_checkpoint_guidance
     # Preserve the frozen native prompt hashes.  Native is the implicit v1
     # carrier; the text diagnostic is explicitly namespaced in its hash.
     if active_carrier != CARRIER_NATIVE_TOOL_CALLS:
@@ -1475,10 +1511,14 @@ __all__ = [
     "CARRIER_NATIVE_TOOL_CALLS",
     "CARRIER_POLICY_VERSION",
     "CARRIER_TEXT_JSON",
+    "CHECKPOINT_GUIDANCE_PROFILES",
+    "CHECKPOINT_GUIDANCE_PROFILE_STANDARD",
+    "CHECKPOINT_GUIDANCE_PROFILE_STRESS",
     "COMPARISON_OPERATORS",
     "CHECKPOINT_POLICY_VERSION",
     "CONTROL_TOOLS",
     "DEFAULT_CARRIER",
+    "DEFAULT_CHECKPOINT_GUIDANCE_PROFILE",
     "MAX_AST_DEPTH",
     "MAX_EXPRESSION_DEPTH",
     "MODE_TOOLS",
@@ -1513,6 +1553,7 @@ __all__ = [
     "get_tool_definitions",
     "normalize_mode",
     "normalize_carrier",
+    "normalize_checkpoint_guidance_profile",
     "parameter_schema",
     "prompt_hash",
     "provider_tool_definitions",

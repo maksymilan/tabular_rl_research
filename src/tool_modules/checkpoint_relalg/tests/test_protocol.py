@@ -482,6 +482,23 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
         self.assertNotIn("execute_sql", atomic)
         self.assertNotIn("TEACHER CHECKPOINT GUIDANCE", atomic)
         self.assertIn("TEACHER CHECKPOINT GUIDANCE", teacher)
+        stress = get_system_prompt(
+            "atomic",
+            teacher=True,
+            checkpoint_guidance_profile="checkpoint-stress-v1",
+        )
+        self.assertIn("TEACHER CHECKPOINT STRESS GUIDANCE", stress)
+        self.assertIn("commit exactly once", stress)
+        self.assertIn("restore to the phase-start checkpoint", stress)
+        self.assertNotEqual(stress, teacher)
+        self.assertNotEqual(
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                checkpoint_guidance_profile="checkpoint-stress-v1",
+            ),
+            prompt_hash("atomic", teacher=True),
+        )
         for implementation_detail in ("snapshot hash", "reward", "SQLite", "error code", "provider validator"):
             self.assertNotIn(implementation_detail, teacher)
         self.assertLess(len(teacher), 5000)

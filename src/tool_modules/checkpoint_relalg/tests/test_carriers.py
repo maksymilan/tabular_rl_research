@@ -1134,6 +1134,7 @@ def test_result_dir_audit_rejects_synchronized_manifest_identity_tamper(tmp_path
         "max_batch_calls", "mode", "tool_schema_sha256", "student_prompt_sha256",
         "teacher_prompt_sha256", "admission_status", "capability_manifest", "backend",
         "dialect", "environment_renderer_version", "checkpoint_policy_version",
+        "checkpoint_guidance_profile",
         "executor_version", "tool_schema_hash", "carrier_ablation_protocol_version",
         "carrier_policy_version", "experiment_arm", "within_batch_order", "carrier",
         "prompt_hash", "provider_request_options", "runtime_config",
