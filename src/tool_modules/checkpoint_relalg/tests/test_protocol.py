@@ -529,6 +529,33 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 "atomic",
                 checkpoint_guidance_profile="restore-trigger-v1",
             )
+        restore_target = get_system_prompt(
+            "atomic",
+            teacher=True,
+            checkpoint_guidance_profile="restore-target-v2",
+        )
+        self.assertIn("TEACHER RESTORE-TARGET V2 DIAGNOSTIC GUIDANCE", restore_target)
+        self.assertIn("Never call restore_checkpoint before a successful commit", restore_target)
+        self.assertIn("Never restore root", restore_target)
+        self.assertIn("A successful action clears", restore_target)
+        self.assertNotEqual(restore_target, restore_trigger)
+        self.assertNotEqual(
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                checkpoint_guidance_profile="restore-target-v2",
+            ),
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                checkpoint_guidance_profile="restore-trigger-v1",
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "teacher-only"):
+            get_system_prompt(
+                "atomic",
+                checkpoint_guidance_profile="restore-target-v2",
+            )
         for implementation_detail in ("snapshot hash", "reward", "SQLite", "error code", "provider validator"):
             self.assertNotIn(implementation_detail, teacher)
         self.assertLess(len(teacher), 5000)

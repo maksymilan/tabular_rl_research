@@ -322,7 +322,16 @@ def test_checkpoint_stress_guidance_is_identity_bound_and_replayable(tmp_path):
     assert not audit_record(forged)["passed"]
 
 
-def test_restore_trigger_guidance_executes_and_replays_a_recovery_branch(tmp_path):
+@pytest.mark.parametrize(
+    ("profile", "heading"),
+    [
+        ("restore-trigger-v1", "TEACHER RESTORE-TRIGGER DIAGNOSTIC GUIDANCE"),
+        ("restore-target-v2", "TEACHER RESTORE-TARGET V2 DIAGNOSTIC GUIDANCE"),
+    ],
+)
+def test_restore_guidance_executes_and_replays_a_recovery_branch(
+    tmp_path, profile, heading
+):
     task = _task(tmp_path)
     client = FakeClient(
         [
@@ -358,7 +367,7 @@ def test_restore_trigger_guidance_executes_and_replays_a_recovery_branch(tmp_pat
         task_position=0,
         mode="direct",
         client=client,
-        checkpoint_guidance_profile="restore-trigger-v1",
+        checkpoint_guidance_profile=profile,
         runtime_config=RuntimeConfig(),
         max_model_turns=10,
         max_tokens=128,
@@ -368,15 +377,15 @@ def test_restore_trigger_guidance_executes_and_replays_a_recovery_branch(tmp_pat
     assert record["correct"] and record["legal"]
     assert record["checkpoint_count"] == 2
     assert record["restore_count"] == 1
-    assert record["checkpoint_guidance_profile"] == "restore-trigger-v1"
-    assert "TEACHER RESTORE-TRIGGER DIAGNOSTIC GUIDANCE" in client.requests[0][0]["content"]
+    assert record["checkpoint_guidance_profile"] == profile
+    assert heading in client.requests[0][0]["content"]
     assert record["turns"][4]["result"]["phase_transition"] == "restore"
     assert record["turns"][4]["provider_phase_history_reset"] is True
     assert audit_record(record)["passed"]
     assert fresh_replay_record(record, task)["passed"]
 
     forged = deepcopy(record)
-    forged["checkpoint_guidance_profile"] = "checkpoint-stress-v1"
+    forged["checkpoint_guidance_profile"] = "adaptive-v1"
     assert not audit_record(forged)["passed"]
 
 
