@@ -499,6 +499,36 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
             ),
             prompt_hash("atomic", teacher=True),
         )
+        restore_trigger = get_system_prompt(
+            "atomic",
+            teacher=True,
+            checkpoint_guidance_profile="restore-trigger-v1",
+        )
+        self.assertIn("TEACHER RESTORE-TRIGGER DIAGNOSTIC GUIDANCE", restore_trigger)
+        self.assertIn("before a third branch attempt", restore_trigger)
+        self.assertIn(
+            "same non-carrier type, schema, or execution error occurs twice",
+            restore_trigger,
+        )
+        self.assertIn("never trigger restore", restore_trigger)
+        self.assertNotEqual(restore_trigger, stress)
+        self.assertNotEqual(
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                checkpoint_guidance_profile="restore-trigger-v1",
+            ),
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                checkpoint_guidance_profile="checkpoint-stress-v1",
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "teacher-only"):
+            get_system_prompt(
+                "atomic",
+                checkpoint_guidance_profile="restore-trigger-v1",
+            )
         for implementation_detail in ("snapshot hash", "reward", "SQLite", "error code", "provider validator"):
             self.assertNotIn(implementation_detail, teacher)
         self.assertLess(len(teacher), 5000)

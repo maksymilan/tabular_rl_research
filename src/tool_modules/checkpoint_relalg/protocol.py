@@ -39,9 +39,11 @@ ENVIRONMENT_RENDERER_VERSION = "checkpoint-relalg-environment-renderer-v1"
 CHECKPOINT_POLICY_VERSION = "checkpoint-relalg-semantic-checkpoint-v1"
 CHECKPOINT_GUIDANCE_PROFILE_STANDARD = "adaptive-v1"
 CHECKPOINT_GUIDANCE_PROFILE_STRESS = "checkpoint-stress-v1"
+CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER = "restore-trigger-v1"
 CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_STANDARD,
     CHECKPOINT_GUIDANCE_PROFILE_STRESS,
+    CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER,
 )
 DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
@@ -1336,11 +1338,13 @@ def get_system_prompt(
     shared_core = _prompt_fragment("shared_core")
     fragments = [shared_core, _prompt_fragment(active_mode)]
     if teacher:
-        checkpoint_fragment = (
-            "teacher_checkpoint"
-            if active_checkpoint_guidance == CHECKPOINT_GUIDANCE_PROFILE_STANDARD
-            else "teacher_checkpoint_stress"
-        )
+        checkpoint_fragment = {
+            CHECKPOINT_GUIDANCE_PROFILE_STANDARD: "teacher_checkpoint",
+            CHECKPOINT_GUIDANCE_PROFILE_STRESS: "teacher_checkpoint_stress",
+            CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER: (
+                "teacher_checkpoint_restore_trigger"
+            ),
+        }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(checkpoint_fragment))
     elif active_checkpoint_guidance != DEFAULT_CHECKPOINT_GUIDANCE_PROFILE:
         raise ValueError("non-default checkpoint guidance is teacher-only")
@@ -1512,6 +1516,7 @@ __all__ = [
     "CARRIER_POLICY_VERSION",
     "CARRIER_TEXT_JSON",
     "CHECKPOINT_GUIDANCE_PROFILES",
+    "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER",
     "CHECKPOINT_GUIDANCE_PROFILE_STANDARD",
     "CHECKPOINT_GUIDANCE_PROFILE_STRESS",
     "COMPARISON_OPERATORS",

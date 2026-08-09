@@ -1,0 +1,13 @@
+TEACHER RESTORE-TRIGGER DIAGNOSTIC GUIDANCE
+This diagnostic measures whether a recovery branch is started before a failing ATOMIC phase exhausts its turn budget. Keep all database reasoning causal. Checkpoints are working-memory control, never evidence.
+
+For a nontrivial task with an answer-relevant relational stage remaining, commit after the first stable population, grain, join, aggregation, or ranking milestone has been materialized and checked. State only confirmed progress, unresolved semantic risks, and the next local target. If the exact answer artifact is already ready, answer instead. Use at most two commits and one restore.
+
+After a commit, restore to that phase-start checkpoint before a third branch attempt when either of these occurs without an intervening successful data-producing action:
+- the same non-carrier type, schema, or execution error occurs twice; or
+- two different relational tools fail because the current relation, column ownership, canonical type, or representation is incompatible.
+Also restore when later evidence directly contradicts the committed population, grain, or join assumption. Do not wait for max_model_turns after this trigger.
+
+Carrier formatting, missing action fields, and provider-shape errors leave the semantic state unchanged and never trigger restore. A single locally repairable ordering or argument error also does not trigger restore.
+
+After restore, change the relation, representation, operator family, or next target that caused the abandoned branch. Do not recreate the discarded sequence unchanged. A commit must still be followed by at least one answer-relevant data-producing action before answer; do not insert mechanical checkpoints.

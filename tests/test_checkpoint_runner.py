@@ -322,6 +322,64 @@ def test_checkpoint_stress_guidance_is_identity_bound_and_replayable(tmp_path):
     assert not audit_record(forged)["passed"]
 
 
+def test_restore_trigger_guidance_executes_and_replays_a_recovery_branch(tmp_path):
+    task = _task(tmp_path)
+    client = FakeClient(
+        [
+            [("describe_table", {"tables": ["items"]})],
+            [("execute_sql", {"sql": "SELECT id FROM items ORDER BY id"})],
+            [
+                (
+                    "commit_checkpoint",
+                    {
+                        "progress_summary": ["Confirmed the item population."],
+                        "remaining_uncertainties": ["The final count remains."],
+                        "next_targets": ["Construct the exact count relation."],
+                    },
+                )
+            ],
+            [("execute_sql", {"sql": "SELECT id FROM items WHERE id = 1"})],
+            [
+                (
+                    "restore_checkpoint",
+                    {
+                        "checkpoint_id": "checkpoint_001",
+                        "reason": "The branch used the wrong output grain.",
+                        "next_targets": ["Build one grounded count relation."],
+                    },
+                )
+            ],
+            [("execute_sql", {"sql": "SELECT COUNT(*) AS n FROM items"})],
+            [("answer", {"table": "sql_003"})],
+        ]
+    )
+    record = run_episode(
+        task,
+        task_position=0,
+        mode="direct",
+        client=client,
+        checkpoint_guidance_profile="restore-trigger-v1",
+        runtime_config=RuntimeConfig(),
+        max_model_turns=10,
+        max_tokens=128,
+        max_completion_tokens=256,
+        api_retries=2,
+    )
+    assert record["correct"] and record["legal"]
+    assert record["checkpoint_count"] == 2
+    assert record["restore_count"] == 1
+    assert record["checkpoint_guidance_profile"] == "restore-trigger-v1"
+    assert "TEACHER RESTORE-TRIGGER DIAGNOSTIC GUIDANCE" in client.requests[0][0]["content"]
+    assert record["turns"][4]["result"]["phase_transition"] == "restore"
+    assert record["turns"][4]["provider_phase_history_reset"] is True
+    assert audit_record(record)["passed"]
+    assert fresh_replay_record(record, task)["passed"]
+
+    forged = deepcopy(record)
+    forged["checkpoint_guidance_profile"] = "checkpoint-stress-v1"
+    assert not audit_record(forged)["passed"]
+
+
 def test_multiple_native_calls_are_one_state_preserving_semantic_error(tmp_path):
     task = _task(tmp_path)
     client = FakeClient(
