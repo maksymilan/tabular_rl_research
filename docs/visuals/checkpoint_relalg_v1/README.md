@@ -26,6 +26,8 @@ elements remain individually selectable in OmniGraffle.
 - `CHECKPOINT_RELALG_VISUAL_STANDARD.md` defines the reusable drawing contract.
 - `checkpoint_relalg_formulas.tex` is the canonical formula source.
 - `equations/F01.svg` through `F12.svg` are path-only LaTeX renderings.
+- `equations/formula_sources.json` binds each canonical formula source to its reviewed
+  vector output, so unchanged equations are reused byte-for-byte across rebuilds.
 - `build_checkpoint_relalg_visuals.py` deterministically regenerates vector canvases,
   previews, equation assets, and `visual_manifest.json`.
 - `visual_manifest.json` records protocol identity and content hashes.

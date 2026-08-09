@@ -11,6 +11,7 @@ import base64
 import hashlib
 import html
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -20,8 +21,10 @@ from typing import Iterable
 
 HERE = Path(__file__).resolve().parent
 EQUATION_DIR = HERE / "equations"
+EQUATION_CACHE = EQUATION_DIR / "formula_sources.json"
 STANDARD_VERSION = "checkpoint-relalg-visual-standard-v1"
 PROTOCOL_VERSION = "checkpoint-relalg-v1"
+FORMULA_RENDERER_VERSION = "latex-dvisvgm-path-svg-v1"
 
 COLORS = {
     "canvas": "#F7F8FC",
@@ -57,16 +60,22 @@ FORMULAS = {
     "F07": r"\mu_{R\bowtie_\theta S}(r,s)=\mu_R(r)\,\mu_S(s)\,\mathbf{1}[\theta(r,s)]",
     "F08": r"C_k=\langle D_k,A_k,O_k,U_k,h_k\rangle,\qquad h_k=\operatorname{SHA256}\!\left(\operatorname{canon}(S_k)\right)",
     "F09": r"\operatorname{Restore}(C_j):\quad S\leftarrow S(C_j),\qquad\mathcal{P}_{\mathrm{active}}\leftarrow\operatorname{Ancestors}(C_j)\cup\{C_{\mathrm{recovery}}\}",
-    "F10": r"S_{t+1}=\begin{cases}\operatorname{Apply}(S_t,a_t),&\operatorname{valid}(a_t),\\S_t,&\operatorname{rejected}(a_t)\lor\operatorname{failed}(a_t),\end{cases}\qquad H(S_{t+1})=H(S_t)\ \text{on failure}",
+    "F10": r"\begin{aligned}S_{t+1}&=\begin{cases}\operatorname{Apply}(S_t,a_t),&\operatorname{valid}(a_t),\\S_t,&\operatorname{rejected}(a_t)\lor\operatorname{failed}(a_t),\end{cases}\\[3pt]H(S_{t+1})&=H(S_t)\qquad\text{on failure}.\end{aligned}",
     "F11": r"\widehat{R}=\operatorname{Artifact}(a_T),\qquad\operatorname{Acc}_{\mathrm{official}}=\mathbf{1}\!\left[\operatorname{Set}(\widehat{R})=\operatorname{Set}(R^*)\right]",
     "F12": r"\operatorname{Strict}(\widehat{R},R^*)=\operatorname{Schema}\land\operatorname{Rows}_{\mathrm{multiset/sequence}}\land\operatorname{NULL}\land\operatorname{Multiplicity}",
 }
 
 
-def _run(command: list[str], *, cwd: Path) -> None:
+def _run(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+) -> None:
     completed = subprocess.run(
         command,
         cwd=cwd,
+        env={**os.environ, **(env or {})},
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -79,43 +88,75 @@ def _run(command: list[str], *, cwd: Path) -> None:
         )
 
 
+def _formula_fingerprint(source: str) -> str:
+    payload = f"{FORMULA_RENDERER_VERSION}\0{source}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def render_equations() -> dict[str, str]:
-    """Render every canonical formula to path-only SVG and return data URIs."""
+    """Render changed formulas to path-only SVG and return stable data URIs."""
 
     EQUATION_DIR.mkdir(parents=True, exist_ok=True)
+    cache: dict[str, dict[str, str]] = {}
+    if EQUATION_CACHE.exists():
+        loaded = json.loads(EQUATION_CACHE.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            cache = loaded
+    updated_cache: dict[str, dict[str, str]] = {}
     data_uris: dict[str, str] = {}
     for formula_id, source in FORMULAS.items():
-        with tempfile.TemporaryDirectory(prefix=f"{formula_id.lower()}-", dir=HERE) as tmp:
-            temp_dir = Path(tmp)
-            tex = temp_dir / f"{formula_id}.tex"
-            tex.write_text(
-                "\n".join(
+        output = EQUATION_DIR / f"{formula_id}.svg"
+        source_sha256 = _formula_fingerprint(source)
+        cached = cache.get(formula_id, {})
+        output_sha256 = _sha256(output) if output.exists() else ""
+        cache_hit = (
+            cached.get("source_sha256") == source_sha256
+            and cached.get("output_sha256") == output_sha256
+            and bool(output_sha256)
+        )
+        if not cache_hit:
+            with tempfile.TemporaryDirectory(prefix=f"{formula_id.lower()}-", dir=HERE) as tmp:
+                temp_dir = Path(tmp)
+                tex = temp_dir / f"{formula_id}.tex"
+                tex.write_text(
+                    "\n".join(
+                        [
+                            r"\documentclass[12pt]{standalone}",
+                            r"\usepackage{mathptmx}",
+                            r"\usepackage{amsmath,amssymb}",
+                            r"\begin{document}",
+                            rf"$\displaystyle {source}$",
+                            r"\end{document}",
+                            "",
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+                _run(
+                    ["latex", "-interaction=nonstopmode", "-halt-on-error", tex.name],
+                    cwd=temp_dir,
+                )
+                _run(
                     [
-                        r"\documentclass[12pt]{standalone}",
-                        r"\usepackage{mathptmx}",
-                        r"\usepackage{amsmath,amssymb}",
-                        r"\begin{document}",
-                        rf"$\displaystyle {source}$",
-                        r"\end{document}",
-                        "",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            _run(["latex", "-interaction=nonstopmode", "-halt-on-error", tex.name], cwd=temp_dir)
-            output = EQUATION_DIR / f"{formula_id}.svg"
-            _run(
-                [
-                    "dvisvgm",
-                    "--no-fonts",
-                    "--exact-bbox",
-                    f"--output={output}",
-                    f"{formula_id}.dvi",
-                ],
-                cwd=temp_dir,
-            )
+                        "dvisvgm",
+                        "--no-fonts",
+                        "--exact-bbox",
+                        f"--output={output}",
+                        f"{formula_id}.dvi",
+                    ],
+                    cwd=temp_dir,
+                )
+            output_sha256 = _sha256(output)
+        updated_cache[formula_id] = {
+            "source_sha256": source_sha256,
+            "output_sha256": output_sha256,
+        }
         encoded = base64.b64encode(output.read_bytes()).decode("ascii")
         data_uris[formula_id] = f"data:image/svg+xml;base64,{encoded}"
+    EQUATION_CACHE.write_text(
+        json.dumps(updated_cache, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return data_uris
 
 
@@ -135,6 +176,7 @@ def render_formula_sheet() -> Path:
                 str(source),
             ],
             cwd=HERE,
+            env={"SOURCE_DATE_EPOCH": "0", "FORCE_SOURCE_DATE": "1"},
         )
         shutil.copy2(temp_dir / "checkpoint_relalg_formulas.pdf", output)
     return output
@@ -268,6 +310,12 @@ class Canvas:
         self.rect(x, y, w, h, fill=fill, stroke=color, sw=1.2, rx=h / 2)
         self.text(x + w / 2, y + h / 2 + 4, value, cls="chip", fill=color, anchor="middle", weight="bold")
 
+    def edge_label(self, x: float, y: float, w: float, value: str, color: str) -> None:
+        """Draw a readable connector label with an opaque canvas-color backing."""
+
+        self.rect(x, y, w, 26, fill=COLORS["canvas"], stroke=COLORS["canvas"], sw=0, rx=4)
+        self.text(x + w / 2, y + 18, value, cls="edge", fill=color, anchor="middle")
+
     def formula(self, formula_id: str, x: float, y: float, w: float, h: float, *, caption: str | None = None) -> None:
         self.rect(x, y, w, h, fill="#FFFFFF", stroke=COLORS["border"], sw=1.2, rx=10)
         if caption:
@@ -315,14 +363,14 @@ class Canvas:
         css = """
 <style>
 text { font-family: 'Times New Roman', Times, serif; }
-.title { font-size: 34px; }
-.subtitle { font-size: 16px; }
-.section { font-size: 18px; }
-.node { font-size: 15px; }
-.body { font-size: 12.5px; }
-.edge { font-size: 11px; font-style: italic; }
-.chip { font-size: 10.5px; }
-.foot { font-size: 10px; }
+.title { font-size: 38px; }
+.subtitle { font-size: 18px; }
+.section { font-size: 20px; }
+.node { font-size: 16px; }
+.body { font-size: 14px; }
+.edge { font-size: 13px; font-style: italic; }
+.chip { font-size: 13px; }
+.foot { font-size: 13px; }
 </style>
 """
         return (
@@ -346,7 +394,7 @@ def architecture(formulas: dict[str, str]) -> Canvas:
 
     c.group(48, 138, 286, 316, "TASK CONTRACT", COLORS["ink"])
     c.card(70, 196, 242, 92, "QUESTION", ["Requested semantics", "Output grain and shape"], color=COLORS["ink"], fill="#F4F6F8", icon="document")
-    c.card(70, 306, 242, 92, "EXTERNAL KNOWLEDGE", ["Task-given mappings", "Constants and definitions"], color=COLORS["ink"], fill="#F4F6F8", icon="document")
+    c.card(70, 306, 242, 92, "EXTERNAL KNOWLEDGE", ["Task-given mappings", "Constants and definitions"], color=COLORS["ink"], fill="#F4F6F8")
     c.text(70, 428, "Task authority only", cls="chip", fill=COLORS["ink"], weight="bold")
 
     c.group(356, 138, 360, 316, "PROMPT ASSEMBLY", COLORS["protocol"])
@@ -354,7 +402,7 @@ def architecture(formulas: dict[str, str]) -> Canvas:
     c.card(378, 310, 316, 124, "Dynamic context renderer", ["QUESTION → EXTERNAL KNOWLEDGE", "PHASE TARGETS → CHECKPOINT HISTORY", "ENVIRONMENT STATE → LAST ERROR"], color=COLORS["protocol"], fill=COLORS["light_blue"], icon="document")
 
     c.group(738, 138, 338, 316, "MODEL / PROVIDER", COLORS["provider"])
-    c.card(760, 190, 294, 88, "Official DeepSeek", ["Chat Completions · thinking high", "Provider-private reasoning: audit only"], color=COLORS["provider"], fill=COLORS["light_violet"], icon="model")
+    c.card(760, 190, 294, 88, "Official DeepSeek", ["Chat Completions · thinking high", "Private reasoning: audit only"], color=COLORS["provider"], fill=COLORS["light_violet"], icon="model")
     c.card(760, 294, 142, 112, "Arm A", ["Text-JSON", "one raw action", "current rollout"], color=COLORS["provider"], fill="#F7F3FF")
     c.card(912, 294, 142, 112, "Arm B", ["Native tool_call", "one call", "ablation"], color=COLORS["muted"], fill="#F4F6F8", dash="5 4")
     c.text(907, 429, "Exactly one authored action", cls="chip", fill=COLORS["provider"], anchor="middle", weight="bold")
@@ -363,12 +411,12 @@ def architecture(formulas: dict[str, str]) -> Canvas:
     c.card(1120, 188, 166, 102, "Carrier parser", ["Strict envelope", "No semantic repair"], color=COLORS["protocol"], fill=COLORS["light_blue"], icon="shield")
     c.card(1302, 188, 176, 102, "Schema validator", ["Closed arguments", "Mode capability"], color=COLORS["protocol"], fill=COLORS["light_blue"], icon="shield")
     c.card(1120, 306, 166, 102, "State validator", ["Active handles", "Exact columns"], color=COLORS["protocol"], fill=COLORS["light_blue"], icon="shield")
-    c.card(1302, 306, 176, 102, "Runtime dispatcher", ["Perception · SQL", "Atomic · Control"], color=COLORS["protocol"], fill=COLORS["light_blue"], icon="terminal")
+    c.card(1302, 306, 176, 102, "Runtime dispatcher", ["Perception · SQL", "Atomic · Control"], color=COLORS["protocol"], fill=COLORS["light_blue"])
 
     c.group(1522, 138, 350, 316, "STATE / EXECUTION", COLORS["state"])
     c.card(1544, 188, 306, 94, "EnvironmentState", ["Active membership + immutable records", "Current phase · checkpoint · targets"], color=COLORS["state"], fill=COLORS["light_teal"], icon="stack")
-    c.card(1544, 298, 144, 112, "CheckpointStore", ["Snapshots", "Active path", "Restore branch"], color=COLORS["checkpoint"], fill=COLORS["light_violet"], icon="checkpoint")
-    c.card(1704, 298, 146, 112, "Artifact registry", ["Immutable tables", "Schema · order", "Derivation"], color=COLORS["state"], fill=COLORS["light_teal"], icon="table")
+    c.card(1544, 298, 144, 112, "Checkpoint store", ["Snapshots", "Active path", "Restore branch"], color=COLORS["checkpoint"], fill=COLORS["light_violet"])
+    c.card(1704, 298, 146, 112, "Artifact registry", ["Immutable tables", "Schema · order", "Derivation"], color=COLORS["state"], fill=COLORS["light_teal"])
 
     c.line([(334, 256), (356, 256)], color=COLORS["protocol"])
     c.line([(716, 256), (738, 256)], color=COLORS["protocol"])
@@ -390,8 +438,7 @@ def architecture(formulas: dict[str, str]) -> Canvas:
     c.line([(807, 648), (807, 660), (670, 660), (670, 674)], color=COLORS["execution"])
     c.line([(1002, 648), (1002, 674)], color=COLORS["execution"])
 
-    c.group(1134, 486, 738, 344, "ISOLATED SCORING AND AUDIT", COLORS["hidden"], dash="8 5")
-    c.text(1158, 526, "NO-LEAK BOUNDARY — no evaluator edge returns to the model", cls="chip", fill=COLORS["error"], weight="bold")
+    c.group(1134, 486, 738, 344, "ISOLATED SCORING AND AUDIT · NO-LEAK", COLORS["hidden"], dash="8 5")
     c.card(1158, 550, 208, 104, "Terminal artifact", ["answer(handle)", "Exact full relation", "Model does not copy values"], color=COLORS["state"], fill=COLORS["light_teal"], icon="table")
     c.card(1386, 550, 216, 104, "Hidden evaluator", ["Reference executes only", "after termination", "Never provider-visible"], color=COLORS["hidden"], fill=COLORS["light_gray"], icon="lock")
     c.card(1622, 550, 226, 104, "Two evaluation views", ["Official bird-set", "Strict artifact audit", "schema · order · NULL · bags"], color=COLORS["hidden"], fill=COLORS["light_gray"], icon="audit")
@@ -404,8 +451,8 @@ def architecture(formulas: dict[str, str]) -> Canvas:
 
     c.line([(1697, 454), (1697, 470), (812, 470), (812, 486)], color=COLORS["state"])
     c.line([(1697, 486), (1697, 464), (536, 464), (536, 434)], color=COLORS["state"], dash="6 5")
-    c.text(1110, 463, "Harness re-renders the causal state", cls="edge", fill=COLORS["state"], anchor="middle")
-    c.text(972, 842, "Bounded client retry = transport event, not a semantic action", cls="foot", fill=COLORS["warning"], anchor="middle")
+    c.edge_label(982, 451, 256, "Harness re-renders the causal state", COLORS["state"])
+    c.text(972, 850, "Bounded client retry = transport event, not a semantic action", cls="foot", fill=COLORS["warning"], anchor="middle")
 
     c.formula("F01", 64, 866, 850, 136, caption="Causal context")
     c.formula("F02", 936, 866, 920, 136, caption="Single-action invariant")
@@ -455,8 +502,6 @@ def tool_surface(formulas: dict[str, str]) -> Canvas:
     c.card(1412, 244, 212, 112, "commit_checkpoint", ["Meaningful milestone", "summary · uncertainty", "1–3 next targets"], color=COLORS["checkpoint"], fill=COLORS["light_violet"], icon="checkpoint")
     c.card(1638, 244, 212, 112, "restore_checkpoint", ["Explicit contradiction", "restore exact snapshot", "create recovery child"], color=COLORS["checkpoint"], fill=COLORS["light_violet"], icon="checkpoint")
     c.card(1412, 382, 438, 112, "answer", ["Consume exactly one active relation artifact", "The exact full relation is the answer evidence"], color=COLORS["success"], fill="#EAF8F0", icon="table")
-    c.text(1631, 548, "Zero checkpoints are legal for simple tasks", cls="foot", fill=COLORS["checkpoint"], anchor="middle")
-
     c.line([(348, 408), (370, 408)], color=COLORS["state"], dash="6 5")
     c.line([(646, 408), (668, 408)], color=COLORS["execution"])
     c.line([(1368, 408), (1390, 408)], color=COLORS["state"])
@@ -470,6 +515,7 @@ def tool_surface(formulas: dict[str, str]) -> Canvas:
     c.line([(1018, 616), (1018, 642)], color=COLORS["execution"])
     c.line([(1631, 494), (1631, 608), (1474, 608), (1474, 708)], color=COLORS["state"])
     c.line([(960, 642), (960, 620), (832, 620), (832, 616)], color=COLORS["state"], dash="5 4")
+    c.edge_label(1480, 532, 302, "Zero checkpoints are legal for simple tasks", COLORS["checkpoint"])
 
     c.formula("F04", 64, 808, 880, 104, caption="Mode surfaces")
     c.formula("F05", 966, 808, 890, 104, caption="Artifact contract")
@@ -487,22 +533,22 @@ def checkpoint_reasoning(formulas: dict[str, str]) -> Canvas:
     )
     c.text(64, 148, "PHASE TIMELINE", cls="section", fill=COLORS["checkpoint"], weight="bold")
     phases = [
-        (100, "P₀ · Bootstrap", "explore or answer directly", COLORS["protocol"]),
-        (410, "C₁ · Commit", "meaningful milestone", COLORS["checkpoint"]),
-        (690, "P₁(T₁)", "targeted investigation", COLORS["protocol"]),
-        (970, "C₂ · Commit", "later assumption", COLORS["checkpoint"]),
-        (1250, "Contradiction?", "explicit evidence", COLORS["error"]),
-        (1505, "Restore C₁", "new recovery child", COLORS["checkpoint"]),
-        (1740, "Answer", "active artifact", COLORS["success"]),
+        (96, 216, "P₀ · Bootstrap", "explore or answer directly", COLORS["protocol"]),
+        (380, 216, "C₁ · Commit", "meaningful milestone", COLORS["checkpoint"]),
+        (660, 216, "P₁(T₁)", "targeted investigation", COLORS["protocol"]),
+        (940, 216, "C₂ · Commit", "later assumption", COLORS["checkpoint"]),
+        (1210, 184, "Contradiction?", "explicit evidence", COLORS["error"]),
+        (1450, 176, "Restore C₁", "new recovery child", COLORS["checkpoint"]),
+        (1680, 176, "Answer", "active artifact", COLORS["success"]),
     ]
-    for idx, (x, title, detail, color) in enumerate(phases):
-        w = 220 if idx not in {4, 5, 6} else (190 if idx == 4 else 180)
-        c.card(x, 180, w, 96, title, [detail], color=color, fill="#FFFFFF", icon="checkpoint" if "C" in title or "Restore" in title else ("error" if idx == 4 else "table"))
+    for idx, (x, w, title, detail, color) in enumerate(phases):
+        icon = "checkpoint" if idx in {1, 3, 5} else ("error" if idx == 4 else "table")
+        c.card(x, 180, w, 96, title, [detail], color=color, fill="#FFFFFF", icon=icon)
         if idx < len(phases) - 1:
             nx = phases[idx + 1][0]
             c.line([(x + w, 228), (nx, 228)], color=COLORS["checkpoint"] if idx in {1, 3, 4} else COLORS["protocol"], dash="8 5" if idx in {1, 3, 4} else None)
-    c.line([(100, 288), (100, 312), (1770, 312), (1770, 276)], color=COLORS["muted"], dash="3 5")
-    c.text(900, 307, "Simple tasks may take the zero-checkpoint path P₀ → answer", cls="edge", fill=COLORS["muted"], anchor="middle")
+    c.line([(96, 288), (96, 320), (1768, 320), (1768, 276)], color=COLORS["muted"], dash="3 5")
+    c.edge_label(700, 292, 400, "Simple tasks may take the zero-checkpoint path P₀ → answer", COLORS["muted"])
 
     c.text(64, 366, "CHECKPOINT GRAPH", cls="section", fill=COLORS["checkpoint"], weight="bold")
     c.card(80, 402, 170, 82, "root", ["bootstrap snapshot"], color=COLORS["checkpoint"], fill=COLORS["light_violet"], icon="checkpoint")
@@ -515,7 +561,7 @@ def checkpoint_reasoning(formulas: dict[str, str]) -> Canvas:
     c.line([(550, 443), (610, 443), (610, 523), (680, 523)], color=COLORS["checkpoint"], dash="8 5")
     c.line([(918, 523), (1048, 523)], color=COLORS["success"])
 
-    c.card(1340, 350, 520, 214, "Structural-sharing snapshot", [
+    c.card(1340, 350, 516, 214, "Structural-sharing snapshot", [
         "discovered_schema_ids", "active_artifact_ids", "active_observation_ids",
         "usable_step_ids", "environment_state_hash",
         "Tables are not copied; immutable records are shared.",
@@ -560,7 +606,7 @@ def causal_execution(formulas: dict[str, str]) -> Canvas:
     c.text(64, 146, "CAUSAL LOOP", cls="section", fill=COLORS["protocol"], weight="bold")
     steps = [
         (82, 184, "Render causal prefix", "state + targets + last error", "document", COLORS["protocol"]),
-        (370, 184, "Official provider request", "one carrier response", "model", COLORS["provider"]),
+        (370, 184, "Provider request", "one carrier response", "model", COLORS["provider"]),
         (658, 184, "Envelope + schema", "strict one-action validation", "shield", COLORS["protocol"]),
         (946, 184, "State validation", "active handles + exact columns", "shield", COLORS["protocol"]),
         (1234, 184, "Compile / authorize", "typed IR or read-only SQL", "terminal", COLORS["execution"]),
@@ -575,7 +621,7 @@ def causal_execution(formulas: dict[str, str]) -> Canvas:
     lower = [
         (1522, 352, "Validate result", "types · rows · bytes · cells", "shield", COLORS["execution"]),
         (1234, 352, "Atomic publish", "artifact / observation + derivation", "table", COLORS["success"]),
-        (946, 352, "Update EnvironmentState", "immutable record + active membership", "stack", COLORS["state"]),
+        (946, 352, "Update state", "immutable record + active membership", "stack", COLORS["state"]),
         (658, 352, "Structured tool result", "causal feedback only", "document", COLORS["state"]),
     ]
     for idx, (x, y, title, detail, icon, color) in enumerate(lower, start=7):
@@ -595,7 +641,7 @@ def causal_execution(formulas: dict[str, str]) -> Canvas:
     c.line([(266, 610), (288, 610)], color=COLORS["error"])
     c.line([(442, 610), (464, 610)], color=COLORS["error"])
     c.line([(658, 610), (686, 610), (686, 476), (207, 476), (207, 452)], color=COLORS["error"], dash="6 5")
-    c.text(350, 478, "state hash unchanged", cls="edge", fill=COLORS["error"], anchor="middle")
+    c.chip(272, 458, 276, 30, "FAILED CALL: STATE HASH UNCHANGED", COLORS["error"], COLORS["light_red"])
 
     c.group(682, 498, 500, 252, "TERMINAL LANE", COLORS["success"])
     c.card(706, 554, 202, 112, "answer(active artifact)", ["exact relation evidence", "columns · rows · order"], color=COLORS["success"], fill="#EAF8F0", icon="table")
@@ -609,20 +655,19 @@ def causal_execution(formulas: dict[str, str]) -> Canvas:
     c.line([(1158, 610), (1230, 610)], color=COLORS["hidden"])
     c.line([(1414, 610), (1436, 610)], color=COLORS["hidden"])
     c.line([(1616, 610), (1638, 610)], color=COLORS["hidden"])
-    c.line([(1340, 536), (1340, 514), (1045, 514), (1045, 498)], color=COLORS["error"], dash="2 5", marker="stop")
-    c.text(1210, 510, "forbidden return flow", cls="edge", fill=COLORS["error"], anchor="middle")
+    c.chip(1556, 458, 292, 30, "NO RETURN EDGE TO THE MODEL", COLORS["error"], COLORS["light_red"])
 
-    c.group(48, 778, 1824, 174, "AUDIT, RESOURCE GUARDS, AND ADMISSION", COLORS["hidden"])
-    c.card(72, 832, 390, 88, "Immutable audit record", ["provider identity/history · state hashes · checkpoint path", "artifact dependencies · error events · fresh replay · no-leak"], color=COLORS["hidden"], fill=COLORS["light_gray"], icon="document")
-    c.card(484, 832, 394, 88, "Runtime and batch guards", ["model turns · calls · checkpoints · restores · SQL timeout", "artifact rows/bytes/cells · attempts · tokens · wall time · failure streaks"], color=COLORS["warning"], fill=COLORS["light_amber"], icon="shield")
-    c.card(900, 832, 406, 88, "Diagnostic trajectory", ["structure + replay + identity + causal-history gates", "Correct trajectories are still not automatically training data"], color=COLORS["protocol"], fill=COLORS["light_blue"], icon="audit")
-    c.card(1328, 832, 520, 88, "LOCKED: scheme-aware export and explicit admission", ["SFT/RL export remains disabled until a separate admission decision", "Never mix with atomic or native-tool-bundle result directories"], color=COLORS["error"], fill=COLORS["light_red"], icon="lock", dash="6 5")
-    c.line([(462, 876), (484, 876)], color=COLORS["hidden"])
-    c.line([(878, 876), (900, 876)], color=COLORS["hidden"])
-    c.line([(1306, 876), (1328, 876)], color=COLORS["error"], dash="6 5")
+    c.group(48, 766, 1824, 178, "AUDIT, RESOURCE GUARDS, AND ADMISSION", COLORS["hidden"])
+    c.card(72, 820, 390, 104, "Immutable audit record", ["provider history · state hashes · checkpoint path", "artifact dependencies · errors · budgets", "fresh replay · no-leak"], color=COLORS["hidden"], fill=COLORS["light_gray"], icon="document")
+    c.card(484, 820, 394, 104, "Runtime and batch guards", ["turns · calls · checkpoints · restores · SQL timeout", "artifact rows · bytes · cells · attempts · tokens", "wall time · provider and semantic failure streaks"], color=COLORS["warning"], fill=COLORS["light_amber"], icon="shield")
+    c.card(900, 820, 406, 104, "Diagnostic trajectory", ["structure · replay · identity · causal history", "Correct output is not automatic training admission"], color=COLORS["protocol"], fill=COLORS["light_blue"], icon="audit")
+    c.card(1328, 820, 520, 104, "LOCKED: explicit scheme-aware admission", ["SFT/RL export requires a separate admission decision", "Never mix atomic or native-tool-bundle result directories"], color=COLORS["error"], fill=COLORS["light_red"], icon="lock", dash="6 5")
+    c.line([(462, 872), (484, 872)], color=COLORS["hidden"])
+    c.line([(878, 872), (900, 872)], color=COLORS["hidden"])
+    c.line([(1306, 872), (1328, 872)], color=COLORS["error"], dash="6 5")
 
-    c.formula("F10", 64, 972, 900, 78, caption="Success / failure state invariant")
-    c.formula("F12", 986, 972, 870, 78, caption="Independent strict artifact audit")
+    c.formula("F10", 64, 948, 900, 122, caption="Success / failure state invariant")
+    c.formula("F12", 986, 948, 870, 122, caption="Independent strict artifact audit")
     return c
 
 
@@ -636,15 +681,15 @@ def visual_standard(formulas: dict[str, str]) -> Canvas:
 
     c.group(48, 138, 560, 300, "TYPOGRAPHY AND GRID", COLORS["ink"])
     typography = [
-        ("Canvas title", "34 pt · Bold"), ("Section heading", "20 pt · Bold"),
-        ("Node title", "15 pt · Bold"), ("Body", "12.5 pt · Regular"),
-        ("Edge label", "11 pt · Italic"), ("Chip / footnote", "10.5 / 10 pt"),
+        ("Canvas title", "38 px · Bold"), ("Section heading", "20 px · Bold"),
+        ("Node title", "16 px · Bold"), ("Body", "14 px · Regular"),
+        ("Edge label", "13 px · Italic"), ("Chip / footnote", "13 / 13 px"),
     ]
     for idx, (label, spec) in enumerate(typography):
         y = 194 + idx * 34
         c.text(74, y, label, cls="body", weight="bold")
         c.text(330, y, spec, cls="body", fill=COLORS["muted"])
-    c.multiline(74, 404, ["Font: Times New Roman", "Canvas: 1920 × 1080 · 64 px safe margin", "8 px base grid · 24 px major grid · 24 px node gap"], cls="foot", fill=COLORS["muted"], step=17)
+    c.multiline(74, 392, ["Font: Times New Roman", "Canvas: 1920 × 1080 · 48 px safe margin", "8 px base grid · 24 px major grid · 24 px node gap"], cls="foot", fill=COLORS["muted"], step=17)
 
     c.group(632, 138, 716, 300, "SEMANTIC COLOR TOKENS", COLORS["protocol"])
     swatches = [
@@ -740,7 +785,11 @@ def export_preview(svg_path: Path) -> None:
     converter = shutil.which("rsvg-convert")
     if not converter:
         return
-    _run([converter, "-f", "pdf", "-o", str(svg_path.with_suffix(".pdf")), str(svg_path)], cwd=HERE)
+    _run(
+        [converter, "-f", "pdf", "-o", str(svg_path.with_suffix(".pdf")), str(svg_path)],
+        cwd=HERE,
+        env={"SOURCE_DATE_EPOCH": "0"},
+    )
     _run([converter, "-f", "png", "-w", "1920", "-o", str(svg_path.with_suffix(".png")), str(svg_path)], cwd=HERE)
 
 
@@ -770,6 +819,7 @@ def main() -> int:
             HERE / "README.md",
             HERE / "checkpoint_relalg_formulas.tex",
             formula_sheet,
+            EQUATION_CACHE,
             *(EQUATION_DIR / f"{formula_id}.svg" for formula_id in FORMULAS),
             *(HERE / f"{stem}.graffle" for stem in canvases),
         )

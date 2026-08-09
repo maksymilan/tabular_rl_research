@@ -27,7 +27,7 @@ thought content in a diagram. Use abstract labels such as “Provider-private re
 ## 2. Canvas System
 
 - Primary canvas: `1920 × 1080 px`, landscape, white or `Canvas` background.
-- Safe margin: `64 px` on every side.
+- Safe margin: `48 px` on every side; reserve `64 px` for titles and footer text.
 - Base grid: `8 px`; major alignment grid: `24 px`.
 - Minimum inter-node gap: `24 px`; minimum group gap: `40 px`.
 - Default flow: left to right. Use top to bottom only for long causal sequences.
@@ -48,21 +48,23 @@ All human-readable diagram text is English and uses **Times New Roman**.
 
 | Token | Size | Weight | Use |
 |---|---:|---|---|
-| `Title` | 34 pt | Bold | Canvas title |
-| `Subtitle` | 16 pt | Regular | Protocol/version/status line |
-| `Section` | 20 pt | Bold | Swimlane or group heading |
-| `NodeTitle` | 15 pt | Bold | Process, store, or tool-group title |
-| `Body` | 12.5 pt | Regular | Explanatory text and field lists |
-| `EdgeLabel` | 11 pt | Italic | Connector meaning |
-| `Chip` | 10.5 pt | Bold | Status, mode, version, or policy badge |
-| `Footnote` | 10 pt | Regular | Constraints and provenance |
+| `Title` | 38 px | Bold | Canvas title |
+| `Subtitle` | 18 px | Regular | Protocol/version/status line |
+| `Section` | 20 px | Bold | Swimlane or group heading |
+| `NodeTitle` | 16 px | Bold | Process, store, or tool-group title |
+| `Body` | 14 px | Regular | Explanatory text and field lists |
+| `EdgeLabel` | 13 px | Italic | Connector meaning |
+| `Chip` | 13 px | Bold | Status, mode, version, or policy badge |
+| `Footnote` | 13 px | Regular | Constraints and provenance |
 
 Rules:
 
 - Use sentence case for prose and title case only for canvas/group titles.
 - Use exact tool names in monospace only when the export target supports it; otherwise keep
   Times New Roman and distinguish tools with a light code-card fill.
-- Never reduce body text below `10 pt` in the final PDF.
+- Never reduce any exported diagram text below the `13 px` source minimum. If a label
+  does not fit, widen its container, split it into semantic lines, or shorten the prose;
+  never solve overflow by shrinking the font.
 - Keep line height between `1.15` and `1.25`.
 
 ## 4. Color Tokens
@@ -129,8 +131,11 @@ Icon rules:
 | Forbidden/no-leak direction | `1.5 px`, `2/5` dot `Hidden` with stop bar | Flow that must not occur |
 | Inactive branch | `1.5 px`, `3/5` dot `MutedInk` | Abandoned checkpoint path |
 
-Place edge labels on the final segment nearest the destination. Avoid diagonal connectors,
-unlabeled bidirectional arrows, and decorative arrows that do not encode a flow.
+Place edge labels on the final segment nearest the destination. Every label that touches a
+connector corridor must use an opaque `Canvas`-color backing with at least `4 px`
+horizontal padding and `2 px` vertical padding. A connector must never cross readable
+text. Avoid diagonal connectors, unlabeled bidirectional arrows, and decorative arrows
+that do not encode a flow.
 
 ## 7. Mathematical Typesetting
 
@@ -189,6 +194,9 @@ Before release, verify:
 - [ ] Hidden evaluator has no return edge to the model.
 - [ ] Diagnostic-only or admission status is visible.
 - [ ] Rasterization has not occurred in the OmniGraffle source.
+- [ ] No label touches or crosses a connector, card edge, group header, or canvas edge.
+- [ ] No text extends outside its owning card; long prose is split rather than shrunk.
+- [ ] The minimum source text size is `13 px`, including captions and edge labels.
 - [ ] PDF, SVG, and PNG preview exports match the source.
 - [ ] The diagram manifest records source commit, standard version, and artifact hashes.
 

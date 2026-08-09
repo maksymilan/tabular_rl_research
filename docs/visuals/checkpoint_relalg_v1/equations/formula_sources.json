@@ -1,0 +1,50 @@
+{
+  "F01": {
+    "output_sha256": "c9d6cfff963683858758b5c1db057ad20f89930e3c0b4804c22060b4ed9db5d3",
+    "source_sha256": "c056207befd5a81eb2d3f6947cb6dff405793e15c4e481dfeef2f4f91f0183c5"
+  },
+  "F02": {
+    "output_sha256": "d459df93c35c258f0ea98345eabac4159f6eb320d0564e131eeb5d6b0a066cab",
+    "source_sha256": "82149c03a4950e7f50e2123638efd170fb71e7b35260d0ec384b228adb398942"
+  },
+  "F03": {
+    "output_sha256": "dddae71395fc424b382ab4b2ba45323237f26a146768a12609aa2ae62b9ccf8d",
+    "source_sha256": "45744e91e3e08b8753d5b4c8e205cd229ad2b361e908e1822c7db94a12f1e633"
+  },
+  "F04": {
+    "output_sha256": "67005aac0c6b4c18a38d0de23ea129011a915f9e6c0ba061ff94dc1931c2fb55",
+    "source_sha256": "c4ca3f12f103387f2238e0ca1a4220c69824adebaa99b3bcd6813f600749cc3e"
+  },
+  "F05": {
+    "output_sha256": "b2d4cccfdc4b350ab9ef3c4058e65e0796e8b5061d62cbb757d58146eea8e3de",
+    "source_sha256": "0f4d2d53a37aafe5cc5067dc64e8eb71da24202eb4386b12fd3522551f9de932"
+  },
+  "F06": {
+    "output_sha256": "e5914dbaba3f3ef115cb5cde2960faebdb0b5f4646cbdc7baa875b8b4c7a1f33",
+    "source_sha256": "adf7817eb8ee21335e4354bb79d293e10ff383cea6ed860adf35ba8c003f20c4"
+  },
+  "F07": {
+    "output_sha256": "6fe4bf574c1138b5a838b239367edaa1cd1ecb04d9896ca7e6607cf824d1c67d",
+    "source_sha256": "cac25c5fc73b4279823d446db4b72cc5c44f497fb57552581177de7ba6a70b0b"
+  },
+  "F08": {
+    "output_sha256": "9bff4c348e650e1da954265755410b7d67bbc4b14ed9e87848c325e7110df4a0",
+    "source_sha256": "55f66a5b9e11a709a2f43ff5c2fe546eec64750710b758e09537f860e7dc13cc"
+  },
+  "F09": {
+    "output_sha256": "2da0433ad725bb354f4520b952d5ca93020ec8523b15ad3597cf9510eb70a22f",
+    "source_sha256": "ab6aa66d48984c38f5cbe4826f657659f7221590a73e88aa7051956f020d7ab6"
+  },
+  "F10": {
+    "output_sha256": "524c71a156719b25ef54ec8705b18077e81a1886fadf8f2d46f88fc9d2bf67ee",
+    "source_sha256": "b3492c5c82c452fa963cdc56ddd6f2dab4f07564d1e06e7335492241095a2595"
+  },
+  "F11": {
+    "output_sha256": "b6ca8090c11c1905203909c84d984c507ec6a80b0237912a1e0c61cb31b5e627",
+    "source_sha256": "462499d2a396d4f99f22ba601b6c83eb4481e423ea76e73bdcf702d36df9e2a8"
+  },
+  "F12": {
+    "output_sha256": "86efe14aac5b2370be1a6f74b53747321b93781166f61c8294b968c927cb88af",
+    "source_sha256": "cd77106be7ad800dfb261c43fd7aecd664fc4356d92a451c16799919acd31047"
+  }
+}

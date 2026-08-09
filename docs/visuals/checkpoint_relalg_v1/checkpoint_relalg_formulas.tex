@@ -2,6 +2,9 @@
 \usepackage[margin=0.5in]{geometry}
 \usepackage{mathptmx}
 \usepackage{amsmath,amssymb}
+\pdfinfoomitdate=1
+\pdfsuppressptexinfo=15
+\pdftrailerid{}
 \pagestyle{empty}
 \begin{document}
 
@@ -72,13 +75,14 @@ S\leftarrow S(C_j),\qquad
 
 \paragraph{F10 — State-preserving failure.}
 \[
-S_{t+1}=
+\begin{aligned}
+S_{t+1}&=
 \begin{cases}
 \operatorname{Apply}(S_t,a_t), & \operatorname{valid}(a_t),\\
 S_t, & \operatorname{rejected}(a_t)\lor\operatorname{failed}(a_t),
-\end{cases}
-\qquad
-H(S_{t+1})=H(S_t)\ \text{on failure}.
+\end{cases}\\[3pt]
+H(S_{t+1})&=H(S_t)\qquad\text{on failure}.
+\end{aligned}
 \]
 
 \paragraph{F11 — Grounded answer and official score.}
