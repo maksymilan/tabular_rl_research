@@ -6,12 +6,15 @@ sources of truth.
 
 - `overview.md`: research objective and non-negotiable method boundary.
 - `architecture.md`: active code layout and ownership.
+- `checkpoint_relalg_v1_zh.md`: `checkpoint-relalg-v1` 的前向协议、三种 mode、短提示词、
+  关系工件/检查点状态，以及诊断准入边界。完整设计规格属于 Harness 与实现侧输入，
+  不是逐轮发送给模型的 prompt。
 - `provider_api.md`: official DeepSeek endpoint and credential contract, AimixHub/AIHubMix
   deprecation, Chat Completions versus FIM boundary, and migration verification.
 - `deepseek_native_tool_calls_zh.md`: official DeepSeek native function-call adapter,
   thinking-mode history contract, completed version50/version51 results, and the diagnostic
-  version52 compact prompt, version53 reviewed prompt, and version54 no-plan successor.
-- `tool_schemes.md`: the six exclusive model action schemes and their train/eval boundaries.
+  version52 compact prompt, version53 reviewed prompt, and frozen version54 no-plan successor.
+- `tool_schemes.md`: the seven exclusive model action schemes and their train/eval boundaries.
 - `direct_sql_search_tool_scheme_zh.md`: two-tool out-of-band value search + direct-SQL feedback
   diagnostic, frozen v1 Gate16, optimized v2 prompt/feedback/context protocol, completed paired
   Holdout Gate15, replay audit, and non-promotion boundary.
@@ -46,8 +49,9 @@ sources of truth.
   result (215/300, 298/300 legal), untouched tasks 71–300 generalization read (168/230), complete
   replay/structure audit, error/token long-tail analysis, and the no-paired-v5 interpretation
   boundary.
-- `tool_protocol.md`: model-visible action and context protocol, including the version39 default,
-  isolated version40-version43 diagnostics, version44-version45 search diagnostics, and the
+- `tool_protocol.md`: the forward `checkpoint-relalg-v1` action/context protocol plus the retained
+  atomic protocol index, including isolated version40-version43 diagnostics,
+  version44-version45 search diagnostics, and the
   rejected version46-version49 context-management ablations, including the dependency-aware
   active/archive renderer.
 - `atomic_tool_interface_zh.md`: standalone Chinese reference for the atomic version39 public
@@ -91,6 +95,10 @@ sources of truth.
 - `../reports/evaluation/BIRD_VERSION54_NO_PLAN_TEACHER1500_PREFIX200_PLAN_20260806_ZH.md`:
   frozen v54-only teacher1500 Prefix200 absolute acceptance gate, privacy boundary, and conditional
   remaining-1300 expansion rule; no external request or result exists before authorization.
+- `../reports/evaluation/CHECKPOINT_RELALG_V1_CAUSAL_SMOKE_20260809_ZH.md`: actual official
+  DeepSeek checkpoint-relalg request, authenticated model preflight, explicit HTTP 402 insufficient-
+  balance transport block, passing failure-artifact structure/fresh-replay audits, and the resulting
+  no-semantic-result/non-admission boundary.
 - `tool_design_and_motivation_zh.md`: complete Chinese report connecting the current atomic tool
   surface, ownership/grounding boundaries, prompt and context decisions, version history,
   external-teacher evidence, limitations, and next optimization priorities.
@@ -111,10 +119,19 @@ When documentation conflicts, the scheme registry in `src/tool_modules/registry.
 scheme's executable protocol, harness behavior, and explicit evaluation manifests take precedence;
 update the affected current document in the same change.
 
-The forward experimental implementation is version54 / `native-tool-bundle`. It keeps version53's
-student runtime prompt and all non-plan execution behavior, removes only the provider-visible
-`plan` function and the stale teacher plan-evidence sentence, and exposes eleven functions. Its
-teacher prompt plus native schema is 14,316 characters versus version53's 15,168. The v54-only
-teacher1500 Prefix200 absolute acceptance test is preregistered and has no result yet. Version26 remains
-historical; version51-version54 cannot supply SFT/RL data until a scheme-aware exporter and
-explicit training-admission gates pass.
+The forward implementation line is now `checkpoint-relalg-v1` under scheme
+`checkpoint-relalg`, with an explicit `mode=direct|atomic|hybrid`. Every provider assistant turn
+authors exactly one official DeepSeek native tool call. All modes share the same relation-artifact,
+environment-state, checkpoint/restore, and exact-artifact terminal contract. This is the required
+starting point for new tool and experiment development, but it remains `diagnostic-only` until
+fresh replay, structure, provider-history, no-leak, behavior, and explicit SFT/RL admission gates
+pass. “Forward mainline” identifies where new development starts; it does not imply a training or
+accuracy promotion.
+
+The original `atomic` line remains available for already-running RL work, frozen controls, and
+exact reproduction; version54 / `native-tool-bundle` remains a diagnostic control/reproduction
+line and does not gain RL admission. Do not delete them, silently migrate their
+checkpoints, mix their trajectories with `checkpoint-relalg`, or start a new protocol experiment
+from them. Version51-version54 remain ineligible for the current SFT/RL exporters. The first actual
+official checkpoint-relalg request was transport-blocked by insufficient balance before any tool
+call; it supplies no live semantic pilot result or SFT/RL admission evidence.

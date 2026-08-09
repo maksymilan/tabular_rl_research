@@ -1,17 +1,22 @@
-# Atomic Tool-Scheme Trajectory Protocol (version39 diagnostic)
+# Tool-Scheme Trajectory Protocol Index
 
-Status: index-level contract for the currently implemented trajectory format. This file does not
-replace code; it points to the source of truth and records what must not drift.
+Status: index-level contract for the forward `checkpoint-relalg-v1` format and the retained atomic
+formats. This file does not replace code; it points to the source of truth and records what must
+not drift.
 
-This document describes the original `atomic` scheme and indexes its version51-version54
-primitive-compatible `native-tool-bundle` successors. The independently selectable non-atomic schemes are indexed in
-`docs/current/tool_schemes.md`; the new two-action SQL protocol is specified by
+The forward scheme is `checkpoint-relalg` with a mandatory
+`mode=direct|atomic|hybrid`. The original `atomic` scheme and its version51-version54
+primitive-compatible `native-tool-bundle` successors remain supported only for existing RL work,
+frozen controls, and exact reproduction. Independently selectable schemes are indexed in
+`docs/current/tool_schemes.md`; the two-action SQL protocol is specified by
 `docs/current/iterative_sql_tool_scheme_zh.md` and
 `src/tool_modules/iterative_sql/protocol.py`. A model is
 given exactly one scheme; top-level action spaces are never merged in one prompt.
 
 ## Sources of Truth
 
+- Forward checkpoint-relational-algebra protocol, prompts, schemas, runtime, and audit:
+  `src/tool_modules/checkpoint_relalg/` and `docs/current/checkpoint_relalg_v1_zh.md`
 - Shared atomic prompt semantics: `src/sft/prompt_contract.py`
 - Public atomic tool structure: `src/sft/public_tool_contract.py`
 - Model-visible protocol and validation: `src/sft/protocol.py`
@@ -49,12 +54,36 @@ given exactly one scheme; top-level action spaces are never merged in one prompt
 If these disagree, fix the code and this index together. Do not infer the active protocol from
 anything under `docs/archive/`.
 
-## Model-Visible Format
+## Forward checkpoint-relalg-v1 format
 
-Use `execution_contract.md` for the single current/new-episode contract. This file is the
-protocol index; historical v2h and older documents are replay references only.
+Every assistant turn contains exactly one official DeepSeek native `tool_calls` item. Multiple
+model-authored calls are a state-preserving semantic protocol error, not a bundle. Non-empty
+assistant `content` is retained for audit only and is never executable evidence. A matching
+`role=tool` result is returned before the next assistant request. Provider transport, truncation,
+or zero-call retries are bounded client operations and do not become semantic tool steps.
 
-Before every assistant turn, the promoted/default SFT/evaluation/RL contract is rendered by
+The complete design specification is for the Harness and implementation agent. It must not be
+copied into each model request. Model-visible input is assembled from:
+
+1. a short shared runtime core;
+2. one short mode prompt;
+3. compact native schemas for that mode only; and
+4. dynamic context in the fixed order `QUESTION`, optional `EXTERNAL KNOWLEDGE`, `CURRENT PHASE
+   TARGETS`, `CHECKPOINT HISTORY`, `CURRENT ENVIRONMENT STATE`, and optional `LAST ERROR`.
+
+The external teacher receives the same runtime contract plus short checkpoint-use guidance. It
+does not receive hidden gold SQL, gold results, future actions, or later observations. Checkpoint
+history is working memory, not database evidence; the current Harness state and exact relation
+artifacts are authoritative. See `checkpoint_relalg_v1_zh.md` for mode surfaces, commit/restore
+semantics, and the diagnostic admission boundary.
+
+## Retained atomic model-visible format
+
+Use `execution_contract.md` for the retained atomic execution contract and
+`checkpoint_relalg_v1_zh.md` plus the package executable schemas for the forward contract. This
+file is the protocol index; historical v2h and older documents are replay references only.
+
+Before every assistant turn, the retained atomic SFT/evaluation/RL contract is rendered by
 `src/sft/protocol.py::rolling_legal_history_messages` with recent `history_turns=4`:
 
 ```text
@@ -102,8 +131,8 @@ Teacher-rollout, SFT, evaluation, and RL manifests record the applicable teacher
 SHA-256 values and the public tool-schema SHA-256. A teacher addition cannot introduce a tool,
 argument, state field, or execution behavior absent from the shared contract.
 
-The model emits only one non-empty `<think>` block followed by one raw JSON object containing
-exactly `tool` and `arguments`. The active carrier has no `tool_call` tags.
+Under the atomic text carrier, the model emits only one non-empty `<think>` block followed by one
+raw JSON object containing exactly `tool` and `arguments`. That carrier has no `tool_call` tags.
 
 The model does not emit provenance, references, produces, quality status, repair metadata, or reward
 fields.
@@ -385,10 +414,11 @@ Public version mapping:
   version53 remains diagnostic-only;
 - `version54`: keeps the version53 student prompt, carrier, eleven non-plan functions, execution,
   state, history, feedback, and terminal semantics; removes only public `plan` and its stale
-  teacher-only evidence sentence. Its v54-only teacher1500 Prefix200 absolute gate is
-  preregistered, not yet completed; passing every gate conditionally opens the remaining 1,300
-  frozen tasks without a v53 comparison;
-- future changes increment only the integer (`version55`, `version56`, ...).
+  teacher-only evidence sentence. Its v54-only teacher1500 Prefix200 absolute gate was
+  preregistered but had no result when the line was frozen. Version54 remains available for
+  reproduction and existing work; it is no longer the starting point for new protocol design;
+- any exact continuation of that frozen lineage would increment only its integer, but all new tool
+  and experiment development starts from the independently named `checkpoint-relalg-v1` scheme.
 
 Historical-control note: a separate branch at `deaa0e4` rebuilt original version24 and added only
 bounded `search_values`, retaining plan, `read_subtable`, raw schema, and exact-table terminal
@@ -397,7 +427,7 @@ semantics. Fresh version24 reproduced 41/50 versus the original 42/50; the searc
 historical ablation and not part of the current protocol progression. See
 `docs/reports/evaluation/BIRD_VERSION24_BOUNDED_SEARCH_SINGLE_VARIABLE_GATE50_20260730_ZH.md`.
 
-The version39 atomic baseline and version51-version53 native-bundle line share the complete tool
+The retained version39 atomic baseline and version51-version53 native-bundle line share the complete tool
 set in `src/sft/protocol.py::TOOL_SPECS`; version54 uses the same set minus `plan`:
 
 - `condition_filter`
@@ -423,7 +453,7 @@ but has a distinct tool-schema hash because its terminal evidence object require
 The model-visible relation derivation schema is indexed separately in
 `docs/current/relation_derivation.md`.
 
-For the promoted/default version39 contract, only the teacher-generation prompt includes canonical
+For the retained version39 contract, only the teacher-generation prompt includes canonical
 JSON examples for complex operation families; its student runtime prompt has no worked cases. The
 isolated external-teacher-only version40/version41 diagnostics instead use one fixed prompt and
 remain ineligible for student SFT/RL.

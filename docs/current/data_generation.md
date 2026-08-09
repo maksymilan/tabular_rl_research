@@ -20,6 +20,15 @@ All new DeepSeek teacher calls use the official `https://api.deepseek.com` Chat 
 service. AimixHub/AIHubMix is deprecated and must not be used as a provider, proxy, or fallback.
 Provider configuration and the FIM boundary are defined in `provider_api.md`.
 
+All new tool/protocol generation work starts from `checkpoint-relalg-v1` with an explicit
+`mode=direct|atomic|hybrid`. It runs one official DeepSeek native call per assistant turn against
+the real shared state/artifact/checkpoint Harness. The provider sees only a short shared core, one
+short mode prompt, compact schemas for that mode, and the current causal dynamic context. A teacher
+adds only short checkpoint-use guidance. The complete design specification is implementation-side
+material and must never be copied wholesale into requests. The scheme remains diagnostic-only;
+generated episodes are audit artifacts, not SFT records, until scheme-specific replay, no-leak,
+behavior, exporter, and admission gates pass.
+
 The completed atomic `version50` diagnostic tested official DeepSeek native function calls as the
 teacher transport. It preserved the same causal harness loop and canonical stored trajectory but
 scored 133/200 versus historical version24 at 145/200, with 183/200 versus 197/200 legal
@@ -50,18 +59,25 @@ The frozen reviewed prompt is `version53`. It preserves version52 execution whil
 semantics from teacher-only trajectory-generation rules and hardening data authority, join
 cardinality, output representation, independent filters, and error recovery. Launch it with
 `--atomic-protocol-version version53 --deepseek-carrier native-tool-bundle --diagnostic-only`.
-The active no-plan diagnostic is `version54`: it keeps version53's student prompt and all non-plan
+The frozen no-plan diagnostic is `version54`: it keeps version53's student prompt and all non-plan
 semantics, while removing only the provider-visible `plan` function and stale teacher plan rule.
 Launch it with `--atomic-protocol-version version54 --deepseek-carrier native-tool-bundle
 --diagnostic-only`. Version51-version54 are not SFT sources until a scheme-aware exporter and
-explicit training-admission gates promote them. New work branches from version54, not version26.
+explicit training-admission gates promote them. Keep this lineage for existing compatible work and
+exact reproduction; new protocol/tool work branches from `checkpoint-relalg-v1`, not version54 or
+version26.
 
-The active version54 rollout gate is single-arm: use the frozen first 200 tasks of
+The preregistered version54 rollout gate is single-arm: use the frozen first 200 tasks of
 `bird_train_atomic_teacher1500_v2_nonempty` in source order and judge absolute verified yield,
 legal completion, process-error, replay, native-history, no-plan, and no-leak gates. Do not run a
 v53 comparison. Only if every Prefix200 gate passes may the same configuration continue over the
 remaining 1,300 frozen tasks. All resulting multi-call trajectories remain diagnostic candidates;
 they are not SFT records until a scheme-aware exporter and explicit promotion exist.
+This frozen plan and the version51 results below provide no admission evidence for
+`checkpoint-relalg-v1`. Its first actual official request on 2026-08-09 passed model identity
+verification but was transport-blocked by `HTTP 402 / Insufficient Balance` before any authored
+tool call. That audited failure artifact is not a semantic pilot result; the scheme must still be
+evaluated under its own protocol hashes and gates after official service availability is restored.
 
 Its frozen Gate32 passed: 22/32 correct and 32/32 legal versus version50 at 16/32 and 26/32. The
 completed fixed-200 scored 147/200 correct and 200/200 legal versus version50 at 133/200 and

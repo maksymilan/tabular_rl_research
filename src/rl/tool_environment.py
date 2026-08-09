@@ -754,8 +754,14 @@ def create_tool_use_env(
     require_tool_scheme(tool_scheme)
     if tool_scheme == ATOMIC_TOOL_SCHEME:
         return ToolUseEnv(example, **kwargs)
-    return ActionBlockToolUseEnv(
-        example,
-        max_batch_calls=max_batch_calls,
-        **kwargs,
+    if tool_scheme == ACTION_BLOCK_TOOL_SCHEME:
+        return ActionBlockToolUseEnv(
+            example,
+            max_batch_calls=max_batch_calls,
+            **kwargs,
+        )
+    raise ValueError(
+        f"RL environment does not implement tool scheme {tool_scheme!r}; "
+        "ongoing RL remains on the frozen atomic/action-block environments, while "
+        "checkpoint-relalg-v1 is diagnostic-only until its admission gates pass"
     )

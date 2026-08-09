@@ -16,6 +16,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT / "src" / "eval"), str(HERE)]
 from tool_modules.registry import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
+    CHECKPOINT_RELALG_TOOL_SCHEME,
     DIRECT_SQL_SEARCH_TOOL_SCHEME,
     ITERATIVE_SQL_TOOL_SCHEME,
     NATIVE_TOOL_BUNDLE_SCHEME,
@@ -47,6 +48,12 @@ def generator_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
             "--deepseek-carrier",
             "native-tool-bundle",
             "--diagnostic-only",
+        ]
+    if tool_scheme == CHECKPOINT_RELALG_TOOL_SCHEME:
+        return [
+            sys.executable,
+            str(ROOT / "src" / "tool_modules" / "checkpoint_relalg" / "runner.py"),
+            *forwarded,
         ]
     if tool_scheme == ACTION_BLOCK_TOOL_SCHEME:
         return [

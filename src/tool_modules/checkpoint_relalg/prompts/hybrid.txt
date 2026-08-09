@@ -1,0 +1,2 @@
+MODE: HYBRID
+Use SQL for a compact transformation whose semantics are already clear. Use atomic operators when explicit intermediate relations, cardinality changes, or staged verification are useful. SQL and atomic artifacts are interoperable.

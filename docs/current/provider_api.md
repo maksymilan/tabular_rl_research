@@ -41,15 +41,30 @@ comparability and provider-identity auditing.
 
 ## Chat Completions versus FIM
 
-The promoted causal model↔harness loop uses Chat Completions with native
-`reasoning_content` plus visible JSON Output. Its base URL is `https://api.deepseek.com`. The
-isolated `deepseek-native-function-call-v1` diagnostic uses the same endpoint and harness through
-the provider's native `tools`/`tool_calls` carrier. Atomic `version50` completed its frozen Flash
+The forward `checkpoint-relalg-v1` causal model↔harness loop uses Chat Completions with native
+`reasoning_content` plus exactly one provider `tool_calls` item per assistant turn. Its base URL is
+`https://api.deepseek.com`; `tool_choice=auto` is used where required by official DeepSeek thinking
+mode, while the Harness enforces the one-call semantic contract. The provider receives only the
+selected mode's compact schemas. Multiple model-authored calls are returned as structured,
+state-preserving protocol feedback; they are never executed as a bundle. Non-empty assistant
+content is audit-only. Zero-call, length-truncated, and transport responses may receive bounded
+client retries and do not count as model tool steps. Provider history preserves original
+reasoning, call id, arguments, and the matching `role=tool` result.
+
+The external teacher sees the same short runtime contract as the eventual student plus short
+checkpoint-use guidance. It never sees hidden gold SQL, gold output, later tool results, or the
+complete Harness/implementation specification. `checkpoint-relalg-v1` is diagnostic-only; this
+transport contract alone does not authorize its trajectories for SFT or RL.
+
+The retained atomic causal loop uses Chat Completions with native `reasoning_content` plus visible
+JSON Output and remains available for existing SFT/RL work and exact reproduction. The isolated
+`deepseek-native-function-call-v1` diagnostic uses the same endpoint and harness through the
+provider's native `tools`/`tool_calls` carrier. Atomic `version50` completed its frozen Flash
 fixed-200 diagnostic at 133/200 correct and 183/200 legal versus historical version24 at 145/200
-and 197/200; it is rejected and does not replace the promoted carrier or authorize SFT.
+and 197/200; it is rejected and does not replace the retained atomic carrier or authorize SFT.
 See `deepseek_native_tool_calls_zh.md` for its contract and results.
 
-The forward diagnostic is `deepseek-native-tool-bundle-v1` / version51. It follows the documented
+The frozen native-bundle behavior baseline is `deepseek-native-tool-bundle-v1` / version51. It follows the documented
 Chat Completions behavior that `auto` may return more than one tool call: the provider assistant
 message and its complete `reasoning_content` are preserved, and every call id receives a separate
 `role=tool` result before the next request. Assistant `content`, when present beside tool calls, is
@@ -63,7 +78,7 @@ Version51's frozen Gate32 passed at 22/32 correct and 32/32 legal versus version
 Carrier protocol errors fell from 124 to two. Historical version24 remained statistically tied at
 145/200 while using about half the tokens. Version51 is therefore the frozen provider-tool-call
 behavior baseline for version52+; version53 is the reviewed-prompt control and version54 is the
-active no-plan diagnostic. The JSON Output production/SFT path remains unchanged
+frozen no-plan diagnostic. The JSON Output production/SFT path remains unchanged
 until a scheme-aware exporter and explicit training promotion.
 
 DeepSeek FIM is a separate Beta code-completion API at
@@ -89,5 +104,13 @@ The 2026-08-05 migration was verified against the official service:
 - native reasoning and visible JSON were both present;
 - the existing provider adapter reconstructed and strictly parsed the expected tool action.
 
-This verifies transport compatibility only. Each research run must still record its model,
+This verifies transport compatibility only and is not a `checkpoint-relalg-v1` behavior result.
+Each research run must still record its model,
 provider response metadata, prompt hashes, request controls, token usage, and protocol manifest.
+
+On 2026-08-09 the first actual checkpoint-relalg Direct smoke again passed authenticated
+`GET /models`, but the subsequent official Chat Completion returned
+`HTTP 402 / Insufficient Balance` before any tool call. The runner retained an audited provider-
+failure artifact; no fallback was used and Atomic/Hybrid were not redundantly dispatched. This is
+an account-availability incident, not a semantic mode result. See
+`../reports/evaluation/CHECKPOINT_RELALG_V1_CAUSAL_SMOKE_20260809_ZH.md`.

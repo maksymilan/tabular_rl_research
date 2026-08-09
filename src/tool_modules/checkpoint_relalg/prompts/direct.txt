@@ -1,0 +1,2 @@
+MODE: DIRECT
+Use execute_sql for relational transformations. It accepts one read-only SELECT or WITH statement and creates a relation artifact. Use the shared perception tools for schema, value, and row inspection.

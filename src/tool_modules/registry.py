@@ -10,6 +10,8 @@ boundary so callers never infer a scheme from record shape or experimental flags
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 from typing import Any
 
 from tool_modules._bootstrap import activate_legacy_paths
@@ -19,9 +21,13 @@ activate_legacy_paths()
 from action_carrier import ACTIVE_ACTION_CARRIER
 
 
-TOOL_SCHEME_REGISTRY_VERSION = "tool-scheme-registry-v11"
+TOOL_SCHEME_REGISTRY_VERSION = "tool-scheme-registry-v12"
 ATOMIC_TOOL_SCHEME = "atomic"
 NATIVE_TOOL_BUNDLE_SCHEME = "native-tool-bundle"
+CHECKPOINT_RELALG_TOOL_SCHEME = "checkpoint-relalg"
+# All new tool-design, teacher-rollout, evaluation, and future training work starts here.
+# Older schemes remain registered so active RL runs and frozen artifacts stay reproducible.
+FORWARD_TOOL_SCHEME = CHECKPOINT_RELALG_TOOL_SCHEME
 ACTION_BLOCK_TOOL_SCHEME = "action-block"
 RELATIONAL_PROGRAM_TOOL_SCHEME = "relational-program"
 DIRECT_SQL_SEARCH_TOOL_SCHEME = "direct-sql-search"
@@ -29,6 +35,7 @@ ITERATIVE_SQL_TOOL_SCHEME = "iterative-sql"
 TOOL_SCHEME_NAMES = (
     ATOMIC_TOOL_SCHEME,
     NATIVE_TOOL_BUNDLE_SCHEME,
+    CHECKPOINT_RELALG_TOOL_SCHEME,
     ACTION_BLOCK_TOOL_SCHEME,
     RELATIONAL_PROGRAM_TOOL_SCHEME,
     DIRECT_SQL_SEARCH_TOOL_SCHEME,
@@ -50,9 +57,14 @@ class ToolScheme:
     top_level_tools: tuple[str, ...]
     atomic_tools: tuple[str, ...]
     max_batch_calls: int | None = None
+    mode: str | None = None
+    tool_schema_hash: str | None = None
+    student_prompt_hash: str | None = None
+    teacher_prompt_hash: str | None = None
+    admission_status: str | None = None
 
     def manifest_fields(self) -> dict[str, Any]:
-        return {
+        payload = {
             "tool_scheme_registry_version": TOOL_SCHEME_REGISTRY_VERSION,
             "tool_scheme": self.name,
             "protocol_version": self.protocol_version,
@@ -62,6 +74,15 @@ class ToolScheme:
             "atomic_tools": list(self.atomic_tools),
             "max_batch_calls": self.max_batch_calls,
         }
+        optional = {
+            "mode": self.mode,
+            "tool_schema_sha256": self.tool_schema_hash,
+            "student_prompt_sha256": self.student_prompt_hash,
+            "teacher_prompt_sha256": self.teacher_prompt_hash,
+            "admission_status": self.admission_status,
+        }
+        payload.update({key: value for key, value in optional.items() if value is not None})
+        return payload
 
 
 def require_tool_scheme(name: str) -> str:
@@ -168,6 +189,68 @@ def build_native_tool_bundle_scheme() -> ToolScheme:
     )
 
 
+def build_checkpoint_relalg_tool_scheme(*, mode: str) -> ToolScheme:
+    """Build the forward checkpointed Direct/Atomic/Hybrid scheme.
+
+    ``mode`` is deliberately mandatory: the three capability surfaces share one state
+    protocol but never appear together accidentally.
+    """
+    from tool_modules.checkpoint_relalg.protocol import (
+        ADMISSION_STATUS,
+        MODE_TOOLS,
+        NATIVE_ASSISTANT_CARRIER,
+        PROTOCOL_VERSION,
+        get_system_prompt,
+        normalize_mode,
+        prompt_hash,
+        tool_schema_hash,
+    )
+
+    active_mode = normalize_mode(mode)
+    student_prompt = get_system_prompt(active_mode, teacher=False)
+    student_hash = prompt_hash(active_mode, teacher=False)
+    teacher_hash = prompt_hash(active_mode, teacher=True)
+    schema_hash = tool_schema_hash(active_mode)
+    identity = hashlib.sha256(json.dumps(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "mode": active_mode,
+            "student_prompt_sha256": student_hash,
+            "tool_schema_sha256": schema_hash,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    tools = tuple(MODE_TOOLS[active_mode])
+    return ToolScheme(
+        name=CHECKPOINT_RELALG_TOOL_SCHEME,
+        protocol_version=PROTOCOL_VERSION,
+        protocol_hash=identity,
+        system_prompt=student_prompt,
+        assistant_carrier=NATIVE_ASSISTANT_CARRIER,
+        top_level_tools=tools,
+        atomic_tools=tuple(
+            tool
+            for tool in tools
+            if tool not in {
+                "describe_table",
+                "inspect_column",
+                "read_rows",
+                "execute_sql",
+                "commit_checkpoint",
+                "restore_checkpoint",
+                "answer",
+            }
+        ),
+        max_batch_calls=1,
+        mode=active_mode,
+        tool_schema_hash=schema_hash,
+        student_prompt_hash=student_hash,
+        teacher_prompt_hash=teacher_hash,
+        admission_status=ADMISSION_STATUS,
+    )
+
+
 def build_relational_program_tool_scheme(
     *,
     max_program_calls: int = 8,
@@ -265,15 +348,20 @@ def build_tool_scheme(
     max_batch_calls: int | None = None,
     assistant_carrier: str | None = None,
     protocol_version: str | None = None,
+    mode: str | None = None,
 ) -> ToolScheme:
     require_tool_scheme(name)
     if name == ATOMIC_TOOL_SCHEME:
+        if mode is not None:
+            raise ValueError("atomic scheme does not accept checkpoint-relalg mode")
         if assistant_carrier is not None or protocol_version is not None:
             raise ValueError(
                 "atomic scheme carrier/version are owned by the atomic protocol"
             )
         return build_atomic_tool_scheme(system_prompt=system_prompt)
     if name == NATIVE_TOOL_BUNDLE_SCHEME:
+        if mode is not None:
+            raise ValueError("native-tool-bundle does not accept checkpoint-relalg mode")
         if system_prompt is not None or max_batch_calls is not None:
             raise ValueError(
                 "native-tool-bundle owns its prompt and bounded provider call count"
@@ -283,6 +371,20 @@ def build_tool_scheme(
                 "native-tool-bundle carrier/version are owned by version54"
             )
         return build_native_tool_bundle_scheme()
+    if name == CHECKPOINT_RELALG_TOOL_SCHEME:
+        if system_prompt is not None or max_batch_calls is not None:
+            raise ValueError(
+                "checkpoint-relalg owns its prompt and single-call boundary"
+            )
+        if assistant_carrier is not None or protocol_version is not None:
+            raise ValueError(
+                "checkpoint-relalg carrier/version are owned by checkpoint-relalg-v1"
+            )
+        if mode is None:
+            raise ValueError("checkpoint-relalg requires mode=direct|atomic|hybrid")
+        return build_checkpoint_relalg_tool_scheme(mode=mode)
+    if mode is not None:
+        raise ValueError(f"{name} does not accept checkpoint-relalg mode")
     if system_prompt is not None:
         raise ValueError(
             "non-atomic system prompts are derived from their carrier and call bound"
@@ -323,6 +425,10 @@ def render_scheme_action(
         raise ValueError(
             "native-tool-bundle targets are structured provider messages, not text actions"
         )
+    if scheme.name == CHECKPOINT_RELALG_TOOL_SCHEME:
+        raise ValueError(
+            "checkpoint-relalg targets are structured provider messages, not text actions"
+        )
     if scheme.name == ACTION_BLOCK_TOOL_SCHEME:
         from tool_modules.action_block.protocol import render_batch_plan_assistant
 
@@ -354,6 +460,10 @@ def parse_scheme_action(
     if scheme.name == NATIVE_TOOL_BUNDLE_SCHEME:
         raise ValueError(
             "native-tool-bundle actions must be read from structured provider tool_calls"
+        )
+    if scheme.name == CHECKPOINT_RELALG_TOOL_SCHEME:
+        raise ValueError(
+            "checkpoint-relalg actions must be read from structured provider tool_calls"
         )
     if scheme.name == ACTION_BLOCK_TOOL_SCHEME:
         from tool_modules.action_block.protocol import parse_batch_plan_assistant

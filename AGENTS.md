@@ -49,12 +49,38 @@ Start at `docs/current/README.md`.
 
 ### Model-visible protocol
 
-- Shared prompt semantics: `src/sft/prompt_contract.py`; protocol/validation:
-  `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- The active forward experimental implementation is `version54` under the distinct
-  `native-tool-bundle` scheme; `version51` is the frozen provider-tool-call baseline,
+- The forward implementation is `checkpoint-relalg-v1` under scheme `checkpoint-relalg`, with a
+  mandatory `mode=direct|atomic|hybrid`. New tool and protocol experiments start from this package,
+  not from atomic or version54. Every assistant turn authors exactly one official DeepSeek native
+  tool call; all modes share the same Harness-owned relation artifacts, current environment state,
+  semantic checkpoint/restore path, and exact-artifact terminal answer. The complete 40k-character
+  specification is for the Harness and implementation agent, not a model prompt. The model sees
+  only a short shared core, one short mode prompt, compact schemas for that mode, and causal dynamic
+  context in this order: question, optional external knowledge, current phase targets, checkpoint
+  history, current environment state, and optional last error. The external teacher adds only short
+  checkpoint-use guidance. See `docs/current/checkpoint_relalg_v1_zh.md`.
+- “Forward” identifies the development base; it is not a behavior or training promotion.
+  `checkpoint-relalg-v1` remains diagnostic-only until fresh replay, structure, provider-history,
+  no-leak, behavior, scheme-aware export, and explicit SFT/RL admission gates pass. Gold SQL and
+  gold results remain Harness-only and never enter any provider request. Do not report a pilot
+  result until an actual run and its audits complete.
+- The first actual official checkpoint-relalg request on 2026-08-09 passed `/models` identity
+  verification but the Direct Chat Completions call returned `HTTP 402 / Insufficient Balance`
+  before any authored tool call. Its failure artifact passed structure audit and fresh replay.
+  This is a transport-blocked attempt with zero semantic episodes, not a Direct failure or a
+  three-mode pilot result. Atomic/Hybrid were not sent redundant requests and no third-party
+  fallback was used. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_V1_CAUSAL_SMOKE_20260809_ZH.md`.
+- The original atomic protocol remains supported for ongoing RL work, frozen controls, and exact
+  reproduction. Version54 / `native-tool-bundle` remains a diagnostic control/reproduction line
+  and does not gain RL admission. Do not delete either line, mix their
+  trajectories or result directories with `checkpoint-relalg`, relabel their checkpoints, or use
+  them as the starting point for new protocol work. Atomic shared prompt semantics remain in
+  `src/sft/prompt_contract.py`; atomic protocol/validation remains in `src/sft/protocol.py`; the
+  cross-scheme index is `docs/current/tool_protocol.md`.
+- In the frozen predecessor lineage, `version51` is the provider-tool-call baseline,
   `version52` is the frozen compact-prompt predecessor, and `version53` is the frozen reviewed-
-  prompt control for the version54 no-plan ablation.
+  prompt control for the version54 no-plan ablation; version54 is the frozen no-plan diagnostic.
   `version26` is now historical checkpoint-560 control only: do not
   start new feature work from it or describe it as the current destination. The original atomic
   local diagnostic baseline remains `version39`; `version40`-`version50` are frozen
@@ -361,9 +387,9 @@ Start at `docs/current/README.md`.
   and reduced carrier protocol errors from 124 to two. Against historical version24's 145/200 it
   had 15 gains and 13 regressions (`p=0.8506`): accuracy is tied rather than promoted, while errors
   remain 54 versus 29 and tokens 1.92x. All 147 successes replayed, and structural plus full
-  200-task native-history/no-leak audits had zero issues. Version51 therefore passes as the forward
-  provider-tool-call experiment baseline, not as an SFT/RL protocol. Subsequent protocol
-  experiments should branch from version51 rather than version26; do not flatten its multi-call
+  200-task native-history/no-leak audits had zero issues. Version51 therefore passed as the
+  provider-tool-call behavior baseline for its frozen lineage, not as an SFT/RL protocol. New
+  protocol experiments now branch from `checkpoint-relalg-v1`; do not flatten version51 multi-call
   turns into atomic training targets. See
   `docs/reports/evaluation/BIRD_VERSION51_NATIVE_TOOL_BUNDLE_GATE32_20260805_ZH.md` and
   `docs/reports/evaluation/BIRD_VERSION51_NATIVE_TOOL_BUNDLE_FIXED200_20260805_ZH.md`.
@@ -402,14 +428,12 @@ Start at `docs/current/README.md`.
   turn history, feedback, and terminal semantics. It removes only the provider-visible `plan`
   function plus the now-inapplicable teacher-only plan-evidence sentence. The underlying harness
   retains replay compatibility; a hallucinated plan call is a structured state-preserving
-  `unknown_tool` error. Version54 is registered by `tool-scheme-registry-v11` and remains
-  diagnostic-only. The current gate is a v54-only absolute acceptance pilot over the first 200
-  tasks of frozen `bird_train_atomic_teacher1500_v2_nonempty`; it does not run a v53 comparison.
-  If every yield/legal/error/replay/structure/no-leak gate passes, generation may continue in the
-  same frozen order over the remaining 1,300 tasks. No external request has been made before the
-  new authorization. Version54 multi-call turns must not be flattened into atomic training targets;
-  all outputs remain diagnostic candidates until a scheme-aware exporter and explicit promotion.
-  Future changes increment from `version55`.
+  `unknown_tool` error. Version54 was introduced by `tool-scheme-registry-v11` and is carried by
+  registry v12 as a frozen diagnostic. Its v54-only Prefix200 absolute acceptance pilot was
+  preregistered but has no recorded result; do not infer one. Version54 multi-call turns must not be
+  flattened into atomic training targets, and its lineage remains available only for compatible
+  ongoing work and reproduction. New tools and experiments use `checkpoint-relalg-v1` rather than
+  incrementing this version line.
 - Training export applies `causal-empty-result-target-filter-v1`. A successful intermediate call
   whose tool output explicitly has `row_count=0` remains in the executed trajectory and later
   causal context but is marked `sft_target_eligible=false`; it receives no positive target loss.
@@ -429,8 +453,9 @@ Start at `docs/current/README.md`.
   `bird_train_atomic_teacher1500_v2_nonempty`. It preserves all v1 ids/order and the same task-file
   hash because all prior 1,500 were certified nonempty. New training-task selectors must require a
   hash-bound successful filter manifest; the unfiltered bypass is historical reproduction only.
-- Non-atomic scheme implementations are package-owned under `src/tool_modules/`: action-block,
-  relational-program, direct-SQL-search, iterative-SQL, and native-tool-bundle each own their
+- Non-atomic scheme implementations are package-owned under `src/tool_modules/`:
+  checkpoint-relalg, action-block, relational-program, direct-SQL-search, iterative-SQL, and
+  native-tool-bundle each own their
   protocol directory;
   `sql_common` is the explicit shared immutable-SQL runner and `tool_modules.registry` is the
   exclusive cross-scheme registry. `src/eval` contains cross-scheme
@@ -448,20 +473,25 @@ Start at `docs/current/README.md`.
   without editing function arguments before the shared parser and harness. Version51-version54 are named
   non-atomic exception: its structured provider assistant turn is the authoritative carrier and is
   never reconstructed as multiple causal text turns.
-- The promoted/default context contract remains bounded recent legal history with
+- The retained atomic context contract remains bounded recent legal history with
   `history_turns=4`: catalog,
   question, and optional external knowledge are followed by at most four successful
   assistant/observation pairs, and the latest observation carries rebuilt resident state plus
-  optional `LAST TOOL ERROR`. Rejected assistant text is never added to the promoted/default
+  optional `LAST TOOL ERROR`. Rejected assistant text is never added to the retained atomic
   history. Version40 is an explicit diagnostic exception for reasoning only: rejected reasons are
   retained with `status=rejected`, while the authored failed call is represented by the
   harness-owned attempted action/error. Version37 may render first-5 plus recent-5 for a paired
   diagnostic, but that policy is not promoted unless it beats recent-4 on the same frozen tasks.
   Version51-version54 instead bound history by four provider assistant turns; each retained assistant turn
   is followed by all of its matching tool-result messages, including structured per-call errors.
-- Current tools: `plan`, `describe_table`, `inspect_column`, `read_subtable`,
+- Retained atomic tools: `plan`, `describe_table`, `inspect_column`, `read_subtable`,
   `condition_filter`, `project`, `scalar_compute`, `join_tables`, `group_aggregate`,
   `extreme_value_select`, `set_op`, and `answer_from_context`.
+- Forward checkpoint-relalg surfaces: every mode has `describe_table`, `inspect_column`,
+  `read_rows`, `commit_checkpoint`, `restore_checkpoint`, and `answer`; direct adds read-only
+  `execute_sql`; atomic adds `filter_rows`, `project`, `join`, `aggregate`, `distinct`,
+  `set_operation`, `sort`, `limit`, and `add_rank`; hybrid has both data-operation sets. Exact
+  arguments come only from the mode's executable native schemas.
 - Version54 exposes that same surface except that `plan` is absent; the other eleven functions and
   their argument schemas are unchanged.
 - Version40 exposes the same set except that `plan` is absent and `read_subtable` is named
@@ -537,7 +567,7 @@ Start at `docs/current/README.md`.
   expansion, and do not use v6 for SFT/RL; see
   `docs/reports/evaluation/BIRD_RELATIONAL_PROGRAM_V6_BASE_ROLE_GATE4_20260727_ZH.md`.
   The scheme has evaluation and causal-rollout plumbing only, was introduced in registry v4 and is
-  carried forward by `tool-scheme-registry-v11`, and remains
+  carried forward by `tool-scheme-registry-v12`, and remains
   `diagnostic_only_pending_protocol_scale_gate`; it has no SFT exporter or RL environment.
 - The separate direct-SQL-search scheme is the action scheme introduced by registry v4 and exposes
   exactly `search_values(query, table?, column?, limit?, offset?)` plus
@@ -561,7 +591,7 @@ Start at `docs/current/README.md`.
   missed the accuracy expansion threshold by four tasks. The single search call occurred in a
   failure. Keep v2 as a diagnostic low-token SQL control; do not expand it or use it for SFT/RL. See
   `docs/current/direct_sql_search_tool_scheme_zh.md`.
-- The separate active `iterative-sql-v6` scheme is registered by `tool-scheme-registry-v11` and exposes
+- The separate active `iterative-sql-v6` scheme is carried by `tool-scheme-registry-v12` and exposes
   exactly `execute_sql(sql)` plus `submit_sql(sql)`. The prompt requires causal SQL exploration
   until enough schema/value/join/population/grain/output evidence is available, then requires the
   final SELECT/WITH to match a previously successful `execute_sql` query. Safety, prior-inspection,
@@ -843,6 +873,10 @@ Detailed experiment chronology, artifact paths, and scorer audits are in
 
 - `src/harness/`: executor, catalog, environment state, provenance, grounding, dataset adapters.
   Fact-only table derivation metadata is owned by `src/harness/relation_derivation/`.
+- `src/tool_modules/checkpoint_relalg/`: forward `checkpoint-relalg-v1` protocol, compact prompts,
+  native schemas, relation artifacts, checkpoint state, runtime, causal runner, and audits.
+- Other `src/tool_modules/` packages: frozen or independent action-scheme implementations retained
+  under their exact protocol identities.
 - `src/sft/`: protocol, causal teacher rollout, replay/quality filters, SFT export and assembly.
 - `src/eval/`: closed-loop tool evaluation and direct-SQL controls.
 - `src/rl/`: tool environment, task loader, terminal reward, process credit, objective, backend.
@@ -853,6 +887,8 @@ Detailed experiment chronology, artifact paths, and scorer audits are in
 
 ## Active entry points
 
+- Forward checkpoint-relalg diagnostic rollout:
+  `src/tool_modules/checkpoint_relalg/runner.py --mode direct|atomic|hybrid`.
 - Tool rollout: `src/eval/rollout.py`, `src/eval/rollout_passk.py`.
 - Direct SQL: `src/eval/text2sql.py`, `src/eval/text2sql_passk.py`.
 - Teacher data: `src/sft/generate_teacher_rollouts.py`.

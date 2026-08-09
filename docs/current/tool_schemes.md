@@ -2,18 +2,19 @@
 
 ## Contract
 
-The repository exposes six complete and independently selectable model action schemes:
+The repository exposes seven complete and independently selectable model action schemes:
 
 | Scheme id | Model turn | Top-level actions | Student carrier |
 |---|---|---|---|
+| `checkpoint-relalg` | exactly one native function call under mandatory `mode=direct|atomic|hybrid` | mode-specific perception/relational actions plus shared `commit_checkpoint`, `restore_checkpoint`, and exact-artifact `answer` | official DeepSeek `reasoning_content` + exactly one `tool_calls` item, followed by its matching tool result |
 | `atomic` | exactly one primitive tool | the original planning, perception, relational, and terminal tools | `<think>` followed directly by one raw JSON action |
-| `native-tool-bundle` | one provider assistant turn containing 1..8 direct primitive calls from one shared pre-state | the version39 perception, relational, and terminal functions; active version54 excludes `plan` | structured DeepSeek `reasoning_content` + `tool_calls`, followed by one tool result per call id |
+| `native-tool-bundle` | one provider assistant turn containing 1..8 direct primitive calls from one shared pre-state | the version39 perception, relational, and terminal functions; frozen version54 excludes `plan` | structured DeepSeek `reasoning_content` + `tool_calls`, followed by one tool result per call id |
 | `action-block` | one ordered work block of 1..8 primitive calls, or one terminal action | `action_block` for work; `answer_from_context` for termination | `<think>` followed directly by one raw JSON action |
 | `relational-program` | one interactive observation, one declarative relation program of 1..8 nodes, or one terminal action | `observe`; `relational_program`; `answer_from_context` | `<think>` followed directly by one raw JSON action |
 | `direct-sql-search` | one database-value retrieval or one read-only SQL inspection/final execution | `search_values`; `execute_sql` | `<think>` followed directly by one raw JSON action |
 | `iterative-sql` | one read-only SQL exploration or one recoverable final SQL proposal | `execute_sql`; `submit_sql` | `<think>` followed directly by one raw JSON action |
 
-The ids are defined by `tool-scheme-registry-v11` in `src/tool_modules/registry.py`. A model sees exactly
+The ids are defined by `tool-scheme-registry-v12` in `src/tool_modules/registry.py`. A model sees exactly
 one scheme. Do not combine top-level schemas from different schemes in one prompt and do not infer
 a scheme from trajectory shape. Registry v2 unifies both prior student schemes on the active
 `think-json-v1` carrier;
@@ -25,10 +26,12 @@ only that scheme to the failure-derived `iterative-sql-v4`; registry v8 advances
 to the externally reviewed `iterative-sql-v5`; registry v9 advances only that scheme to
 `iterative-sql-v6`, adding an explicit relational output-shape rule; registry v10 advances only
 the native bundle to the version53 reviewed prompt profile; registry v11 advances only that bundle
-to version54 by removing the public `plan` function. Registry v1's
+to version54 by removing the public `plan` function; registry v12 adds the independent forward
+`checkpoint-relalg-v1` scheme without changing any frozen predecessor. Registry v1's
 tagged atomic carrier is retired.
 
-The first four schemes share the harness-owned primitive relational semantics and resident facts.
+The first five listed schemes share Harness-owned relational semantics while retaining distinct
+state, action, and trajectory contracts.
 `direct-sql-search` and `iterative-sql` instead share the immutable SQLite database, provider
 transport, causal loop, and hidden terminal scorer. The former exposes raw read-only SQL plus a
 bounded retrieval service; the latter exposes only SQL execution and recoverable final submission.
@@ -59,6 +62,34 @@ provider-native field plus raw visible JSON, then records the same canonical car
 The provider and student carriers are adapters around the same structured action. They are
 separately hashed and recorded.
 
+### checkpoint-relalg-v1
+
+`checkpoint-relalg-v1` is the forward implementation line for all new tool and experiment work.
+The mode is explicit in the launcher, protocol identity, manifests, prompt hash, schema hash, and
+result directory; it cannot be inferred or changed inside an episode. The consolidated Chinese
+contract is `docs/current/checkpoint_relalg_v1_zh.md`.
+
+- `direct` exposes perception plus read-only `execute_sql`.
+- `atomic` exposes perception plus typed relational-algebra operators.
+- `hybrid` exposes both direct SQL and typed relational algebra.
+- every mode shares the same relation-artifact store, current environment state, semantic
+  checkpoint/restore controls, and exact-artifact terminal answer.
+
+Every assistant turn authors exactly one native tool call. Unlike `native-tool-bundle`, there is no
+multi-call turn and no shared-pre-state bundle lowering. Checkpoint history is a compact working-
+memory path; it is not database evidence and cannot override the current environment or artifact
+contents. Simple tasks may answer without creating a checkpoint. A commit records a semantic
+milestone; restore is reserved for an explicit contradiction and creates a new active checkpoint
+path rather than erasing audit history.
+
+The full approximately 40k-character design specification is a Harness/implementation contract,
+not a provider prompt. The model receives a short shared core, one short mode prompt, compact
+schemas for the selected mode, and bounded dynamic context. Teacher generation adds only short
+checkpoint guidance. The scheme is the forward mainline but remains
+`diagnostic-only`: it has no authorized SFT exporter or RL
+environment until fresh replay, structure, provider-history, no-leak, behavior, and explicit
+admission gates pass.
+
 Atomic `version50` is an isolated exception on the provider side only: DeepSeek receives the
 version39 atomic functions through native `tools` and answers with one `tool_calls` item plus
 `reasoning_content`. The stored/replay/student carrier remains `think-json-v1`. This keeps the
@@ -68,7 +99,7 @@ improves external-teacher trajectories. Version50 is selectable only with
 completed fixed-200 scored 133/200 correct and 183/200 legal versus historical version24 at
 145/200 and 197/200, so it is rejected and its trajectories cannot enter SFT/RL.
 
-Version51 is the forward `native-tool-bundle` implementation. Unlike version50, it does not reject
+Version51 is the frozen behavior baseline of the `native-tool-bundle` lineage. Unlike version50, it does not reject
 provider-authored parallel calls or non-empty assistant content. Content is retained only for
 audit; execution consumes the structured calls. All arguments are checked against the bundle's
 shared pre-state before any primitive executes, preventing same-bundle use of unseen derived
@@ -92,18 +123,23 @@ copied-source versus derived-metric representation, correctness-first scheduling
 filters over distinct handles. Teacher-only rules cover trajectory generation; harness-only
 message mechanics are omitted. No live accuracy result or SFT/RL admission is claimed.
 
-Version54 is the active no-plan diagnostic. It keeps the exact version53 student runtime prompt,
+Version54 is the frozen no-plan diagnostic. It keeps the exact version53 student runtime prompt,
 all eleven non-plan functions and argument schemas, carrier, execution, state, feedback, history,
 and terminal behavior. Only the native `plan` schema and its stale teacher-only evidence sentence
-are removed. The active gate is a v54-only absolute acceptance pilot on the first 200 tasks of the
-frozen teacher1500 training-candidate cohort, followed conditionally by its remaining 1,300 tasks;
-until it finishes, version54 has no live scale claim and remains ineligible for SFT/RL.
+are removed. Its v54-only absolute acceptance pilot on the first 200 tasks of the frozen
+teacher1500 training-candidate cohort was preregistered but had no result when the lineage was
+superseded as the forward development base. Version54 has no live scale claim and remains
+ineligible for SFT/RL; keep it for exact reproduction and already-running compatible work.
 
 ## Evaluation and causal rollout
 
 Preferred unified evaluation entry:
 
 ```bash
+PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
+  .venv/bin/python src/eval/run_tool_scheme.py \
+  --tool-scheme checkpoint-relalg -- --mode hybrid <checkpoint-relalg runner arguments>
+
 PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
   .venv/bin/python src/eval/run_tool_scheme.py \
   --tool-scheme atomic -- <atomic rollout.py arguments>
@@ -387,6 +423,11 @@ protocol.
 
 Atomic bounded-history SFT continues through `src/sft/build_rolling_sft_data.py`.
 
+`checkpoint-relalg-v1` is not an SFT source yet. Its one-native-call turns, explicit mode, relation
+artifacts, checkpoint path, provider history, and state hashes require a scheme-aware causal
+exporter and explicit admission gate. Do not relabel them as atomic records or infer eligibility
+from the fact that both schemes expose relational operations.
+
 Action-block bounded-history SFT is exported by
 `src/tool_modules/action_block/sft_export.py`. It:
 
@@ -425,6 +466,11 @@ behavior gate explicitly open admission. They cannot be relabeled as direct-SQL-
 trajectories.
 
 ## RL
+
+There is no `checkpoint-relalg` RL environment yet. The forward-mainline designation applies to
+new protocol/tool development, not to training admission. Existing atomic and action-block RL
+runs remain supported under their exact stored scheme/protocol hashes; they must not be silently
+resumed under `checkpoint-relalg-v1`.
 
 `src/rl/tool_environment.py::create_tool_use_env` constructs either:
 

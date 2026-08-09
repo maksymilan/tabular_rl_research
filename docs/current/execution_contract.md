@@ -1,8 +1,9 @@
 # Canonical Execution Contract
 
-Status: active shared harness contract across current tool schemes. The forward provider-tool-call
-prompt diagnostic is version54 / `native-tool-bundle`; version26 is a frozen historical checkpoint
-control, not the base for new feature work. `src/sft/protocol.py`, the selected scheme protocol,
+Status: active shared harness contract across current tool schemes. The forward implementation is
+`checkpoint-relalg-v1` / `checkpoint-relalg` with an explicit `direct|atomic|hybrid` mode;
+version54 / `native-tool-bundle` is now a frozen predecessor diagnostic, and version26 is a frozen
+historical checkpoint control. `src/sft/protocol.py`, the selected scheme protocol,
 and `src/tool_modules/registry.py` are executable authority. Old trajectory artifacts remain replay
 inputs, not examples of the current public action interface.
 
@@ -15,6 +16,13 @@ Its exact boundary is documented in `docs/current/iterative_sql_tool_scheme_zh.m
 
 An episode is a sequence of model actions against one immutable source database and one
 harness-managed resident state.
+
+For the forward checkpoint-relalg scheme, every assistant turn contains exactly one native call.
+The three modes share package-owned relation artifacts, EnvironmentState, checkpoint/restore, and
+exact-artifact `answer`; successful commit/restore begins a new provider phase while retaining the
+compact checkpoint history. The original atomic and version51-version54 rules below remain the
+executable compatibility contract for ongoing RL and frozen artifacts, not the base for new tool
+work.
 
 1. The original atomic renderer starts with the catalog, question, and optional external
    knowledge, then retains at most four successful assistant/observation pairs. Version51-version54 instead
@@ -64,6 +72,11 @@ assistant message, ignores assistant content for execution, validates the struct
 names/arguments without repair, and returns one native tool-result message for every call id.
 Primitive records carry their shared model-turn identity so storage and replay do not invent
 intermediate model observations.
+
+Checkpoint-relalg also preserves the complete provider assistant message, but requires exactly one
+call and returns exactly one matching tool result. Multiple authored calls are a state-preserving
+semantic protocol error, not a bundle. Its full implementation specification is not inserted into
+the provider prompt; the model sees the selected compact schemas and causal dynamic state only.
 
 The API-facing prompt must contain only the selected provider envelope. For DS Flash, positive
 instructions to emit a visible `<think>` block are removed before the split-field contract and its
@@ -310,9 +323,9 @@ state rebuilding needs per-turn loss accounting rather than one appended transcr
 
 ## Migration Rule
 
-Do not mix naming contracts inside one dataset or evaluation. New provider-tool-call diagnostics
-branch from `version54` / `native-tool-bundle`; the original atomic local baseline remains
-version39, and version26 is historical checkpoint control only. New SFT construction remains gated
+Do not mix naming contracts inside one dataset or evaluation. All new tool/protocol diagnostics
+branch from `checkpoint-relalg-v1`; version54 / `native-tool-bundle`, the original atomic local
+baseline version39, and version26 remain frozen compatibility/control lines. New SFT construction remains gated
 on the selected scheme's explicit exporter and training-admission requirements.
 Historical artifacts retain their original model-visible contracts and may only enter
 replay-compatible paths. SFT, evaluation, and RL use the same student runtime prompt; the external

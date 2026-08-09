@@ -6,8 +6,15 @@ SFT examples come from causal student or external-teacher model↔harness episod
 episode must pass terminal denotation scoring, fresh replay, protocol/quality gates, and the rolling
 single-action export checks before entering a mixture.
 
+`checkpoint-relalg-v1` / `checkpoint-relalg` is now the forward line for new tool and experiment
+development, but it is not an accepted SFT source. Its explicit mode, one-native-call provider
+history, relation artifacts, checkpoint path, state hashes, and terminal artifact require a
+scheme-aware causal exporter plus fresh replay, no-leak, behavior, and explicit admission gates.
+Do not relabel its episodes as atomic or admit them through the current rolling text-action
+exporter. “Forward mainline” is a development-direction decision, not training promotion.
+
 Version51 is the frozen provider baseline, version52 is its compact-prompt successor, version53 is
-the reviewed-prompt control, and version54 / `native-tool-bundle` is the forward no-plan
+the reviewed-prompt control, and version54 / `native-tool-bundle` is the frozen no-plan
 diagnostic. All four are diagnostic-only. Their
 multi-call turns must not enter the existing single-action exporter or SFT/RL
 mixtures by flattening them into fake assistant turns. Admission requires a scheme-aware exporter
@@ -28,6 +35,10 @@ for every new BIRD episode, replay, grounding gate, and reward audit is `bird-se
 The current BIRD SFT-2 construction is student-first pass@k. Teacher fallback is restricted to true
 student pass@k failures. Provider attempts, transport failures, rejected trajectories, and duplicate
 actions remain auditable but do not become training targets.
+
+The existing atomic SFT-2 pipeline remains supported for its current datasets, checkpoints,
+ongoing RL dependencies, and exact reproduction. It must not silently consume checkpoint-relalg
+records, and no existing atomic checkpoint may be resumed under the new scheme identity.
 
 Task-level admission happens before rollout. `gold-denotation-nonempty-task-filter-v1` privately
 executes hidden gold SQL in read-only SQLite and retains only tasks with at least one returned row.

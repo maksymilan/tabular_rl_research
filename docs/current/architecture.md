@@ -7,9 +7,9 @@
 - `src/sft/`: protocol rendering/parsing, causal teacher rollouts, replay and quality gates, SFT
   dataset export, and current BIRD SFT-2 assembly.
 - `src/tool_modules/`: independently selectable, scheme-owned protocols, execution loops, audits,
-  exporters, and tests. `action_block/`, `relational_program/`, `direct_sql_search/`, and
-  `iterative_sql/` and `native_tool_bundle/` do not import one another except through an explicit
-  semantic dependency;
+  exporters, and tests. `checkpoint_relalg/`, `action_block/`, `relational_program/`,
+  `direct_sql_search/`, `iterative_sql/`, and `native_tool_bundle/` do not import one another except
+  through an explicit semantic dependency;
   `sql_common/` is the named immutable-SQL execution layer shared by the two SQL schemes.
 - `src/eval/`: cross-scheme evaluation infrastructure, atomic/direct-SQL controls, pass@k
   aggregation, denotation/candidate selection, artifact contracts, and thin compatibility entry
@@ -22,19 +22,24 @@
 
 ## Shared ownership
 
-`src/sft/protocol.py` owns the model-visible tool contract and context renderer.
-Non-atomic scheme contracts are owned by their package under `src/tool_modules/`; the exclusive
-scheme registry is `src/tool_modules/registry.py`.
-`src/harness/executor.py` owns tool execution. `src/harness/relation_derivation/` owns validated,
+`src/sft/protocol.py` owns the retained atomic model-visible contract and context renderer.
+`src/tool_modules/checkpoint_relalg/` owns the forward protocol, mode schemas, prompt layers,
+state/artifacts/checkpoints, execution loop, and audit contract. Other non-atomic scheme contracts
+are owned by their package under `src/tool_modules/`; the exclusive scheme registry is
+`src/tool_modules/registry.py`.
+`src/harness/executor.py` owns retained atomic tool execution; checkpoint-relalg uses its
+package-owned typed relational executor. `src/harness/relation_derivation/` owns validated,
 fact-only formal semantics attached to derived relation handles. `src/harness/provenance.py` owns
 data/value/grounding edges. `src/harness/environment_state.py` owns resident state.
-`src/eval/rollout.py` orchestrates those harness services and provides shared scoring helpers used
-by evaluation, teacher rollout, and RL. `src/harness/catalog.py` owns the bounded opening catalog.
+`src/eval/rollout.py` orchestrates those services for the retained atomic line and provides shared
+scoring helpers used by evaluation, teacher rollout, and RL. `src/harness/catalog.py` owns the
+bounded atomic opening catalog.
 
 ## Scheme package map
 
 | Scheme | Canonical protocol | Canonical runtime / exporter |
 |---|---|---|
+| checkpoint-relalg | `src/tool_modules/checkpoint_relalg/protocol.py` | `runner.py`, `runtime.py`, `audit.py` |
 | atomic | `src/sft/protocol.py` | `src/eval/rollout.py` and the shared harness |
 | action-block | `src/tool_modules/action_block/protocol.py` | `evaluator.py`, `sft_export.py` |
 | relational-program | `src/tool_modules/relational_program/protocol.py` | `evaluator.py` |
@@ -42,9 +47,22 @@ by evaluation, teacher rollout, and RL. `src/harness/catalog.py` owns the bounde
 | iterative-sql | `src/tool_modules/iterative_sql/protocol.py` | `src/tool_modules/sql_common/runner.py`, `iterative_sql/audit.py` |
 | native-tool-bundle | `src/tool_modules/native_tool_bundle/protocol.py` | `provider_tools.py`, `audit.py` |
 
-Atomic remains the promoted project-wide protocol consumed jointly by SFT, evaluation, and RL; it
-is intentionally not duplicated under `tool_modules/`. The package split isolates the independent
-experimental action surfaces that were previously mixed into flat evaluation/SFT directories.
+`checkpoint-relalg-v1` is the forward implementation boundary for all new tool and experiment
+development. Its package owns one shared state/artifact/checkpoint runtime and three explicitly
+selected public surfaces (`direct`, `atomic`, and `hybrid`); the mode is part of every manifest and
+cannot be inferred from observed calls. The complete design specification is a Harness and
+implementation contract. Provider requests contain only a short shared core, a short mode prompt,
+compact native function schemas, and the current dynamic context.
+
+This forward designation does not open training admission. `checkpoint-relalg-v1` remains
+diagnostic-only until its own fresh replay, structure, provider-history, no-leak, behavior, and
+export/admission gates pass. The original atomic runtime is intentionally not duplicated under
+`tool_modules/`; it remains supported for existing RL experiments, frozen controls, and exact
+reproduction. Version54 / `native-tool-bundle` is a frozen diagnostic predecessor with no RL
+admission. Neither legacy line may be silently mixed with or relabeled as `checkpoint-relalg`.
+
+The package split isolates independent action surfaces that were previously mixed into flat
+evaluation/SFT directories.
 
 Historical paths such as `src/eval/evaluate_batch_plan.py`,
 `src/eval/evaluate_relational_program.py`, `src/eval/iterative_sql.py`, and the former flat protocol

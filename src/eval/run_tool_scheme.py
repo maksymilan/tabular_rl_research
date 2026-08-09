@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "src" / "sft"))
 from tool_modules.registry import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
+    CHECKPOINT_RELALG_TOOL_SCHEME,
     DIRECT_SQL_SEARCH_TOOL_SCHEME,
     ITERATIVE_SQL_TOOL_SCHEME,
     NATIVE_TOOL_BUNDLE_SCHEME,
@@ -52,6 +53,9 @@ def runner_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
             "native-tool-bundle",
             "--diagnostic-only",
         ]
+    if tool_scheme == CHECKPOINT_RELALG_TOOL_SCHEME:
+        script = ROOT / "src" / "tool_modules" / "checkpoint_relalg" / "runner.py"
+        return [sys.executable, str(script), *forwarded]
     if tool_scheme == ACTION_BLOCK_TOOL_SCHEME:
         script = ROOT / "src" / "tool_modules" / "action_block" / "evaluator.py"
         return [sys.executable, str(script), *forwarded]

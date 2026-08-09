@@ -688,6 +688,12 @@ def save_checkpoint(
 
 def main() -> int:
     args = parse_args()
+    if args.tool_scheme not in (ATOMIC_TOOL_SCHEME, ACTION_BLOCK_TOOL_SCHEME):
+        raise SystemExit(
+            "this trainer supports only the frozen atomic and action-block RL environments; "
+            "checkpoint-relalg-v1 is the forward experimental scheme but remains "
+            "diagnostic-only until replay, no-leak, and training-admission gates pass"
+        )
     if args.group_size < 2:
         raise SystemExit("--group-size must be at least 2 for a group-relative baseline")
     if args.rollout_batch_size < 0:

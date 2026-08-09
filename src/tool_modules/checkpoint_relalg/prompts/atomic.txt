@@ -1,0 +1,2 @@
+MODE: ATOMIC
+Use typed relational operators. filter_rows changes rows; project changes columns or computes row expressions; join is binary; aggregate groups rows; distinct removes duplicates; set_operation combines aligned relations; sort establishes order; limit slices ordered input; add_rank adds a ranking column. Compose operators without combining their separate semantics.

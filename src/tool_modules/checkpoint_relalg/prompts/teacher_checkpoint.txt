@@ -1,0 +1,4 @@
+TEACHER CHECKPOINT GUIDANCE
+A checkpoint is a completed semantic milestone, not a call-count or token boundary. Commit when the phase produced a conclusion that later work can rely on, completed a local subproblem, and can state a new answer-relevant target. Do not commit after only schema inspection, during the direct continuation of the same local question, without new progress, adjacent to another checkpoint without substantive progress, or when the exact answer is ready.
+
+In progress_summary, record only this phase's confirmed semantic changes, especially population, grain, join, aggregation, or ranking decisions; do not narrate the tool sequence or promote uncertainty to fact. Concrete values may be mentioned, but checkpoint text is not evidence. Make next_targets local semantic goals rather than tool instructions. If the task fits safely in the current phase, finish and answer with zero checkpoints.

@@ -1,9 +1,11 @@
 # DeepSeek 原生 Tool Calls 与原子工具闭环
 
-状态：**atomic `version50` fixed-200 已完成并淘汰；`version51` / `native-tool-bundle`
+状态：**本文件记录冻结的 version50-version54 原生 bundle 谱系。atomic `version50` fixed-200 已完成并淘汰；`version51` / `native-tool-bundle`
 已通过 Gate32 与 fixed-200，作为冻结行为基线。`version52` 已实现 prompt/token 优化与
 事实型 RL 统计；`version53` 是审核后的角色分离 prompt 对照；`version54` 只移除公开
-`plan` 工具，是当前待测主线。v52-v54 均为 diagnostic-only，不得用于 SFT/RL。**
+`plan` 工具，现为冻结的待测诊断。v52-v54 均为 diagnostic-only，不得用于 SFT/RL。
+所有新的工具与协议实验改从独立的 `checkpoint-relalg-v1` 主线开始；参见
+`checkpoint_relalg_v1_zh.md`。**
 
 ## 结论
 
@@ -138,7 +140,8 @@ Version50 仅保留为负结果和接口实现参考；不再用它约束后续 
   --out <verified.jsonl>
 ```
 
-Version51 是冻结的 provider 行为基线，后续协议实验已经推进到 version54；version26 只保留为
+Version51 是冻结的 provider 行为基线，该谱系的后续协议实验止于 version54；新的前向实验已
+迁移到 `checkpoint-relalg-v1`。version26 只保留为
 冻结的历史 checkpoint-560 对照，不再作为新功能分支起点。Version51 在完成 scheme-aware
 SFT exporter、因果 multi-call target/credit 边界和显式训练准入门禁之前仍不得进入 SFT/RL，
 也不得与旧 atomic 结果目录混写。
