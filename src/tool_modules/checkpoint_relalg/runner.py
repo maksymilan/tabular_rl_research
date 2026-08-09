@@ -6,11 +6,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
+import os
 import sqlite3
 import sys
+import tempfile
 import time
 from collections import Counter, defaultdict
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import quote
@@ -31,7 +35,12 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     ADMISSION_STATUS,
     ATOMIC_TOOLS,
     BACKEND,
+    CARRIERS,
+    CARRIER_ABLATION_PROTOCOL_VERSION,
+    CARRIER_NATIVE_TOOL_CALLS,
+    CARRIER_POLICY_VERSION,
     CHECKPOINT_POLICY_VERSION,
+    DEFAULT_CARRIER,
     DIALECT,
     ENVIRONMENT_RENDERER_VERSION,
     EXECUTOR_VERSION,
@@ -39,7 +48,9 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     PROTOCOL_VERSION,
     SCHEME,
     capability_manifest,
+    carrier_experiment_arm,
     get_system_prompt,
+    normalize_carrier,
     prompt_hash,
     provider_tool_definitions,
     tool_schema_hash,
@@ -50,18 +61,31 @@ from tool_modules.checkpoint_relalg.executors import (  # noqa: E402
 )
 from tool_modules.checkpoint_relalg.provider import (  # noqa: E402
     DeepSeekNativeClient,
+    OFFICIAL_DEEPSEEK_BASE_URL,
     ProviderContextOverflow,
     ProviderError,
+    provider_request_audit_options,
     tool_result_message,
 )
 from tool_modules.checkpoint_relalg.provider_tools import (  # noqa: E402
     NativeToolCallError,
     attempted_action_from_native_message,
+    native_authored_action_count,
+    native_carrier_envelope_valid,
     validate_native_assistant_message,
 )
 from tool_modules.checkpoint_relalg.runtime import (  # noqa: E402
     CheckpointRelalgRuntime,
     RuntimeConfig,
+)
+from tool_modules.checkpoint_relalg.text_json_carrier import (  # noqa: E402
+    TextJSONActionError,
+    attempted_action_from_text_json_message,
+    text_json_result_message,
+    text_json_authored_action_count,
+    text_json_carrier_envelope_valid,
+    text_json_exact_single_action,
+    validate_text_json_assistant_message,
 )
 from tool_modules.checkpoint_relalg.strict_artifact_audit import (  # noqa: E402
     STRICT_AUDIT_VERSION,
@@ -69,13 +93,68 @@ from tool_modules.checkpoint_relalg.strict_artifact_audit import (  # noqa: E402
     has_top_level_order_by,
 )
 from tool_modules.registry import (  # noqa: E402
-    TOOL_SCHEME_REGISTRY_VERSION,
     build_checkpoint_relalg_tool_scheme,
 )
 
 
 DEFAULT_TASKS = PROJECT_ROOT / "data/eval_inputs/bird_train_sft1_protocol_terminal10.jsonl"
 DEFAULT_MODEL = "deepseek-v4-flash"
+RUNNER_VERSION = "checkpoint-relalg-causal-official-deepseek-carrier-ab-v2"
+LEGACY_RUNNER_VERSION = "checkpoint-relalg-causal-official-deepseek-carrier-ab-v1"
+BATCH_CONTROL_VERSION = "checkpoint-relalg-batch-control-v1"
+SELECTION_IDENTITY_VERSION = "checkpoint-relalg-selection-identity-v1"
+DEFAULT_MAX_BATCH_PROVIDER_ATTEMPTS = 1_200
+DEFAULT_MAX_BATCH_PROVIDER_TOKENS = 15_000_000
+DEFAULT_MAX_BATCH_WALL_SECONDS = 7_200.0
+DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES = 2
+DEFAULT_MAX_TOTAL_PROVIDER_FAILURES = 3
+DEFAULT_MAX_CONSECUTIVE_SEMANTIC_FAILURES = 5
+PUBLIC_TASK_IDENTITY_FIELDS = (
+    "position",
+    "example_id",
+    "example_index",
+    "db_id",
+    "question_sha256",
+    "external_knowledge_sha256",
+)
+INFRASTRUCTURE_FAILURE_TYPES = frozenset(
+    {
+        "provider_error",
+        "context_length_exceeded",
+        "hidden_verifier_error",
+        "batch_limit_reached",
+    }
+)
+BATCH_STATUS_FIELDS = frozenset(
+    {
+        "batch_control_version",
+        "state",
+        "stop_code",
+        "stop_detail",
+        "requested_size",
+        "completed_records",
+        "counters",
+        "limits",
+        "manifest_config_sha256",
+        "all_jsonl_sha256",
+        "recorded_at_utc",
+    }
+)
+BATCH_COUNTER_FIELDS = frozenset(
+    {
+        "provider_attempts",
+        "provider_tokens",
+        "total_provider_failures",
+        "consecutive_provider_failures",
+        "consecutive_semantic_failures",
+        "semantic_failures",
+        "total_wall_seconds",
+    }
+)
+OPERATIONAL_RESUME_FIELDS = frozenset({"run_started_at_utc"})
+OPERATIONAL_RESUME_POLICY_VERSION = (
+    "checkpoint-relalg-preserve-original-run-start-v1"
+)
 
 
 def _load_tasks(path: Path) -> list[dict[str, Any]]:
@@ -94,6 +173,770 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _canonical_sha256(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _task_example_index(task: Mapping[str, Any], position: int) -> int:
+    value = task.get("example_index", task.get("index", position))
+    if isinstance(value, bool) or not isinstance(value, int):
+        return position
+    return value
+
+
+def _resolve_source_path(value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path.resolve()
+
+
+def _dataset_source_identity(source_manifest: Mapping[str, Any]) -> dict[str, Any]:
+    outputs = source_manifest.get("outputs")
+    harness_tasks = outputs.get("harness_tasks") if isinstance(outputs, Mapping) else None
+    selection = source_manifest.get("selection")
+    preserved = (
+        selection.get("preserved_cohort")
+        if isinstance(selection, Mapping)
+        else None
+    )
+    source_path = (
+        harness_tasks.get("path")
+        if isinstance(harness_tasks, Mapping)
+        else None
+    )
+    identity: dict[str, Any] = {
+        "schema_version": source_manifest.get("schema_version"),
+        "status": source_manifest.get("status"),
+        "harness_source_path": (
+            str(_resolve_source_path(source_path))
+            if isinstance(source_path, str) and source_path
+            else None
+        ),
+        "harness_source_sha256": (
+            harness_tasks.get("sha256")
+            if isinstance(harness_tasks, Mapping)
+            else None
+        ),
+        "harness_source_records": (
+            harness_tasks.get("records")
+            if isinstance(harness_tasks, Mapping)
+            else None
+        ),
+        "selection_algorithm": (
+            selection.get("algorithm") if isinstance(selection, Mapping) else None
+        ),
+        "order_preserved": (
+            preserved.get("task_ids_and_order_preserved")
+            if isinstance(preserved, Mapping)
+            else None
+        ),
+    }
+    identity["dataset_source_identity_sha256"] = _canonical_sha256(identity)
+    return identity
+
+
+def _selection_identity(
+    tasks: list[Mapping[str, Any]],
+    *,
+    start: int,
+    requested_size: int,
+) -> dict[str, Any]:
+    selected = list(enumerate(tasks))[start : start + requested_size]
+    position_ids: list[dict[str, Any]] = []
+    public_tasks: list[dict[str, Any]] = []
+    for position, task in selected:
+        example_id = task.get("example_id")
+        if not isinstance(example_id, str) or not example_id:
+            raise ValueError("selected tasks require nonempty example_id values")
+        position_ids.append({"position": position, "example_id": example_id})
+        public_tasks.append(
+            {
+                "position": position,
+                "example_id": example_id,
+                "example_index": _task_example_index(task, position),
+                "db_id": (
+                    task.get("db_id") if isinstance(task.get("db_id"), str) else None
+                ),
+                "question_sha256": _canonical_sha256(task.get("question")),
+                "external_knowledge_sha256": _canonical_sha256(
+                    task.get("external_knowledge")
+                ),
+            }
+        )
+    identity: dict[str, Any] = {
+        "identity_version": SELECTION_IDENTITY_VERSION,
+        "start": start,
+        "requested_size": requested_size,
+        "selected_count": len(selected),
+        "position_example_id_sequence_sha256": _canonical_sha256(position_ids),
+        "public_task_identity_sha256": _canonical_sha256(public_tasks),
+        "public_identity_fields": list(PUBLIC_TASK_IDENTITY_FIELDS),
+    }
+    identity["selection_identity_sha256"] = _canonical_sha256(identity)
+    return identity
+
+
+def _build_dataset_identity(
+    tasks_path: Path,
+    dataset_manifest_path: Path,
+    tasks: list[Mapping[str, Any]],
+    *,
+    start: int,
+    requested_size: int,
+) -> dict[str, Any]:
+    resolved_tasks = tasks_path.expanduser().resolve()
+    resolved_manifest = dataset_manifest_path.expanduser().resolve()
+    try:
+        source_manifest = json.loads(resolved_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("dataset manifest is unavailable or malformed") from exc
+    if not isinstance(source_manifest, Mapping):
+        raise ValueError("dataset manifest root must be an object")
+    source_identity = _dataset_source_identity(source_manifest)
+    actual_tasks_sha256 = _file_sha256(resolved_tasks)
+    if source_identity["harness_source_path"] != str(resolved_tasks):
+        raise ValueError("dataset manifest does not identify --tasks-json")
+    if source_identity["harness_source_sha256"] != actual_tasks_sha256:
+        raise ValueError("dataset manifest task hash does not match --tasks-json")
+    if source_identity["harness_source_records"] != len(tasks):
+        raise ValueError("dataset manifest task count does not match --tasks-json")
+    if source_identity["order_preserved"] is not True:
+        raise ValueError("dataset manifest does not certify preserved task order")
+    selection = _selection_identity(
+        tasks,
+        start=start,
+        requested_size=requested_size,
+    )
+    if selection["selected_count"] != requested_size:
+        raise ValueError("requested task slice extends beyond the certified dataset")
+    return {
+        "dataset_manifest": str(resolved_manifest),
+        "dataset_manifest_sha256": _file_sha256(resolved_manifest),
+        "dataset_source_identity": source_identity,
+        "selection_identity": selection,
+    }
+
+
+def _positive_int(value: Any, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _positive_float(value: Any, *, name: str) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) <= 0
+    ):
+        raise ValueError(f"{name} must be a positive finite number")
+    return float(value)
+
+
+def _batch_limits_payload(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "max_provider_attempts": _positive_int(
+            getattr(
+                args,
+                "max_batch_provider_attempts",
+                DEFAULT_MAX_BATCH_PROVIDER_ATTEMPTS,
+            ),
+            name="max_batch_provider_attempts",
+        ),
+        "max_provider_tokens": _positive_int(
+            getattr(
+                args,
+                "max_batch_provider_tokens",
+                DEFAULT_MAX_BATCH_PROVIDER_TOKENS,
+            ),
+            name="max_batch_provider_tokens",
+        ),
+        "max_wall_seconds": _positive_float(
+            getattr(
+                args,
+                "max_batch_wall_seconds",
+                DEFAULT_MAX_BATCH_WALL_SECONDS,
+            ),
+            name="max_batch_wall_seconds",
+        ),
+        "max_consecutive_provider_failures": _positive_int(
+            getattr(
+                args,
+                "max_consecutive_provider_failures",
+                DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES,
+            ),
+            name="max_consecutive_provider_failures",
+        ),
+        "max_total_provider_failures": _positive_int(
+            getattr(
+                args,
+                "max_total_provider_failures",
+                DEFAULT_MAX_TOTAL_PROVIDER_FAILURES,
+            ),
+            name="max_total_provider_failures",
+        ),
+        "max_consecutive_semantic_failures": _positive_int(
+            getattr(
+                args,
+                "max_consecutive_semantic_failures",
+                DEFAULT_MAX_CONSECUTIVE_SEMANTIC_FAILURES,
+            ),
+            name="max_consecutive_semantic_failures",
+        ),
+    }
+
+
+def _load_committed_records(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"authoritative journal is malformed at line {line_number}"
+                ) from exc
+            if not isinstance(value, dict):
+                raise ValueError(
+                    f"authoritative journal record {line_number} is not an object"
+                )
+            records.append(value)
+    return records
+
+
+def _record_provider_attempts(record: Mapping[str, Any]) -> int:
+    attempts = 0
+    turns = record.get("turns")
+    if not isinstance(turns, list):
+        return attempts
+    for turn in turns:
+        if not isinstance(turn, Mapping):
+            continue
+        events = turn.get("provider_attempt_events")
+        if isinstance(events, list):
+            attempts += len(events)
+    return attempts
+
+
+def _record_provider_tokens(record: Mapping[str, Any]) -> int:
+    usage = record.get("provider_usage")
+    value = usage.get("total_tokens") if isinstance(usage, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("record provider_usage.total_tokens must be a nonnegative integer")
+    return value
+
+
+def _record_wall_seconds(record: Mapping[str, Any]) -> float:
+    value = record.get("elapsed_seconds")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) < 0
+    ):
+        raise ValueError("record elapsed_seconds must be a nonnegative finite number")
+    return float(value)
+
+
+def _is_provider_failure(record: Mapping[str, Any]) -> bool:
+    return record.get("failure_type") in {
+        "provider_error",
+        "context_length_exceeded",
+    }
+
+
+def _is_semantic_failure(record: Mapping[str, Any]) -> bool:
+    if record.get("correct") is True:
+        return False
+    return record.get("failure_type") not in INFRASTRUCTURE_FAILURE_TYPES
+
+
+def _batch_counters_from_records(
+    records: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    provider_attempts = 0
+    provider_tokens = 0
+    total_provider_failures = 0
+    consecutive_provider_failures = 0
+    semantic_failures = 0
+    consecutive_semantic_failures = 0
+    total_wall_seconds = 0.0
+    for record in records:
+        provider_attempts += _record_provider_attempts(record)
+        provider_tokens += _record_provider_tokens(record)
+        total_wall_seconds += _record_wall_seconds(record)
+        if _is_provider_failure(record):
+            total_provider_failures += 1
+            consecutive_provider_failures += 1
+        else:
+            consecutive_provider_failures = 0
+        if _is_semantic_failure(record):
+            semantic_failures += 1
+            consecutive_semantic_failures += 1
+        else:
+            consecutive_semantic_failures = 0
+    return {
+        "provider_attempts": provider_attempts,
+        "provider_tokens": provider_tokens,
+        "total_provider_failures": total_provider_failures,
+        "consecutive_provider_failures": consecutive_provider_failures,
+        "consecutive_semantic_failures": consecutive_semantic_failures,
+        "semantic_failures": semantic_failures,
+        "total_wall_seconds": round(total_wall_seconds, 6),
+    }
+
+
+def _last_provider_error(record: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    turns = record.get("turns")
+    if not isinstance(turns, list):
+        return None
+    for turn in reversed(turns):
+        if not isinstance(turn, Mapping):
+            continue
+        error = turn.get("provider_error")
+        if isinstance(error, Mapping):
+            return error
+    return None
+
+
+def _non_retryable_provider_stop_detail(
+    records: list[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    if not records or not _is_provider_failure(records[-1]):
+        return None
+    error = _last_provider_error(records[-1])
+    if not isinstance(error, Mapping) or error.get("retryable") is not False:
+        return None
+    status = error.get("http_status")
+    if status is not None and (
+        isinstance(status, bool) or not isinstance(status, int)
+    ):
+        raise ValueError("provider_error.http_status must be an integer or null")
+    return {"http_status": status, "retryable": False}
+
+
+def _batch_stop_decision(
+    records: list[Mapping[str, Any]],
+    counters: Mapping[str, Any],
+    limits: Mapping[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
+    provider_detail = _non_retryable_provider_stop_detail(records)
+    if provider_detail is not None:
+        return "non_retryable_provider_http", provider_detail
+    comparisons = (
+        ("max_provider_attempts", "provider_attempts"),
+        ("max_provider_tokens", "provider_tokens"),
+        ("max_wall_seconds", "total_wall_seconds"),
+        (
+            "max_consecutive_provider_failures",
+            "consecutive_provider_failures",
+        ),
+        ("max_total_provider_failures", "total_provider_failures"),
+        (
+            "max_consecutive_semantic_failures",
+            "consecutive_semantic_failures",
+        ),
+    )
+    for stop_code, counter_name in comparisons:
+        actual = counters[counter_name]
+        limit = limits[stop_code]
+        if actual >= limit:
+            return stop_code, {"counter": actual, "limit": limit}
+    return None
+
+
+class BatchRequestGuard:
+    """Run-wide pre-request guard with resume-aware provider accounting."""
+
+    def __init__(
+        self,
+        *,
+        counters: Mapping[str, Any],
+        limits: Mapping[str, Any],
+        base_wall_seconds: float | None = None,
+    ) -> None:
+        self.limits = dict(limits)
+        self.provider_attempts = int(counters["provider_attempts"])
+        self.provider_tokens = int(counters["provider_tokens"])
+        recorded_wall = float(counters["total_wall_seconds"])
+        self.base_wall_seconds = max(
+            recorded_wall,
+            float(base_wall_seconds) if base_wall_seconds is not None else recorded_wall,
+        )
+        self.started = time.monotonic()
+
+    def total_wall_seconds(self) -> float:
+        return round(
+            self.base_wall_seconds + max(0.0, time.monotonic() - self.started),
+            6,
+        )
+
+    def provider_counters(self) -> dict[str, Any]:
+        return {
+            "provider_attempts": self.provider_attempts,
+            "provider_tokens": self.provider_tokens,
+            "total_wall_seconds": self.total_wall_seconds(),
+        }
+
+    def stop_decision(self) -> tuple[str, dict[str, Any]] | None:
+        for stop_code, counter_name in (
+            ("max_provider_attempts", "provider_attempts"),
+            ("max_provider_tokens", "provider_tokens"),
+            ("max_wall_seconds", "total_wall_seconds"),
+        ):
+            actual = self.provider_counters()[counter_name]
+            limit = self.limits[stop_code]
+            if actual >= limit:
+                return stop_code, {"counter": actual, "limit": limit}
+        return None
+
+    def allowed_retries(self, requested_retries: int) -> int:
+        remaining = self.limits["max_provider_attempts"] - self.provider_attempts
+        return min(requested_retries, max(0, remaining))
+
+    def _observe(self, value: Any) -> None:
+        events = getattr(value, "provider_attempt_events", None)
+        event_count = len(events) if isinstance(events, list) else 0
+        attempt_count = getattr(value, "provider_attempt_count", None)
+        if isinstance(attempt_count, bool) or not isinstance(attempt_count, int):
+            attempt_count = event_count
+        if attempt_count < 0:
+            raise ValueError("provider attempt count cannot be negative")
+        usage = getattr(value, "usage", None)
+        if usage is None:
+            usage = getattr(value, "accumulated_usage", None)
+        total_tokens = usage.get("total_tokens", 0) if isinstance(usage, Mapping) else 0
+        if (
+            isinstance(total_tokens, bool)
+            or not isinstance(total_tokens, int)
+            or total_tokens < 0
+        ):
+            raise ValueError("provider total token count must be a nonnegative integer")
+        self.provider_attempts += attempt_count
+        self.provider_tokens += total_tokens
+
+    def observe_response(self, response: Any) -> None:
+        self._observe(response)
+
+    def observe_error(self, error: BaseException) -> None:
+        self._observe(error)
+
+
+class BatchRunLimitReached(RuntimeError):
+    def __init__(self, stop_code: str, stop_detail: Mapping[str, Any]) -> None:
+        super().__init__(stop_code)
+        self.stop_code = stop_code
+        self.stop_detail = dict(stop_detail)
+
+
+def _ensure_journal(path: Path) -> None:
+    if path.exists():
+        return
+    with path.open("xb") as handle:
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.tmp-",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, sort_keys=True, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except BaseException:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _batch_status_payload(
+    *,
+    state: str,
+    stop_code: str | None,
+    stop_detail: Mapping[str, Any] | None,
+    requested_size: int,
+    completed_records: int,
+    counters: Mapping[str, Any],
+    limits: Mapping[str, Any],
+    manifest_config_sha256: str,
+    all_jsonl_sha256: str,
+) -> dict[str, Any]:
+    if state not in {"running", "stopped", "completed", "incomplete"}:
+        raise ValueError("invalid batch state")
+    payload = {
+        "batch_control_version": BATCH_CONTROL_VERSION,
+        "state": state,
+        "stop_code": stop_code,
+        "stop_detail": dict(stop_detail) if stop_detail is not None else None,
+        "requested_size": requested_size,
+        "completed_records": completed_records,
+        "counters": dict(counters),
+        "limits": dict(limits),
+        "manifest_config_sha256": manifest_config_sha256,
+        "all_jsonl_sha256": all_jsonl_sha256,
+        "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    if set(payload) != BATCH_STATUS_FIELDS or set(payload["counters"]) != BATCH_COUNTER_FIELDS:
+        raise AssertionError("batch status schema drifted")
+    return payload
+
+
+def _write_batch_status(
+    result_dir: Path,
+    *,
+    state: str,
+    stop_code: str | None,
+    stop_detail: Mapping[str, Any] | None,
+    requested_size: int,
+    records: list[Mapping[str, Any]],
+    counters: Mapping[str, Any],
+    limits: Mapping[str, Any],
+    manifest_config_sha256: str,
+) -> dict[str, Any]:
+    all_path = result_dir / "all.jsonl"
+    _ensure_journal(all_path)
+    payload = _batch_status_payload(
+        state=state,
+        stop_code=stop_code,
+        stop_detail=stop_detail,
+        requested_size=requested_size,
+        completed_records=len(records),
+        counters=counters,
+        limits=limits,
+        manifest_config_sha256=manifest_config_sha256,
+        all_jsonl_sha256=_file_sha256(all_path),
+    )
+    _atomic_write_json(result_dir / "batch_status.json", payload)
+    return payload
+
+
+def _record_batch_identity_fields(
+    dataset_identity: Mapping[str, Any],
+    *,
+    start: int,
+    requested_size: int,
+) -> dict[str, Any]:
+    source_identity = dataset_identity["dataset_source_identity"]
+    selection_identity = dataset_identity["selection_identity"]
+    if not isinstance(source_identity, Mapping) or not isinstance(
+        selection_identity, Mapping
+    ):
+        raise ValueError("dataset identities must be objects")
+    return {
+        "runner": RUNNER_VERSION,
+        "dataset_manifest_sha256": dataset_identity["dataset_manifest_sha256"],
+        "dataset_source_identity_sha256": source_identity[
+            "dataset_source_identity_sha256"
+        ],
+        "selection_identity_sha256": selection_identity[
+            "selection_identity_sha256"
+        ],
+        "selection_start": start,
+        "selection_requested_size": requested_size,
+        "batch_control_version": BATCH_CONTROL_VERSION,
+    }
+
+
+def _validate_committed_records(
+    records: list[Mapping[str, Any]],
+    selected: list[tuple[int, Mapping[str, Any]]],
+    *,
+    identity_fields: Mapping[str, Any],
+    batch_limits: Mapping[str, Any],
+) -> None:
+    if len(records) > len(selected):
+        raise ValueError("authoritative journal exceeds the selected cohort")
+    expected_positions = [position for position, _ in selected[: len(records)]]
+    actual_positions = [record.get("task_position") for record in records]
+    if actual_positions != expected_positions:
+        raise ValueError("authoritative journal is not an ordered cohort prefix")
+    for record, (_, task) in zip(records, selected):
+        if record.get("example_id") != task.get("example_id"):
+            raise ValueError("authoritative journal example identity differs from cohort")
+        for field, expected in identity_fields.items():
+            if record.get(field) != expected:
+                raise ValueError(f"authoritative journal {field} differs from manifest")
+        if record.get("batch_limits") != dict(batch_limits):
+            raise ValueError("authoritative journal batch limits differ from manifest")
+
+
+def _stored_manifest_config_sha256(path: Path) -> str:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("stored manifest is unavailable or malformed") from exc
+    value = manifest.get("config_sha256") if isinstance(manifest, Mapping) else None
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError("stored manifest config hash is invalid")
+    return value
+
+
+def _journal_prefix_sha256(path: Path, record_count: int) -> str:
+    lines = [line for line in path.read_bytes().splitlines(keepends=True) if line.strip()]
+    if record_count < 0 or record_count > len(lines):
+        raise ValueError("journal prefix record count is invalid")
+    return hashlib.sha256(b"".join(lines[:record_count])).hexdigest()
+
+
+def _load_batch_status(
+    result_dir: Path,
+    *,
+    records: list[Mapping[str, Any]],
+    requested_size: int,
+    limits: Mapping[str, Any],
+    manifest_config_sha256: str,
+) -> dict[str, Any] | None:
+    path = result_dir / "batch_status.json"
+    if not path.exists():
+        if records:
+            raise ValueError("committed records exist without batch_status.json")
+        return None
+    try:
+        status = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("batch_status.json is unavailable or malformed") from exc
+    if not isinstance(status, Mapping) or set(status) != BATCH_STATUS_FIELDS:
+        raise ValueError("batch_status.json schema differs from batch-control policy")
+    if status.get("batch_control_version") != BATCH_CONTROL_VERSION:
+        raise ValueError("batch_status.json control version differs")
+    if status.get("requested_size") != requested_size:
+        raise ValueError("batch_status.json requested size differs")
+    if status.get("limits") != dict(limits):
+        raise ValueError("batch_status.json limits differ")
+    if status.get("manifest_config_sha256") != manifest_config_sha256:
+        raise ValueError("batch_status.json manifest hash differs")
+    counters = status.get("counters")
+    if not isinstance(counters, Mapping) or set(counters) != BATCH_COUNTER_FIELDS:
+        raise ValueError("batch_status.json counters differ from policy")
+    state = status.get("state")
+    if state not in {"running", "stopped", "completed", "incomplete"}:
+        raise ValueError("batch_status.json state is invalid")
+    completed_records = status.get("completed_records")
+    if (
+        isinstance(completed_records, bool)
+        or not isinstance(completed_records, int)
+        or completed_records < 0
+        or completed_records > len(records)
+        or len(records) - completed_records > 1
+    ):
+        raise ValueError("batch_status.json is not a recoverable journal prefix")
+    recomputed = _batch_counters_from_records(records)
+    if completed_records == len(records):
+        for field in BATCH_COUNTER_FIELDS - {"total_wall_seconds"}:
+            if counters.get(field) != recomputed[field]:
+                raise ValueError(f"batch_status.json counter {field} differs from journal")
+        wall = counters.get("total_wall_seconds")
+        if (
+            isinstance(wall, bool)
+            or not isinstance(wall, (int, float))
+            or not math.isfinite(float(wall))
+            or float(wall) < recomputed["total_wall_seconds"]
+        ):
+            raise ValueError("batch_status.json wall time differs from journal")
+        if status.get("all_jsonl_sha256") != _file_sha256(
+            result_dir / "all.jsonl"
+        ):
+            raise ValueError("batch_status.json journal hash differs")
+    else:
+        if state != "running":
+            raise ValueError("only running status may lag one committed record")
+        prior_records = records[:completed_records]
+        prior_counters = _batch_counters_from_records(prior_records)
+        for field in BATCH_COUNTER_FIELDS - {"total_wall_seconds"}:
+            if counters.get(field) != prior_counters[field]:
+                raise ValueError(
+                    f"lagging batch_status.json counter {field} differs from journal prefix"
+                )
+        wall = counters.get("total_wall_seconds")
+        if (
+            isinstance(wall, bool)
+            or not isinstance(wall, (int, float))
+            or not math.isfinite(float(wall))
+            or float(wall) < prior_counters["total_wall_seconds"]
+        ):
+            raise ValueError("lagging batch_status.json wall time differs from journal prefix")
+        if status.get("all_jsonl_sha256") != _journal_prefix_sha256(
+            result_dir / "all.jsonl",
+            completed_records,
+        ):
+            raise ValueError("lagging batch_status.json hash differs from journal prefix")
+    if state == "completed" and len(records) != requested_size:
+        raise ValueError("completed batch_status.json has an incomplete cohort")
+    return dict(status)
+
+
+def _merge_wall_counter(
+    counters: Mapping[str, Any],
+    guard: BatchRequestGuard,
+) -> dict[str, Any]:
+    result = dict(counters)
+    result["total_wall_seconds"] = max(
+        float(result["total_wall_seconds"]),
+        guard.total_wall_seconds(),
+    )
+    return result
+
+
+def _open_artifact_writer(
+    result_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    resume: bool,
+) -> ArtifactWriter:
+    """Open artifacts while preserving the first run's immutable identity.
+
+    A resumed process necessarily computes a new wall-clock start timestamp.
+    That single operational field may differ, but ArtifactWriter retains the
+    original manifest and records the resume event.  Protocol, carrier, model,
+    envelope, cohort, and resource identities remain fail-closed.
+    """
+
+    return ArtifactWriter(
+        str(result_dir),
+        dict(manifest),
+        resume,
+        operational_resume_fields=set(OPERATIONAL_RESUME_FIELDS),
+        operational_resume_metadata={
+            "policy_version": OPERATIONAL_RESUME_POLICY_VERSION,
+        },
+    )
 
 
 def _open_read_only(path: str) -> sqlite3.Connection:
@@ -302,18 +1145,56 @@ def _process_metrics(
     }
 
 
+def _provider_error_payload(error: ProviderError, *, error_type: str) -> dict[str, Any]:
+    http_status = getattr(error, "http_status", None)
+    if http_status is not None and (
+        isinstance(http_status, bool) or not isinstance(http_status, int)
+    ):
+        raise ValueError("provider error http_status must be an integer or null")
+    retryable = getattr(error, "retryable", True)
+    if not isinstance(retryable, bool):
+        raise ValueError("provider error retryable must be a boolean")
+    return {
+        "type": error_type,
+        "message": str(error),
+        "finish_reason": getattr(error, "finish_reason", None),
+        "response_envelope_sha256": getattr(
+            error,
+            "response_envelope_sha256",
+            None,
+        ),
+        "response_model": getattr(error, "response_model", None),
+        "http_status": http_status,
+        "retryable": retryable,
+    }
+
+
 def run_episode(
     task: Mapping[str, Any],
     *,
     task_position: int,
     mode: str,
     client: DeepSeekNativeClient,
+    carrier: str = DEFAULT_CARRIER,
+    experiment_arm: str | None = None,
+    within_batch_order: str | None = None,
     runtime_config: RuntimeConfig,
     max_model_turns: int,
     max_tokens: int,
     max_completion_tokens: int,
     api_retries: int,
+    artifact_identity_fields: Mapping[str, Any] | None = None,
+    batch_limits: Mapping[str, Any] | None = None,
+    batch_guard: BatchRequestGuard | None = None,
 ) -> dict[str, Any]:
+    active_carrier = normalize_carrier(carrier)
+    active_experiment_arm = experiment_arm or carrier_experiment_arm(active_carrier)
+    if active_experiment_arm != carrier_experiment_arm(active_carrier):
+        raise ValueError("experiment arm does not match the frozen carrier mapping")
+    if within_batch_order not in {None, "A_then_B", "B_then_A"}:
+        raise ValueError("invalid within-batch carrier order")
+    if getattr(client, "carrier", DEFAULT_CARRIER) != active_carrier:
+        raise ValueError("runner carrier and provider client carrier must match")
     started = time.monotonic()
     connection = _open_read_only(_task_db_path(task))
     runtime = CheckpointRelalgRuntime(
@@ -321,7 +1202,7 @@ def run_episode(
         mode=mode,
         config=runtime_config,
     )
-    system_prompt = get_system_prompt(mode, teacher=True)
+    system_prompt = get_system_prompt(mode, teacher=True, carrier=active_carrier)
     tools = provider_tool_definitions(mode)
     phase_history: list[dict[str, Any]] = []
     turns: list[dict[str, Any]] = []
@@ -333,9 +1214,38 @@ def run_episode(
     answer_rows: list[list[Any]] = []
     scorer_error_type: str | None = None
     strict_artifact_audit: dict[str, Any] | None = None
+    batch_stop_code: str | None = None
+    batch_stop_detail: dict[str, Any] | None = None
 
     try:
         for model_turn in range(1, max_model_turns + 1):
+            if batch_guard is not None:
+                stop = batch_guard.stop_decision()
+                if stop is not None:
+                    batch_stop_code, batch_stop_detail = stop
+                    if not turns:
+                        raise BatchRunLimitReached(
+                            batch_stop_code,
+                            batch_stop_detail,
+                        )
+                    failure_type = "batch_limit_reached"
+                    break
+                effective_retries = batch_guard.allowed_retries(api_retries)
+                if effective_retries < 1:
+                    batch_stop_code = "max_provider_attempts"
+                    batch_stop_detail = {
+                        "counter": batch_guard.provider_attempts,
+                        "limit": batch_guard.limits["max_provider_attempts"],
+                    }
+                    if not turns:
+                        raise BatchRunLimitReached(
+                            batch_stop_code,
+                            batch_stop_detail,
+                        )
+                    failure_type = "batch_limit_reached"
+                    break
+            else:
+                effective_retries = api_retries
             context = runtime.render_context(
                 str(task.get("question") or ""),
                 task.get("external_knowledge"),
@@ -351,6 +1261,18 @@ def run_episode(
             checkpoint_before = runtime.state.checkpoint_id
             turn: dict[str, Any] = {
                 "model_turn_index": model_turn,
+                "carrier": active_carrier,
+                "carrier_metrics": {
+                    "carrier": active_carrier,
+                    "provider_response_present": False,
+                    "authored_action_count": 0,
+                    "exact_single_action": False,
+                    "carrier_envelope_valid": False,
+                    "carrier_error_code": None,
+                    "action_validation_error_code": None,
+                    "provider_attempt_count": None,
+                    "provider_elapsed_seconds": None,
+                },
                 "model_input": deepcopy(model_input),
                 "phase_id_before": phase_before,
                 "checkpoint_id_before": checkpoint_before,
@@ -361,70 +1283,172 @@ def run_episode(
                     messages=model_input,
                     tools=tools,
                     max_tokens=max_tokens,
-                    retries=api_retries,
+                    retries=effective_retries,
                     max_completion_tokens=max_completion_tokens,
                 )
             except ProviderContextOverflow as exc:
-                provider_usage.update(exc.accumulated_usage)
+                if batch_guard is not None:
+                    batch_guard.observe_error(exc)
+                failed_usage = dict(exc.accumulated_usage)
+                failed_attempt_events = deepcopy(exc.provider_attempt_events)
+                if batch_limits is not None:
+                    failed_usage.setdefault("total_tokens", 0)
+                    for event in failed_attempt_events:
+                        if isinstance(event, dict) and isinstance(event.get("usage"), dict):
+                            event["usage"].setdefault("total_tokens", 0)
+                provider_usage.update(failed_usage)
                 failure_type = "context_length_exceeded"
-                turn["provider_error"] = {
-                    "type": failure_type,
-                    "message": str(exc),
-                }
+                turn["provider_error"] = _provider_error_payload(
+                    exc,
+                    error_type=failure_type,
+                )
                 turn["provider_retry_events"] = deepcopy(exc.retry_events)
-                turn["provider_failed_usage"] = dict(sorted(exc.accumulated_usage.items()))
+                turn["provider_attempt_events"] = failed_attempt_events
+                turn["provider_failed_usage"] = dict(sorted(failed_usage.items()))
+                turn["provider_usage"] = dict(sorted(failed_usage.items()))
+                turn["carrier_metrics"]["provider_attempt_count"] = (
+                    exc.provider_attempt_count
+                )
+                turn["carrier_metrics"]["provider_elapsed_seconds"] = (
+                    exc.provider_elapsed_seconds
+                )
                 turns.append(turn)
+                if batch_guard is not None:
+                    stop = batch_guard.stop_decision()
+                    if stop is not None:
+                        batch_stop_code, batch_stop_detail = stop
                 break
             except ProviderError as exc:
-                provider_usage.update(exc.accumulated_usage)
+                if batch_guard is not None:
+                    batch_guard.observe_error(exc)
+                failed_usage = dict(exc.accumulated_usage)
+                failed_attempt_events = deepcopy(exc.provider_attempt_events)
+                if batch_limits is not None:
+                    failed_usage.setdefault("total_tokens", 0)
+                    for event in failed_attempt_events:
+                        if isinstance(event, dict) and isinstance(event.get("usage"), dict):
+                            event["usage"].setdefault("total_tokens", 0)
+                provider_usage.update(failed_usage)
                 failure_type = "provider_error"
-                turn["provider_error"] = {
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                }
+                turn["provider_error"] = _provider_error_payload(
+                    exc,
+                    error_type=type(exc).__name__,
+                )
                 turn["provider_retry_events"] = deepcopy(exc.retry_events)
-                turn["provider_failed_usage"] = dict(sorted(exc.accumulated_usage.items()))
+                turn["provider_attempt_events"] = failed_attempt_events
+                turn["provider_failed_usage"] = dict(sorted(failed_usage.items()))
+                turn["provider_usage"] = dict(sorted(failed_usage.items()))
+                turn["carrier_metrics"]["provider_attempt_count"] = (
+                    exc.provider_attempt_count
+                )
+                turn["carrier_metrics"]["provider_elapsed_seconds"] = (
+                    exc.provider_elapsed_seconds
+                )
                 turns.append(turn)
+                if batch_guard is not None:
+                    stop = batch_guard.stop_decision()
+                    if stop is not None:
+                        batch_stop_code, batch_stop_detail = stop
                 break
 
+            if batch_guard is not None:
+                batch_guard.observe_response(response)
             provider_usage.update(
-                {key: value for key, value in response.usage.items() if isinstance(value, int)}
+                {
+                    key: value
+                    for key, value in response.usage.items()
+                    if isinstance(value, int) and not isinstance(value, bool)
+                }
             )
             turn["assistant_message"] = deepcopy(response.message)
             turn["finish_reason"] = response.finish_reason
             turn["provider_response_metadata"] = deepcopy(response.response_metadata)
             turn["provider_retry_events"] = deepcopy(response.retry_events)
+            turn["provider_attempt_events"] = deepcopy(
+                response.provider_attempt_events
+            )
+            turn["provider_usage"] = dict(sorted(
+                (key, value)
+                for key, value in response.usage.items()
+                if isinstance(value, int) and not isinstance(value, bool)
+            ))
+            carrier_metrics = turn["carrier_metrics"]
+            carrier_metrics["provider_response_present"] = True
+            carrier_metrics["provider_attempt_count"] = response.provider_attempt_count
+            carrier_metrics["provider_elapsed_seconds"] = (
+                response.provider_elapsed_seconds
+            )
+            if active_carrier == CARRIER_NATIVE_TOOL_CALLS:
+                authored_action_count = native_authored_action_count(response.message)
+                carrier_metrics["authored_action_count"] = authored_action_count
+                carrier_metrics["exact_single_action"] = authored_action_count == 1
+                carrier_metrics["carrier_envelope_valid"] = (
+                    native_carrier_envelope_valid(response.message)
+                )
+            else:
+                carrier_metrics["authored_action_count"] = (
+                    text_json_authored_action_count(response.message)
+                )
+                carrier_metrics["exact_single_action"] = (
+                    text_json_exact_single_action(response.message)
+                )
+                carrier_metrics["carrier_envelope_valid"] = (
+                    text_json_carrier_envelope_valid(response.message)
+                )
 
             try:
-                action = validate_native_assistant_message(mode, response.message)
+                if active_carrier == CARRIER_NATIVE_TOOL_CALLS:
+                    action = validate_native_assistant_message(mode, response.message)
+                else:
+                    action = validate_text_json_assistant_message(mode, response.message)
                 canonical_action = {
                     "tool": action["tool"],
                     "arguments": deepcopy(action["arguments"]),
-                    "tool_call_id": action["tool_call_id"],
+                    "tool_call_id": action.get("tool_call_id"),
                 }
                 turn["action"] = canonical_action
                 result = runtime.apply(action["tool"], action["arguments"])
-            except NativeToolCallError as exc:
-                attempted = attempted_action_from_native_message(response.message)
+            except (NativeToolCallError, TextJSONActionError) as exc:
+                if carrier_metrics["carrier_envelope_valid"]:
+                    carrier_metrics["action_validation_error_code"] = exc.code
+                else:
+                    carrier_metrics["carrier_error_code"] = exc.code
+                if active_carrier == CARRIER_NATIVE_TOOL_CALLS:
+                    attempted = attempted_action_from_native_message(response.message)
+                    rejection_details = {
+                        "argument_path": exc.path,
+                        "call_count": len(response.calls),
+                    }
+                    rejection_field = "native_rejection"
+                else:
+                    attempted = attempted_action_from_text_json_message(response.message)
+                    rejection_details = {
+                        "argument_path": exc.path,
+                        "carrier": active_carrier,
+                    }
+                    rejection_field = "text_json_rejection"
                 result = runtime.reject_native_turn(
                     code=exc.code,
                     message=exc.message,
-                    details={"argument_path": exc.path, "call_count": len(response.calls)},
+                    details=deepcopy(rejection_details),
                     attempted_tool=attempted["tool"],
                     attempted_arguments=attempted["arguments"],
                 )
-                turn["native_rejection"] = {
+                turn[rejection_field] = {
                     "code": exc.code,
                     "message": exc.message,
-                    "argument_path": exc.path,
-                    "call_count": len(response.calls),
+                    **rejection_details,
                 }
 
-            result_messages = [
-                tool_result_message(call.call_id, result) for call in response.calls
-            ]
+            if active_carrier == CARRIER_NATIVE_TOOL_CALLS:
+                result_messages = [
+                    tool_result_message(call.call_id, result) for call in response.calls
+                ]
+                turn["tool_result_messages"] = deepcopy(result_messages)
+            else:
+                result_messages = [text_json_result_message(result)]
+                turn["text_result_messages"] = deepcopy(result_messages)
             turn["result"] = deepcopy(result)
-            turn["tool_result_messages"] = deepcopy(result_messages)
             turn["environment_state_hash_after"] = runtime.state.logical_hash()
             turn["phase_id_after"] = runtime.state.phase_id
             turn["checkpoint_id_after"] = runtime.state.checkpoint_id
@@ -477,6 +1501,12 @@ def run_episode(
                 else:
                     failure_type = runtime.failure_type or "runtime_terminated"
                 break
+            if batch_guard is not None:
+                stop = batch_guard.stop_decision()
+                if stop is not None:
+                    batch_stop_code, batch_stop_detail = stop
+                    failure_type = "batch_limit_reached"
+                    break
         else:
             failure_type = "max_model_turns"
     finally:
@@ -486,7 +1516,7 @@ def run_episode(
     example_index = task.get("example_index", task.get("index", task_position))
     if isinstance(example_index, bool) or not isinstance(example_index, int):
         example_index = task_position
-    scheme = build_checkpoint_relalg_tool_scheme(mode=mode)
+    scheme = build_checkpoint_relalg_tool_scheme(mode=mode, carrier=active_carrier)
     process_metrics = _process_metrics(
         turns,
         final_runtime=final_runtime,
@@ -495,15 +1525,21 @@ def run_episode(
         provider_usage=provider_usage,
     )
     record = {
+        **(dict(artifact_identity_fields) if artifact_identity_fields else {}),
         **scheme.manifest_fields(),
-        "capability_manifest": capability_manifest(mode),
+        "capability_manifest": capability_manifest(mode, active_carrier),
         "backend": BACKEND,
         "dialect": DIALECT,
         "environment_renderer_version": ENVIRONMENT_RENDERER_VERSION,
         "checkpoint_policy_version": CHECKPOINT_POLICY_VERSION,
         "executor_version": EXECUTOR_VERSION,
         "tool_schema_hash": tool_schema_hash(mode),
-        "prompt_hash": prompt_hash(mode, teacher=True),
+        "carrier_ablation_protocol_version": CARRIER_ABLATION_PROTOCOL_VERSION,
+        "carrier_policy_version": CARRIER_POLICY_VERSION,
+        "experiment_arm": active_experiment_arm,
+        "within_batch_order": within_batch_order,
+        "carrier": active_carrier,
+        "prompt_hash": prompt_hash(mode, teacher=True, carrier=active_carrier),
         "example_index": example_index,
         "task_position": task_position,
         "example_id": task.get("example_id") or task.get("instance_id"),
@@ -511,7 +1547,11 @@ def run_episode(
         "question": task.get("question"),
         "external_knowledge": task.get("external_knowledge"),
         "mode": mode,
-        "teacher_prompt_sha256": prompt_hash(mode, teacher=True),
+        "teacher_prompt_sha256": prompt_hash(
+            mode,
+            teacher=True,
+            carrier=active_carrier,
+        ),
         "runtime_config": _runtime_config_payload(
             runtime_config,
             max_model_turns=max_model_turns,
@@ -535,6 +1575,8 @@ def run_episode(
         ),
         "legal": legal,
         "failure_type": failure_type,
+        "batch_stop_code": batch_stop_code,
+        "batch_stop_detail": batch_stop_detail,
         "scorer_error_type": scorer_error_type,
         "steps": len(turns),
         "primitive_calls": runtime.primitive_calls,
@@ -553,11 +1595,31 @@ def run_episode(
         "rl_admission_eligible": False,
         "elapsed_seconds": round(time.monotonic() - started, 3),
     }
+    if batch_limits is not None:
+        record["batch_limits"] = deepcopy(dict(batch_limits))
     return record
 
 
-def build_manifest(args: argparse.Namespace, *, provider_verification: Mapping[str, Any]) -> dict[str, Any]:
-    scheme = build_checkpoint_relalg_tool_scheme(mode=args.mode)
+def build_manifest(
+    args: argparse.Namespace,
+    *,
+    provider_verification: Mapping[str, Any],
+    dataset_identity: Mapping[str, Any] | None = None,
+    batch_limits: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    active_carrier = normalize_carrier(getattr(args, "carrier", DEFAULT_CARRIER))
+    experiment_arm = getattr(args, "experiment_arm", None) or carrier_experiment_arm(
+        active_carrier
+    )
+    within_batch_order = getattr(args, "within_batch_order", None)
+    if experiment_arm != carrier_experiment_arm(active_carrier):
+        raise ValueError("manifest experiment arm does not match carrier")
+    if within_batch_order not in {None, "A_then_B", "B_then_A"}:
+        raise ValueError("manifest within-batch order is invalid")
+    scheme = build_checkpoint_relalg_tool_scheme(
+        mode=args.mode,
+        carrier=active_carrier,
+    )
     config = RuntimeConfig(
         max_primitive_calls=args.max_primitive_calls,
         max_checkpoints=args.max_checkpoints,
@@ -567,30 +1629,44 @@ def build_manifest(args: argparse.Namespace, *, provider_verification: Mapping[s
         max_artifact_bytes=args.max_artifact_bytes,
         max_cell_bytes=args.max_cell_bytes,
     )
-    return {
+    strict_batch = dataset_identity is not None
+    manifest = {
         **scheme.manifest_fields(),
-        "capability_manifest": capability_manifest(args.mode),
+        "capability_manifest": capability_manifest(args.mode, active_carrier),
         "backend": BACKEND,
         "dialect": DIALECT,
         "environment_renderer_version": ENVIRONMENT_RENDERER_VERSION,
         "checkpoint_policy_version": CHECKPOINT_POLICY_VERSION,
         "executor_version": EXECUTOR_VERSION,
         "tool_schema_hash": tool_schema_hash(args.mode),
-        "prompt_hash": prompt_hash(args.mode, teacher=True),
-        "runner": "checkpoint-relalg-causal-official-deepseek-v1",
+        "carrier_ablation_protocol_version": CARRIER_ABLATION_PROTOCOL_VERSION,
+        "carrier_policy_version": CARRIER_POLICY_VERSION,
+        "experiment_arm": experiment_arm,
+        "within_batch_order": within_batch_order,
+        "carrier": active_carrier,
+        "prompt_hash": prompt_hash(
+            args.mode,
+            teacher=True,
+            carrier=active_carrier,
+        ),
+        "runner": RUNNER_VERSION if strict_batch else LEGACY_RUNNER_VERSION,
+        "run_started_at_utc": datetime.now(timezone.utc).isoformat(),
         "dataset": str(args.tasks_json.resolve()),
         "dataset_sha256": _file_sha256(args.tasks_json),
         "start": args.start,
         "requested_size": args.n,
         "model": args.model,
         "provider_verification": dict(provider_verification),
-        "provider_request_options": {
-            "endpoint": "https://api.deepseek.com/chat/completions",
-            "tool_choice": "auto",
-            "thinking": {"type": "enabled"},
-            "reasoning_effort": "high",
-        },
-        "teacher_prompt_sha256": prompt_hash(args.mode, teacher=True),
+        "provider_request_options": provider_request_audit_options(
+            base_url=OFFICIAL_DEEPSEEK_BASE_URL,
+            model=args.model,
+            carrier=active_carrier,
+        ),
+        "teacher_prompt_sha256": prompt_hash(
+            args.mode,
+            teacher=True,
+            carrier=active_carrier,
+        ),
         "runtime_config": _runtime_config_payload(config, max_model_turns=args.max_model_turns),
         "max_tokens": args.max_tokens,
         "max_completion_tokens": args.max_completion_tokens,
@@ -611,6 +1687,13 @@ def build_manifest(args: argparse.Namespace, *, provider_verification: Mapping[s
             "subsection_tokens": "nullable_when_provider_does_not_report_splits",
         },
     }
+    if strict_batch:
+        if batch_limits is None:
+            raise ValueError("v2 batch manifest requires batch limits")
+        manifest.update(deepcopy(dict(dataset_identity)))
+        manifest["batch_control_version"] = BATCH_CONTROL_VERSION
+        manifest["batch_limits"] = deepcopy(dict(batch_limits))
+    return manifest
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -618,7 +1701,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Run causal checkpoint-relalg-v1 diagnostics with official DeepSeek."
     )
     parser.add_argument("--mode", choices=MODES, required=True)
+    parser.add_argument("--carrier", choices=CARRIERS, default=DEFAULT_CARRIER)
+    parser.add_argument("--experiment-arm", choices=("A", "B"))
+    parser.add_argument(
+        "--within-batch-order",
+        choices=("A_then_B", "B_then_A"),
+    )
     parser.add_argument("--tasks-json", type=Path, default=DEFAULT_TASKS)
+    parser.add_argument("--dataset-manifest", type=Path)
     parser.add_argument("--result-dir", type=Path, required=True)
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--n", type=int, default=1)
@@ -636,6 +1726,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-artifact-rows", type=int, default=100_000)
     parser.add_argument("--max-artifact-bytes", type=int, default=64 * 1024 * 1024)
     parser.add_argument("--max-cell-bytes", type=int, default=4 * 1024 * 1024)
+    parser.add_argument(
+        "--max-batch-provider-attempts",
+        type=int,
+        default=DEFAULT_MAX_BATCH_PROVIDER_ATTEMPTS,
+    )
+    parser.add_argument(
+        "--max-batch-provider-tokens",
+        type=int,
+        default=DEFAULT_MAX_BATCH_PROVIDER_TOKENS,
+    )
+    parser.add_argument(
+        "--max-batch-wall-seconds",
+        type=float,
+        default=DEFAULT_MAX_BATCH_WALL_SECONDS,
+    )
+    parser.add_argument(
+        "--max-consecutive-provider-failures",
+        type=int,
+        default=DEFAULT_MAX_CONSECUTIVE_PROVIDER_FAILURES,
+    )
+    parser.add_argument(
+        "--max-total-provider-failures",
+        type=int,
+        default=DEFAULT_MAX_TOTAL_PROVIDER_FAILURES,
+    )
+    parser.add_argument(
+        "--max-consecutive-semantic-failures",
+        type=int,
+        default=DEFAULT_MAX_CONSECUTIVE_SEMANTIC_FAILURES,
+    )
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -654,8 +1774,15 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--api-timeout-seconds must be positive")
     if args.max_tokens < 1 or args.max_completion_tokens < args.max_tokens:
         raise SystemExit("completion token bounds are invalid")
+    if args.dataset_manifest is None:
+        raise SystemExit("--dataset-manifest is required for v2 diagnostic runs")
+    expected_arm = carrier_experiment_arm(args.carrier)
+    if args.experiment_arm is not None and args.experiment_arm != expected_arm:
+        raise SystemExit(
+            f"--experiment-arm must be {expected_arm} for carrier {args.carrier}"
+        )
     try:
-        RuntimeConfig(
+        runtime_config = RuntimeConfig(
             max_primitive_calls=args.max_primitive_calls,
             max_checkpoints=args.max_checkpoints,
             max_restores=args.max_restores,
@@ -664,21 +1791,62 @@ def main(argv: list[str] | None = None) -> int:
             max_artifact_bytes=args.max_artifact_bytes,
             max_cell_bytes=args.max_cell_bytes,
         )
+        batch_limits = _batch_limits_payload(args)
     except ValueError as exc:
-        raise SystemExit(f"invalid runtime resource limits: {exc}") from exc
+        raise SystemExit(f"invalid resource limits: {exc}") from exc
     tasks = _load_tasks(args.tasks_json)
     selected = list(enumerate(tasks))[args.start : args.start + args.n]
-    if not selected:
-        raise SystemExit("selected task slice is empty")
+    if len(selected) != args.n:
+        raise SystemExit("selected task slice does not contain --n certified tasks")
+    selected_indices = [
+        _task_example_index(task, position) for position, task in selected
+    ]
+    if len(set(selected_indices)) != len(selected_indices):
+        raise SystemExit("selected task slice has duplicate example_index values")
+    try:
+        dataset_identity = _build_dataset_identity(
+            args.tasks_json,
+            args.dataset_manifest,
+            tasks,
+            start=args.start,
+            requested_size=args.n,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"invalid dataset identity: {exc}") from exc
+    identity_fields = _record_batch_identity_fields(
+        dataset_identity,
+        start=args.start,
+        requested_size=args.n,
+    )
 
     if args.dry_run:
         print(json.dumps({
             "tool_scheme": SCHEME,
             "protocol_version": PROTOCOL_VERSION,
             "mode": args.mode,
+            "carrier": args.carrier,
+            "carrier_ablation_protocol_version": CARRIER_ABLATION_PROTOCOL_VERSION,
+            "carrier_policy_version": CARRIER_POLICY_VERSION,
+            "experiment_arm": args.experiment_arm or expected_arm,
+            "within_batch_order": args.within_batch_order,
             "tasks": [position for position, _ in selected],
+            "dataset_manifest_sha256": dataset_identity[
+                "dataset_manifest_sha256"
+            ],
+            "dataset_source_identity_sha256": dataset_identity[
+                "dataset_source_identity"
+            ]["dataset_source_identity_sha256"],
+            "selection_identity_sha256": dataset_identity[
+                "selection_identity"
+            ]["selection_identity_sha256"],
+            "batch_control_version": BATCH_CONTROL_VERSION,
+            "batch_limits": batch_limits,
             "tool_schema_sha256": tool_schema_hash(args.mode),
-            "teacher_prompt_sha256": prompt_hash(args.mode, teacher=True),
+            "teacher_prompt_sha256": prompt_hash(
+                args.mode,
+                teacher=True,
+                carrier=args.carrier,
+            ),
             "result_dir": str(args.result_dir),
             "admission_status": ADMISSION_STATUS,
         }, ensure_ascii=False, sort_keys=True))
@@ -690,43 +1858,190 @@ def main(argv: list[str] | None = None) -> int:
         base_url=base_url,
         model=args.model,
         timeout_seconds=args.api_timeout_seconds,
+        carrier=args.carrier,
     )
     verification = client.verify_model()
-    manifest = build_manifest(args, provider_verification=verification)
-    writer = ArtifactWriter(str(args.result_dir), manifest, args.resume)
-    runtime_config = RuntimeConfig(
-        max_primitive_calls=args.max_primitive_calls,
-        max_checkpoints=args.max_checkpoints,
-        max_restores=args.max_restores,
-        sql_timeout_seconds=args.sql_timeout_seconds,
-        max_artifact_rows=args.max_artifact_rows,
-        max_artifact_bytes=args.max_artifact_bytes,
-        max_cell_bytes=args.max_cell_bytes,
+    manifest = build_manifest(
+        args,
+        provider_verification=verification,
+        dataset_identity=dataset_identity,
+        batch_limits=batch_limits,
     )
-    for position, task in selected:
-        example_index = task.get("example_index", task.get("index", position))
-        if example_index in writer.completed:
-            continue
-        record = run_episode(
-            task,
-            task_position=position,
-            mode=args.mode,
-            client=client,
-            runtime_config=runtime_config,
-            max_model_turns=args.max_model_turns,
-            max_tokens=args.max_tokens,
-            max_completion_tokens=args.max_completion_tokens,
-            api_retries=args.api_retries,
+    writer = _open_artifact_writer(
+        args.result_dir,
+        manifest,
+        resume=args.resume,
+    )
+    _ensure_journal(writer.all_path)
+    records = _load_committed_records(writer.all_path)
+    _validate_committed_records(
+        records,
+        selected,
+        identity_fields=identity_fields,
+        batch_limits=batch_limits,
+    )
+    manifest_config_sha256 = _stored_manifest_config_sha256(writer.manifest_path)
+    existing_status = _load_batch_status(
+        args.result_dir,
+        records=records,
+        requested_size=args.n,
+        limits=batch_limits,
+        manifest_config_sha256=manifest_config_sha256,
+    )
+    counters = _batch_counters_from_records(records)
+    prior_wall = (
+        existing_status["counters"]["total_wall_seconds"]
+        if existing_status is not None
+        else counters["total_wall_seconds"]
+    )
+    guard = BatchRequestGuard(
+        counters=counters,
+        limits=batch_limits,
+        base_wall_seconds=prior_wall,
+    )
+    counters = _merge_wall_counter(counters, guard)
+
+    if existing_status is not None and existing_status["state"] == "completed":
+        summary = writer.summarize()
+        audit = audit_result_dir(args.result_dir)
+        print(json.dumps({"summary": summary, "audit": audit}, ensure_ascii=False, sort_keys=True))
+        return 0 if audit["passed"] else 1
+
+    stop = _batch_stop_decision(records, counters, batch_limits)
+    if existing_status is not None and existing_status["state"] == "stopped":
+        if stop is None or stop[0] != existing_status.get("stop_code"):
+            raise SystemExit("stored stopped batch is not supported by committed records")
+    if stop is not None:
+        _write_batch_status(
+            args.result_dir,
+            state="stopped",
+            stop_code=stop[0],
+            stop_detail=stop[1],
+            requested_size=args.n,
+            records=records,
+            counters=counters,
+            limits=batch_limits,
+            manifest_config_sha256=manifest_config_sha256,
         )
-        writer.append(record)
-        flag = "PASS" if record["correct"] else "FAIL"
-        print(
-            f"[{flag}] {record.get('example_id') or record['example_index']} "
-            f"mode={args.mode} turns={record['steps']} errors={record['errors']}"
+        summary = writer.summarize()
+        audit = audit_result_dir(args.result_dir)
+        print(json.dumps({"summary": summary, "audit": audit}, ensure_ascii=False, sort_keys=True))
+        return 2
+
+    _write_batch_status(
+        args.result_dir,
+        state="running",
+        stop_code=None,
+        stop_detail=None,
+        requested_size=args.n,
+        records=records,
+        counters=counters,
+        limits=batch_limits,
+        manifest_config_sha256=manifest_config_sha256,
+    )
+    stop = None
+    try:
+        for position, task in selected[len(records) :]:
+            pre_request_stop = guard.stop_decision()
+            if pre_request_stop is not None:
+                stop = pre_request_stop
+                break
+            try:
+                record = run_episode(
+                    task,
+                    task_position=position,
+                    mode=args.mode,
+                    client=client,
+                    carrier=args.carrier,
+                    experiment_arm=args.experiment_arm,
+                    within_batch_order=args.within_batch_order,
+                    runtime_config=runtime_config,
+                    max_model_turns=args.max_model_turns,
+                    max_tokens=args.max_tokens,
+                    max_completion_tokens=args.max_completion_tokens,
+                    api_retries=args.api_retries,
+                    artifact_identity_fields=identity_fields,
+                    batch_limits=batch_limits,
+                    batch_guard=guard,
+                )
+            except BatchRunLimitReached as exc:
+                stop = (exc.stop_code, exc.stop_detail)
+                break
+            writer.append(record)
+            records = _load_committed_records(writer.all_path)
+            counters = _merge_wall_counter(
+                _batch_counters_from_records(records),
+                guard,
+            )
+            stop = _batch_stop_decision(records, counters, batch_limits)
+            flag = "PASS" if record["correct"] else "FAIL"
+            print(
+                f"[{flag}] {record.get('example_id') or record['example_index']} "
+                f"mode={args.mode} carrier={args.carrier} "
+                f"turns={record['steps']} errors={record['errors']}"
+            )
+            if stop is not None and len(records) < args.n:
+                break
+            _write_batch_status(
+                args.result_dir,
+                state="running",
+                stop_code=None,
+                stop_detail=None,
+                requested_size=args.n,
+                records=records,
+                counters=counters,
+                limits=batch_limits,
+                manifest_config_sha256=manifest_config_sha256,
+            )
+    except BaseException as exc:
+        records = _load_committed_records(writer.all_path)
+        counters = _merge_wall_counter(
+            _batch_counters_from_records(records),
+            guard,
         )
+        _write_batch_status(
+            args.result_dir,
+            state="incomplete",
+            stop_code="runner_interrupted",
+            stop_detail={"exception_type": type(exc).__name__},
+            requested_size=args.n,
+            records=records,
+            counters=counters,
+            limits=batch_limits,
+            manifest_config_sha256=manifest_config_sha256,
+        )
+        raise
+
+    records = _load_committed_records(writer.all_path)
+    counters = _merge_wall_counter(_batch_counters_from_records(records), guard)
+    completed = len(records) == args.n and not any(
+        record.get("failure_type") == "batch_limit_reached" for record in records
+    )
+    if completed:
+        stop = None
+        state = "completed"
+    else:
+        if stop is None:
+            stop = _batch_stop_decision(records, counters, batch_limits)
+        if stop is None:
+            raise RuntimeError("batch ended without completion or a stop condition")
+        state = "stopped"
+    _write_batch_status(
+        args.result_dir,
+        state=state,
+        stop_code=stop[0] if stop is not None else None,
+        stop_detail=stop[1] if stop is not None else None,
+        requested_size=args.n,
+        records=records,
+        counters=counters,
+        limits=batch_limits,
+        manifest_config_sha256=manifest_config_sha256,
+    )
     summary = writer.summarize()
     audit = audit_result_dir(args.result_dir)
     print(json.dumps({"summary": summary, "audit": audit}, ensure_ascii=False, sort_keys=True))
+    if state != "completed":
+        return 2
     return 0 if audit["passed"] else 1
 
 

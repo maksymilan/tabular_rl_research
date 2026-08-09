@@ -86,14 +86,26 @@ def validate_native_tool_calls(
             code="unexpected_field",
             path="$.tool_calls[0]",
         )
-    unexpected = sorted(set(call) - {"id", "type", "function"})
+    unexpected = sorted(set(call) - {"id", "type", "function", "index"})
     if unexpected:
         raise NativeToolCallError(
             f"unexpected native call field(s): {', '.join(unexpected)}",
             code="unexpected_field",
             path="$.tool_calls[0]",
         )
-    if call.get("type", "function") != "function":
+    if "index" in call:
+        call_index = call.get("index")
+        if (
+            isinstance(call_index, bool)
+            or not isinstance(call_index, int)
+            or call_index != 0
+        ):
+            raise NativeToolCallError(
+                "single native tool call index must be the integer 0",
+                code="invalid_tool_call_index",
+                path="$.tool_calls[0].index",
+            )
+    if call.get("type") != "function":
         raise NativeToolCallError(
             "native tool call type must be 'function'",
             path="$.tool_calls[0].type",
@@ -125,7 +137,14 @@ def validate_native_tool_calls(
             code="missing_required_field",
             path="$.tool_calls[0].function.name",
         )
-    arguments = _decode_arguments(function.get("arguments"))
+    raw_arguments = function.get("arguments")
+    if not isinstance(raw_arguments, str):
+        raise NativeToolCallError(
+            "native function arguments must be a JSON string",
+            code="invalid_json_arguments",
+            path="$.tool_calls[0].function.arguments",
+        )
+    arguments = _decode_arguments(raw_arguments)
     try:
         validated = validate_arguments(name, arguments, mode=active_mode)
     except ProtocolValidationError as exc:
@@ -211,6 +230,63 @@ def attempted_action_from_native_message(message: Mapping[str, Any]) -> dict[str
     }
 
 
+def native_authored_action_count(message: Mapping[str, Any]) -> int:
+    calls = message.get("tool_calls") if isinstance(message, Mapping) else None
+    return len(calls) if isinstance(calls, list) else 0
+
+
+def native_carrier_envelope_valid(message: Mapping[str, Any]) -> bool:
+    """Check only the native envelope, not tool-name/argument semantics."""
+
+    if not isinstance(message, Mapping) or message.get("role") != "assistant":
+        return False
+    if not isinstance(message.get("reasoning_content"), str) or not message[
+        "reasoning_content"
+    ].strip():
+        return False
+    if any(
+        not isinstance(key, str)
+        or key not in {"role", "content", "reasoning_content", "tool_calls"}
+        for key in message
+    ):
+        return False
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list) or len(calls) != 1:
+        return False
+    call = calls[0]
+    if not isinstance(call, Mapping) or set(call) - {
+        "id",
+        "type",
+        "function",
+        "index",
+    }:
+        return False
+    if "index" in call and (
+        isinstance(call.get("index"), bool)
+        or not isinstance(call.get("index"), int)
+        or call.get("index") != 0
+    ):
+        return False
+    if call.get("type") != "function":
+        return False
+    call_id = call.get("id")
+    if not isinstance(call_id, str) or not call_id:
+        return False
+    function = call.get("function")
+    if not isinstance(function, Mapping) or set(function) - {"name", "arguments"}:
+        return False
+    if not isinstance(function.get("name"), str) or not function["name"]:
+        return False
+    raw_arguments = function.get("arguments")
+    if not isinstance(raw_arguments, str):
+        return False
+    try:
+        arguments = _decode_arguments(raw_arguments)
+    except NativeToolCallError:
+        return False
+    return isinstance(arguments, dict)
+
+
 __all__ = [
     "MAX_NATIVE_TOOL_CALLS",
     "MIN_NATIVE_TOOL_CALLS",
@@ -221,6 +297,8 @@ __all__ = [
     "lower_native_tool_calls",
     "native_tools",
     "native_tools_sha256",
+    "native_authored_action_count",
+    "native_carrier_envelope_valid",
     "parse_native_tool_calls",
     "provider_tools_for_mode",
     "validate_native_assistant_message",

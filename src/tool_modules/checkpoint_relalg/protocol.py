@@ -25,6 +25,13 @@ MODES = ("direct", "atomic", "hybrid")
 MAX_EXPRESSION_DEPTH = 5
 MAX_AST_DEPTH = MAX_EXPRESSION_DEPTH
 NATIVE_ASSISTANT_CARRIER = "provider-native-single-tool-call-v1"
+TEXT_JSON_ASSISTANT_CARRIER = "provider-thinking-raw-text-json-single-action-v1"
+CARRIER_NATIVE_TOOL_CALLS = "native-tool-calls"
+CARRIER_TEXT_JSON = "text-json"
+CARRIERS = (CARRIER_NATIVE_TOOL_CALLS, CARRIER_TEXT_JSON)
+DEFAULT_CARRIER = CARRIER_NATIVE_TOOL_CALLS
+CARRIER_ABLATION_PROTOCOL_VERSION = "checkpoint-relalg-carrier-ab-v1"
+CARRIER_POLICY_VERSION = "checkpoint-relalg-carrier-policy-v1"
 ADMISSION_STATUS = "diagnostic-only"
 BACKEND = "sqlite"
 DIALECT = "sqlite"
@@ -1269,6 +1276,24 @@ def validate_model_action(action: Mapping[str, Any], *, mode: str = "hybrid") ->
     return {"tool": tool, "arguments": arguments}
 
 
+def normalize_carrier(carrier: str | None) -> str:
+    value = DEFAULT_CARRIER if carrier is None else str(carrier).strip().lower()
+    if value not in CARRIERS:
+        raise ValueError(f"unknown checkpoint-relalg carrier {carrier!r}")
+    return value
+
+
+def assistant_carrier_protocol(carrier: str | None = None) -> str:
+    active_carrier = normalize_carrier(carrier)
+    if active_carrier == CARRIER_NATIVE_TOOL_CALLS:
+        return NATIVE_ASSISTANT_CARRIER
+    return TEXT_JSON_ASSISTANT_CARRIER
+
+
+def carrier_experiment_arm(carrier: str | None = None) -> str:
+    return "A" if normalize_carrier(carrier) == CARRIER_TEXT_JSON else "B"
+
+
 _PROMPT_DIR = Path(__file__).with_name("prompts")
 
 
@@ -1277,34 +1302,109 @@ def _prompt_fragment(name: str) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def get_system_prompt(mode: str, *, teacher: bool = False) -> str:
+def get_system_prompt(
+    mode: str,
+    *,
+    teacher: bool = False,
+    carrier: str = DEFAULT_CARRIER,
+) -> str:
     """Build Shared Core + one short mode clause + optional teacher-only guidance."""
     active_mode = normalize_mode(mode)
-    fragments = [_prompt_fragment("shared_core"), _prompt_fragment(active_mode)]
+    active_carrier = normalize_carrier(carrier)
+    shared_core = _prompt_fragment("shared_core")
+    fragments = [shared_core, _prompt_fragment(active_mode)]
     if teacher:
         fragments.append(_prompt_fragment("teacher_checkpoint"))
+    if active_carrier == CARRIER_TEXT_JSON:
+        native_clause = "Make exactly one native tool call per turn."
+        if shared_core.count(native_clause) != 1:
+            raise RuntimeError("shared prompt native carrier clause drifted")
+        fragments[0] = shared_core.replace(
+            native_clause,
+            "Make exactly one action per turn using the TEXT-JSON CARRIER below.",
+            1,
+        )
+        # Text JSON cannot receive provider ``tools``.  Render the exact same
+        # name/description/parameters, without the native ``type=function``
+        # transport wrapper that could be mistaken for the action envelope.
+        compact_schemas = _canonical_json([
+            deepcopy(item["function"])
+            for item in provider_tool_definitions(active_mode)
+        ])
+        fragments.append(
+            "TEXT-JSON CARRIER (diagnostic-only)\n"
+            "Keep reasoning only in the provider reasoning_content field. Visible assistant "
+            "content must be exactly one raw JSON object with exactly the keys tool and "
+            "arguments: {\"tool\":\"tool_name\",\"arguments\":{}}. Do not return prose, "
+            "Markdown fences, XML, an array, or multiple actions. A later user message whose "
+            "JSON type is checkpoint_relalg_tool_result is Harness feedback, not a new task.\n"
+            f"EXACT TOOL SCHEMAS FOR {active_mode.upper()} MODE\n{compact_schemas}"
+        )
     return "\n\n".join(fragments)
 
 
 build_system_prompt = get_system_prompt
 
 
-def prompt_hash(mode: str, *, teacher: bool = False) -> str:
+def prompt_hash(
+    mode: str,
+    *,
+    teacher: bool = False,
+    carrier: str = DEFAULT_CARRIER,
+) -> str:
     active_mode = normalize_mode(mode)
+    active_carrier = normalize_carrier(carrier)
     payload = {
         "protocol_version": PROTOCOL_VERSION,
         "scheme": SCHEME,
         "mode": active_mode,
         "audience": "teacher" if teacher else "student",
-        "system_prompt": get_system_prompt(active_mode, teacher=teacher),
+        "system_prompt": get_system_prompt(
+            active_mode,
+            teacher=teacher,
+            carrier=active_carrier,
+        ),
     }
+    # Preserve the frozen native prompt hashes.  Native is the implicit v1
+    # carrier; the text diagnostic is explicitly namespaced in its hash.
+    if active_carrier != CARRIER_NATIVE_TOOL_CALLS:
+        payload["carrier_ablation_protocol_version"] = CARRIER_ABLATION_PROTOCOL_VERSION
+        payload["carrier"] = active_carrier
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
-def capability_manifest(mode: str) -> dict[str, Any]:
+def carrier_protocol_hash(mode: str, carrier: str = DEFAULT_CARRIER) -> str:
+    """Hash one carrier-specific protocol while preserving the native v1 identity."""
+
+    active_mode = normalize_mode(mode)
+    active_carrier = normalize_carrier(carrier)
+    payload = {
+        "protocol_version": PROTOCOL_VERSION,
+        "mode": active_mode,
+        "student_prompt_sha256": prompt_hash(
+            active_mode,
+            teacher=False,
+            carrier=active_carrier,
+        ),
+        "tool_schema_sha256": tool_schema_hash(active_mode),
+    }
+    if active_carrier != CARRIER_NATIVE_TOOL_CALLS:
+        payload.update({
+            "carrier_policy_version": CARRIER_POLICY_VERSION,
+            "carrier": active_carrier,
+            "assistant_carrier": assistant_carrier_protocol(active_carrier),
+        })
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def capability_manifest(
+    mode: str,
+    carrier: str = DEFAULT_CARRIER,
+) -> dict[str, Any]:
     """Generate a frozen, serializable account of one isolated mode surface."""
     active_mode = normalize_mode(mode)
-    return {
+    active_carrier = normalize_carrier(carrier)
+    manifest = {
         "protocol_version": PROTOCOL_VERSION,
         "scheme": SCHEME,
         "tool_scheme": SCHEME,
@@ -1315,7 +1415,7 @@ def capability_manifest(mode: str) -> dict[str, Any]:
         "environment_renderer_version": ENVIRONMENT_RENDERER_VERSION,
         "checkpoint_policy_version": CHECKPOINT_POLICY_VERSION,
         "executor_version": EXECUTOR_VERSION,
-        "assistant_carrier": NATIVE_ASSISTANT_CARRIER,
+        "assistant_carrier": assistant_carrier_protocol(active_carrier),
         "single_tool_call_per_turn": True,
         "max_calls_per_turn": 1,
         "min_tool_calls_per_turn": 1,
@@ -1326,8 +1426,12 @@ def capability_manifest(mode: str) -> dict[str, Any]:
             for name in MODE_TOOLS[active_mode]
         },
         "tool_schema_sha256": tool_schema_hash(active_mode),
-        "student_prompt_sha256": prompt_hash(active_mode),
-        "teacher_prompt_sha256": prompt_hash(active_mode, teacher=True),
+        "student_prompt_sha256": prompt_hash(active_mode, carrier=active_carrier),
+        "teacher_prompt_sha256": prompt_hash(
+            active_mode,
+            teacher=True,
+            carrier=active_carrier,
+        ),
         "max_expression_predicate_depth": MAX_EXPRESSION_DEPTH,
         "canonical_types": list(CANONICAL_TYPES),
         "expression_operators": [
@@ -1339,6 +1443,20 @@ def capability_manifest(mode: str) -> dict[str, Any]:
         ],
         "predicate_operators": list(PREDICATE_OPERATORS),
     }
+    # Keep the default native capability manifest byte-for-byte compatible.
+    # The A/B record and run manifest still carry the explicit carrier name.
+    if active_carrier != CARRIER_NATIVE_TOOL_CALLS:
+        manifest["single_tool_call_per_turn"] = False
+        manifest["min_tool_calls_per_turn"] = 0
+        manifest["max_tool_calls_per_turn"] = 0
+        manifest["single_action_per_turn"] = True
+        manifest["min_actions_per_turn"] = 1
+        manifest["max_actions_per_turn"] = 1
+        manifest["carrier_ablation_protocol_version"] = CARRIER_ABLATION_PROTOCOL_VERSION
+        manifest["carrier_policy_version"] = CARRIER_POLICY_VERSION
+        manifest["experiment_arm"] = carrier_experiment_arm(active_carrier)
+        manifest["carrier"] = active_carrier
+    return manifest
 
 
 get_capability_manifest = capability_manifest
@@ -1352,9 +1470,15 @@ __all__ = [
     "BINARY_EXPRESSION_OPERATORS",
     "CANONICAL_TYPES",
     "CAPABILITY_MANIFESTS",
+    "CARRIERS",
+    "CARRIER_ABLATION_PROTOCOL_VERSION",
+    "CARRIER_NATIVE_TOOL_CALLS",
+    "CARRIER_POLICY_VERSION",
+    "CARRIER_TEXT_JSON",
     "COMPARISON_OPERATORS",
     "CHECKPOINT_POLICY_VERSION",
     "CONTROL_TOOLS",
+    "DEFAULT_CARRIER",
     "MAX_AST_DEPTH",
     "MAX_EXPRESSION_DEPTH",
     "MODE_TOOLS",
@@ -1362,6 +1486,7 @@ __all__ = [
     "MODEL_ARG_SCHEMA",
     "MODES",
     "NATIVE_ASSISTANT_CARRIER",
+    "TEXT_JSON_ASSISTANT_CARRIER",
     "DIALECT",
     "ENVIRONMENT_RENDERER_VERSION",
     "EXECUTOR_VERSION",
@@ -1379,11 +1504,15 @@ __all__ = [
     "UNARY_EXPRESSION_OPERATORS",
     "VARIABLE_EXPRESSION_ARITY",
     "build_system_prompt",
+    "assistant_carrier_protocol",
+    "carrier_experiment_arm",
+    "carrier_protocol_hash",
     "capability_manifest",
     "get_capability_manifest",
     "get_system_prompt",
     "get_tool_definitions",
     "normalize_mode",
+    "normalize_carrier",
     "parameter_schema",
     "prompt_hash",
     "provider_tool_definitions",

@@ -1,19 +1,35 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
+import json
 from pathlib import Path
 from copy import deepcopy
 
-from tool_modules.checkpoint_relalg.provider import NativeAssistantResponse, _normalize_assistant_message
+import pytest
+
+from tool_modules.checkpoint_relalg.provider import (
+    NATIVE_PROVIDER_RESPONSE_ENVELOPE_VERSION,
+    NativeAssistantResponse,
+    _normalize_assistant_message,
+)
 from tool_modules.checkpoint_relalg.audit import audit_record, fresh_replay_record
-from tool_modules.checkpoint_relalg.runner import _phase_execution_styles, run_episode
+from tool_modules.checkpoint_relalg.runner import (
+    OPERATIONAL_RESUME_POLICY_VERSION,
+    _open_artifact_writer,
+    _phase_execution_styles,
+    run_episode,
+)
 from tool_modules.checkpoint_relalg.runtime import RuntimeConfig
 
 
 class FakeClient:
+    carrier = "native-tool-calls"
     request_audit_options = {
         "endpoint": "https://api.deepseek.com/chat/completions",
         "model": "fake",
+        "carrier": "native-tool-calls",
+        "assistant_carrier": "provider-native-single-tool-call-v1",
         "tool_choice": "auto",
         "thinking": {"type": "enabled"},
         "reasoning_effort": "high",
@@ -29,6 +45,7 @@ class FakeClient:
         raw_calls = [
             {
                 "id": f"call_{len(self.requests)}_{index}",
+                "index": index,
                 "type": "function",
                 "function": {
                     "name": item[0],
@@ -45,12 +62,39 @@ class FakeClient:
                 "tool_calls": raw_calls,
             }
         )
+        usage = {
+            "prompt_tokens": 8,
+            "completion_tokens": 2,
+            "total_tokens": 10,
+        }
+        envelope_hash = hashlib.sha256(json.dumps(
+            message,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")).hexdigest()
         return NativeAssistantResponse(
             message=message,
             calls=calls,
             finish_reason="tool_calls",
-            usage={"total_tokens": 10},
+            usage=usage,
             response_metadata={"model": "fake"},
+            raw_assistant_message=message,
+            retry_events=[],
+            provider_attempt_count=1,
+            provider_elapsed_seconds=0.01,
+            provider_attempt_events=[{
+                "attempt_index": 1,
+                "max_tokens": kwargs["max_tokens"],
+                "finish_reason": "tool_calls",
+                "usage": usage,
+                "shape_category": "accepted_response",
+                "response_envelope_sha256": envelope_hash,
+                "response_model": "fake",
+                "raw_assistant_message": message,
+                "elapsed_seconds_from_request_start": 0.01,
+            }],
         )
 
 
@@ -71,6 +115,45 @@ def _task(tmp_path: Path):
         "external_knowledge": None,
         "gold_sql": "SELECT COUNT(*) FROM items",
     }
+
+
+def test_operational_resume_preserves_original_start_and_rejects_identity_drift(
+    tmp_path: Path,
+):
+    result_dir = tmp_path / "resume"
+    first_manifest = {
+        "run_started_at_utc": "2026-08-09T00:00:00+00:00",
+        "protocol_hash": "new-native-protocol",
+        "provider_response_envelope_version": (
+            NATIVE_PROVIDER_RESPONSE_ENVELOPE_VERSION
+        ),
+    }
+    _open_artifact_writer(result_dir, first_manifest, resume=False)
+
+    resumed_manifest = {
+        **first_manifest,
+        "run_started_at_utc": "2026-08-09T00:05:00+00:00",
+    }
+    _open_artifact_writer(result_dir, resumed_manifest, resume=True)
+    stored_manifest = json.loads((result_dir / "manifest.json").read_text())
+    assert stored_manifest["run_started_at_utc"] == first_manifest["run_started_at_utc"]
+    events = [
+        json.loads(line)
+        for line in (result_dir / "operational_resume_events.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    assert len(events) == 1
+    assert set(events[0]["differences"]) == {"run_started_at_utc"}
+    assert events[0]["metadata"]["policy_version"] == OPERATIONAL_RESUME_POLICY_VERSION
+
+    old_native_identity = {
+        **resumed_manifest,
+        "protocol_hash": "old-native-protocol",
+        "provider_response_envelope_version": "native-response-envelope-v1",
+    }
+    with pytest.raises(ValueError, match="existing manifest differs"):
+        _open_artifact_writer(result_dir, old_native_identity, resume=True)
 
 
 def test_causal_runner_hides_reference_and_resets_history_after_checkpoint(tmp_path):
@@ -105,6 +188,8 @@ def test_causal_runner_hides_reference_and_resets_history_after_checkpoint(tmp_p
     )
     assert record["correct"] and record["legal"]
     assert "gold_sql" not in record
+    assert "index" not in record["turns"][0]["action"]
+    assert record["turns"][0]["assistant_message"]["tool_calls"][0]["index"] == 0
     assert [message["role"] for message in client.requests[1]] == [
         "system",
         "user",
@@ -117,6 +202,56 @@ def test_causal_runner_hides_reference_and_resets_history_after_checkpoint(tmp_p
     assert [message["role"] for message in client.requests[2]] == ["system", "user"]
     assert audit_record(record)["passed"]
     assert fresh_replay_record(record, task)["passed"]
+
+    forged = deepcopy(record)
+    final_runtime = forged["final_runtime"]
+    forged["turns"].append({
+        "model_turn_index": len(forged["turns"]) + 1,
+        "carrier": "native-tool-calls",
+        "carrier_metrics": {
+            "carrier": "native-tool-calls",
+            "provider_response_present": False,
+            "authored_action_count": 0,
+            "exact_single_action": False,
+            "carrier_envelope_valid": False,
+            "carrier_error_code": None,
+            "action_validation_error_code": None,
+            "provider_attempt_count": 1,
+            "provider_elapsed_seconds": 0.01,
+        },
+        "model_input": deepcopy(forged["turns"][-1]["model_input"]),
+        "phase_id_before": final_runtime["phase_id"],
+        "checkpoint_id_before": final_runtime["checkpoint_id"],
+        "environment_state_hash_before": final_runtime["environment_state_hash"],
+        "provider_error": {
+            "type": "ProviderError",
+            "message": "forged post-terminal provider failure",
+            "finish_reason": None,
+            "response_envelope_sha256": None,
+            "response_model": None,
+        },
+        "provider_retry_events": [],
+        "provider_attempt_events": [{
+            "attempt_index": 1,
+            "max_tokens": 128,
+            "finish_reason": None,
+            "usage": {},
+            "shape_category": "transport",
+            "response_envelope_sha256": None,
+            "response_model": None,
+            "raw_assistant_message": None,
+            "elapsed_seconds_from_request_start": 0.0,
+        }],
+        "provider_failed_usage": {},
+        "provider_usage": {},
+    })
+    forged["failure_type"] = "provider_error"
+    structural = audit_record(forged)
+    replay = fresh_replay_record(forged, task)
+    assert structural["passed"] is False
+    assert any("after terminal" in issue for issue in structural["issues"])
+    assert replay["passed"] is False
+    assert any("after replay runtime" in issue for issue in replay["issues"])
 
     missing_reasoning = deepcopy(record)
     missing_reasoning["turns"][0]["assistant_message"]["reasoning_content"] = None

@@ -10,8 +10,6 @@ boundary so callers never infer a scheme from record shape or experimental flags
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
-import json
 from typing import Any
 
 from tool_modules._bootstrap import activate_legacy_paths
@@ -62,6 +60,7 @@ class ToolScheme:
     student_prompt_hash: str | None = None
     teacher_prompt_hash: str | None = None
     admission_status: str | None = None
+    provider_response_envelope_version: str | None = None
 
     def manifest_fields(self) -> dict[str, Any]:
         payload = {
@@ -80,6 +79,9 @@ class ToolScheme:
             "student_prompt_sha256": self.student_prompt_hash,
             "teacher_prompt_sha256": self.teacher_prompt_hash,
             "admission_status": self.admission_status,
+            "provider_response_envelope_version": (
+                self.provider_response_envelope_version
+            ),
         }
         payload.update({key: value for key, value in optional.items() if value is not None})
         return payload
@@ -189,7 +191,11 @@ def build_native_tool_bundle_scheme() -> ToolScheme:
     )
 
 
-def build_checkpoint_relalg_tool_scheme(*, mode: str) -> ToolScheme:
+def build_checkpoint_relalg_tool_scheme(
+    *,
+    mode: str,
+    carrier: str = "native-tool-calls",
+) -> ToolScheme:
     """Build the forward checkpointed Direct/Atomic/Hybrid scheme.
 
     ``mode`` is deliberately mandatory: the three capability surfaces share one state
@@ -198,36 +204,50 @@ def build_checkpoint_relalg_tool_scheme(*, mode: str) -> ToolScheme:
     from tool_modules.checkpoint_relalg.protocol import (
         ADMISSION_STATUS,
         MODE_TOOLS,
-        NATIVE_ASSISTANT_CARRIER,
         PROTOCOL_VERSION,
+        assistant_carrier_protocol,
+        carrier_protocol_hash,
         get_system_prompt,
+        normalize_carrier,
         normalize_mode,
         prompt_hash,
         tool_schema_hash,
     )
+    from tool_modules.checkpoint_relalg.provider import (
+        provider_response_envelope_protocol_hash,
+        provider_response_envelope_version,
+    )
 
     active_mode = normalize_mode(mode)
-    student_prompt = get_system_prompt(active_mode, teacher=False)
-    student_hash = prompt_hash(active_mode, teacher=False)
-    teacher_hash = prompt_hash(active_mode, teacher=True)
+    active_carrier = normalize_carrier(carrier)
+    student_prompt = get_system_prompt(
+        active_mode,
+        teacher=False,
+        carrier=active_carrier,
+    )
+    student_hash = prompt_hash(
+        active_mode,
+        teacher=False,
+        carrier=active_carrier,
+    )
+    teacher_hash = prompt_hash(
+        active_mode,
+        teacher=True,
+        carrier=active_carrier,
+    )
     schema_hash = tool_schema_hash(active_mode)
-    identity = hashlib.sha256(json.dumps(
-        {
-            "protocol_version": PROTOCOL_VERSION,
-            "mode": active_mode,
-            "student_prompt_sha256": student_hash,
-            "tool_schema_sha256": schema_hash,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")).hexdigest()
+    response_envelope_version = provider_response_envelope_version(active_carrier)
+    identity = provider_response_envelope_protocol_hash(
+        carrier_protocol_hash(active_mode, active_carrier),
+        active_carrier,
+    )
     tools = tuple(MODE_TOOLS[active_mode])
     return ToolScheme(
         name=CHECKPOINT_RELALG_TOOL_SCHEME,
         protocol_version=PROTOCOL_VERSION,
         protocol_hash=identity,
         system_prompt=student_prompt,
-        assistant_carrier=NATIVE_ASSISTANT_CARRIER,
+        assistant_carrier=assistant_carrier_protocol(active_carrier),
         top_level_tools=tools,
         atomic_tools=tuple(
             tool
@@ -248,6 +268,7 @@ def build_checkpoint_relalg_tool_scheme(*, mode: str) -> ToolScheme:
         student_prompt_hash=student_hash,
         teacher_prompt_hash=teacher_hash,
         admission_status=ADMISSION_STATUS,
+        provider_response_envelope_version=response_envelope_version,
     )
 
 
