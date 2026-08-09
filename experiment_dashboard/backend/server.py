@@ -23,6 +23,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 DASHBOARD_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = DASHBOARD_ROOT.parent
 REGISTRY_PATH = DASHBOARD_ROOT / "data" / "experiments.json"
+RESEARCH_SUMMARY_PATH = DASHBOARD_ROOT / "data" / "research_summary.json"
+RESEARCH_INDEX_PATH = REPO_ROOT / "docs" / "reports" / "TWO_WEEK_EXPERIMENT_DATA_INDEX_20260723_20260805_ZH.md"
 DIST_ROOT = DASHBOARD_ROOT / "frontend" / "dist"
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:18001/v1").rstrip("/")
 SSH_HOST = os.environ.get("EXPERIMENT_SSH_HOST", "table_rl")
@@ -82,6 +84,70 @@ def resolve_repo_path(value: str) -> Path:
 
 def load_registry() -> list[dict]:
     return read_json(REGISTRY_PATH)
+
+
+def _research_artifact_category(path: str) -> str:
+    if path.startswith("table_rl:"):
+        return "table_rl"
+    if path.startswith("docs/reports") or "/docs/reports/" in path:
+        return "reports"
+    if path.startswith("data/results") or "/data/results/" in path:
+        return "evaluation"
+    if path.startswith("data/trajectories") or "/data/trajectories/" in path:
+        return "trajectories"
+    if path.startswith("data/eval_inputs") or "/data/eval_inputs/" in path:
+        return "eval-inputs"
+    return "workspace"
+
+
+def research_artifact_index() -> list[dict]:
+    """Extract every concrete artifact path from the human-audited two-week index."""
+    text = RESEARCH_INDEX_PATH.read_text(encoding="utf-8")
+    candidates = re.findall(r"`([^`]+)`", text)
+    paths = []
+    seen = set()
+    for value in candidates:
+        path = value.strip()
+        if not path.startswith(("table_rl:/", "/Users/", "data/", "docs/")):
+            continue
+        if path in seen:
+            continue
+        seen.add(path)
+        remote = path.startswith("table_rl:")
+        available = None
+        kind = "remote"
+        if not remote:
+            try:
+                local_path = Path(path) if path.startswith("/") else resolve_repo_path(path)
+                available = local_path.exists()
+                kind = "directory" if local_path.is_dir() else "file" if local_path.is_file() else "missing"
+            except ValueError:
+                available = False
+                kind = "invalid"
+        paths.append({
+            "path": path,
+            "category": _research_artifact_category(path),
+            "remote": remote,
+            "available": available,
+            "kind": kind,
+        })
+    return paths
+
+
+def load_research_summary() -> dict:
+    payload = read_json(RESEARCH_SUMMARY_PATH)
+    payload["artifacts"] = research_artifact_index()
+    payload["coverage"] = {
+        "full_dev_runs": len(payload.get("full_dev_runs", [])),
+        "paired_comparisons": len(payload.get("paired_comparisons", [])),
+        "diagnostic_runs": len(payload.get("diagnostic_runs", [])),
+        "artifact_paths": len(payload["artifacts"]),
+        "local_artifacts_available": sum(
+            item["available"] is True for item in payload["artifacts"]
+        ),
+        "remote_artifacts": sum(item["remote"] for item in payload["artifacts"]),
+    }
+    return payload
 
 
 def find_experiment(experiment_id: str) -> dict:
@@ -940,6 +1006,8 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if parsed.path == "/api/experiments":
                 return self.send_json([enrich_experiment(item) for item in load_registry()])
+            if parsed.path == "/api/research-summary":
+                return self.send_json(load_research_summary())
             if parsed.path == "/api/construction":
                 # Enriched reflection/perception/recovery trajectories under data/trajectories/.
                 # Raw recovery_candidates are intentionally excluded because they are rollout audit

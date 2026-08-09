@@ -20,6 +20,7 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(HERE))
 
 from bird_sft1_teacher import replay_success_trajectory  # noqa: E402
@@ -33,12 +34,17 @@ from protocol import (  # noqa: E402
     tool_schema_hash,
     tool_output_message,
 )
-from tool_schemes import (  # noqa: E402
+from tool_modules.registry import (  # noqa: E402
     ATOMIC_TOOL_SCHEME,
     TOOL_SCHEME_REGISTRY_VERSION,
     assert_record_tool_scheme,
 )
 from sft_dataset_registry import write_sharegpt_dataset_info  # noqa: E402
+from training_result_quality import (  # noqa: E402
+    EMPTY_RESULT_POLICY_VERSION,
+    empty_result_target_reason,
+    trajectory_has_empty_terminal_evidence,
+)
 
 ROLE_MAP = {"user": "human", "assistant": "gpt"}
 STEP_REF = re.compile(r"\bstep_(\d+)\b")
@@ -87,7 +93,9 @@ def legal_history(steps: list[dict]) -> list[dict]:
 
 def is_sft_target_step(step: dict) -> bool:
     """Context-only recovery prefixes remain replayable history but do not contribute loss."""
-    return step.get("sft_target_eligible", True) is not False
+    if step.get("sft_target_eligible", True) is False:
+        return False
+    return empty_result_target_reason(step) is None
 
 
 def factual_step_refs(value: Any, parent_key: str | None = None):
@@ -250,6 +258,9 @@ def build(
     tool_hist: Counter = Counter()
     difficulty_hist: Counter = Counter()
     recovery_count = replayed = record_count = context_only_prefix_steps = 0
+    empty_result_target_steps_excluded = 0
+    empty_terminal_trajectories_excluded = 0
+    eligible_source_episodes = 0
 
     try:
         with tmp_out.open("w", encoding="utf-8") as out, tmp_index.open("w", encoding="utf-8") as index:
@@ -268,6 +279,10 @@ def build(
                     raise ValueError(
                         f"{trajectory['trajectory_id']}: history window {generation.get('history_turns')} != {history_turns}"
                     )
+                if trajectory_has_empty_terminal_evidence(trajectory.get("steps") or []):
+                    empty_terminal_trajectories_excluded += 1
+                    continue
+                eligible_source_episodes += 1
                 if replay_attestation is None:
                     replay_ok, replay_error = replay_success_trajectory(
                         trajectory,
@@ -281,6 +296,8 @@ def build(
                 for step_index, step in enumerate(trajectory["steps"]):
                     if not is_sft_target_step(step):
                         context_only_prefix_steps += 1
+                        if empty_result_target_reason(step) is not None:
+                            empty_result_target_steps_excluded += 1
                         continue
                     record, index_row = convert_step(
                         trajectory,
@@ -346,6 +363,8 @@ def build(
         }),
         "base_protocol_hash": protocol_hash(system),
         "source_episodes": len(trajectories),
+        "eligible_source_episodes_after_empty_result_filter": eligible_source_episodes,
+        "empty_terminal_trajectories_excluded": empty_terminal_trajectories_excluded,
         "replayed_episodes": replayed,
         "source_replay_attested_episodes": (
             len(trajectories) if replay_attestation is not None else 0
@@ -362,6 +381,13 @@ def build(
         ),
         "records": record_count,
         "context_only_prefix_steps": context_only_prefix_steps,
+        "empty_result_target_steps_excluded": empty_result_target_steps_excluded,
+        "empty_result_policy": {
+            "version": EMPTY_RESULT_POLICY_VERSION,
+            "intermediate_empty_result": "retain-as-context-no-loss",
+            "terminal_empty_evidence": "exclude-whole-trajectory",
+            "scalar_zero_in_one_row_table": "eligible",
+        },
         "feedback_recovery_targets": recovery_count,
         "difficulty_targets": dict(sorted(difficulty_hist.items())),
         "tool_hist": dict(tool_hist.most_common()),

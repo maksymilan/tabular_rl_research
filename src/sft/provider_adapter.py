@@ -8,8 +8,22 @@ from __future__ import annotations
 
 import json
 import re
+import sys
+from pathlib import Path
 from typing import Any
 
+SRC_ROOT = Path(__file__).resolve().parents[1]
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from tool_modules.native_tool_bundle.provider_tools import (
+    MAX_NATIVE_BUNDLE_CALLS,
+    NATIVE_ASSISTANT_CARRIER,
+    NATIVE_BUNDLE_ASSISTANT_CARRIER,
+    canonical_messages_to_native,
+    native_atomic_tools,
+    native_tools_sha256,
+)
 from prompt_contract import CANONICAL_ACTION_RULE, TEACHER_ONE_ACTION_RULE
 
 
@@ -18,9 +32,13 @@ DEEPSEEK_V4_DEFAULT_MAX_TOKENS = 2048
 DEEPSEEK_V4_REASONING_EFFORT = "high"
 DEEPSEEK_CARRIER_JSON_OUTPUT = "json-output"
 DEEPSEEK_CARRIER_TOOL_CALL = "tool-call"
+DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS = "native-tool-calls"
+DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE = "native-tool-bundle"
 DEEPSEEK_CARRIER_CHOICES = (
     DEEPSEEK_CARRIER_JSON_OUTPUT,
     DEEPSEEK_CARRIER_TOOL_CALL,
+    DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+    DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE,
 )
 VERSION40_RESPONSE_CONTRACT_PLACEHOLDER = "{{VERSION40_RESPONSE_CONTRACT}}"
 _CANONICAL_SYSTEM_RESPONSE_RULE = CANONICAL_ACTION_RULE
@@ -57,6 +75,35 @@ _SPLIT_GENERATION_RESPONSE_RULE = (
     "only this one action and return a fresh state before you choose the next action. Follow the "
     "provider-specific field placement at the end of this prompt."
 )
+_NATIVE_SYSTEM_RESPONSE_RULE = (
+    "1. Each turn, select exactly one function through the provider's native function-calling "
+    "interface. Put non-empty reasoning only in the native reasoning field and leave assistant "
+    "content empty."
+)
+_NATIVE_GENERATION_RESPONSE_RULE = (
+    "ONE REQUEST = ONE NATIVE FUNCTION CALL. Produce one non-empty, brief action reason in the "
+    "provider's native reasoning field, select exactly one supplied function, and pass only that "
+    "function's arguments object. Immediately stop after the call. Never emit a second function, "
+    "serialize a tool/action wrapper into assistant content, or provide a complete multi-step "
+    "solution. The harness executes this one call and returns fresh state before the next choice."
+)
+_NATIVE_BUNDLE_SYSTEM_RESPONSE_RULE = (
+    "1. Each turn, use the provider's native function interface. Select one or more independent "
+    "functions that are all valid from the currently visible state."
+)
+_NATIVE_BUNDLE_GENERATION_RESPONSE_RULE = (
+    "ONE REQUEST = ONE NATIVE TOOL BUNDLE. Produce one non-empty, brief reason in the provider's "
+    "native reasoning field, then select one or more supplied functions. Calls in the same "
+    "response share one pre-call state: never make a later call depend on a result created by an "
+    "earlier call in that response. Call answer_from_context only by itself."
+)
+_CANONICAL_ONE_ACTION_POLICY_RULE = (
+    "2. Use only names and arguments in TOOLS. One turn contains one action."
+)
+_NATIVE_BUNDLE_ACTION_POLICY_RULE = (
+    "2. Use only names and arguments in TOOLS. One turn contains one or more independent "
+    "native calls, all chosen from the same visible pre-call state."
+)
 _CANONICAL_ASSISTANT_HISTORY_RE = re.compile(
     r"^\s*<think>(?P<reasoning>.*?)</think>\s*(?P<call_json>\{.*\})\s*$",
     re.DOTALL,
@@ -74,6 +121,7 @@ def provider_default_max_tokens(model: str, fallback: int) -> int:
 def provider_request_options(
     model: str,
     carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
+    native_model_arg_schema: dict[str, tuple[set[str], set[str]]] | None = None,
 ) -> dict[str, Any]:
     """Return provider controls that must be explicit and auditable."""
     if not is_deepseek_split_model(model):
@@ -86,7 +134,88 @@ def provider_request_options(
     }
     if carrier == DEEPSEEK_CARRIER_JSON_OUTPUT:
         options["response_format"] = {"type": "json_object"}
+    elif carrier in {
+        DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+        DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE,
+    }:
+        # Thinking mode currently rejects tool_choice="required". Version50 narrows auto to one
+        # call client-side; version51 accepts a bounded provider-native bundle.
+        options["tools"] = native_atomic_tools(native_model_arg_schema)
+        options["tool_choice"] = "auto"
     return options
+
+
+def provider_request_audit_options(
+    model: str,
+    carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
+    native_model_arg_schema: dict[str, tuple[set[str], set[str]]] | None = None,
+) -> dict[str, Any]:
+    """Return request controls without duplicating the full native schema in every turn."""
+    options = provider_request_options(
+        model,
+        carrier=carrier,
+        native_model_arg_schema=native_model_arg_schema,
+    )
+    if carrier in {
+        DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+        DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE,
+    } and "tools" in options:
+        options = dict(options)
+        options.pop("tools")
+        options["native_tools_sha256"] = native_tools_sha256(
+            native_model_arg_schema
+        )
+        options["native_tool_count"] = len(
+            native_atomic_tools(native_model_arg_schema)
+        )
+        options["provider_assistant_carrier"] = (
+            NATIVE_BUNDLE_ASSISTANT_CARRIER
+            if carrier == DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE
+            else NATIVE_ASSISTANT_CARRIER
+        )
+        if carrier == DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE:
+            options["max_native_bundle_calls"] = MAX_NATIVE_BUNDLE_CALLS
+    return options
+
+
+def _rewrite_canonical_cookbook_for_native(prompt: str) -> str:
+    """Keep the teacher's argument examples without teaching a competing JSON wrapper."""
+    header = "CANONICAL CALLS (copy these argument shapes; replace names and values only)"
+    suffix = "\n\nDATA GENERATION STRICTNESS\n"
+    start = prompt.find(header)
+    if start < 0:
+        raise ValueError("native function-call prompt cannot find the canonical call cookbook")
+    end = prompt.find(suffix, start)
+    if end < 0:
+        raise ValueError("native function-call prompt cannot find data-generation strictness")
+    lines = prompt[start:end].splitlines()
+    rewritten = [
+        "NATIVE FUNCTION CALL EXAMPLES (select one function; replace argument values only)"
+    ]
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        label, separator, raw_action = line.partition(": ")
+        if not separator:
+            raise ValueError(f"cannot convert canonical call example: {line!r}")
+        try:
+            action = json.loads(raw_action)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"cannot parse canonical call example: {label}") from exc
+        if (
+            not isinstance(action, dict)
+            or set(action) != {"tool", "arguments"}
+            or not isinstance(action.get("tool"), str)
+            or not isinstance(action.get("arguments"), dict)
+        ):
+            raise ValueError(f"canonical call example has unexpected shape: {label}")
+        arguments = json.dumps(
+            action["arguments"], ensure_ascii=False, separators=(",", ":")
+        )
+        rewritten.append(
+            f"{label}: call function {action['tool']} with arguments {arguments}"
+        )
+    return prompt[:start] + "\n".join(rewritten) + prompt[end:]
 
 
 def provider_system_prompt(
@@ -124,15 +253,41 @@ def provider_system_prompt(
             "the prompt template drifted"
         )
     canonical_response, split_response = matched[0]
+    if carrier in {
+        DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+        DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE,
+    }:
+        split_response = _NATIVE_SYSTEM_RESPONSE_RULE
+        split_generation_rule = _NATIVE_GENERATION_RESPONSE_RULE
+        if carrier == DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE:
+            split_response = _NATIVE_BUNDLE_SYSTEM_RESPONSE_RULE
+            split_generation_rule = _NATIVE_BUNDLE_GENERATION_RESPONSE_RULE
+    else:
+        split_generation_rule = _SPLIT_GENERATION_RESPONSE_RULE
     prompt = canonical_prompt.replace(
         canonical_response,
         split_response,
         1,
     ).replace(
         _CANONICAL_GENERATION_RESPONSE_RULE,
-        _SPLIT_GENERATION_RESPONSE_RULE,
+        split_generation_rule,
         1,
     )
+    if carrier == DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE:
+        if prompt.count(_CANONICAL_ONE_ACTION_POLICY_RULE) != 1:
+            raise ValueError(
+                "native tool-bundle prompt cannot replace the one-action policy rule"
+            )
+        prompt = prompt.replace(
+            _CANONICAL_ONE_ACTION_POLICY_RULE,
+            _NATIVE_BUNDLE_ACTION_POLICY_RULE,
+            1,
+        )
+    if carrier in {
+        DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+        DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE,
+    }:
+        prompt = _rewrite_canonical_cookbook_for_native(prompt)
     return prompt + provider_instruction(
         model,
         example_visible_content=example_visible_content,
@@ -192,6 +347,7 @@ def provider_request_messages(
     carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
     *,
     preserve_reasoning: bool = False,
+    native_assistant_history: list[tuple[str, dict[str, Any]]] | None = None,
 ) -> list[dict]:
     """Render canonical legal-history actions in the provider's API-facing carrier.
 
@@ -206,6 +362,10 @@ def provider_request_messages(
         return rendered
     if carrier not in DEEPSEEK_CARRIER_CHOICES:
         raise ValueError(f"unknown DeepSeek carrier {carrier!r}")
+    if carrier == DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS:
+        return canonical_messages_to_native(rendered, native_assistant_history)
+    if carrier == DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE:
+        return rendered
     for message in rendered:
         if message.get("role") != "assistant":
             continue
@@ -250,6 +410,7 @@ def provider_instruction(
     *,
     example_visible_content: str | None = None,
     carrier: str = DEEPSEEK_CARRIER_JSON_OUTPUT,
+    include_client_implementation: bool = True,
 ) -> str:
     """Return an explicit transport instruction only for a provider with a known split response."""
     if is_deepseek_split_model(model):
@@ -258,6 +419,28 @@ def provider_instruction(
         example = example_visible_content or (
             '{"tool":"describe_table","arguments":{"tables":["Document"]}}'
         )
+        if carrier == DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE:
+            return (
+                "\n\nDEEPSEEK NATIVE TOOL-BUNDLE CONTRACT\n"
+                "Use the API's separate native reasoning field for one non-empty brief reason. "
+                f"Select between one and {MAX_NATIVE_BUNDLE_CALLS} supplied functions. Every "
+                "call in one response is chosen from the same currently visible state: calls may "
+                "be independent, but no call may consume a handle or value produced by another "
+                "call in that response. Call answer_from_context only as the sole call. Assistant "
+                "content is not executable and is ignored for scoring; put arguments only in "
+                "native function calls. The harness returns one tool result for every call id."
+            )
+        if carrier == DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS:
+            return (
+                "\n\nDEEPSEEK NATIVE FUNCTION-CALL CONTRACT\n"
+                "Use the API's separate native reasoning field for one non-empty brief reason. "
+                "Keep it under 120 words and reserve output budget for the call. Select exactly "
+                "one function from the supplied tools and pass only its arguments object. Leave "
+                "assistant content empty: do not serialize a {\"tool\":...,\"arguments\":...} "
+                "wrapper, XML/tool_call tags, Markdown, an answer, or a second call into content. "
+                "The client rejects zero or multiple calls, unknown functions, malformed argument "
+                "JSON, missing reasoning, and any non-empty assistant content before execution."
+            )
         if carrier == DEEPSEEK_CARRIER_TOOL_CALL:
             return (
                 "\n\nDEEPSEEK SPLIT-RESPONSE TOOL-CALL CONTRACT\n"
@@ -277,6 +460,13 @@ def provider_instruction(
                 "single block. The client preserves the separate reason and wraps the unchanged "
                 "action in the internal canonical envelope."
             )
+        client_clause = (
+            " The client preserves the separate reason and raw JSON for audit, renders the "
+            "active think-plus-JSON envelope, and rejects a missing reason or extra top-level "
+            "keys."
+            if include_client_implementation
+            else ""
+        )
         return (
             "\n\nDEEPSEEK SPLIT-RESPONSE JSON OUTPUT CONTRACT\n"
             "Use the API's separate native reasoning channel for one non-empty brief reason. "
@@ -290,10 +480,8 @@ def provider_instruction(
             "Put every tool parameter inside arguments; never add a tool parameter as an extra "
             "top-level key. "
             "Do not describe the response envelope, name its channels, repeat the reason, use "
-            "Markdown or XML tags, add a second action, or put any text before or after the JSON. "
-            "The client preserves the separate reason and raw JSON for audit, renders the active "
-            "think-plus-JSON envelope, and rejects a missing reason or "
-            "extra top-level keys."
+            "Markdown or XML tags, add a second action, or put any text before or after the JSON."
+            + client_clause
         )
     return ""
 
@@ -341,11 +529,34 @@ def adapt_provider_response(
     reasoning_text = raw_reasoning.strip()
     reasoning_has_tag = "<think" in reasoning_text.lower() or "</think>" in reasoning_text.lower()
     record["carrier"] = carrier
-    record["name"] = (
-        "deepseek_reasoning_tool_call_v1"
-        if carrier == DEEPSEEK_CARRIER_TOOL_CALL
-        else "deepseek_reasoning_json_content_v2"
-    )
+    if carrier in {
+        DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+        DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE,
+    }:
+        record["name"] = NATIVE_ASSISTANT_CARRIER
+        if carrier == DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE:
+            record["name"] = NATIVE_BUNDLE_ASSISTANT_CARRIER
+        record["transport_reconstructed_from_native_tool_calls"] = True
+    elif carrier == DEEPSEEK_CARRIER_TOOL_CALL:
+        record["name"] = "deepseek_reasoning_tool_call_v1"
+    else:
+        record["name"] = "deepseek_reasoning_json_content_v2"
+    if carrier == DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE:
+        record["assistant_content_ignored"] = True
+        record["reasoning_contains_think_tag"] = reasoning_has_tag
+        try:
+            payload = json.loads(content_text)
+        except json.JSONDecodeError:
+            payload = None
+        calls = payload.get("calls") if isinstance(payload, dict) else None
+        if not isinstance(calls, list) or not 1 <= len(calls) <= MAX_NATIVE_BUNDLE_CALLS:
+            record["rejection_reason"] = "invalid_native_bundle"
+        else:
+            record["rejection_reason"] = None
+            record["native_call_count"] = len(calls)
+        record["eligible"] = record["rejection_reason"] is None
+        record["applied"] = record["eligible"]
+        return raw_content, record
     if not reasoning_text:
         record["rejection_reason"] = "missing_reasoning_content"
     elif not content_text:
@@ -420,7 +631,38 @@ def provider_rejection_message(audit: dict[str, Any]) -> str | None:
             "the tool_call body was not one valid JSON action object"
         ),
     }
-    detail = details.get(reason, f"provider carrier was rejected: {reason}")
+    if reason.startswith("tool_call_count_"):
+        count = reason.removeprefix("tool_call_count_")
+        detail = (
+            f"the assistant selected {count} native functions in one atomic turn; "
+            "exactly one is required"
+        )
+    else:
+        native_details = {
+            "nonempty_assistant_content": (
+                "assistant content was non-empty; use only reasoning_content plus one native "
+                "function call"
+            ),
+            "missing_function_payload": "the native tool call had no function payload",
+            "unknown_function": "the native tool call named a function outside the supplied set",
+            "invalid_arguments_json": "the native function arguments were not valid JSON",
+            "arguments_not_object_json": (
+                "the native function arguments did not decode to one JSON object"
+            ),
+        }
+        detail = details.get(
+            reason,
+            native_details.get(reason, f"provider carrier was rejected: {reason}"),
+        )
+    if carrier in {
+        DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+        DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE,
+    }:
+        return (
+            "DeepSeek native function-call transport error: " + detail + ". On retry, select "
+            "exactly one supplied function, put only its parameters in the function arguments, "
+            "keep assistant content empty, and put the brief reason only in reasoning_content."
+        )
     if carrier == DEEPSEEK_CARRIER_TOOL_CALL:
         return (
             "DeepSeek split-response transport error: " + detail + ". On the retry, visible "

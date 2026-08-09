@@ -1,0 +1,306 @@
+{
+  "schema_version": "routed-coupled-reward-smoke-v1",
+  "measurement": "exact frozen tokens; independent reset to SFT2 for each LR",
+  "train_example_indices": [
+    3044,
+    1188,
+    1295,
+    5027,
+    3102,
+    3700,
+    4692,
+    1626,
+    4579,
+    2837,
+    5040,
+    2376,
+    2263,
+    4050,
+    3345,
+    3395,
+    5623,
+    104,
+    4505,
+    733
+  ],
+  "retention_example_indices": [
+    3797,
+    4800,
+    2810
+  ],
+  "think_weight": 0.5,
+  "action_weight": 1.0,
+  "rank_coefficient": 0.0,
+  "negative_scales": [
+    0.5
+  ],
+  "negative_grad_ratio_cap": null,
+  "question_batch_size": 5,
+  "loss_normalization": "category_mean",
+  "category_weights": {
+    "correct_key_evidence": 2.0,
+    "correct_key_backslice": 2.0,
+    "correct_terminal": 0.25,
+    "severe_local_error": 1.0
+  },
+  "routing": {
+    "positive": [
+      "correct_key_backslice",
+      "correct_key_evidence",
+      "correct_terminal"
+    ],
+    "negative": [
+      "severe_local_error"
+    ],
+    "neutral": [
+      "correct_other_clean",
+      "incorrect_other_clean"
+    ],
+    "normalization": "equal mean over present routed reward categories"
+  },
+  "train_categories": {
+    "correct_key_evidence": 41,
+    "correct_other_clean": 20,
+    "correct_key_backslice": 111,
+    "severe_local_error": 32,
+    "correct_terminal": 36,
+    "incorrect_other_clean": 268
+  },
+  "active_train_transitions": 220,
+  "retention_correct_transitions": 62,
+  "variants": [
+    {
+      "learning_rate": 6e-06,
+      "negative_scale": 0.5,
+      "negative_grad_ratio_cap": null,
+      "question_batch_size": 5,
+      "loss_normalization": "category_mean",
+      "category_weights": {
+        "correct_key_evidence": 2.0,
+        "correct_key_backslice": 2.0,
+        "correct_terminal": 0.25,
+        "severe_local_error": 1.0
+      },
+      "weight_decay": 0.01,
+      "steps": [
+        {
+          "step": 1,
+          "example_index": null,
+          "example_indices": [
+            3044,
+            1188,
+            1295,
+            5027,
+            3102
+          ],
+          "question_batch_size": 5,
+          "loss_normalization": "category_mean",
+          "active_transitions": 32,
+          "positive_transitions": 29,
+          "negative_transitions": 3,
+          "negative_grad_ratio_cap": null,
+          "positive_grad_norm": null,
+          "negative_grad_norm": null,
+          "negative_grad_scale_applied": 1.0,
+          "loss": 0.002539884466386866,
+          "grad_norm_before_clip": 0.3328455090522766,
+          "clip_triggered": false
+        },
+        {
+          "step": 2,
+          "example_index": null,
+          "example_indices": [
+            3700,
+            4692,
+            1626,
+            4579,
+            2837
+          ],
+          "question_batch_size": 5,
+          "loss_normalization": "category_mean",
+          "active_transitions": 49,
+          "positive_transitions": 39,
+          "negative_transitions": 10,
+          "negative_grad_ratio_cap": null,
+          "positive_grad_norm": null,
+          "negative_grad_norm": null,
+          "negative_grad_scale_applied": 1.0,
+          "loss": 0.005903819896047935,
+          "grad_norm_before_clip": 0.11416494846343994,
+          "clip_triggered": false
+        },
+        {
+          "step": 3,
+          "example_index": null,
+          "example_indices": [
+            5040,
+            2376,
+            2263,
+            4050,
+            3345
+          ],
+          "question_batch_size": 5,
+          "loss_normalization": "category_mean",
+          "active_transitions": 69,
+          "positive_transitions": 64,
+          "negative_transitions": 5,
+          "negative_grad_ratio_cap": null,
+          "positive_grad_norm": null,
+          "negative_grad_norm": null,
+          "negative_grad_scale_applied": 1.0,
+          "loss": 0.004235040195453621,
+          "grad_norm_before_clip": 0.13154155015945435,
+          "clip_triggered": false
+        },
+        {
+          "step": 4,
+          "example_index": null,
+          "example_indices": [
+            3395,
+            5623,
+            104,
+            4505,
+            733
+          ],
+          "question_batch_size": 5,
+          "loss_normalization": "category_mean",
+          "active_transitions": 70,
+          "positive_transitions": 56,
+          "negative_transitions": 14,
+          "negative_grad_ratio_cap": null,
+          "positive_grad_norm": null,
+          "negative_grad_norm": null,
+          "negative_grad_scale_applied": 1.0,
+          "loss": 0.00790314606456377,
+          "grad_norm_before_clip": 0.13722671568393707,
+          "clip_triggered": false
+        }
+      ],
+      "raw_adapter_update_norm": 0.09238424798434991,
+      "raw_adapter_update_over_reference": 0.0025107754780087426,
+      "deltas": {
+        "active": {
+          "transitions": 281,
+          "think_mean_delta": 0.005459585206357769,
+          "think_mean_abs_delta": 0.009846109382350834,
+          "think_reward_aligned_fraction": 0.8256227758007118,
+          "think_decrease_fraction": 0.16370106761565836,
+          "action_mean_delta": -0.0007218445668571855,
+          "action_mean_abs_delta": 0.0051945346658863675,
+          "action_reward_aligned_fraction": 0.7437722419928826,
+          "action_decrease_fraction": 0.28113879003558717,
+          "joint_mean_delta": 0.00200794809257605,
+          "joint_mean_abs_delta": 0.009897103990938554,
+          "joint_reward_aligned_fraction": 0.8647686832740213,
+          "joint_decrease_fraction": 0.18861209964412812
+        },
+        "positive": {
+          "transitions": 246,
+          "think_mean_delta": 0.008194915915279067,
+          "think_mean_abs_delta": 0.008893958333599555,
+          "think_reward_aligned_fraction": 0.8780487804878049,
+          "think_decrease_fraction": 0.12195121951219512,
+          "action_mean_delta": 0.0024428255065571634,
+          "action_mean_abs_delta": 0.0026336292014557477,
+          "action_reward_aligned_fraction": 0.7642276422764228,
+          "action_decrease_fraction": 0.23577235772357724,
+          "joint_mean_delta": 0.0065402835195815965,
+          "joint_mean_abs_delta": 0.006906459358335298,
+          "joint_reward_aligned_fraction": 0.8861788617886179,
+          "joint_decrease_fraction": 0.11382113821138211
+        },
+        "correct_key_evidence": {
+          "transitions": 50,
+          "think_mean_delta": 0.011497944332659245,
+          "think_mean_abs_delta": 0.012089682705700398,
+          "think_reward_aligned_fraction": 0.86,
+          "think_decrease_fraction": 0.14,
+          "action_mean_delta": 0.00015343600765390874,
+          "action_mean_abs_delta": 0.00015591890228733974,
+          "action_reward_aligned_fraction": 0.76,
+          "action_decrease_fraction": 0.24,
+          "joint_mean_delta": 0.005902408231049776,
+          "joint_mean_abs_delta": 0.0061979305185377595,
+          "joint_reward_aligned_fraction": 0.86,
+          "joint_decrease_fraction": 0.14
+        },
+        "correct_key_backslice": {
+          "transitions": 151,
+          "think_mean_delta": 0.0057285824892364,
+          "think_mean_abs_delta": 0.006582117647191645,
+          "think_reward_aligned_fraction": 0.8675496688741722,
+          "think_decrease_fraction": 0.13245033112582782,
+          "action_mean_delta": 0.0015359550453326275,
+          "action_mean_abs_delta": 0.0017084406727249097,
+          "action_reward_aligned_fraction": 0.7615894039735099,
+          "action_decrease_fraction": 0.23841059602649006,
+          "joint_mean_delta": 0.004400246638638146,
+          "joint_mean_abs_delta": 0.004850361919468454,
+          "joint_reward_aligned_fraction": 0.8807947019867549,
+          "joint_decrease_fraction": 0.11920529801324503
+        },
+        "negative": {
+          "transitions": 35,
+          "think_mean_delta": -0.013765882062060492,
+          "think_mean_abs_delta": 0.016538371039288385,
+          "think_reward_aligned_fraction": 0.45714285714285713,
+          "think_decrease_fraction": 0.45714285714285713,
+          "action_mean_delta": -0.022964954225712323,
+          "action_mean_abs_delta": 0.023194041644455866,
+          "action_reward_aligned_fraction": 0.6,
+          "action_decrease_fraction": 0.6,
+          "joint_mean_delta": -0.02984789519437722,
+          "joint_mean_abs_delta": 0.030917063408664295,
+          "joint_reward_aligned_fraction": 0.7142857142857143,
+          "joint_decrease_fraction": 0.7142857142857143
+        },
+        "severe_local_error": {
+          "transitions": 35,
+          "think_mean_delta": -0.013765882062060492,
+          "think_mean_abs_delta": 0.016538371039288385,
+          "think_reward_aligned_fraction": 0.45714285714285713,
+          "think_decrease_fraction": 0.45714285714285713,
+          "action_mean_delta": -0.022964954225712323,
+          "action_mean_abs_delta": 0.023194041644455866,
+          "action_reward_aligned_fraction": 0.6,
+          "action_decrease_fraction": 0.6,
+          "joint_mean_delta": -0.02984789519437722,
+          "joint_mean_abs_delta": 0.030917063408664295,
+          "joint_reward_aligned_fraction": 0.7142857142857143,
+          "joint_decrease_fraction": 0.7142857142857143
+        },
+        "correct_terminal": {
+          "transitions": 45,
+          "think_mean_delta": 0.012800803170022038,
+          "think_mean_abs_delta": 0.013100663334545163,
+          "think_reward_aligned_fraction": 0.9333333333333333,
+          "think_decrease_fraction": 0.06666666666666667,
+          "action_mean_delta": 0.008029645830780889,
+          "action_mean_abs_delta": 0.008491162152495235,
+          "action_reward_aligned_fraction": 0.7777777777777778,
+          "action_decrease_fraction": 0.2222222222222222,
+          "joint_mean_delta": 0.014430046485116085,
+          "joint_mean_abs_delta": 0.014593062808530198,
+          "joint_reward_aligned_fraction": 0.9333333333333333,
+          "joint_decrease_fraction": 0.06666666666666667
+        },
+        "retention_correct": {
+          "transitions": 62,
+          "think_mean_delta": 0.002599879787603934,
+          "think_mean_abs_delta": 0.004014392251959971,
+          "think_reward_aligned_fraction": 0.7068965517241379,
+          "think_decrease_fraction": 0.27419354838709675,
+          "action_mean_delta": 0.00023660791387761316,
+          "action_mean_abs_delta": 0.0005579966222608016,
+          "action_reward_aligned_fraction": 0.6896551724137931,
+          "action_decrease_fraction": 0.3064516129032258,
+          "joint_mean_delta": 0.0015365487854597309,
+          "joint_mean_abs_delta": 0.0023198217292496512,
+          "joint_reward_aligned_fraction": 0.7413793103448276,
+          "joint_decrease_fraction": 0.24193548387096775
+        }
+      },
+      "adapter_dir": "/home/dengyan/tabular_rl_outputs/diagnostics/routed_coupled_scale20_20260808/retry1_lr6e6_adapters/lr_6e-06_neg_0p5_qbatch_5_category_mean_weighted"
+    }
+  ]
+}

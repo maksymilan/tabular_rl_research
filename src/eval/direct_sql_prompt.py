@@ -20,9 +20,11 @@ from rollout import overview
 
 CANONICAL_JSON_PROFILE = "canonical-json-v1"
 SQL_ASTRA_APPENDIX_PROFILE = "sql-astra-appendix-v1"
+SQL_ASTRA_DISCLOSED_SINGLE_TURN_PROFILE = "sql-astra-disclosed-single-turn-v1"
 DIRECT_SQL_PROMPT_PROFILES = (
     CANONICAL_JSON_PROFILE,
     SQL_ASTRA_APPENDIX_PROFILE,
+    SQL_ASTRA_DISCLOSED_SINGLE_TURN_PROFILE,
 )
 
 CANONICAL_SYSTEM_PROMPT = (
@@ -36,6 +38,11 @@ SQL_ASTRA_SYSTEM_PROMPT = (
     "Think through the query first, then put exactly one read-only SELECT or WITH query inside "
     "<answer></answer> tags. Only the SQL inside those tags is graded."
 )
+
+# SQL-ASTRA Appendix F discloses this role identity before its agent-only tool instructions.  The
+# paper calls the 47.5 BIRD baseline a single-turn SQL setting, so this isolated reproduction keeps
+# only the shared role identity and uses the appendix's verbatim single-turn code-block carrier.
+SQL_ASTRA_DISCLOSED_SINGLE_TURN_SYSTEM_PROMPT = "You are a helpful SQL assistant."
 
 _SQL_RESERVED_WORDS = {
     "ALL", "ALTER", "AND", "AS", "ASC", "BETWEEN", "BY", "CASE", "CAST", "CREATE",
@@ -76,6 +83,8 @@ def system_prompt_for_profile(profile: str) -> str:
         return CANONICAL_SYSTEM_PROMPT
     if profile == SQL_ASTRA_APPENDIX_PROFILE:
         return SQL_ASTRA_SYSTEM_PROMPT
+    if profile == SQL_ASTRA_DISCLOSED_SINGLE_TURN_PROFILE:
+        return SQL_ASTRA_DISCLOSED_SINGLE_TURN_SYSTEM_PROMPT
     raise ValueError(f"unknown direct-SQL prompt profile: {profile}")
 
 
@@ -116,7 +125,10 @@ def build_direct_sql_messages(
             example["question"],
             example.get("external_knowledge"),
         )
-    elif profile == SQL_ASTRA_APPENDIX_PROFILE:
+    elif profile in {
+        SQL_ASTRA_APPENDIX_PROFILE,
+        SQL_ASTRA_DISCLOSED_SINGLE_TURN_PROFILE,
+    }:
         metadata_path = resolve_schema_metadata_path(
             example,
             explicit_path=schema_metadata_json,
@@ -127,11 +139,12 @@ def build_direct_sql_messages(
             db_schema,
             value_count=schema_value_count,
         )
-        user_prompt = render_sql_astra_user_prompt(
-            ddl,
-            example["question"],
-            example.get("external_knowledge"),
+        renderer = (
+            render_sql_astra_disclosed_single_turn_user_prompt
+            if profile == SQL_ASTRA_DISCLOSED_SINGLE_TURN_PROFILE
+            else render_sql_astra_user_prompt
         )
+        user_prompt = renderer(ddl, example["question"], example.get("external_knowledge"))
     else:  # guarded by argparse in CLIs; retained for programmatic callers.
         raise ValueError(f"unknown direct-SQL prompt profile: {profile}")
     return [
@@ -174,6 +187,51 @@ Instructions:
 
 Output Format:
 <answer>SELECT ...</answer>
+
+Take a deep breath and think step by step to find the correct SQL query."""
+
+
+def render_sql_astra_disclosed_single_turn_user_prompt(
+    ddl: str,
+    question: str,
+    external_knowledge: Any = None,
+) -> str:
+    """Render Appendix F's disclosed single-turn text and code-block SQL carrier.
+
+    Appendix F continues with multi-turn ``run_sql_remote`` instructions after this text.  Those
+    instructions cannot define the paper's separately reported single-turn baseline, so this
+    profile stops at the disclosed code-block output contract and introduces no execution feedback.
+    """
+    if isinstance(external_knowledge, str):
+        evidence = external_knowledge.strip()
+    elif external_knowledge:
+        evidence = json.dumps(external_knowledge, ensure_ascii=False)
+    else:
+        evidence = ""
+    combined_question = f"{evidence}\n{question}" if evidence else question
+    return f"""Task Overview:
+You are a data science expert. Below, you are provided with a database schema and a natural language question. Your task is to understand the schema and generate a valid SQL query to answer the question.
+
+Database Engine:
+SQLite
+
+Database Schema:
+{ddl}
+This schema describes the database's structure, including tables, columns, primary keys, foreign keys, and any relevant relationships or constraints.
+
+Question:
+{combined_question}
+
+Instructions:
+- Make sure you only output the information that is asked in the question. If the question asks for a specific column, make sure to only include that column in the SELECT clause, nothing more.
+- The generated query should return all of the information asked in the question without any missing or extra information.
+- Before generating the final SQL query, please think through the steps of how to write the query.
+
+Output Format:
+In your answer, please enclose the generated SQL query in a code block:
+```sql
+-- Your SQL query
+```
 
 Take a deep breath and think step by step to find the correct SQL query."""
 
@@ -372,11 +430,16 @@ def prompt_profile_manifest(
     return {
         "prompt_profile": profile,
         "schema_value_count": (
-            schema_value_count if profile == SQL_ASTRA_APPENDIX_PROFILE else None
+            schema_value_count
+            if profile
+            in {SQL_ASTRA_APPENDIX_PROFILE, SQL_ASTRA_DISCLOSED_SINGLE_TURN_PROFILE}
+            else None
         ),
         "schema_metadata_json": (
             os.path.abspath(schema_metadata_json)
-            if schema_metadata_json and profile == SQL_ASTRA_APPENDIX_PROFILE
+            if schema_metadata_json
+            and profile
+            in {SQL_ASTRA_APPENDIX_PROFILE, SQL_ASTRA_DISCLOSED_SINGLE_TURN_PROFILE}
             else None
         ),
         "system_prompt": system_prompt_for_profile(profile),

@@ -2,27 +2,37 @@
 
 ## Contract
 
-The repository exposes four complete and independently selectable model action schemes:
+The repository exposes six complete and independently selectable model action schemes:
 
 | Scheme id | Model turn | Top-level actions | Student carrier |
 |---|---|---|---|
 | `atomic` | exactly one primitive tool | the original planning, perception, relational, and terminal tools | `<think>` followed directly by one raw JSON action |
+| `native-tool-bundle` | one provider assistant turn containing 1..8 direct primitive calls from one shared pre-state | the version39 perception, relational, and terminal functions; active version54 excludes `plan` | structured DeepSeek `reasoning_content` + `tool_calls`, followed by one tool result per call id |
 | `action-block` | one ordered work block of 1..8 primitive calls, or one terminal action | `action_block` for work; `answer_from_context` for termination | `<think>` followed directly by one raw JSON action |
 | `relational-program` | one interactive observation, one declarative relation program of 1..8 nodes, or one terminal action | `observe`; `relational_program`; `answer_from_context` | `<think>` followed directly by one raw JSON action |
 | `direct-sql-search` | one database-value retrieval or one read-only SQL inspection/final execution | `search_values`; `execute_sql` | `<think>` followed directly by one raw JSON action |
+| `iterative-sql` | one read-only SQL exploration or one recoverable final SQL proposal | `execute_sql`; `submit_sql` | `<think>` followed directly by one raw JSON action |
 
-The ids are defined by `tool-scheme-registry-v4` in `src/sft/tool_schemes.py`. A model sees exactly
+The ids are defined by `tool-scheme-registry-v11` in `src/tool_modules/registry.py`. A model sees exactly
 one scheme. Do not combine top-level schemas from different schemes in one prompt and do not infer
 a scheme from trajectory shape. Registry v2 unifies both prior student schemes on the active
 `think-json-v1` carrier;
 registry v3 adds `relational-program` without changing either prior scheme; registry v4 adds the
-diagnostic-only `direct-sql-search` scheme without changing the first three. Registry v1's tagged
-atomic carrier is retired.
+diagnostic-only `direct-sql-search` scheme without changing the first three; registry v5 adds the
+diagnostic-only `native-tool-bundle` scheme without changing the prior four; registry v6 registers
+the diagnostic-only `iterative-sql-v3` scheme without changing the prior five; registry v7 advances
+only that scheme to the failure-derived `iterative-sql-v4`; registry v8 advances only that scheme
+to the externally reviewed `iterative-sql-v5`; registry v9 advances only that scheme to
+`iterative-sql-v6`, adding an explicit relational output-shape rule; registry v10 advances only
+the native bundle to the version53 reviewed prompt profile; registry v11 advances only that bundle
+to version54 by removing the public `plan` function. Registry v1's
+tagged atomic carrier is retired.
 
-The first three schemes share the harness-owned primitive relational semantics and resident facts.
-`direct-sql-search` instead shares the immutable SQLite database, provider transport, causal loop,
-and hidden terminal scorer, but exposes raw read-only SQL plus a bounded retrieval service. Schemes do
-not share:
+The first four schemes share the harness-owned primitive relational semantics and resident facts.
+`direct-sql-search` and `iterative-sql` instead share the immutable SQLite database, provider
+transport, causal loop, and hidden terminal scorer. The former exposes raw read-only SQL plus a
+bounded retrieval service; the latter exposes only SQL execution and recoverable final submission.
+Schemes do not share:
 
 - model-visible system prompts;
 - top-level argument schemas;
@@ -33,12 +43,12 @@ not share:
 
 ## Runtime adapters
 
-`src/sft/tool_schemes.py` builds a complete `ToolScheme` object containing the prompt, protocol
+`src/tool_modules/registry.py` builds a complete `ToolScheme` object containing the prompt, protocol
 version/hash, carrier, top-level actions, primitive actions, and batch bound. It also provides
 strict render/parse round trips for local student models.
 
-Both local student schemes use the same `think-json-v1` carrier. Their structured JSON action
-schemas remain different. The DeepSeek action-block evaluator may transport reasoning in its
+All text-carried schemes use the same `think-json-v1` carrier while retaining different structured
+JSON action schemas. The DeepSeek action-block evaluator may transport reasoning in its
 provider-native field plus raw visible JSON, then records the same canonical carrier:
 
 ```text
@@ -48,6 +58,46 @@ provider-native field plus raw visible JSON, then records the same canonical car
 
 The provider and student carriers are adapters around the same structured action. They are
 separately hashed and recorded.
+
+Atomic `version50` is an isolated exception on the provider side only: DeepSeek receives the
+version39 atomic functions through native `tools` and answers with one `tool_calls` item plus
+`reasoning_content`. The stored/replay/student carrier remains `think-json-v1`. This keeps the
+harness and future SFT representation unchanged while testing whether native function selection
+improves external-teacher trajectories. Version50 is selectable only with
+`--deepseek-carrier native-tool-calls --diagnostic-only`; it is not the registry default. Its
+completed fixed-200 scored 133/200 correct and 183/200 legal versus historical version24 at
+145/200 and 197/200, so it is rejected and its trajectories cannot enter SFT/RL.
+
+Version51 is the forward `native-tool-bundle` implementation. Unlike version50, it does not reject
+provider-authored parallel calls or non-empty assistant content. Content is retained only for
+audit; execution consumes the structured calls. All arguments are checked against the bundle's
+shared pre-state before any primitive executes, preventing same-bundle use of unseen derived
+handles. Primitive results remain individually replayable and carry `model_turn_index` plus the
+original call id, while the causal history retains one assistant message followed by all matching
+tool messages. `answer_from_context` must be the sole call. Version51 is diagnostic-only pending
+scheme-specific export/admission work; it is nevertheless the base for subsequent provider-tool-
+call experiments instead of version26.
+
+The frozen carrier-failure/control Gate32 passed at 22/32 correct and 32/32 legal versus version50
+at 16/32 and 26/32, with six paired gains and no regressions. The completed fixed-200 scored
+147/200 correct and 200/200 legal versus version50 at 133/200 and 183/200, with 20 gains, six
+regressions, 54 versus 166 errors, and essentially unchanged tokens. It is statistically tied with
+historical version24's 145/200 and still uses 1.92x its tokens. This promotes version51 only as the
+frozen diagnostic baseline for version52+, not to SFT/RL.
+
+Version53 is the frozen reviewed-prompt control. It preserves version52's
+function schema, carrier, shared-pre-state validation, execution, state, history, feedback, and
+terminal behavior. The shared runtime kernel adds data-as-data, risk-triggered JOIN cardinality,
+copied-source versus derived-metric representation, correctness-first scheduling, and independent
+filters over distinct handles. Teacher-only rules cover trajectory generation; harness-only
+message mechanics are omitted. No live accuracy result or SFT/RL admission is claimed.
+
+Version54 is the active no-plan diagnostic. It keeps the exact version53 student runtime prompt,
+all eleven non-plan functions and argument schemas, carrier, execution, state, feedback, history,
+and terminal behavior. Only the native `plan` schema and its stale teacher-only evidence sentence
+are removed. The active gate is a v54-only absolute acceptance pilot on the first 200 tasks of the
+frozen teacher1500 training-candidate cohort, followed conditionally by its remaining 1,300 tasks;
+until it finishes, version54 has no live scale claim and remains ineligible for SFT/RL.
 
 ## Evaluation and causal rollout
 
@@ -60,6 +110,10 @@ PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
 
 PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
   .venv/bin/python src/eval/run_tool_scheme.py \
+  --tool-scheme native-tool-bundle -- <generate_teacher_rollouts.py arguments>
+
+PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
+  .venv/bin/python src/eval/run_tool_scheme.py \
   --tool-scheme action-block -- <action-block evaluator arguments>
 
 PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
@@ -68,7 +122,11 @@ PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
 
 PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
   .venv/bin/python src/eval/run_tool_scheme.py \
-  --tool-scheme direct-sql-search -- <iterative_sql.py arguments>
+  --tool-scheme direct-sql-search -- <sql_common/runner.py arguments>
+
+PYTHONPATH=src/harness:src/sft:src/eval:src/rl \
+  .venv/bin/python src/eval/run_tool_scheme.py \
+  --tool-scheme iterative-sql -- <sql_common/runner.py arguments>
 ```
 
 The active action-block diagnostic is `action-block-v35`. It keeps v34's short sequential
@@ -94,7 +152,9 @@ The matching causal generation entry is
 `src/sft/generate_tool_scheme_rollouts.py`. It dispatches to the original external-teacher loop for
 `atomic`, the real model↔harness action-block loop for `action-block`, and the separate
 model↔harness relational-program loop for `relational-program`. `direct-sql-search` dispatches to
-the causal iterative-SQL loop with its active interface pinned to `search-values-execute-sql-v2`.
+the causal iterative-SQL loop with its active interface pinned to `search-values-execute-sql-v2`;
+`iterative-sql` dispatches to the same execution runner with the distinct
+`execute-sql-submit-sql-v6` protocol.
 
 Every new episode and manifest records:
 
@@ -126,6 +186,55 @@ arms, 88 versus 115 actions, and 327,401 versus 854,227 tokens. It passed engine
 but failed the accuracy expansion threshold by four tasks. The only search call occurred in a
 failure. V2 therefore remains a low-token SQL control and has no accuracy promotion. See
 `docs/current/direct_sql_search_tool_scheme_zh.md`.
+
+## Iterative-SQL boundary
+
+The diagnostic `iterative-sql-v6` exposes exactly `execute_sql(sql)` and `submit_sql(sql)`.
+`execute_sql` runs one read-only SQLite query and returns a bounded factual preview without ending
+the episode. `submit_sql` accepts only `SELECT`/`WITH`, must match an exact previously successful
+`execute_sql` query after outer-whitespace/trailing-semicolon normalization, and executes the full
+result under the generated-query deadline. Syntax, safety, prior-inspection, timeout, and SQLite
+execution failures become structured, state-preserving `LAST SQL ERROR` feedback; the model may
+then issue another action in the same episode. A successfully executed submission is terminal and
+receives hidden `bird-set` scoring; an executable wrong answer receives no judge feedback.
+
+The active implementation restricts PRAGMA exploration to an allowlist of schema-inspection calls,
+rejects exact repeated successful exploration, uses one compact resident SQL state, and keeps gold
+SQL and verifier results outside model context. V4 repeats the exact task specification at the
+latest context boundary and adds a deterministic syntax-only query-shape audit. Its same-set
+development Gate15 scored 12/15 versus v3 7/15, with 15/15 legal termination, six gains, one
+regression, and all outcomes passing fresh replay/structure/no-hidden-input-key audit. Because v4
+was designed from those same 15 v3 failures, this is not an independent holdout or a training
+promotion. V5 keeps the public tools and execution state machine but clarifies evidence authority,
+bounded-preview limits, data-dependent finals, targeted exploration, and top-N ties; its audit adds
+syntax-only `has_from`/`literal_only_select` facts. On the active baseline300 frozen Prefix20, v5
+initially scored 14/20 versus v4 12/20. The completed Prefix50 scored 36/50 versus 34/50, with four
+gains, two regressions, exact paired `p=0.6875`, 49/50 versus 50/50 legal, 10 versus seven process
+errors, nearly identical actions, and 12.1% more tokens. Stop expansion; this does not change
+training admission or establish v5 as a reliable v4 replacement. Frozen v4/v3 and the older
+unregistered
+`execute_sql_submit_sql_v2` remain explicit reproduction paths. V6 changes only the model-visible
+output rule: every answer is a SQL relation, a scalar is 1x1, and multiple mapped fields remain
+separate ordered columns unless the task explicitly requests one formatted/combined string. It has
+since scored 12/20 versus v5 12/20 on the disjoint frozen tasks 51–70, with one gain, one regression,
+20/20 legal in both arms, and 2.8% more tokens. That slice contained no direct multi-field-name
+target or explicit-concatenation control, so it does not validate the target rule and provides no
+promotion evidence. A subsequent disjoint Target Gate20 directly sampled public multi-field
+mappings and controls: v6 scored 15/20 versus v5 10/20, with five gains, zero regressions, 20/20
+legal in both arms, 99 versus 111 actions, one versus six errors, and 8.5% fewer tokens. The six
+separate-field targets scored 5/6 versus 1/6. All replay/structure audits passed. However, the
+predeclared `field1+field2` anti-overseparation controls were invalid because the reference also
+required separate columns. V6 therefore passes only to a new representative paired gate and
+remains excluded from SFT/RL. See
+`docs/current/iterative_sql_tool_scheme_zh.md`.
+
+The completed v6-only baseline300 run reused the audited tasks 51–70 and requested the other 280
+episodes. It scored **215/300 (71.67%)** with **298/300 legal**, and all 300 records passed fresh
+replay/structure audit. Since tasks 1–70 were consumed by prior design or diagnostics, use the
+untouched tasks 71–300 as the primary generalization read: **168/230 (73.04%)**, **228/230 legal**.
+The two clean 115-task halves both scored 84/115. This run has no clean230 v5 arm and therefore
+establishes only v6 absolute behavior, not a causal v6-over-v5 or cross-scheme improvement. It does
+not change training admission.
 
 ## Sequential action-block boundary
 
@@ -211,7 +320,8 @@ Result directories must remain isolated by scheme.
 ## Relational-program boundary
 
 `relational-program-v6` is a separate diagnostic scheme implemented by
-`src/eval/relational_program_protocol.py` and `src/eval/evaluate_relational_program.py`. It does
+`src/tool_modules/relational_program/protocol.py` and
+`src/tool_modules/relational_program/evaluator.py`. It does
 not add raw SQL or merge the atomic and action-block prompts.
 
 The model-visible prompt is exclusive to three top-level tools: `observe`,
@@ -278,7 +388,7 @@ protocol.
 Atomic bounded-history SFT continues through `src/sft/build_rolling_sft_data.py`.
 
 Action-block bounded-history SFT is exported by
-`src/sft/build_action_block_sft_data.py`. It:
+`src/tool_modules/action_block/sft_export.py`. It:
 
 - requires the source episode to be explicitly marked `sft_export_eligible=true`;
 - requires `bird-set` and correct legal termination;
@@ -310,6 +420,10 @@ promotion; it must not reuse the action-block exporter by relabeling records.
 Direct-SQL-search diagnostics are also never SFT sources. They have distinct action semantics and
 an independent replay audit, and cannot be relabeled as atomic trajectories.
 
+Iterative-SQL v6 diagnostics are never SFT sources until a separate replay/no-leak audit and paired
+behavior gate explicitly open admission. They cannot be relabeled as direct-SQL-search or atomic
+trajectories.
+
 ## RL
 
 `src/rl/tool_environment.py::create_tool_use_env` constructs either:
@@ -323,6 +437,10 @@ enabled.
 
 There is no `direct-sql-search` RL environment. Its Gate16 failed the accuracy/legal comparison with
 atomic and provided no positive search-use signal.
+
+There is no `iterative-sql` RL environment. Version 6 currently establishes only the causal
+evaluation/teacher loop, recoverable submission contract, and a diagnostic-only full300 absolute
+result; it has no training admission.
 
 `group_reinforce.py --tool-scheme ...` can therefore run matched result-only training for the two
 RL-enabled schemes. Checkpoint metadata, rollout logs, and metrics include the scheme and scheme-specific

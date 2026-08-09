@@ -1,0 +1,4 @@
+model_or_system,base_and_training,evaluation_interface,correct,total,accuracy,valid,valid_rate,mean_steps,delta_correct_vs_omnisql_sft_after,delta_pp_vs_omnisql_sft_after
+OmniSQL before SFT,official OmniSQL Text-to-SQL weights,Direct SQL with full DDL column descriptions retrieved values and BIRD evidence,983,1534,0.6408083442,,,,194,12.6467
+OmniSQL after SFT,SFT1+SFT2 union trajectories epoch 4,atomic version36 greedy bird-set,789,1534,0.5143415906,1264,0.8239895698,9.4543676662,0,0
+Qwen2.5-Coder-7B SFT2,checkpoint-1682,atomic version36 greedy bird-set,762,1534,0.4967405476,1194,0.7783572360,8.3709256845,-27,-1.7601

@@ -1,0 +1,40 @@
+{
+  "schema_version": "routed-coupled-behavior-smoke-cohort-v1",
+  "indices": [
+    13,
+    14,
+    116,
+    213,
+    219,
+    250,
+    415,
+    446,
+    570,
+    746,
+    760,
+    773,
+    775,
+    946,
+    995,
+    1026,
+    1108,
+    1139,
+    1169,
+    1342,
+    1407,
+    1511,
+    1521,
+    1531
+  ],
+  "source_pool": "bird_dev_equal_difficulty300_seed20260729.indices.json",
+  "selection_method": "within each difficulty, Python random.Random(20260808).shuffle then first 8; final indices sorted",
+  "seed": 20260808,
+  "difficulty_quotas": {
+    "simple": 8,
+    "moderate": 8,
+    "challenging": 8
+  },
+  "selection_uses_model_outcomes": false,
+  "training_split": "BIRD-train",
+  "evaluation_split": "BIRD-dev"
+}

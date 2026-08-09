@@ -1,0 +1,7 @@
+{
+  "available": false,
+  "correct": null,
+  "total": 1534,
+  "rate": null,
+  "reason": "requires n_samples=1, temperature=0, top_p=1 for every record"
+}

@@ -1,0 +1,208 @@
+{
+  "schema_version": "routed-coupled-reward-smoke-v1",
+  "measurement": "exact frozen tokens; independent reset to SFT2 for each LR",
+  "train_example_indices": [
+    3044,
+    4050,
+    1626,
+    5040,
+    5027
+  ],
+  "retention_example_indices": [
+    4692
+  ],
+  "think_weight": 0.5,
+  "action_weight": 1.0,
+  "rank_coefficient": 0.0,
+  "negative_scales": [
+    0.5
+  ],
+  "negative_grad_ratio_cap": null,
+  "question_batch_size": 5,
+  "loss_normalization": "active_mean",
+  "routing": {
+    "positive": [
+      "correct_key_backslice",
+      "correct_key_evidence",
+      "correct_terminal"
+    ],
+    "negative": [
+      "severe_local_error"
+    ],
+    "neutral": [
+      "correct_other_clean",
+      "incorrect_other_clean"
+    ],
+    "normalization": "mean over routed-active transitions per question"
+  },
+  "train_categories": {
+    "correct_key_evidence": 8,
+    "correct_key_backslice": 22,
+    "correct_terminal": 8,
+    "incorrect_other_clean": 56,
+    "severe_local_error": 11,
+    "correct_other_clean": 3
+  },
+  "active_train_transitions": 49,
+  "retention_correct_transitions": 8,
+  "variants": [
+    {
+      "learning_rate": 4e-06,
+      "negative_scale": 0.5,
+      "negative_grad_ratio_cap": null,
+      "question_batch_size": 5,
+      "loss_normalization": "active_mean",
+      "weight_decay": 0.01,
+      "steps": [
+        {
+          "step": 1,
+          "example_index": null,
+          "example_indices": [
+            3044,
+            4050,
+            1626,
+            5040,
+            5027
+          ],
+          "question_batch_size": 5,
+          "loss_normalization": "active_mean",
+          "active_transitions": 49,
+          "positive_transitions": 38,
+          "negative_transitions": 11,
+          "negative_grad_ratio_cap": null,
+          "positive_grad_norm": null,
+          "negative_grad_norm": null,
+          "negative_grad_scale_applied": 1.0,
+          "loss": 0.004288485928555019,
+          "grad_norm_before_clip": 0.243247389793396,
+          "clip_triggered": false
+        }
+      ],
+      "raw_adapter_update_norm": 0.024937020584723715,
+      "raw_adapter_update_over_reference": 0.0006777265729253976,
+      "deltas": {
+        "active": {
+          "transitions": 57,
+          "think_mean_delta": 0.002875948488189463,
+          "think_mean_abs_delta": 0.006308698667245999,
+          "think_reward_aligned_fraction": 0.9473684210526315,
+          "think_decrease_fraction": 0.21052631578947367,
+          "action_mean_delta": 0.0011221035283836642,
+          "action_mean_abs_delta": 0.005454137264829721,
+          "action_reward_aligned_fraction": 0.7719298245614035,
+          "action_decrease_fraction": 0.3157894736842105,
+          "joint_mean_delta": 0.0025600781827642208,
+          "joint_mean_abs_delta": 0.008574751908319038,
+          "joint_reward_aligned_fraction": 0.9649122807017544,
+          "joint_decrease_fraction": 0.15789473684210525
+        },
+        "positive": {
+          "transitions": 46,
+          "think_mean_delta": 0.00560943336914415,
+          "think_mean_abs_delta": 0.005645247986135276,
+          "think_reward_aligned_fraction": 0.9565217391304348,
+          "think_decrease_fraction": 0.043478260869565216,
+          "action_mean_delta": 0.00405957152271264,
+          "action_mean_abs_delta": 0.004069683649415469,
+          "action_reward_aligned_fraction": 0.782608695652174,
+          "action_decrease_fraction": 0.21739130434782608,
+          "joint_mean_delta": 0.006864288011970727,
+          "joint_mean_abs_delta": 0.006864288011970727,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        },
+        "correct_key_evidence": {
+          "transitions": 10,
+          "think_mean_delta": 0.00288323312997818,
+          "think_mean_abs_delta": 0.00288323312997818,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 0.0,
+          "action_mean_delta": 2.1058104266558074e-06,
+          "action_mean_abs_delta": 1.1171870346515788e-05,
+          "action_reward_aligned_fraction": 0.6,
+          "action_decrease_fraction": 0.4,
+          "joint_mean_delta": 0.0014437228441238404,
+          "joint_mean_abs_delta": 0.0014437228441238404,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        },
+        "correct_key_backslice": {
+          "transitions": 26,
+          "think_mean_delta": 0.004216841278740993,
+          "think_mean_abs_delta": 0.004280205601109908,
+          "think_reward_aligned_fraction": 0.9230769230769231,
+          "think_decrease_fraction": 0.07692307692307693,
+          "action_mean_delta": 0.0009627984005559343,
+          "action_mean_abs_delta": 0.000977202140137916,
+          "action_reward_aligned_fraction": 0.7692307692307693,
+          "action_decrease_fraction": 0.23076923076923078,
+          "joint_mean_delta": 0.0030712188722995613,
+          "joint_mean_abs_delta": 0.0030712188722995613,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        },
+        "correct_terminal": {
+          "transitions": 10,
+          "think_mean_delta": 0.011956373043358327,
+          "think_mean_abs_delta": 0.011956373043358327,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 0.0,
+          "action_mean_delta": 0.016168647352606057,
+          "action_mean_abs_delta": 0.016168647352606057,
+          "action_reward_aligned_fraction": 1.0,
+          "action_decrease_fraction": 0.0,
+          "joint_mean_delta": 0.022146832942962647,
+          "joint_mean_abs_delta": 0.022146832942962647,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        },
+        "negative": {
+          "transitions": 11,
+          "think_mean_delta": -0.008554988286711952,
+          "think_mean_abs_delta": 0.009083128788254478,
+          "think_reward_aligned_fraction": 0.9090909090909091,
+          "think_decrease_fraction": 0.9090909090909091,
+          "action_mean_delta": -0.011161853538810234,
+          "action_mean_abs_delta": 0.011243670565652958,
+          "action_reward_aligned_fraction": 0.7272727272727273,
+          "action_decrease_fraction": 0.7272727272727273,
+          "joint_mean_delta": -0.01543934473937208,
+          "joint_mean_abs_delta": 0.015727600929411976,
+          "joint_reward_aligned_fraction": 0.8181818181818182,
+          "joint_decrease_fraction": 0.8181818181818182
+        },
+        "severe_local_error": {
+          "transitions": 11,
+          "think_mean_delta": -0.008554988286711952,
+          "think_mean_abs_delta": 0.009083128788254478,
+          "think_reward_aligned_fraction": 0.9090909090909091,
+          "think_decrease_fraction": 0.9090909090909091,
+          "action_mean_delta": -0.011161853538810234,
+          "action_mean_abs_delta": 0.011243670565652958,
+          "action_reward_aligned_fraction": 0.7272727272727273,
+          "action_decrease_fraction": 0.7272727272727273,
+          "joint_mean_delta": -0.01543934473937208,
+          "joint_mean_abs_delta": 0.015727600929411976,
+          "joint_reward_aligned_fraction": 0.8181818181818182,
+          "joint_decrease_fraction": 0.8181818181818182
+        },
+        "retention_correct": {
+          "transitions": 8,
+          "think_mean_delta": 0.002369401976466179,
+          "think_mean_abs_delta": 0.0025753360241651535,
+          "think_reward_aligned_fraction": 0.75,
+          "think_decrease_fraction": 0.25,
+          "action_mean_delta": 0.006352076998155098,
+          "action_mean_abs_delta": 0.006352076998155098,
+          "action_reward_aligned_fraction": 1.0,
+          "action_decrease_fraction": 0.0,
+          "joint_mean_delta": 0.00753677636384964,
+          "joint_mean_abs_delta": 0.00753677636384964,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        }
+      },
+      "adapter_dir": "/home/dengyan/tabular_rl_outputs/diagnostics/routed_coupled_balance_smoke_20260808/qbatch5_active_mean_adapters/lr_4e-06_neg_0p5_qbatch_5"
+    }
+  ]
+}

@@ -26,6 +26,7 @@ from typing import Literal
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(ROOT, "src"))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "src", "harness"))
 sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
@@ -73,7 +74,7 @@ from rollout import (  # noqa: E402
     task_gold_sql,
     validate_tool_arguments_against_state,
 )
-from tool_schemes import (  # noqa: E402
+from tool_modules.registry import (  # noqa: E402
     ATOMIC_ASSISTANT_CARRIER,
     ATOMIC_TOOL_SCHEME,
     TOOL_SCHEME_REGISTRY_VERSION,

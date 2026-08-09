@@ -3,6 +3,14 @@
 Local React dashboard for browsing tabular-agent training data, training curves, evaluation cases,
 and testing a served model through an OpenAI-compatible vLLM endpoint.
 
+The default **研究总览** page consolidates the 2026-07-23 to 2026-08-05 evidence set: comparable
+full BIRD-dev SFT/RL scores, paired gains and regressions, teacher-union supervision efficiency,
+fixed-200 atomic/native results, diagnostic cohorts, the complete Exp0–Exp18 / teacher-union RL
+method lineage with primary-paper provenance, and a searchable index of every local and `table_rl`
+artifact path. Formal metrics live in `data/research_summary.json`; artifact paths are
+extracted from the audited two-week Markdown index so the frontend does not maintain a second path
+inventory.
+
 The overview includes both complete Qwen2.5-7B baselines:
 
 - zero-shot direct SQL: the answer-quality reference;
@@ -80,6 +88,9 @@ The Python server serves `frontend/dist` at `http://127.0.0.1:8787`.
 ## Data sources
 
 - `data/experiments.json`: editable experiment registry.
+- `data/research_summary.json`: structured cross-experiment metrics for the research overview.
+- `docs/reports/TWO_WEEK_EXPERIMENT_DATA_INDEX_20260723_20260805_ZH.md`: complete artifact index
+  consumed by `/api/research-summary`.
 - `data/trainer_states/*.json`: local snapshots of LLaMA-Factory `trainer_state.json`.
 - Repository `data/sft/*.jsonl`: training examples.
 - Repository `data/results/**`: evaluation manifests and success/failure cases.

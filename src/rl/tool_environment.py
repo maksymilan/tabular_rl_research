@@ -22,6 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "src", "eval"))
 sys.path.insert(0, os.path.join(ROOT, "src", "harness"))
 sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
+sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from executor import Harness  # noqa: E402
 from protocol import (  # noqa: E402
@@ -47,7 +48,7 @@ from rollout import (  # noqa: E402
     task_gold_sql,
     validate_tool_arguments_against_state,
 )
-from batch_plan_protocol import (  # noqa: E402
+from tool_modules.action_block.protocol import (  # noqa: E402
     BATCH_PLAN_TOOL,
     TERMINAL_TOOL,
     build_sequential_messages,
@@ -58,13 +59,13 @@ from batch_plan_protocol import (  # noqa: E402
     render_sequential_observation,
     validate_sequential_atomic_call,
 )
-from evaluate_batch_plan import (  # noqa: E402
+from tool_modules.action_block.evaluator import (  # noqa: E402
     _error_event as batch_error_event,
     _error_type as batch_error_type,
     _execute_action_block,
     _top_level_error_message,
 )
-from tool_schemes import (  # noqa: E402
+from tool_modules.registry import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
     TOOL_SCHEME_REGISTRY_VERSION,

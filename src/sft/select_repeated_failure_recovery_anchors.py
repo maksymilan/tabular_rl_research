@@ -21,12 +21,16 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
 from protocol import PROTOCOL_VERSION
-from tool_schemes import ATOMIC_TOOL_SCHEME
+from tool_modules.registry import ATOMIC_TOOL_SCHEME
 
 
 INFRASTRUCTURE_FAILURE_TYPES = {

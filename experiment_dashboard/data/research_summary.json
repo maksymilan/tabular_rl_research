@@ -1,0 +1,588 @@
+{
+  "schema_version": "two-week-research-summary-v1",
+  "title": "Tabular RL 两周实验总览",
+  "period": {
+    "start": "2026-07-23",
+    "end": "2026-08-05",
+    "updated": "2026-08-05"
+  },
+  "source_index": "docs/reports/TWO_WEEK_EXPERIMENT_DATA_INDEX_20260723_20260805_ZH.md",
+  "evaluation_contract": "BIRD-dev 1534 · greedy@1 · temperature=0 · top_p=1 · version36 · bird-set · max_steps=30",
+  "headline": {
+    "best_full_dev_run": "Teacher-union 60",
+    "best_full_dev_correct": 785,
+    "best_full_dev_total": 1534,
+    "sft2_correct": 762,
+    "strict120_correct": 765,
+    "native_forward_baseline": "version51 native-tool-bundle",
+    "native_forward_correct": 147,
+    "native_forward_total": 200
+  },
+  "direct_sql_runs": [
+    {
+      "id": "coder-direct-greedy",
+      "label": "Coder-7B Direct SQL greedy",
+      "k": 1,
+      "correct": 748,
+      "total": 1534,
+      "accuracy": 0.487614,
+      "result_path": "data/results/qwen2.5_coder_7b_bird_direct_sql_base_greedy_rp105_dev1534_bird_ex/",
+      "report_path": "docs/reports/evaluation/BIRD_QWEN25_CODER_7B_DIRECT_SQL_BASELINE_20260723.md"
+    },
+    {
+      "id": "coder-direct-k4-pass1",
+      "label": "Coder-7B Direct SQL sampled pass@1",
+      "k": 1,
+      "correct": 727,
+      "total": 1534,
+      "accuracy": 0.473925,
+      "result_path": "data/results/qwen2.5_coder_7b_bird_direct_sql_base_passk4_rp105_dev1534_bird_ex/",
+      "report_path": "docs/reports/evaluation/BIRD_QWEN25_CODER_7B_DIRECT_SQL_BASELINE_20260723.md"
+    },
+    {
+      "id": "coder-direct-k4-pass2",
+      "label": "Coder-7B Direct SQL sampled pass@2",
+      "k": 2,
+      "correct": 820,
+      "total": 1534,
+      "accuracy": 0.53455,
+      "result_path": "data/results/qwen2.5_coder_7b_bird_direct_sql_base_passk4_rp105_dev1534_bird_ex/",
+      "report_path": "docs/reports/evaluation/BIRD_QWEN25_CODER_7B_DIRECT_SQL_BASELINE_20260723.md"
+    },
+    {
+      "id": "coder-direct-k4-pass4",
+      "label": "Coder-7B Direct SQL sampled pass@4",
+      "k": 4,
+      "correct": 904,
+      "total": 1534,
+      "accuracy": 0.589309,
+      "result_path": "data/results/qwen2.5_coder_7b_bird_direct_sql_base_passk4_rp105_dev1534_bird_ex/",
+      "report_path": "docs/reports/evaluation/BIRD_QWEN25_CODER_7B_DIRECT_SQL_BASELINE_20260723.md"
+    }
+  ],
+  "coder_tool_sft_runs": [
+    {
+      "id": "coder-tool-sft-greedy",
+      "label": "Coder-7B Tool SFT greedy",
+      "name": "greedy",
+      "correct": 734,
+      "total": 1534,
+      "accuracy": 0.4784876141,
+      "result_path": "data/results/qwen25_coder7b_raw_json_cp560_tool_dev1534_greedy1_bird_official_ex_rescore/",
+      "report_path": "docs/reports/evaluation/BIRD_CP560_OFFICIAL_EX_ALIGNMENT_AUDIT_20260727_ZH.md"
+    },
+    {
+      "id": "coder-tool-sft-k4-pass1",
+      "label": "Coder-7B Tool SFT sampled pass@1",
+      "name": "pass@1",
+      "correct": 778,
+      "total": 1534,
+      "accuracy": 0.5071707953,
+      "result_path": "data/results/qwen25_coder7b_raw_json_cp560_tool_dev1534_passk4_bird_official_ex_rescore/",
+      "report_path": "docs/reports/evaluation/BIRD_CP560_OFFICIAL_EX_ALIGNMENT_AUDIT_20260727_ZH.md"
+    },
+    {
+      "id": "coder-tool-sft-k4-pass2",
+      "label": "Coder-7B Tool SFT sampled pass@2",
+      "name": "pass@2",
+      "correct": 924,
+      "total": 1534,
+      "accuracy": 0.6023468057,
+      "result_path": "data/results/qwen25_coder7b_raw_json_cp560_tool_dev1534_passk4_bird_official_ex_rescore/",
+      "report_path": "docs/reports/evaluation/BIRD_CP560_OFFICIAL_EX_ALIGNMENT_AUDIT_20260727_ZH.md"
+    },
+    {
+      "id": "coder-tool-sft-k4-pass4",
+      "label": "Coder-7B Tool SFT sampled pass@4",
+      "name": "pass@4",
+      "correct": 1033,
+      "total": 1534,
+      "accuracy": 0.6734028683,
+      "result_path": "data/results/qwen25_coder7b_raw_json_cp560_tool_dev1534_passk4_bird_official_ex_rescore/",
+      "report_path": "docs/reports/evaluation/BIRD_CP560_OFFICIAL_EX_ALIGNMENT_AUDIT_20260727_ZH.md"
+    }
+  ],
+  "omnisql_comparison": {
+    "dataset": "BIRD-dev",
+    "total": 1534,
+    "greedy": [
+      {
+        "id": "omnisql-before-sft",
+        "label": "OmniSQL SFT 前",
+        "model": "OmniSQL-7B",
+        "training": "官方 OmniSQL Text-to-SQL 权重",
+        "interface": "Direct SQL",
+        "protocol": "官方完整 DDL、列描述、检索值、BIRD evidence · greedy",
+        "correct": 983,
+        "total": 1534,
+        "accuracy": 0.6408083442,
+        "valid": null,
+        "average_steps": null
+      },
+      {
+        "id": "omnisql-after-sft",
+        "label": "OmniSQL SFT 后",
+        "model": "OmniSQL-7B",
+        "training": "SFT1+SFT2 union · epoch 4",
+        "interface": "Atomic tools",
+        "protocol": "version36 · temperature=0 · top_p=1 · n=1 · bird-set",
+        "correct": 789,
+        "total": 1534,
+        "accuracy": 0.5143415906,
+        "valid": 1264,
+        "average_steps": 9.4543676662
+      },
+      {
+        "id": "sft2-checkpoint-1682",
+        "label": "SFT2",
+        "model": "Qwen2.5-Coder-7B",
+        "training": "SFT2 checkpoint-1682",
+        "interface": "Atomic tools",
+        "protocol": "version36 · temperature=0 · top_p=1 · n=1 · bird-set",
+        "correct": 762,
+        "total": 1534,
+        "accuracy": 0.4967405476,
+        "valid": 1194,
+        "average_steps": 8.3709256845
+      }
+    ],
+    "paired": [
+      {
+        "reference": "OmniSQL SFT 前 Direct SQL",
+        "both_correct": 701,
+        "omnisql_after_only": 88,
+        "reference_only": 282,
+        "both_wrong": 463,
+        "net_correct": -194,
+        "delta_pp": -12.64667536
+      },
+      {
+        "reference": "SFT2 checkpoint-1682",
+        "both_correct": 640,
+        "omnisql_after_only": 149,
+        "reference_only": 122,
+        "both_wrong": 623,
+        "net_correct": 27,
+        "delta_pp": 1.760104302
+      }
+    ],
+    "greedy_failure_types": [
+      {"failure_type": "correct", "omnisql_after_sft": 789, "sft2": 762},
+      {"failure_type": "wrong_answer", "omnisql_after_sft": 475, "sft2": 432},
+      {"failure_type": "max_steps", "omnisql_after_sft": 151, "sft2": 100},
+      {"failure_type": "protocol_error", "omnisql_after_sft": 60, "sft2": 178},
+      {"failure_type": "context_overflow", "omnisql_after_sft": 31, "sft2": 13},
+      {"failure_type": "argument_validation_error", "omnisql_after_sft": 23, "sft2": 43},
+      {"failure_type": "execution_error", "omnisql_after_sft": 5, "sft2": 6}
+    ],
+    "pass_k": [
+      {
+        "id": "omnisql-after-sft-version36",
+        "label": "OmniSQL SFT 后",
+        "protocol": "version36 · temperature=0.7 · top_p=0.95 · n=4 · bird-set",
+        "pass_at": {
+          "1": {"correct": 817, "total": 1534, "accuracy": 0.5325945241},
+          "2": {"correct": 946, "total": 1534, "accuracy": 0.6166883963},
+          "4": {"correct": 1033, "total": 1534, "accuracy": 0.6734028683}
+        },
+        "sample_valid": 5297,
+        "sample_total": 6136,
+        "sample_valid_rate": 0.8632659713,
+        "average_steps": 8.5840938722
+      },
+      {
+        "id": "qwen25-coder-checkpoint-560-historical",
+        "label": "Qwen2.5-Coder-7B checkpoint-560（历史）",
+        "protocol": "历史 atomic K=4 artifact · strict official EX 重评分",
+        "pass_at": {
+          "1": {"correct": 778, "total": 1534, "accuracy": 0.5071707953},
+          "2": {"correct": 924, "total": 1534, "accuracy": 0.6023468057},
+          "4": {"correct": 1033, "total": 1534, "accuracy": 0.6734028683}
+        },
+        "sample_valid": null,
+        "sample_total": null,
+        "sample_valid_rate": null,
+        "average_steps": null
+      }
+    ]
+  },
+  "full_dev_runs": [
+    {
+      "id": "sft2",
+      "label": "SFT2",
+      "method": "checkpoint-1682 对照",
+      "training_tasks": 0,
+      "correct": 762,
+      "total": 1534,
+      "accuracy": 0.496741,
+      "valid": 1194,
+      "average_steps": 8.371,
+      "status": "baseline"
+    },
+    {
+      "id": "exp12",
+      "label": "Exp12",
+      "method": "fixed process-only",
+      "training_tasks": 60,
+      "correct": 761,
+      "total": 1534,
+      "accuracy": 0.496089,
+      "valid": 1205,
+      "average_steps": 8.216,
+      "status": "completed"
+    },
+    {
+      "id": "exp13",
+      "label": "Exp13",
+      "method": "rank-only action-mean",
+      "training_tasks": 60,
+      "correct": 762,
+      "total": 1534,
+      "accuracy": 0.496741,
+      "valid": 1189,
+      "average_steps": 8.475,
+      "status": "completed"
+    },
+    {
+      "id": "exp14",
+      "label": "Exp14",
+      "method": "process + rank action-mean",
+      "training_tasks": 60,
+      "correct": 771,
+      "total": 1534,
+      "accuracy": 0.502608,
+      "valid": 1207,
+      "average_steps": 8.188,
+      "status": "completed"
+    },
+    {
+      "id": "exp15",
+      "label": "Exp15",
+      "method": "fixed-prefix Action-DPO",
+      "training_tasks": 32,
+      "correct": 776,
+      "total": 1534,
+      "accuracy": 0.505867,
+      "valid": 1208,
+      "average_steps": 8.61,
+      "status": "completed"
+    },
+    {
+      "id": "exp16",
+      "label": "Exp16",
+      "method": "dense uniform full-response",
+      "training_tasks": 60,
+      "correct": 764,
+      "total": 1534,
+      "accuracy": 0.498045,
+      "valid": 1222,
+      "average_steps": 8.106,
+      "status": "completed"
+    },
+    {
+      "id": "exp17",
+      "label": "Exp17",
+      "method": "dense strategic / backslice",
+      "training_tasks": 60,
+      "correct": 760,
+      "total": 1534,
+      "accuracy": 0.495437,
+      "valid": 1199,
+      "average_steps": 8.286,
+      "status": "completed"
+    },
+    {
+      "id": "exp18",
+      "label": "Exp18 seed202",
+      "method": "dense uniform scale120（单 seed）",
+      "training_tasks": 120,
+      "correct": 764,
+      "total": 1534,
+      "accuracy": 0.498045,
+      "valid": 1196,
+      "average_steps": 8.396,
+      "status": "exploratory"
+    },
+    {
+      "id": "union60",
+      "label": "Teacher-union 60",
+      "method": "SFT2+Exp15 MOPD + repair DPO",
+      "training_tasks": 60,
+      "correct": 785,
+      "total": 1534,
+      "accuracy": 0.511734,
+      "valid": 1237,
+      "average_steps": 8.306,
+      "status": "best"
+    },
+    {
+      "id": "strict120",
+      "label": "Teacher-union strict120",
+      "method": "task-balanced multi-repair v2",
+      "training_tasks": 120,
+      "correct": 765,
+      "total": 1534,
+      "accuracy": 0.498696,
+      "valid": 1208,
+      "average_steps": 8.296,
+      "status": "completed"
+    }
+  ],
+  "paired_comparisons": [
+    {
+      "label": "union60 vs SFT2",
+      "gains": 87,
+      "regressions": 64,
+      "net": 23,
+      "exact_p": 0.07305
+    },
+    {
+      "label": "strict120 vs SFT2",
+      "gains": 78,
+      "regressions": 75,
+      "net": 3,
+      "exact_p": 0.87162
+    },
+    {
+      "label": "strict120 vs union60",
+      "gains": 62,
+      "regressions": 82,
+      "net": -20,
+      "exact_p": 0.11303
+    }
+  ],
+  "supervision_runs": [
+    {
+      "id": "union60",
+      "label": "Union 60",
+      "questions": 60,
+      "student_correct": 42,
+      "student_failed": 18,
+      "dense_teacher_tasks": 45,
+      "repair_generated": 496,
+      "repair_legal": 446,
+      "repair_correct": 137,
+      "strong_dpo_tasks": 11,
+      "weak_repair_tasks": 1,
+      "no_repair_tasks": 6,
+      "optimizer_updates": 30,
+      "active_policy_tokens": 8285,
+      "mean_dense_advantage": -0.0000773
+    },
+    {
+      "id": "strict120",
+      "label": "Strict 120",
+      "questions": 120,
+      "student_correct": 88,
+      "student_failed": 32,
+      "dense_teacher_tasks": 90,
+      "repair_generated": 864,
+      "repair_legal": 742,
+      "repair_correct": 124,
+      "strong_dpo_tasks": 10,
+      "weak_repair_tasks": 11,
+      "no_repair_tasks": 11,
+      "optimizer_updates": 53,
+      "active_policy_tokens": 16110,
+      "mean_dense_advantage": -0.0001817
+    }
+  ],
+  "rl_method_families": [
+    {
+      "id": "policy-gradient",
+      "label": "REINFORCE / clipped policy-gradient 优化骨架",
+      "experiments": ["simple-process pilot", "Exp1–2", "Exp3–12", "Exp14", "Exp16–18"],
+      "signal": "Exp1 使用 K=4 group-relative advantage + PPO clipping；Process 系列直接以 turn reward 为 advantage，再做 PPO clipping；早期 Accelerate 路径使用 REINFORCE。",
+      "credit": "trajectory 或 assistant turn → response token",
+      "provenance": "直接算法来源",
+      "paper_ids": ["reinforce", "ppo", "grpo"],
+      "result": "Result-only Exp1 的 equal-300 pass@1/pass@4 为 41.33%/58.33%；SFT2 为 42.33%/55.67%。"
+    },
+    {
+      "id": "result-only",
+      "label": "终局二值 Result-only",
+      "experiments": ["Exp1"],
+      "signal": "terminal denotation 正确为 1，否则为 0；不加过程、长度或错误 shaping。",
+      "credit": "一个 episode advantage 施加到全部生成 turn",
+      "provenance": "论文优化器 + 项目 reward",
+      "paper_ids": ["ppo", "grpo"],
+      "result": "相对 SFT2：pass@1 42.33%→41.33%，pass@4 55.67%→58.33%。"
+    },
+    {
+      "id": "process-credit",
+      "label": "Replay-grounded Process-RL",
+      "experiments": ["Exp2–4", "Exp6–7", "Exp12", "Exp5/8–11/14 的 process 分支"],
+      "signal": "harness 重放得到 BackSlice、search reduction 与确定性 error/repeat/no-op 局部惩罚。",
+      "credit": "执行事件 → authored assistant turn",
+      "provenance": "过程监督启发 + 项目特有实现",
+      "paper_ids": ["process-outcome", "verify-step", "program-slicing"],
+      "result": "Exp2/3/4/6/7 的 pass@1 分别为 37.67%/38.67%/40.33%/40.00%/42.00%；full-dev Exp12 为 761/1534。"
+    },
+    {
+      "id": "trajectory-rank",
+      "label": "Reference-free Trajectory Rank",
+      "experiments": ["Exp5", "Exp8–11", "Exp13–14"],
+      "signal": "同题 K=4 correct×incorrect pair 的 response/action logprob 排序；逐步加入 action-only、conservative mask 与 action-mean。",
+      "credit": "sequence pair → selected response/action token",
+      "provenance": "RRHF / SimPO 近邻，不是 DPO",
+      "paper_ids": ["rrhf", "simpo"],
+      "result": "Exp5 pass@1/pass@4 为 44.67%/56.67%；full-dev Exp13 为 762/1534，Exp14 为 771/1534。"
+    },
+    {
+      "id": "action-dpo",
+      "label": "Exact-prefix Action-DPO",
+      "experiments": ["Exp15"],
+      "signal": "同一精确 resident-state prefix 下，verified-correct suffix 优于 student-wrong suffix；包含 frozen SFT2 reference correction。",
+      "credit": "same-prefix chosen/rejected suffix pair",
+      "provenance": "DPO 直接目标 + 项目数据构造",
+      "paper_ids": ["dpo"],
+      "result": "776/1534，相对 SFT2 为 +14；该 checkpoint 后续作为 teacher-union 的第二个冻结教师。"
+    },
+    {
+      "id": "dense-outcome",
+      "label": "Offline Dense Outcome Shaping",
+      "experiments": ["Exp16", "Exp17", "Exp18"],
+      "signal": "正确 clean legal action +1、错误 clean legal −0.5、确定性坏动作 −2；strategic 版再加 evidence/BackSlice bonus。",
+      "credit": "固定轨迹池内每个 authored action",
+      "provenance": "项目特有组合",
+      "paper_ids": ["process-outcome", "rrhf"],
+      "result": "Exp16/17/18 分别为 764/1534、760/1534、764/1534；训练题数分别为 60、60、120。"
+    },
+    {
+      "id": "teacher-union",
+      "label": "Streaming Multi-teacher OPD + Repair DPO",
+      "experiments": ["Teacher-union 60", "Strict120"],
+      "signal": "当前 student rollout 上，冻结 SFT2/Exp15 计算 token-level logprob 差；失败轨迹并行生成四锚点 repair，再做 verified same-prefix DPO。",
+      "credit": "action token dense signal + branch-level preference",
+      "provenance": "GKD / MiniLLM / MOPD + DPO 的项目化融合",
+      "paper_ids": ["gkd", "minillm", "mopd", "dpo"],
+      "result": "Union60 为 785/1534，vs SFT2 exact paired p=0.073；Strict120 为 765/1534，p=0.872。"
+    }
+  ],
+  "rl_implementation_note": {
+    "title": "PPO / GRPO 实际口径",
+    "exp1": "Exp1：K=4 terminal reward 组内标准化形成 GRPO-style advantage，再使用 epsilon=0.2 的 tokenwise PPO-clipped surrogate。",
+    "process": "Exp3–12、Exp14、Exp16–18：每个 turn 的 harness step reward 直接作为 advantage；仍使用 PPO clipping，但没有 value critic、GAE 或 group-relative normalization，因此不是标准 PPO，也不是标准 GRPO。",
+    "other": "Exp2 是历史 REINFORCE-style；Exp13 是 Rank-only；Exp15 是 Action-DPO；Union60/Strict120 是 OPD + repair DPO。",
+    "rank": "Rank：同题 K=4 全部 correct×incorrect trajectory pair 的 reference-free softplus loss，lambda=0.5、beta=0.1；它不是评测 reranker，也不是 DPO。"
+  },
+  "rl_experiments": [
+    {"id": "Exp0", "method": "SFT2 对照", "algorithm": "无 RL", "training": "0 题 / 0 step", "optimization": "—", "change": "checkpoint-1682", "scope": "equal-300 K=4", "result": "pass@1 42.33% · pass@4 55.67%", "comparison": "初始化基线"},
+    {"id": "Exp1", "method": "Result-only", "algorithm": "GRPO-style group advantage + PPO clip", "training": "online 23题×K4 / 23 step", "optimization": "AdamW 1e-6 · clip .2 · KL0 · cosine", "change": "terminal {0,1} · all response", "scope": "equal-300 K=4", "result": "41.33% · 58.33%", "comparison": "vs Exp0: −1.00 pp · +2.66 pp"},
+    {"id": "Exp2", "method": "历史 Process-RL", "algorithm": "Accelerate REINFORCE-style", "training": "online 23题×K4 / 23 step", "optimization": "AdamW 1e-6 · 无 PPO clip · 3次 grad OOM", "change": "BackSlice + search reduction + 局部惩罚", "scope": "equal-300 K=4", "result": "37.67% · 55.33%", "comparison": "vs Exp0: −4.66 pp · −0.34 pp"},
+    {"id": "Exp3", "method": "NoBackSlice", "algorithm": "turn-reward PPO-clipped PG", "training": "online 23题×K4 / 23 step", "optimization": "AdamW 1e-6 · clip .2 · KL0 · cosine", "change": "w_back_slice 1→0 · all response", "scope": "equal-300 K=4", "result": "38.67% · 52.67%", "comparison": "vs Exp2: +1.00 pp · −2.66 pp"},
+    {"id": "Exp4", "method": "ToolOnly", "algorithm": "turn-reward PPO-clipped PG", "training": "online 23题×K4 / 23 step", "optimization": "AdamW 1e-6 · clip .2 · KL0 · cosine", "change": "process 只训练 JSON action token", "scope": "equal-300 K=4", "result": "40.33% · 56.00%", "comparison": "vs Exp3: +1.66 pp · +3.33 pp"},
+    {"id": "Exp5", "method": "Trajectory Rank", "algorithm": "clipped process PG + Rank", "training": "online 23题×K4 / 23 step", "optimization": "AdamW 1e-6 · Rank λ.5 β.1", "change": "all-token sum score/update", "scope": "equal-300 K=4", "result": "44.67% · 56.67%", "comparison": "vs Exp3: +6.00 pp · +4.00 pp"},
+    {"id": "Exp6", "method": "NoNormalize", "algorithm": "turn-reward PPO-clipped PG", "training": "online 23题×K4 / 23 step", "optimization": "AdamW 1e-6 · clip .2 · KL0 · cosine", "change": "取消 positive mass 归一化", "scope": "equal-300 K=4", "result": "40.00% · 56.67%", "comparison": "vs Exp0: −2.33 pp · +1.00 pp"},
+    {"id": "Exp7", "method": "StrongPenalty", "algorithm": "turn-reward PPO-clipped PG", "training": "online 23题×K4 / 23 step", "optimization": "AdamW 1e-6 · clip .2 · KL0 · cosine", "change": "确定性局部惩罚 ×3", "scope": "equal-300 K=4", "result": "42.00% · 57.33%", "comparison": "vs Exp0: −0.33 pp · +1.66 pp"},
+    {"id": "Exp8", "method": "ActionOnlyRank", "algorithm": "clipped process PG + Rank", "training": "online 23题×K4 / 23 step", "optimization": "AdamW 1e-6 · Rank λ.5 β.1", "change": "action-token sum score/full update", "scope": "equal-300 K=4", "result": "42.67% · 59.00%", "comparison": "vs Exp0: +0.34 pp · +3.33 pp"},
+    {"id": "Exp9", "method": "Conservative Rank", "algorithm": "clipped process PG + Rank", "training": "online 23题×K4 / 23 step", "optimization": "AdamW 1e-6 · Rank λ.5 β.1", "change": "full score / conservative update", "scope": "equal-300 K=4", "result": "41.00% · 55.33%", "comparison": "vs Exp0: −1.33 pp · −0.34 pp"},
+    {"id": "Exp10", "method": "Score-masked Rank", "algorithm": "clipped process PG + Rank", "training": "online 23题×K4 / 23 step", "optimization": "AdamW 1e-6 · Rank λ.5 β.1", "change": "conservative score+update · sum", "scope": "equal-300 K=4", "result": "44.33% · 56.33%", "comparison": "vs Exp9: +3.33 pp · +1.00 pp"},
+    {"id": "Exp11", "method": "Action-mean Rank", "algorithm": "clipped process PG + Rank", "training": "online 23题×K4 / 23 step", "optimization": "AdamW 1e-6 · Rank λ.5 β.1", "change": "conservative · token→action→trajectory mean", "scope": "训练完成", "result": "grad norm 17.125→0.539", "comparison": "正式报告未列最终 K=4 排名"},
+    {"id": "Exp12", "method": "Fixed process-only", "algorithm": "offline PPO-clipped process", "training": "fixed 60题×K4 / 60 step", "optimization": "AdamW 1e-6 · clip .2 · KL0 · constant", "change": "NoBackSlice · action-only", "scope": "full-dev1534", "result": "761/1534", "comparison": "vs SFT2: −1"},
+    {"id": "Exp13", "method": "Rank-only action-mean", "algorithm": "reference-free Rank-only", "training": "fixed 60题×K4 / 60 step", "optimization": "AdamW 1e-6 · policy coeff0 · Rank λ.5 β.1", "change": "action-only · conservative · mean-action", "scope": "full-dev1534", "result": "762/1534", "comparison": "vs SFT2: 0"},
+    {"id": "Exp14", "method": "Process + Rank", "algorithm": "offline clipped process + Rank", "training": "fixed 60题×K4 / 60 step", "optimization": "AdamW 1e-6 · clip .2 · Rank λ.5 β.1", "change": "action-only conservative mean-action", "scope": "full-dev1534", "result": "771/1534", "comparison": "vs SFT2: +9"},
+    {"id": "Exp15", "method": "Action-DPO", "algorithm": "exact-prefix DPO", "training": "32题 / 36 pair / 32 step", "optimization": "AdamW 1e-6 · β.1 · grad clip1", "change": "tool-token only · frozen SFT2 reference", "scope": "full-dev1534", "result": "776/1534", "comparison": "vs SFT2: +14"},
+    {"id": "Exp16", "method": "Dense uniform", "algorithm": "offline clipped dense + Rank", "training": "fixed 60题×K4 / 60 step", "optimization": "AdamW 1e-6 · clip .2 · Rank λ.5 β.1", "change": "all-response · +1/−.5/−2 · mean-action", "scope": "full-dev1534", "result": "764/1534", "comparison": "vs SFT2: +2"},
+    {"id": "Exp17", "method": "Dense strategic", "algorithm": "offline clipped dense + Rank", "training": "fixed 60题×K4 / 60 step", "optimization": "AdamW 1e-6 · clip .2 · Rank λ.5 β.1", "change": "Exp16 + evidence/BackSlice +.5", "scope": "full-dev1534", "result": "760/1534", "comparison": "vs SFT2: −2"},
+    {"id": "Exp18", "method": "Dense scale120", "algorithm": "offline clipped dense + Rank", "training": "fixed 120题×K4 / 120 step", "optimization": "AdamW 1e-6 · clip .2 · Rank λ.5 β.1 · seed202", "change": "Exp16 uniform 扩至 120", "scope": "full-dev1534", "result": "764/1534", "comparison": "vs SFT2: +2"},
+    {"id": "Union60", "method": "MOPD + repair DPO", "algorithm": "streaming OPD + DPO", "training": "60题 · batch2 / 30 step", "optimization": "AdamW 1e-6 · adv clip5 · repair β.1 λ1", "change": "SFT2+Exp15 teacher · four anchors · seed101", "scope": "full-dev1534", "result": "785/1534 · p=0.073", "comparison": "vs SFT2: +23"},
+    {"id": "Strict120", "method": "Task-balanced multi-repair v2", "algorithm": "streaming OPD + DPO v2", "training": "120题 · batch2 / 60 batch / 53 step", "optimization": "AdamW 1e-6 · adv clip5 · repair β.1 λ1", "change": "最多2 positive/group · seed120", "scope": "full-dev1534", "result": "765/1534 · p=0.872", "comparison": "vs SFT2: +3"}
+  ],
+  "rl_papers": [
+    {"id": "reinforce", "year": 1992, "title": "Simple Statistical Gradient-Following Algorithms for Connectionist Reinforcement Learning", "short": "REINFORCE", "url": "https://doi.org/10.1007/BF00992696", "relation": "早期单卡 policy-gradient backend"},
+    {"id": "ppo", "year": 2017, "title": "Proximal Policy Optimization Algorithms", "short": "PPO", "url": "https://arxiv.org/abs/1707.06347", "relation": "TRL tokenwise clipped objective"},
+    {"id": "grpo", "year": 2024, "title": "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models", "short": "GRPO", "url": "https://arxiv.org/abs/2402.03300", "relation": "group-relative advantage backend"},
+    {"id": "process-outcome", "year": 2022, "title": "Solving Math Word Problems with Process- and Outcome-Based Feedback", "short": "Process vs outcome", "url": "https://arxiv.org/abs/2211.14275", "relation": "过程/终局监督研究问题"},
+    {"id": "verify-step", "year": 2023, "title": "Let's Verify Step by Step", "short": "Process supervision", "url": "https://arxiv.org/abs/2305.20050", "relation": "中间步骤监督动机；不是本项目 reward 的直接实现"},
+    {"id": "program-slicing", "year": 1984, "title": "Program Slicing", "short": "Program slicing", "url": "https://doi.org/10.1109/TSE.1984.5010248", "relation": "BackSlice 的依赖追踪概念来源"},
+    {"id": "rrhf", "year": 2023, "title": "RRHF: Rank Responses to Align Language Models with Human Feedback without tears", "short": "RRHF", "url": "https://arxiv.org/abs/2304.05302", "relation": "trajectory logprob rank 的近邻"},
+    {"id": "simpo", "year": 2024, "title": "SimPO: Simple Preference Optimization with a Reference-Free Reward", "short": "SimPO", "url": "https://arxiv.org/abs/2405.14734", "relation": "平均 logprob / 长度偏差的近邻"},
+    {"id": "dpo", "year": 2023, "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model", "short": "DPO", "url": "https://arxiv.org/abs/2305.18290", "relation": "Exp15 与 repair pair 的直接 objective 来源"},
+    {"id": "gkd", "year": 2023, "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes", "short": "GKD", "url": "https://arxiv.org/abs/2306.13649", "relation": "student 自生成序列上的 teacher feedback"},
+    {"id": "minillm", "year": 2023, "title": "MiniLLM: Knowledge Distillation of Large Language Models", "short": "MiniLLM", "url": "https://arxiv.org/abs/2306.08543", "relation": "reverse-KL generative distillation 近邻"},
+    {"id": "mopd", "year": 2026, "title": "MOPD: Multi-Teacher On-Policy Distillation for Capability Integration in LLM Post-Training", "short": "MOPD", "url": "https://arxiv.org/abs/2606.30406", "relation": "teacher-union 的主要能力融合来源；前身见 MiMo-V2-Flash"}
+  ],
+  "fixed200_runs": [
+    {
+      "id": "version24-flash",
+      "label": "v24 Flash",
+      "scheme": "atomic JSON",
+      "correct": 145,
+      "legal": 197,
+      "errors": 29,
+      "total": 200,
+      "tokens": 8420861,
+      "status": "historical-reference"
+    },
+    {
+      "id": "version24-pro",
+      "label": "v24 Pro",
+      "scheme": "atomic JSON / stronger model",
+      "correct": 145,
+      "legal": null,
+      "errors": null,
+      "total": 200,
+      "tokens": null,
+      "status": "capability-ceiling"
+    },
+    {
+      "id": "version50",
+      "label": "v50 native single-call",
+      "scheme": "native tool_calls",
+      "correct": 133,
+      "legal": 183,
+      "errors": 166,
+      "total": 200,
+      "tokens": 16158278,
+      "status": "rejected"
+    },
+    {
+      "id": "version51",
+      "label": "v51 native bundle",
+      "scheme": "native-tool-bundle",
+      "correct": 147,
+      "legal": 200,
+      "errors": 54,
+      "total": 200,
+      "tokens": 16165179,
+      "status": "forward-baseline"
+    }
+  ],
+  "diagnostic_runs": [
+    {"family": "Atomic", "label": "v40 concise history", "cohort": "Gate50", "correct": 37, "total": 50, "reference": "v24", "reference_correct": 42, "decision": "rejected"},
+    {"family": "Atomic", "label": "v41 output correction", "cohort": "Gate16", "correct": 10, "total": 16, "reference": "v40", "reference_correct": 8, "decision": "not expanded"},
+    {"family": "Atomic", "label": "v42 terminal columns", "cohort": "Gate16", "correct": 12, "total": 16, "reference": "v41", "reference_correct": 10, "decision": "not expanded"},
+    {"family": "Atomic", "label": "v43 bare column resolver", "cohort": "Gate16", "correct": 13, "total": 16, "reference": "v42", "reference_correct": 12, "decision": "local pass"},
+    {"family": "Atomic", "label": "v43 first50", "cohort": "Gate50", "correct": 39, "total": 50, "reference": "v24", "reference_correct": 42, "decision": "rejected"},
+    {"family": "Atomic", "label": "v44 search_values", "cohort": "Gate50", "correct": 38, "total": 50, "reference": "v39", "reference_correct": 39, "decision": "rejected"},
+    {"family": "Atomic", "label": "v45 bounded search", "cohort": "Gate50", "correct": 37, "total": 50, "reference": "v39", "reference_correct": 39, "decision": "latency fixed, accuracy rejected"},
+    {"family": "Atomic", "label": "v46 context cards", "cohort": "semantic 15", "correct": 8, "total": 15, "reference": "v39", "reference_correct": 8, "decision": "rejected"},
+    {"family": "Atomic", "label": "v47 read cards", "cohort": "semantic 15", "correct": 9, "total": 15, "reference": "v39", "reference_correct": 8, "decision": "rejected"},
+    {"family": "Atomic", "label": "v48 teacher guidance", "cohort": "semantic 15", "correct": 9, "total": 15, "reference": "v39", "reference_correct": 8, "decision": "rejected"},
+    {"family": "Atomic", "label": "v49 dependency-aware", "cohort": "semantic 15", "correct": 8, "total": 15, "reference": "v39", "reference_correct": 8, "decision": "rejected"},
+    {"family": "Atomic", "label": "v49 K=3 stability", "cohort": "Gate8 × K3", "correct": 20, "total": 24, "reference": "v39", "reference_correct": 20, "decision": "higher cost, rejected"},
+    {"family": "Direct-SQL-search", "label": "v2 holdout", "cohort": "Gate15", "correct": 6, "total": 15, "reference": "atomic v39", "reference_correct": 10, "decision": "rejected"},
+    {"family": "Iterative-SQL", "label": "v5 Prefix50", "cohort": "Prefix50", "correct": 36, "total": 50, "reference": "v4", "reference_correct": 34, "decision": "inconclusive; consistency failed"},
+    {"family": "Native tool", "label": "v51 bundle", "cohort": "Gate32", "correct": 22, "total": 32, "reference": "v50", "reference_correct": 16, "decision": "expanded"},
+    {"family": "Native tool", "label": "v51 bundle", "cohort": "fixed200", "correct": 147, "total": 200, "reference": "v24", "reference_correct": 145, "decision": "forward baseline; accuracy tie"}
+  ],
+  "findings": [
+    {
+      "title": "完整 BIRD-dev RL 评测",
+      "detail": "包含 SFT2、Exp12–Exp18、Teacher-union60 和 Strict120；统一使用 1534 题 greedy@1 口径。"
+    },
+    {
+      "title": "Equal-300 K=4 单变量实验",
+      "detail": "Exp0–Exp10 记录 pass@1/pass@4；Exp11 记录 action-mean 改动与 grad norm，未列最终冻结 K=4 排名。"
+    },
+    {
+      "title": "Teacher-union 训练监督记录",
+      "detail": "Union60/Strict120 分别记录 496/864 条 repair、137/124 条正确 repair，以及 11/10 个 strong-DPO task。"
+    },
+    {
+      "title": "工具设计诊断记录",
+      "detail": "结构化收录 Atomic、Direct-SQL-search、Iterative-SQL 与 Native-tool 等实验的 cohort、correct 和 reference 分数。"
+    }
+  ]
+}

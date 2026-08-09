@@ -58,7 +58,13 @@ indices_path = Path(sys.argv[2])
 expected_text = sys.argv[3]
 expected = int(expected_text)
 rows = [json.loads(line) for line in (result_dir / "all.jsonl").open() if line.strip()]
-selected = {int(value) for value in json.loads(indices_path.read_text())["indices"]}
+indices_payload = json.loads(indices_path.read_text())
+indices_values = (
+    indices_payload["indices"]
+    if isinstance(indices_payload, dict)
+    else indices_payload
+)
+selected = {int(value) for value in indices_values}
 assert len(rows) == expected
 assert {int(row["example_index"]) for row in rows} == selected
 assert all(len(row.get("samples") or []) == 1 for row in rows)

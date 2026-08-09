@@ -25,6 +25,7 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path[:0] = [
+    str(ROOT / "src"),
     str(ROOT / "src" / "eval"),
     str(ROOT / "src" / "harness"),
     str(HERE),
@@ -82,7 +83,7 @@ from rollout import (  # noqa: E402
     task_gold_sql,
     validate_tool_arguments_against_state,
 )
-from tool_schemes import (  # noqa: E402
+from tool_modules.registry import (  # noqa: E402
     ATOMIC_ASSISTANT_CARRIER,
     ATOMIC_TOOL_SCHEME,
     TOOL_SCHEME_REGISTRY_VERSION,

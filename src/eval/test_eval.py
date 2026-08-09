@@ -31,6 +31,7 @@ from denotation import (  # noqa: E402
 from direct_sql_prompt import (  # noqa: E402
     CANONICAL_JSON_PROFILE,
     SQL_ASTRA_APPENDIX_PROFILE,
+    SQL_ASTRA_DISCLOSED_SINGLE_TURN_PROFILE,
     build_direct_sql_messages,
     canonical_schema_prompt,
 )
@@ -489,6 +490,54 @@ class EvalTests(unittest.TestCase):
         )
         self.assertIn("<answer>SELECT ...</answer>", prompt)
 
+    def test_sql_astra_disclosed_single_turn_profile_uses_paper_code_block_carrier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp, "school.sqlite")
+            harness = Harness(str(db_path))
+            self.addCleanup(harness.conn.close)
+            harness.conn.executescript(
+                "CREATE TABLE schools(id INTEGER PRIMARY KEY, name TEXT);"
+                "INSERT INTO schools VALUES (1, 'Ada Academy'), (2, 'Turing School');"
+            )
+            metadata_path = Path(tmp, "dev_tables.json")
+            metadata_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "db_id": "school",
+                            "table_names_original": ["schools"],
+                            "table_names": ["schools"],
+                            "column_names_original": [[-1, "*"], [0, "id"], [0, "name"]],
+                            "column_names": [[-1, "*"], [0, "identifier"], [0, "school name"]],
+                            "column_types": ["text", "integer", "text"],
+                            "primary_keys": [1],
+                            "foreign_keys": [],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            messages = build_direct_sql_messages(
+                harness,
+                {
+                    "db_id": "school",
+                    "db_path": str(db_path),
+                    "question": "Return every school name.",
+                    "external_knowledge": "Use schools.name.",
+                },
+                profile=SQL_ASTRA_DISCLOSED_SINGLE_TURN_PROFILE,
+                schema_value_count=2,
+                schema_metadata_json=str(metadata_path),
+            )
+
+        self.assertEqual(messages[0]["content"], "You are a helpful SQL assistant.")
+        prompt = messages[1]["content"]
+        self.assertIn("example: ['Ada Academy', 'Turing School']", prompt)
+        self.assertIn("please enclose the generated SQL query in a code block", prompt)
+        self.assertIn("```sql\n-- Your SQL query\n```", prompt)
+        self.assertNotIn("<answer>", prompt)
+        self.assertNotIn("run_sql_remote", prompt)
+
     def test_provider_transport_error_is_not_argument_validation(self):
         error = ProtocolError(
             'DeepSeek split-response transport error: visible content must contain only '
@@ -635,6 +684,13 @@ class EvalTests(unittest.TestCase):
 
     def test_extract_sql(self):
         self.assertEqual(extract_sql("```sql\nSELECT * FROM t;\n```"), "SELECT * FROM t")
+        self.assertEqual(
+            extract_sql(
+                "Select the required column from the schools table.\n\n"
+                "```sql\nSELECT s.Zip FROM schools AS s;\n```"
+            ),
+            "SELECT s.Zip FROM schools AS s",
+        )
         self.assertEqual(
             extract_sql("Here is the query: WITH x AS (SELECT 1) SELECT * FROM x; trailing"),
             "WITH x AS (SELECT 1) SELECT * FROM x",

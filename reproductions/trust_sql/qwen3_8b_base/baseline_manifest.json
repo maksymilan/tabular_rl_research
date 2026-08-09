@@ -1,0 +1,140 @@
+{
+  "status": "complete_numeric_result_below_paper",
+  "paper_baseline": {
+    "model_label": "Qwen3-8B",
+    "setting": "unknown-schema",
+    "reported_greedy_execution_accuracy_percent": 47.9,
+    "reported_schema_prefill_greedy_execution_accuracy_percent": 49.9,
+    "checkpoint_and_eval_manifest_published": false
+  },
+  "explicit_reimplementation_assumptions": {
+    "model_repo": "Qwen/Qwen3-8B",
+    "model_revision": "b968826d9c46dd6066d109eabc6255188de91218",
+    "reason": "The paper and released code name Qwen3-8B but do not publish a repository ID, revision, tokenizer hash, or base-evaluation manifest.",
+    "thinking_mode": "For the selected public revision, apply_chat_template is called without enable_thinking; its template does not inject the empty-think suppression prefix, so default Qwen3 thinking behavior is retained. This is not specified by the paper.",
+    "greedy_max_rounds": 15,
+    "greedy_max_rounds_reason": "The paper states 15 turns for sampled inference but does not explicitly state the greedy horizon.",
+    "top_p": 1.0,
+    "top_p_reason": "Local explicit deterministic choice; the released evaluator defaults to 0.9 and the paper does not report top-p. It is normally inert at temperature 0.",
+    "max_new_tokens_per_turn": 4096,
+    "repetition_penalty": 1.05,
+    "presence_penalty": 0.1,
+    "penalty_reason": "max_new_tokens, repetition_penalty, and presence_penalty are defaults in the released asynchronous evaluator; the paper does not report them.",
+    "schema_observation_rows": 30,
+    "schema_observation_rows_reason": "Paper and system prompt say 30; released evaluator code returned up to 100 before the audit patch.",
+    "evaluation_metric": {
+      "local_name": "bird-set",
+      "semantics": "Execute prediction and gold to completion, then compare sets of rows; ignore row order and duplicate multiplicity but preserve column order.",
+      "reason": "Local BIRD-reference choice. The paper says the database result must match exactly but does not release its Table 2 scorer; the released training reward is bounded and is not this evaluator."
+    }
+  },
+  "pinned_inputs": {
+    "trustsql_repository": "https://github.com/JaneEyre0530/TrustSQL",
+    "trustsql_commit": "89df0661ad6b8e29ed8e61f7c950fbc2c1678b08",
+    "released_system_prompt_sha256": "31e7031dcd0c0313b698ec0e742fc1666284179115e10b41838d5a9386cc41e1",
+    "local_bird_dev_snapshot": "BIRD-Dev 2024-06-27",
+    "local_bird_dev_questions": 1534,
+    "bird_dev_json_sha256": "630272f2b1c44d8cef2c3b246f623355cf0bbc1e832c81061df895530dfc2f06",
+    "model_tokenizer_config_git_blob": "417d038a63fa3de29cfde265caedae14d1a58d92",
+    "model_tokenizer_config_sha256": "d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c923acd8101",
+    "model_chat_template_sha256": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8",
+    "model_architecture": "Qwen3ForCausalLM",
+    "model_type": "qwen3",
+    "loaded_tokenizer_class": "Qwen2Tokenizer",
+    "loaded_tokenizer_length": 151669,
+    "default_template_forced_empty_think_prefix": false,
+    "enable_thinking_false_forced_empty_think_prefix": true,
+    "model_download_endpoint": "https://hf-mirror.com",
+    "model_download_backend": "resumable curl with pinned per-file size and LFS SHA256 or Git blob validation"
+  },
+  "decoding": {
+    "temperature": 0.0,
+    "rollouts_per_question": 1,
+    "seed": 20260806,
+    "batch_size": 16,
+    "tensor_parallel_size": 2,
+    "gpu_memory_utilization": 0.9
+  },
+  "runtime": {
+    "host": "table_rl",
+    "gpus": "2 x NVIDIA GeForce RTX 3090 24 GiB",
+    "python": "3.11.15",
+    "torch": "2.10.0+cu126",
+    "transformers": "5.12.0",
+    "vllm": "0.19.1",
+    "huggingface_hub": "1.21.0",
+    "hf_hub_offline_during_evaluation": true,
+    "author_tool_sql_timeout_seconds": 15.0,
+    "local_scoring_sql_timeout_seconds": 10.0,
+    "scoring_timeout_reason": "Local project BIRD-reference execution limit; the paper does not publish the Table 2 scorer timeout. Timeouts are reported separately."
+  },
+  "validation": {
+    "model_transfer": {
+      "status": "complete",
+      "remote_path": "/home/dengyan/models/Qwen3-8B-TrustSQL-baseline",
+      "verification": "All pinned regular files matched size and Git blob ID; all pinned LFS objects matched size and SHA256."
+    },
+    "smoke4_seed20260806": {
+      "status": "complete",
+      "result_directory": "/home/dengyan/tabular_rl_outputs/reproductions/trust_sql/results/qwen3_8b_base_unknown_greedy_smoke4_seed20260806",
+      "tasks": 4,
+      "legal_terminal_outputs": 4,
+      "prediction_parse_ok": 4,
+      "prediction_execution_ok": 4,
+      "gold_execution_ok": 4,
+      "correct": 1,
+      "accuracy": 0.25,
+      "interpretation": "End-to-end transport/protocol smoke only; not a paper-score estimate."
+    },
+    "shutdown_regression_smoke1_seed20260807": {
+      "status": "complete",
+      "result_directory": "/home/dengyan/tabular_rl_outputs/reproductions/trust_sql/results/qwen3_8b_base_unknown_greedy_smoke1_seed20260807",
+      "tasks": 1,
+      "normal_process_exit": true,
+      "remaining_vllm_processes_after_exit": 0,
+      "remaining_gpu_allocations_after_exit": 0
+    },
+    "full_dev1534_seed20260806": {
+      "status": "complete",
+      "launched_at_utc": "2026-08-06T04:47:09Z",
+      "score_created_at_utc": "2026-08-06T07:19:39.376411Z",
+      "generation_wall_minutes": 149.5,
+      "launcher_pid_at_start": 75866,
+      "run_name": "qwen3_8b_base_unknown_greedy_dev1534_seed20260806",
+      "result_directory": "/home/dengyan/tabular_rl_outputs/reproductions/trust_sql/results/qwen3_8b_base_unknown_greedy_dev1534_seed20260806",
+      "launcher_log": "/home/dengyan/tabular_rl_outputs/reproductions/trust_sql/logs/qwen3_8b_base/full_launcher_seed20260806.nohup.log",
+      "score_file": "/home/dengyan/tabular_rl_outputs/reproductions/trust_sql/results/qwen3_8b_base_unknown_greedy_dev1534_seed20260806/score.json",
+      "score_file_sha256": "745a17c573958df38424b68625d9d332380606aa517ac1d71053d69ad39b2df7",
+      "tasks": 1534,
+      "observed_rollout_records": 1534,
+      "missing_rollout_slots": 0,
+      "duplicate_rollout_records": 0,
+      "unexpected_rollout_records": 0,
+      "raw_terminated_true": 1532,
+      "raw_terminated_false": 2,
+      "raw_runner_error_records": 1,
+      "correct": 709,
+      "accuracy": 0.4621903520208605,
+      "accuracy_percent": 46.21903520208605,
+      "paper_reported_accuracy_percent": 47.9,
+      "difference_from_paper_percentage_points": -1.6809647979139497,
+      "parse_errors": 6,
+      "prediction_execution_errors": 74,
+      "prediction_timeouts": 2,
+      "gold_timeouts": 2,
+      "normal_process_exit": true,
+      "remaining_vllm_processes_after_exit": 0,
+      "remaining_gpu_allocations_after_exit": 0,
+      "interpretation": "The full auditable reimplementation completed, but it did not exactly match the unpublished Table 2 setup or its reported 47.9%."
+    }
+  },
+  "metric": "local bird-set reimplementation choice; not a published Table 2 scorer artifact",
+  "paper_ambiguities_not_filled_silently": [
+    "exact Qwen3-8B repository and revision",
+    "tokenizer/chat-template revision and thinking-mode flag",
+    "greedy maximum turn budget",
+    "greedy top-p, penalties, max tokens, and seed",
+    "formal schema-prefill serialization",
+    "execution-majority K and tie-break rule"
+  ]
+}

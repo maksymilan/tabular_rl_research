@@ -33,6 +33,7 @@ from copy import deepcopy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(ROOT, "src"))
 sys.path.insert(0, os.path.join(ROOT, "src", "harness"))
 sys.path.insert(0, os.path.join(ROOT, "src", "sft"))
 
@@ -52,7 +53,7 @@ from protocol import (ACCEPTED_TOOLS, AdjacentActionGuard, ProtocolError, get_sy
                       model_context_messages, policy_system_prompt, protocol_hash, tool_error_message,
                       rolling_legal_history_messages, rolling_system_prompt,
                       state_context_message, tool_output_message, tool_schema_hash)
-from tool_schemes import (  # noqa: E402
+from tool_modules.registry import (  # noqa: E402
     ATOMIC_ASSISTANT_CARRIER,
     ATOMIC_TOOL_SCHEME,
     TOOL_SCHEME_REGISTRY_VERSION,
@@ -1314,6 +1315,7 @@ def run_live(
     history_turns: int = 4,
     compact_history_observations: bool = True,
     denotation_comparison: str = "bird-set",
+    chat_fn=None,
 ) -> dict:
     task_path = task_db_path(ex)
     gold_sql = task_gold_sql(ex)
@@ -1369,6 +1371,7 @@ def run_live(
         "api_transport_retries": 0,
         "api_context_retries": 0,
     }
+    turn_chat = chat if chat_fn is None else chat_fn
 
     while action_count < max_steps:
         action_count += 1
@@ -1386,8 +1389,14 @@ def run_live(
         turn = {"turn_index": len(turns), "model_input": deepcopy(model_input)}
         try:
             retry_stats: dict = {}
-            text = chat(base_url, model, model_input, max_tokens=max_tokens, retries=api_retries,
-                        retry_stats=retry_stats)
+            text = turn_chat(
+                base_url,
+                model,
+                model_input,
+                max_tokens=max_tokens,
+                retries=api_retries,
+                retry_stats=retry_stats,
+            )
             turn["api_retry_stats"] = retry_stats
         except ContextOverflowError as e:
             rec["failure_type"] = "context_overflow"
@@ -1540,7 +1549,9 @@ def run_replay(n: int, path: str = "") -> int:
                 break
             t = json.loads(line)
             total += 1
-            h = Harness(db_path(t["source"]["db_id"]))
+            source = t.get("source") or {}
+            replay_db_path = source.get("db_path") or db_path(source["db_id"])
+            h = Harness(replay_db_path)
             created: set[str] = set()
             ctx = new_ctx(t.get("initial_state", {}).get("dataset_overview"))
             try:

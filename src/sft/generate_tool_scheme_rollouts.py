@@ -11,16 +11,21 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-sys.path[:0] = [str(ROOT / "src" / "eval"), str(HERE)]
+sys.path[:0] = [str(ROOT / "src"), str(ROOT / "src" / "eval"), str(HERE)]
 
-from tool_schemes import (  # noqa: E402
+from tool_modules.registry import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
     DIRECT_SQL_SEARCH_TOOL_SCHEME,
+    ITERATIVE_SQL_TOOL_SCHEME,
+    NATIVE_TOOL_BUNDLE_SCHEME,
     RELATIONAL_PROGRAM_TOOL_SCHEME,
     TOOL_SCHEME_NAMES,
 )
-from direct_sql_search_protocol import DIRECT_SQL_SEARCH_INTERFACE  # noqa: E402
+from tool_modules.direct_sql_search.protocol import (  # noqa: E402
+    DIRECT_SQL_SEARCH_INTERFACE,
+)
+from tool_modules.iterative_sql.protocol import ITERATIVE_SQL_INTERFACE  # noqa: E402
 
 
 def generator_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
@@ -32,25 +37,44 @@ def generator_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
             str(HERE / "generate_teacher_rollouts.py"),
             *forwarded,
         ]
+    if tool_scheme == NATIVE_TOOL_BUNDLE_SCHEME:
+        return [
+            sys.executable,
+            str(HERE / "generate_teacher_rollouts.py"),
+            *forwarded,
+            "--atomic-protocol-version",
+            "version54",
+            "--deepseek-carrier",
+            "native-tool-bundle",
+            "--diagnostic-only",
+        ]
     if tool_scheme == ACTION_BLOCK_TOOL_SCHEME:
         return [
             sys.executable,
-            str(ROOT / "src" / "eval" / "evaluate_batch_plan.py"),
+            str(ROOT / "src" / "tool_modules" / "action_block" / "evaluator.py"),
             *forwarded,
         ]
     if tool_scheme == RELATIONAL_PROGRAM_TOOL_SCHEME:
         return [
             sys.executable,
-            str(ROOT / "src" / "eval" / "evaluate_relational_program.py"),
+            str(ROOT / "src" / "tool_modules" / "relational_program" / "evaluator.py"),
             *forwarded,
         ]
     if tool_scheme == DIRECT_SQL_SEARCH_TOOL_SCHEME:
         return [
             sys.executable,
-            str(ROOT / "src" / "eval" / "iterative_sql.py"),
+            str(ROOT / "src" / "tool_modules" / "sql_common" / "runner.py"),
             *forwarded,
             "--interface",
             DIRECT_SQL_SEARCH_INTERFACE,
+        ]
+    if tool_scheme == ITERATIVE_SQL_TOOL_SCHEME:
+        return [
+            sys.executable,
+            str(ROOT / "src" / "tool_modules" / "sql_common" / "runner.py"),
+            *forwarded,
+            "--interface",
+            ITERATIVE_SQL_INTERFACE,
         ]
     raise ValueError(f"unsupported tool scheme: {tool_scheme}")
 

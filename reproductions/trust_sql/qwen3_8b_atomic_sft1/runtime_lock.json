@@ -1,0 +1,49 @@
+{
+  "schema_version": "version26-isolated-runtime-lock-v1",
+  "source_commit": "4cd47c957fc6ae791e76a10594c8cd22f4d3b6de",
+  "source_commit_subject": "Use raw JSON carrier for both tool schemes",
+  "exported_paths": [
+    "src/eval",
+    "src/sft",
+    "src/harness"
+  ],
+  "source_git_trees": {
+    "src/eval": "d943e616a2232d376466fa0e699df55e5a99e6a7",
+    "src/sft": "9139ec4db02a28fd34367d472784f89b63fbefc2",
+    "src/harness": "7f67e3e00370912907595075496e5616b44c9bdf"
+  },
+  "exported_file_count": 101,
+  "content_tree_sha256": "5fecf5b40447c956a470957022ca4eff8ba9ea0804a4e070b9742959edc00bab",
+  "key_file_sha256": {
+    "src/eval/rollout.py": "530845a1d359065df634d156ab9a9716e6f935e63db530106cf4e5edd48a56d6",
+    "src/eval/rollout_passk.py": "b0e682a4590881ff51d18d4c1a1de0980f9bb6cd98396d73291986be5dafe4bf",
+    "src/sft/action_carrier.py": "cac5d10d4f06bcf844819ba9250769bd9fab50841ebc572461f29a4795234f32",
+    "src/sft/prompt_contract.py": "dcdf217a255cc007076c5db2b6739f1ccd74973919ae6f0785d2d2f459d748ea",
+    "src/sft/protocol.py": "3a937516e8df6eedd7feb5375150c75ee9bc944dba644b10b939e77d54607895",
+    "src/sft/tool_schemes.py": "bbea1ee46fa30bcd1c6b15300515b12aabde67fd077d465f28465032baebc9e0"
+  },
+  "protocol_contract": {
+    "protocol_version": "version26",
+    "tool_scheme": "atomic",
+    "tool_scheme_registry_version": "tool-scheme-registry-v2",
+    "assistant_carrier": "think-json-v1",
+    "rolling_prompt_variant": "full",
+    "rolling_system_prompt_sha256": "848598074e653648d52b58dfa1a54dd777beabae16cb91d83c4ba1a54b5d7316",
+    "rolling_protocol_hash": "4da19387399bd3a5"
+  },
+  "evaluation_contract": {
+    "dataset": "BIRD-Dev 2024-06-27",
+    "questions": 1534,
+    "rollouts_per_question": 1,
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "minimum_max_tokens": 2048,
+    "max_steps": 30,
+    "context_mode": "rolling-legal-history",
+    "history_turns": 4,
+    "rolling_observation_style": "resident",
+    "denotation_comparison": "bird-set",
+    "enable_thinking": true,
+    "reasoning_parser": null
+  }
+}

@@ -30,15 +30,30 @@ def main() -> int:
     parser.add_argument("--exclude-indices", type=Path)
     parser.add_argument("--seed", type=int, default=20260719)
     parser.add_argument("--total", type=int, default=100)
+    parser.add_argument(
+        "--equal-difficulty",
+        action="store_true",
+        help="Use equal simple/moderate/challenging quotas; total must divide by 3.",
+    )
     args = parser.parse_args()
-    if args.total <= 0 or args.total % 10:
-        parser.error("--total must be a positive multiple of 10")
+    if args.total <= 0:
+        parser.error("--total must be positive")
 
-    quotas = {
-        "simple": args.total * 4 // 10,
-        "moderate": args.total * 3 // 10,
-        "challenging": args.total * 3 // 10,
-    }
+    if args.equal_difficulty:
+        if args.total % 3:
+            parser.error("--total must divide by 3 with --equal-difficulty")
+        quotas = {
+            difficulty: args.total // 3
+            for difficulty in ("simple", "moderate", "challenging")
+        }
+    else:
+        if args.total % 10:
+            parser.error("--total must be a multiple of 10")
+        quotas = {
+            "simple": args.total * 4 // 10,
+            "moderate": args.total * 3 // 10,
+            "challenging": args.total * 3 // 10,
+        }
     excluded = read_indices(args.exclude_indices)
     tasks = read_jsonl(args.tasks)
     buckets = {difficulty: [] for difficulty in quotas}
@@ -58,11 +73,23 @@ def main() -> int:
     selected.sort()
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(selected, indent=2) + "\n", encoding="utf-8")
+    cohort = {
+        "schema_version": "bird-dev-difficulty-stratified-cohort-v1",
+        "indices": selected,
+        "seed": args.seed,
+        "difficulty_quotas": quotas,
+        "excluded_indices": sorted(excluded),
+        "selection_uses_model_outcomes": False,
+    }
+    args.out.write_text(
+        json.dumps(cohort, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     manifest = {
         "tasks": str(args.tasks),
         "indices": str(args.out),
         "seed": args.seed,
+        "equal_difficulty": args.equal_difficulty,
         "excluded_indices": sorted(excluded),
         "total": len(selected),
         "difficulty": dict(Counter(

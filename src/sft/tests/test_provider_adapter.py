@@ -11,11 +11,14 @@ SFT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SFT_DIR))
 
 from provider_adapter import (  # noqa: E402
+    DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE,
+    DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
     DEEPSEEK_CARRIER_TOOL_CALL,
     adapt_provider_response,
     provider_default_max_tokens,
     provider_instruction,
     provider_request_messages,
+    provider_request_audit_options,
     provider_request_options,
     provider_rejection_message,
     provider_system_prompt,
@@ -27,6 +30,7 @@ from generate_teacher_rollouts import (  # noqa: E402
     protocol_failure_type,
     request_chat,
 )
+from rollout import ChatAPIError  # noqa: E402
 from protocol import (  # noqa: E402
     ProtocolError,
     ROLLING_SYSTEM_PROMPT_COMPACT,
@@ -38,6 +42,88 @@ from protocol import (  # noqa: E402
 
 
 class ProviderAdapterTests(unittest.TestCase):
+    def test_local_qwen_request_can_pin_thinking_chat_template(self):
+        response_payload = {
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": "<think>reason</think>\n{}"},
+            }],
+            "usage": {},
+        }
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(response_payload).encode("utf-8")
+
+        with patch(
+            "generate_teacher_rollouts.urllib.request.urlopen",
+            return_value=FakeResponse(),
+        ) as mocked:
+            request_chat(
+                base_url="http://127.0.0.1:8031/v1",
+                api_key="local-vllm",
+                model="qwen3-8b-iterative-sql-base",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=2048,
+                timeout=30,
+                chat_template_kwargs={"enable_thinking": True},
+            )
+
+        sent = json.loads(mocked.call_args.args[0].data)
+        self.assertEqual(sent["chat_template_kwargs"], {"enable_thinking": True})
+        self.assertEqual(sent["temperature"], 0)
+
+    def test_nonretryable_payment_error_is_not_repeated(self):
+        with patch(
+            "generate_teacher_rollouts.request_chat",
+            side_effect=ChatAPIError("HTTP 402", status=402),
+        ) as mocked, patch("generate_teacher_rollouts.time.sleep") as sleeping:
+            with self.assertRaises(ChatAPIError) as captured:
+                chat_with_retries(
+                    base_url="https://api.deepseek.com",
+                    api_key="test-key",
+                    model="deepseek-v4-flash",
+                    messages=[{"role": "user", "content": "test"}],
+                    max_tokens=2048,
+                    timeout=30,
+                    retries=10,
+                )
+        self.assertEqual(captured.exception.status, 402)
+        self.assertEqual(mocked.call_count, 1)
+        sleeping.assert_not_called()
+
+    def test_retryable_rate_limit_still_uses_transport_retry_budget(self):
+        success = (
+            '{"tool":"describe_table","arguments":{"tables":["T"]}}',
+            {
+                "api_finish_reason": "stop",
+                "provider_request_options": {},
+                "provider_response_metadata": {},
+            },
+            "Inspect schema.",
+        )
+        with patch(
+            "generate_teacher_rollouts.request_chat",
+            side_effect=[ChatAPIError("HTTP 429", status=429), success],
+        ) as mocked, patch("generate_teacher_rollouts.time.sleep"):
+            _, usage, _ = chat_with_retries(
+                base_url="https://api.deepseek.com",
+                api_key="test-key",
+                model="deepseek-v4-flash",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=2048,
+                timeout=30,
+                retries=3,
+            )
+        self.assertEqual(mocked.call_count, 2)
+        self.assertEqual(usage["api_transport_retries"], 1)
+
     def test_deepseek_request_options_explicitly_enable_thinking(self):
         self.assertEqual(
             provider_request_options("deepseek-v4-flash"),
@@ -47,6 +133,22 @@ class ProviderAdapterTests(unittest.TestCase):
                 "response_format": {"type": "json_object"},
             },
         )
+        native = provider_request_options(
+            "deepseek-v4-flash",
+            carrier=DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+        )
+        self.assertEqual(native["thinking"], {"type": "enabled"})
+        self.assertEqual(native["reasoning_effort"], "high")
+        self.assertEqual(native["tool_choice"], "auto")
+        self.assertNotIn("response_format", native)
+        self.assertEqual(len(native["tools"]), 12)
+        audit = provider_request_audit_options(
+            "deepseek-v4-flash",
+            carrier=DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+        )
+        self.assertNotIn("tools", audit)
+        self.assertEqual(audit["native_tool_count"], 12)
+        self.assertEqual(len(audit["native_tools_sha256"]), 64)
         self.assertEqual(provider_request_options("gpt-5.6-sol"), {})
         self.assertEqual(
             provider_request_options(
@@ -106,6 +208,7 @@ class ProviderAdapterTests(unittest.TestCase):
         self.assertEqual(sent["thinking"], {"type": "enabled"})
         self.assertEqual(sent["reasoning_effort"], "high")
         self.assertEqual(sent["response_format"], {"type": "json_object"})
+        self.assertNotIn("temperature", sent)
         self.assertEqual(reasoning, "Inspect the schema.")
         self.assertTrue(content.startswith('{"tool"'))
         self.assertEqual(
@@ -116,6 +219,139 @@ class ProviderAdapterTests(unittest.TestCase):
                 "system_fingerprint": "fp_test",
                 "object": "chat.completion",
             },
+        )
+
+    def test_teacher_request_extracts_one_native_function_call_without_editing_arguments(self):
+        raw_arguments = '{"tables":["Document"]}'
+        response_payload = {
+            "id": "response_native_1",
+            "model": "deepseek-v4-flash",
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": None,
+                    "reasoning_content": "Inspect the schema.",
+                    "tool_calls": [{
+                        "id": "call_native_1",
+                        "type": "function",
+                        "function": {
+                            "name": "describe_table",
+                            "arguments": raw_arguments,
+                        },
+                    }],
+                },
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(response_payload).encode("utf-8")
+
+        with patch(
+            "generate_teacher_rollouts.urllib.request.urlopen",
+            return_value=FakeResponse(),
+        ) as mocked:
+            content, usage, reasoning = request_chat(
+                base_url="https://api.deepseek.com",
+                api_key="test-key",
+                model="deepseek-v4-flash",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=2048,
+                timeout=30,
+                deepseek_carrier=DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+            )
+
+        sent = json.loads(mocked.call_args.args[0].data)
+        self.assertEqual(sent["tool_choice"], "auto")
+        self.assertEqual(len(sent["tools"]), 12)
+        self.assertNotIn("response_format", sent)
+        self.assertEqual(
+            json.loads(content),
+            {"tool": "describe_table", "arguments": {"tables": ["Document"]}},
+        )
+        self.assertEqual(reasoning, "Inspect the schema.")
+        native_message = usage["provider_native_assistant_message"]
+        self.assertEqual(native_message["tool_calls"][0]["id"], "call_native_1")
+        self.assertEqual(
+            native_message["tool_calls"][0]["function"]["arguments"],
+            raw_arguments,
+        )
+        self.assertIsNone(usage["provider_native_rejection_reason"])
+
+    def test_teacher_request_accepts_bounded_native_bundle_and_ignores_content(self):
+        response_payload = {
+            "id": "response_bundle_1",
+            "model": "deepseek-v4-flash",
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": "I will inspect both columns.",
+                    "reasoning_content": "Both inspections are independent.",
+                    "tool_calls": [
+                        {
+                            "id": "call_a",
+                            "type": "function",
+                            "function": {
+                                "name": "inspect_column",
+                                "arguments": '{"table":"items","column":"name"}',
+                            },
+                        },
+                        {
+                            "id": "call_b",
+                            "type": "function",
+                            "function": {
+                                "name": "inspect_column",
+                                "arguments": '{"table":"items","column":"category"}',
+                            },
+                        },
+                    ],
+                },
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(response_payload).encode("utf-8")
+
+        with patch(
+            "generate_teacher_rollouts.urllib.request.urlopen",
+            return_value=FakeResponse(),
+        ):
+            content, usage, reasoning = request_chat(
+                base_url="https://api.deepseek.com",
+                api_key="test-key",
+                model="deepseek-v4-flash",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=2048,
+                timeout=30,
+                deepseek_carrier=DEEPSEEK_CARRIER_NATIVE_TOOL_BUNDLE,
+            )
+
+        calls = json.loads(content)["calls"]
+        self.assertEqual([call["id"] for call in calls], ["call_a", "call_b"])
+        self.assertEqual(
+            [call["tool"] for call in calls],
+            ["inspect_column", "inspect_column"],
+        )
+        self.assertEqual(reasoning, "Both inspections are independent.")
+        self.assertIsNone(usage["provider_native_rejection_reason"])
+        self.assertEqual(
+            usage["provider_native_assistant_message"]["content"],
+            "I will inspect both columns.",
         )
 
     def test_length_truncation_retries_same_turn_with_larger_budget(self):
@@ -297,6 +533,21 @@ class ProviderAdapterTests(unittest.TestCase):
         self.assertEqual(tool, "describe_table")
         self.assertEqual(args["tables"], ["Document"])
 
+    def test_deepseek_native_carrier_becomes_same_canonical_action(self):
+        content = '{"tool":"describe_table","arguments":{"tables":["Document"]}}'
+        adapted, audit = adapt_provider_response(
+            "deepseek-v4-flash",
+            content,
+            "Inspect the table schema first.",
+            carrier=DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+        )
+        self.assertTrue(audit["applied"])
+        self.assertTrue(audit["transport_reconstructed_from_native_tool_calls"])
+        think, tool, args = parse_assistant_strict(adapted)
+        self.assertEqual(think, "Inspect the table schema first.")
+        self.assertEqual(tool, "describe_table")
+        self.assertEqual(args["tables"], ["Document"])
+
     def test_adapter_refuses_partial_think_tag_or_missing_reasoning(self):
         malformed = 'reasoning without an opening tag.</think><tool_call>{"tool":"describe_table","arguments":{"tables":["Document"]}}</tool_call>'
         adapted, audit = adapt_provider_response("deepseek-v4-flash", malformed, "")
@@ -342,6 +593,18 @@ class ProviderAdapterTests(unittest.TestCase):
         )
         self.assertIn(sql_example, instruction)
         self.assertNotIn('"tool":"describe_table"', instruction)
+
+    def test_transport_instruction_can_hide_client_implementation_details(self):
+        default = provider_instruction("deepseek-v4-flash")
+        provider_facing = provider_instruction(
+            "deepseek-v4-flash",
+            include_client_implementation=False,
+        )
+        self.assertIn("The client preserves the separate reason", default)
+        self.assertIn("active think-plus-JSON envelope", default)
+        self.assertNotIn("The client preserves the separate reason", provider_facing)
+        self.assertNotIn("active think-plus-JSON envelope", provider_facing)
+        self.assertIn("separate native reasoning channel", provider_facing)
 
     def test_deepseek_api_prompt_has_one_nonconflicting_response_contract(self):
         prompt = provider_system_prompt(
@@ -390,6 +653,24 @@ class ProviderAdapterTests(unittest.TestCase):
             '"arguments":{"tables":["Document"]}}</tool_call>',
             prompt,
         )
+
+    def test_deepseek_native_prompt_uses_functions_and_rewrites_call_cookbook(self):
+        prompt = provider_system_prompt(
+            "deepseek-v4-flash",
+            TEACHER_SYSTEM_PROMPT + DATA_GENERATION_SUFFIX,
+            carrier=DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+        )
+        self.assertNotIn("output exactly: <think>brief reasoning</think>", prompt)
+        self.assertNotIn("Emit exactly one non-empty <think> block", prompt)
+        self.assertNotIn("CANONICAL CALLS", prompt)
+        self.assertEqual(prompt.count("DEEPSEEK NATIVE FUNCTION-CALL CONTRACT"), 1)
+        self.assertIn("NATIVE FUNCTION CALL EXAMPLES", prompt)
+        self.assertIn(
+            'Filter: call function condition_filter with arguments {"table":"people"',
+            prompt,
+        )
+        self.assertIn("Leave assistant content empty", prompt)
+        self.assertIn("select exactly one supplied function", prompt)
 
     def test_deepseek_empty_visible_feedback_requests_json_not_xml(self):
         _, audit = adapt_provider_response(
@@ -449,6 +730,43 @@ class ProviderAdapterTests(unittest.TestCase):
             '"arguments":{"tables":["Document"]}}</tool_call>',
         )
         self.assertNotIn("<think>", tool_call_rendered[1]["content"])
+
+        native_history = [
+            (
+                canonical,
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning_content": "Inspect the schema before filtering.",
+                    "tool_calls": [{
+                        "id": "call_native_history_1",
+                        "type": "function",
+                        "function": {
+                            "name": "describe_table",
+                            "arguments": '{"tables":["Document"]}',
+                        },
+                    }],
+                },
+            )
+        ]
+        native_rendered = provider_request_messages(
+            "deepseek-v4-flash",
+            messages,
+            carrier=DEEPSEEK_CARRIER_NATIVE_TOOL_CALLS,
+            native_assistant_history=native_history,
+        )
+        self.assertEqual(
+            [message["role"] for message in native_rendered],
+            ["system", "assistant", "tool"],
+        )
+        self.assertEqual(
+            native_rendered[1]["tool_calls"][0]["id"],
+            native_rendered[2]["tool_call_id"],
+        )
+        self.assertEqual(
+            native_rendered[1]["reasoning_content"],
+            "Inspect the schema before filtering.",
+        )
 
     def test_deepseek_history_rejects_ambiguous_assistant_text(self):
         with self.assertRaises(ValueError):

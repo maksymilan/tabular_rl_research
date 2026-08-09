@@ -51,10 +51,15 @@ Start at `docs/current/README.md`.
 
 - Shared prompt semantics: `src/sft/prompt_contract.py`; protocol/validation:
   `src/sft/protocol.py`; index: `docs/current/tool_protocol.md`.
-- Current atomic local diagnostic default: `version39`; `version40`-`version49` are opt-in
-  prompt/interface diagnostics. The production checkpoint-560 evaluation chain remains frozen on
-  `version26`; none of version39-version49 has received an accuracy promotion and they must
-  not be mixed into its result directories. Version26 retains version25's prompt-role and
+- The active forward experimental implementation is `version54` under the distinct
+  `native-tool-bundle` scheme; `version51` is the frozen provider-tool-call baseline,
+  `version52` is the frozen compact-prompt predecessor, and `version53` is the frozen reviewed-
+  prompt control for the version54 no-plan ablation.
+  `version26` is now historical checkpoint-560 control only: do not
+  start new feature work from it or describe it as the current destination. The original atomic
+  local diagnostic baseline remains `version39`; `version40`-`version50` are frozen
+  prompt/interface/provider diagnostics. None may be mixed into version26 result directories.
+  Version26 retains version25's prompt-role and
   public-contract refactor, but replaces the model-visible tagged action carrier with one
   non-empty `<think>` block followed directly by a strict raw JSON action object. The former
   `v2i-state-only-join-feedback-r2` contract is `version1`;
@@ -314,11 +319,135 @@ Start at `docs/current/README.md`.
   paired regression returned the correct exact literal but kept an extra ranking column. Do not
   promote or expand this ablation. See
   `docs/reports/evaluation/BIRD_VERSION24_BOUNDED_SEARCH_SINGLE_VARIABLE_GATE50_20260730_ZH.md`.
-  Future versions increment numerically from `version50`.
-- The canonical model action contains exactly one non-empty `<think>` block followed by one strict
-  raw JSON object with exact `tool` and `arguments` keys. A provider-native reasoning adapter may
-  carry the same authored reason in a separate API field, but its API-facing prompt and history
-  must describe only that one carrier.
+  `version50` is a completed, rejected provider-carrier diagnostic. It returns to every version39
+  public tool, argument, execution, canonical state, recent-4 rendering, exact-table terminal, and
+  teacher semantic-guidance rule, but exposes those same 12 calls to DeepSeek through the official
+  native `tools`/`tool_calls` interface. The provider prompt contains no positive raw-action
+  carrier example; canonical teacher examples are rendered as function name plus arguments only.
+  Thinking-mode history must return the original `reasoning_content`, tool call, and call id, while
+  harness observations use the matching `role=tool`. Because DeepSeek thinking mode rejects
+  `tool_choice=required`, the request uses `auto`; zero-call/provider-shape defects receive bounded
+  client retries, while model-authored multiple calls, non-empty assistant content, unknown
+  functions, or malformed argument JSON are rejected before execution as state-preserving semantic
+  protocol errors. Canonical stored trajectories remain `<think>` plus raw JSON for replay/export
+  compatibility. Its user-authorized frozen Flash fixed-200 run scored **133/200** versus
+  historical version24 **145/200**, with 13 gains, 25 regressions, 120 both correct, 42 both wrong,
+  and exact paired `p=0.0730`. Legal termination fell from 197/200 to **183/200** (2 gains,
+  16 regressions, `p=0.00131`); process errors rose from 29 to **166** and tokens from 8,420,861
+  to **16,158,278**, while actions were nearly unchanged at 1,487 versus 1,490. All 133 correct
+  trajectories passed fresh replay and structural/no-leak/native-lowering audits, but this does not
+  rescue the failed behavior and reliability gates. Do not promote version50, use its trajectories
+  for SFT/RL, or replace the JSON-Output default.
+  `version51` is the frozen behavior baseline and the first `native-tool-bundle` scheme. It keeps
+  version39's 12 primitive functions, harness execution, resident state, and exact-table terminal,
+  but follows the official provider semantics instead of forcing one call: one actual assistant
+  turn may contain 1..8 native `tool_calls`, and the client returns one `role=tool` result for each
+  call id in provider order. Non-empty assistant content is retained for audit but is never
+  executable evidence or a training target. Every call is statically and state-validity checked
+  against the bundle's shared pre-state before any call executes, so a later call cannot consume a
+  handle created by an earlier call that the model had not yet observed. Primitive calls execute
+  and are audited in order; `answer_from_context` must be the sole call in its turn. Stored steps
+  carry both `model_turn_index` and `native_tool_call_id`; they must not be flattened into fake
+  assistant turns. Version51 remains diagnostic-only until a scheme-aware exporter and explicit
+  training-admission gates pass. Its frozen carrier-failure Gate32 scored **22/32**
+  versus version50 **16/32**, with six gains, zero regressions, 32/32 versus 26/32 legal
+  termination, 11 versus 37 errors, and 1.0846x tokens. It recovered 6/16 targets and retained
+  16/16 controls; 37 multi-call turns and 92 non-empty-content turns produced zero carrier
+  rejection. All 22 correct trajectories replayed; structure and the full 32-task/271-call
+  no-leak, lowering, call/result order, reasoning-history, state-mutation, and bundle-pre-state
+  audits had zero issues. The subsequent fixed-200 scored **147/200** with **200/200 legal**,
+  54 process errors, 1,414 real model turns, 1,650 primitive calls, and 16,165,179 tokens. Against
+  version50 it had 20 gains and six regressions (`p=0.00936`), 17 legal gains and no regression,
+  and reduced carrier protocol errors from 124 to two. Against historical version24's 145/200 it
+  had 15 gains and 13 regressions (`p=0.8506`): accuracy is tied rather than promoted, while errors
+  remain 54 versus 29 and tokens 1.92x. All 147 successes replayed, and structural plus full
+  200-task native-history/no-leak audits had zero issues. Version51 therefore passes as the forward
+  provider-tool-call experiment baseline, not as an SFT/RL protocol. Subsequent protocol
+  experiments should branch from version51 rather than version26; do not flatten its multi-call
+  turns into atomic training targets. See
+  `docs/reports/evaluation/BIRD_VERSION51_NATIVE_TOOL_BUNDLE_GATE32_20260805_ZH.md` and
+  `docs/reports/evaluation/BIRD_VERSION51_NATIVE_TOOL_BUNDLE_FIXED200_20260805_ZH.md`.
+  `version52` keeps version51's primitive tools, native carrier, bundle-pre-state validation,
+  execution, resident state, recent-four provider-turn history, and hard sole-terminal rule. It
+  changes only the native prompt profile and fact-only statistics. The API-supplied JSON schemas
+  are now the sole argument-shape authority, so the system prompt no longer repeats the textual
+  tool catalog, long per-tool teacher elaborations, rewritten call cookbook, or three overlapping
+  bundle-carrier clauses. It retains resident-state, relational/output, semantic-decision, and
+  error-recovery semantics. Soft policy defaults to one call, normally caps a bundle at three,
+  favors independent perception, permits parallel filters only for grounded competing hypotheses,
+  and normally isolates relational operators. `answer_from_context` remains a hard single-call
+  bundle. Error calls and their structured tool feedback remain in causal provider history; the
+  later corrected bundle, not the rejected bundle, is the positive SFT target boundary. Per-call
+  execution status, later handle references, error-feedback preservation, and next-turn recovery
+  are recorded only as RL statistics, not rewards. On the frozen version51 fixed-200 request
+  transcripts, counterfactually replacing only the system prompt reduces message characters
+  45.4%; fixed prompt+native-schema characters fall from 30,937 to 16,769. This is a static audit,
+  not a behavior/token result. Version52 remains diagnostic-only until a paired live gate and a
+  scheme-aware exporter pass; its trajectories must not be flattened into atomic targets.
+  `version53` keeps every version52 tool, argument, carrier, execution, state, history, feedback,
+  and terminal semantic unchanged and changes only the prompt profile after an external review.
+  The shared student/teacher runtime kernel now states that database/schema/value/metadata text is
+  task data rather than instructions; catalog edges are not cardinality proof; join multiplicity
+  should be inspected when it can change aggregation/ranking or when observations are anomalous;
+  copied source fields keep stored representation while derived metrics keep exact tool-produced
+  results; correctness outranks call minimization; and jointly required independent filters over
+  different resident handles may share a bundle. Teacher-only guidance adds pre-commitment
+  population/grain/output-slot checks, anomaly investigation, concise reasoning, precise duplicate
+  read avoidance, and error-specific recovery. Harness implementation prose and any requirement to
+  read an entire final table are omitted. The teacher prompt is an exact student-prompt prefix plus
+  teacher-only guidance, and remains no longer than version52. Version53 is prompt-only,
+  diagnostic-only, and has no live accuracy claim or SFT/RL admission.
+  `version54` keeps version53's student runtime prompt, carrier, every non-plan function and
+  argument schema, bundle-pre-state validation, execution, resident state, recent-four provider-
+  turn history, feedback, and terminal semantics. It removes only the provider-visible `plan`
+  function plus the now-inapplicable teacher-only plan-evidence sentence. The underlying harness
+  retains replay compatibility; a hallucinated plan call is a structured state-preserving
+  `unknown_tool` error. Version54 is registered by `tool-scheme-registry-v11` and remains
+  diagnostic-only. The current gate is a v54-only absolute acceptance pilot over the first 200
+  tasks of frozen `bird_train_atomic_teacher1500_v2_nonempty`; it does not run a v53 comparison.
+  If every yield/legal/error/replay/structure/no-leak gate passes, generation may continue in the
+  same frozen order over the remaining 1,300 tasks. No external request has been made before the
+  new authorization. Version54 multi-call turns must not be flattened into atomic training targets;
+  all outputs remain diagnostic candidates until a scheme-aware exporter and explicit promotion.
+  Future changes increment from `version55`.
+- Training export applies `causal-empty-result-target-filter-v1`. A successful intermediate call
+  whose tool output explicitly has `row_count=0` remains in the executed trajectory and later
+  causal context but is marked `sft_target_eligible=false`; it receives no positive target loss.
+  If the table cited by `answer_from_context` has `row_count=0`, exclude the entire trajectory from
+  SFT. Do not confuse an empty relation with a grounded one-row scalar whose stored value is zero:
+  COUNT=0 in a 1x1 table remains eligible. Generation, cohort audit, and exporters must record and
+  independently enforce this boundary; never delete an empty observation needed by a later
+  recovery target.
+- Training-task admission applies `gold-denotation-nonempty-task-filter-v1` before rollout. Hidden
+  gold SQL is executed only by the local read-only SQLite harness and only an at-least-one-row bit
+  is retained; the source `gold_exec_results` placeholder is never trusted. Zero-row tasks and
+  tasks with execution/input errors are excluded before any student/teacher request, while a
+  one-row scalar containing value zero remains eligible. Gold SQL, result rows/values, and private
+  empty/nonempty status must never be model-visible or sent to an external provider. The active
+  source pools are the frozen 6,599-task `bird_train_filtered_nonempty_v1` and 5,915-task
+  `bird_train_tool_compatible_nonempty_v1`; the active teacher candidate is
+  `bird_train_atomic_teacher1500_v2_nonempty`. It preserves all v1 ids/order and the same task-file
+  hash because all prior 1,500 were certified nonempty. New training-task selectors must require a
+  hash-bound successful filter manifest; the unfiltered bypass is historical reproduction only.
+- Non-atomic scheme implementations are package-owned under `src/tool_modules/`: action-block,
+  relational-program, direct-SQL-search, iterative-SQL, and native-tool-bundle each own their
+  protocol directory;
+  `sql_common` is the explicit shared immutable-SQL runner and `tool_modules.registry` is the
+  exclusive cross-scheme registry. `src/eval` contains cross-scheme
+  evaluation infrastructure plus thin historical CLI/import aliases only. New code, launchers,
+  manifests, tests, and docs must use `tool_modules.*` canonical paths and must not import the old
+  flat `batch_plan_protocol`, `evaluate_batch_plan`, `relational_program_protocol`,
+  `evaluate_relational_program`, `direct_sql_search_protocol`, `iterative_sql_protocol`, or
+  `iterative_sql`, `atomic_version51`, `deepseek_native_tools`, or `audit_native_tool_bundle`
+  aliases, nor the old `tool_schemes` registry alias, from inside `src/tool_modules/`. See
+  `docs/current/architecture.md`.
+- The canonical atomic model action contains exactly one non-empty `<think>` block followed by one strict
+  raw JSON object with exact `tool` and `arguments` keys. A provider-native adapter may carry the
+  same authored reason and action in separate reasoning/function-call fields, but its API-facing
+  prompt and history must describe only that selected carrier; the canonical form is reconstructed
+  without editing function arguments before the shared parser and harness. Version51-version54 are named
+  non-atomic exception: its structured provider assistant turn is the authoritative carrier and is
+  never reconstructed as multiple causal text turns.
 - The promoted/default context contract remains bounded recent legal history with
   `history_turns=4`: catalog,
   question, and optional external knowledge are followed by at most four successful
@@ -328,9 +457,13 @@ Start at `docs/current/README.md`.
   retained with `status=rejected`, while the authored failed call is represented by the
   harness-owned attempted action/error. Version37 may render first-5 plus recent-5 for a paired
   diagnostic, but that policy is not promoted unless it beats recent-4 on the same frozen tasks.
+  Version51-version54 instead bound history by four provider assistant turns; each retained assistant turn
+  is followed by all of its matching tool-result messages, including structured per-call errors.
 - Current tools: `plan`, `describe_table`, `inspect_column`, `read_subtable`,
   `condition_filter`, `project`, `scalar_compute`, `join_tables`, `group_aggregate`,
   `extreme_value_select`, `set_op`, and `answer_from_context`.
+- Version54 exposes that same surface except that `plan` is absent; the other eleven functions and
+  their argument schemas are unchanged.
 - Version40 exposes the same set except that `plan` is absent and `read_subtable` is named
   `inspect_rows`; all other signatures and execution semantics are unchanged.
 - The frozen experimental `action-block-v32` scheme does not change that atomic contract. A
@@ -403,9 +536,10 @@ Start at `docs/current/README.md`.
   `base_role`; the bug fix is covered by deterministic SQLite tests only. Stop further prompt/schema
   expansion, and do not use v6 for SFT/RL; see
   `docs/reports/evaluation/BIRD_RELATIONAL_PROGRAM_V6_BASE_ROLE_GATE4_20260727_ZH.md`.
-  The scheme has evaluation and causal-rollout plumbing only, uses `tool-scheme-registry-v4`, and remains
+  The scheme has evaluation and causal-rollout plumbing only, was introduced in registry v4 and is
+  carried forward by `tool-scheme-registry-v11`, and remains
   `diagnostic_only_pending_protocol_scale_gate`; it has no SFT exporter or RL environment.
-- The separate direct-SQL-search scheme is the fourth registry-v4 action scheme and exposes
+- The separate direct-SQL-search scheme is the action scheme introduced by registry v4 and exposes
   exactly `search_values(query, table?, column?, limit?, offset?)` plus
   `execute_sql(sql, mode)`. Search is deterministic out-of-band bounded lexical retrieval over
   exact stored database values; it is not claimed to be theoretically inexpressible in SQL and
@@ -427,6 +561,75 @@ Start at `docs/current/README.md`.
   missed the accuracy expansion threshold by four tasks. The single search call occurred in a
   failure. Keep v2 as a diagnostic low-token SQL control; do not expand it or use it for SFT/RL. See
   `docs/current/direct_sql_search_tool_scheme_zh.md`.
+- The separate active `iterative-sql-v6` scheme is registered by `tool-scheme-registry-v11` and exposes
+  exactly `execute_sql(sql)` plus `submit_sql(sql)`. The prompt requires causal SQL exploration
+  until enough schema/value/join/population/grain/output evidence is available, then requires the
+  final SELECT/WITH to match a previously successful `execute_sql` query. Safety, prior-inspection,
+  timeout, syntax, and SQLite execution failures return structured state-preserving `LAST SQL
+  ERROR` feedback and the same episode may recover; only a successfully executed submission
+  terminates for hidden `bird-set` scoring, and an executable wrong answer receives no verifier
+  feedback. V3 added a strict schema-PRAGMA allowlist, exact-success no-progress rejection, compact
+  resident SQL state, and hidden-verifier isolation. Its frozen 15-task Flash baseline scored
+  7/15 with 15/15 legal termination. V4 keeps the same two calls and execution semantics, repeats
+  exact question/external knowledge at the latest context boundary, strengthens binding output/
+  formula/source/grain rules, and adds a deterministic syntax-only query-shape audit to successful
+  SQL observations. On the same 15-task development set it scored 12/15 with 15/15 legal
+  termination, six gains, one regression, 91 versus 97 actions, one versus four process errors,
+  and 346,664 versus 341,223 tokens. All 15 outcomes passed fresh replay, structural, and hidden-
+  input-key audit. Because v4 was designed after inspecting these same v3 failures, this is an
+  in-sample optimization result; freeze v4 and require a new independent holdout before expansion.
+  V5 keeps those public tools and execution semantics, but incorporates an external prompt review:
+  QUESTION and external knowledge receive non-overlapping binding roles; database facts cannot
+  invent semantic restrictions; bounded previews cannot establish absence/order/completeness/
+  extrema/ties; exploration targets one fact or tightly related uncertainty set; alternative
+  source tables are inspected only when relevant; top-N defaults to N rows unless ties are
+  requested; and database-derived final answers must remain SQL-data-dependent. Its v5-only
+  query-shape facts add `has_from` and `literal_only_select`, without semantic rejection. DeepSeek
+  sees only native-reasoning/JSON transport instructions, not internal canonical-envelope details.
+  Its frozen active-baseline300 Prefix20 DeepSeek v4 Flash gate is independent of the old fixed-200
+  and initially scored 14/20 versus frozen v4 at 12/20. The completed Prefix50 scored **36/50**
+  versus **34/50**, with four gains, two regressions, exact paired `p=0.6875`, 49/50 versus 50/50
+  legal, 10 versus seven process errors, 263 versus 265 actions, and 984,082 versus 877,576 tokens
+  (+12.1%). Both arms passed 50/50 fresh replay/structural/no-hidden-input-key audit. The two
+  regressions both concatenated `full name refers to field1, field2...` into one string, while v4
+  preserved separate columns. One irreconcilable question/external/reference formula task caused
+  v5's sole illegal termination and 139,858 tokens. Stop v5 expansion at Prefix50; do not tune on
+  the consumed tasks, infer SFT/RL promotion, or describe v5 as a reliable v4 replacement.
+  V6 keeps the v5 tools, execution, feedback, context, and audit semantics and changes only the
+  model-visible output rule: every answer is a SQL result table; a scalar is 1x1; one mapped field
+  is one column; multiple mapped fields remain separate columns in their stated order; and
+  concatenation is allowed only when QUESTION or EXTERNAL KNOWLEDGE explicitly requests one
+  formatted, combined, or string value. This is a general representation rule, not a task-specific
+  exception. Its frozen disjoint tasks 51-70 DeepSeek Flash Gate20 scored 12/20 versus v5 12/20,
+  with one gain, one regression, 20/20 legal in both arms, 97 versus 100 actions, two process errors
+  each, and 340,873 versus 331,641 tokens (+2.8%). Both arms passed 20/20 fresh replay/structure.
+  The slice had no multi-field-name target or explicit-concatenation control, so it does not
+  validate the target rule and provides no promotion evidence. Do not tune on the consumed first
+  70 tasks. A subsequent public-text-selected Target Gate20 excluded the complete baseline300 and
+  historical fixed-200. V6 scored **15/20** versus v5 **10/20**, with five gains, zero regressions,
+  20/20 legal in both arms, 99 versus 111 actions, one versus six errors, and 339,600 versus
+  371,036 tokens. Separate-field targets improved from 1/6 to 5/6; all ten valid single-field and
+  ordinary controls were retained, and both arms passed 20/20 replay/structure. All numeric gates
+  passed. However, the predeclared `field1+field2` explicit-combined controls were invalid: local
+  hidden references also required separate columns, so the anti-overseparation claim remains
+  untested. V6 is authorized only for a new representative paired gate; do not tune on either
+  consumed Gate20 or use v6 for SFT/RL. V5 remains available as
+  frozen `execute-sql-submit-sql-v5` with DeepSeek Flash lazy-catalog hash
+  `b6465c6e222c12c2`; v6 uses `execute-sql-submit-sql-v6` with hash
+  `176ce977b411636e`. Frozen v4/v3 and the historical
+  `execute_sql_submit_sql_v2` interface are reproduction-only. Iterative SQL remains
+  diagnostic-only, has no SFT exporter or RL environment, and must not be mixed with
+  direct-SQL-search or atomic artifacts. See
+  `docs/current/iterative_sql_tool_scheme_zh.md`.
+  The subsequent user-authorized v6-only baseline300 run reused the audited tasks 51-70 and
+  requested the missing 280 episodes. It scored **215/300 (71.67%)** with **298/300 legal**;
+  all 300 records passed fresh replay and structure audit. Because tasks 1-70 were already consumed
+  during design/diagnosis, the primary generalization read is untouched tasks 71-300:
+  **168/230 (73.04%)**, **228/230 legal**; both clean 115-task halves scored 84/115. The full run
+  used 1,698 actions, had 72 process errors, and consumed 7,000,561 tokens. No v5 arm was run on
+  the clean 230, so this is an absolute v6 diagnostic rather than evidence that v6 beats v5 or
+  another scheme. It does not change the no-SFT/RL boundary. See
+  `docs/reports/evaluation/BIRD_ITERATIVE_SQL_V6_FLASH_FULL300_20260805_ZH.md`.
 - No `add_to_memory`, `refine_memory`, reflection, invalidate, or model-visible sidecar state.
 - Plans are control state, not factual evidence. Scalar reuse is grounded through direct step-id
   `value_ref`.
@@ -606,6 +809,20 @@ Start at `docs/current/README.md`.
   single-object join-`on` errors, but failed the 150/200 gate. Do not construct action-block v32
   SFT data; see
   `docs/reports/evaluation/BIRD_ACTION_BLOCK_V32_FIXED200_20260726_ZH.md`.
+
+## Baseline cohort lifecycle
+
+- The active BIRD-train baseline for all new experiments is
+  `data/eval_inputs/bird_train_baseline300_v1.jsonl` (300 tasks, all 69 train databases, SHA-256
+  `87b37b307ea2710acdff7d03bdc474a6ba2cdb8ed51b005cff0fe8fa54c67c03`). Its frozen manifest is
+  `data/eval_inputs/bird_train_baseline300_v1.manifest.json`.
+- `data/eval_inputs/bird_train_tool_interface_validation200_version4.jsonl` is deprecated for new
+  experiments. Keep it unchanged only for reproducing historical fixed-200 reports; never call an
+  old-200 score a current baseline or pair it statistically with the new 300.
+- The selection and lifecycle source of truth is `docs/current/baseline_datasets.md`. Every future
+  cohort change must create a new versioned JSONL/manifest, preserve prior artifacts, mark the
+  predecessor deprecated, update that document and this section in the same change, and record the
+  exact cohort path/hash in result manifests.
 
 ## Current BIRD reference points (2026-07-24)
 

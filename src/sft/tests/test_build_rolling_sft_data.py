@@ -9,6 +9,7 @@ SFT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SFT_DIR))
 
 from build_rolling_sft_data import convert_step, is_sft_target_step  # noqa: E402
+from training_result_quality import trajectory_has_empty_terminal_evidence  # noqa: E402
 from select_verified_rollouts import quality_reason  # noqa: E402
 
 
@@ -41,6 +42,27 @@ def trajectory() -> dict:
 
 
 class BuildRollingSftTests(unittest.TestCase):
+    def test_empty_result_step_is_context_only_without_deleting_it(self):
+        item = trajectory()
+        item["steps"][0]["tool_output"] = {
+            "table": "filter_001",
+            "row_count": 0,
+            "columns": ["id"],
+        }
+        self.assertFalse(is_sft_target_step(item["steps"][0]))
+        record, _ = convert_step(item, 1, 4, "rolling system")
+        self.assertIn('"row_count":0', record["conversations"][2]["value"])
+
+    def test_empty_terminal_evidence_marks_whole_trajectory_for_exclusion(self):
+        item = trajectory()
+        item["steps"][1]["tool_call"]["arguments"] = {
+            "evidence": {"table": "empty_result"}
+        }
+        item["steps"][1]["environment_state_before"] = {
+            "tables": {"empty_result": {"row_count": 0}}
+        }
+        self.assertTrue(trajectory_has_empty_terminal_evidence(item["steps"]))
+
     def test_recovery_prefix_can_be_context_only(self):
         item = trajectory()
         item["steps"][0]["sft_target_eligible"] = False

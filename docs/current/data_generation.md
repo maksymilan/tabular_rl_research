@@ -20,6 +20,89 @@ All new DeepSeek teacher calls use the official `https://api.deepseek.com` Chat 
 service. AimixHub/AIHubMix is deprecated and must not be used as a provider, proxy, or fallback.
 Provider configuration and the FIM boundary are defined in `provider_api.md`.
 
+The completed atomic `version50` diagnostic tested official DeepSeek native function calls as the
+teacher transport. It preserved the same causal harness loop and canonical stored trajectory but
+scored 133/200 versus historical version24 at 145/200, with 183/200 versus 197/200 legal
+termination and 166 versus 29 process errors. It is permanently `diagnostic-only`; its successful
+episodes are not SFT candidates despite passing replay and structural/no-leak audits. The batch
+entry point remains
+`src/sft/generate_teacher_rollouts.py`, selected with
+`--atomic-protocol-version version50 --deepseek-carrier native-tool-calls --diagnostic-only`.
+
+The frozen provider behavior baseline is `version51` with the distinct `native-tool-bundle` scheme. One real
+assistant turn may contain 1..8 direct primitive calls. All calls are validated against the same
+pre-turn harness state, executed and audited in provider order, and returned as one matching tool
+message per call id. The record keeps the shared `model_turn_index`; it must never flatten the
+bundle into several assistant turns that falsely imply intermediate observations. The entry point
+is `--atomic-protocol-version version51 --deepseek-carrier native-tool-bundle
+--diagnostic-only`.
+
+The frozen compact-prompt predecessor is `version52` with the same carrier and execution contract. Its
+compact prompt treats the supplied native schemas as the sole function/argument-shape authority,
+adds soft one-to-three-call scheduling and explicit error recovery, and preserves every errored
+assistant bundle plus structured tool feedback in causal history. A rejected bundle is never a
+positive SFT target; a later corrected bundle may be, with the error prefix intact. Records also
+contain `native_bundle_rl_statistics`, which is fact-only and must not be interpreted as a reward.
+Launch it with `--atomic-protocol-version version52 --deepseek-carrier native-tool-bundle
+--diagnostic-only` only for explicit reproduction.
+
+The frozen reviewed prompt is `version53`. It preserves version52 execution while separating shared runtime
+semantics from teacher-only trajectory-generation rules and hardening data authority, join
+cardinality, output representation, independent filters, and error recovery. Launch it with
+`--atomic-protocol-version version53 --deepseek-carrier native-tool-bundle --diagnostic-only`.
+The active no-plan diagnostic is `version54`: it keeps version53's student prompt and all non-plan
+semantics, while removing only the provider-visible `plan` function and stale teacher plan rule.
+Launch it with `--atomic-protocol-version version54 --deepseek-carrier native-tool-bundle
+--diagnostic-only`. Version51-version54 are not SFT sources until a scheme-aware exporter and
+explicit training-admission gates promote them. New work branches from version54, not version26.
+
+The active version54 rollout gate is single-arm: use the frozen first 200 tasks of
+`bird_train_atomic_teacher1500_v2_nonempty` in source order and judge absolute verified yield,
+legal completion, process-error, replay, native-history, no-plan, and no-leak gates. Do not run a
+v53 comparison. Only if every Prefix200 gate passes may the same configuration continue over the
+remaining 1,300 frozen tasks. All resulting multi-call trajectories remain diagnostic candidates;
+they are not SFT records until a scheme-aware exporter and explicit promotion exist.
+
+Its frozen Gate32 passed: 22/32 correct and 32/32 legal versus version50 at 16/32 and 26/32. The
+completed fixed-200 scored 147/200 correct and 200/200 legal versus version50 at 133/200 and
+183/200, with significant paired improvement and all replay/structure/provider-history/no-leak
+audits passing. It remains statistically tied with version24's 145/200 and uses 1.92x its tokens;
+the SFT exclusion above remains.
+
+The separate active `iterative-sql-v6` causal loop is also diagnostic-only. Although its launcher lives
+under `src/sft/` for external-teacher dispatch, its `execute_sql`/`submit_sql` episodes are not
+atomic SFT candidates and cannot enter any current exporter or mixture. A future admission would
+require its own frozen paired gate, fresh replay/no-leak audit, and scheme-aware exporter.
+
+## Training-task admission before rollout
+
+Training-task selection now applies `gold-denotation-nonempty-task-filter-v1` before any student or
+external-teacher episode starts. The local harness executes hidden gold SQL against a SQLite
+connection opened with URI `mode=ro` plus `PRAGMA query_only=ON` and calls only `fetchone()`:
+
+- zero returned rows exclude the task;
+- a returned 1x1 scalar whose value is `0` is nonempty and stays eligible;
+- SQL execution errors, timeouts, missing databases, and invalid query inputs fail closed and are
+  not training tasks;
+- source `gold_exec_results` placeholders are ignored;
+- neither SQL text, rows, values, nor the private empty/nonempty status may enter a model/teacher
+  prompt or external-provider request.
+
+The 2026-08-06 audit executed all 6,601 normalized BIRD-train tasks. It found 6,599 certified
+nonempty tasks, zero true empty denotations, and two execution errors. The compatible rollout pool
+had 5,915/5,915 certified nonempty tasks and no errors. Frozen artifacts are:
+
+- `data/eval_inputs/bird_train_filtered_nonempty_v1.jsonl` (6,599);
+- `data/eval_inputs/bird_train_tool_compatible_nonempty_v1.jsonl` (5,915);
+- private proof `data/eval_inputs/bird_train_nonempty_v1.private_status.jsonl` and its manifest;
+- `data/eval_inputs/bird_train_atomic_teacher1500_v2_nonempty.jsonl` plus manifest.
+
+The 1,500-task v2 preserves every v1 task id and its exact order because all 1,500 were certified
+nonempty. Its task file has the same SHA-256 as v1; v2 adds a hash-bound admission proof instead of
+confounding this policy change with resampling. New teacher-data generation uses v2. The v1 cohort
+is retained only for historical reproduction. Selection refuses an uncertified training cohort by
+default; `--allow-unfiltered-historical-reproduction` is an explicit historical-only bypass.
+
 ## Data lanes
 
 The complete second-stage mixture is:
@@ -41,6 +124,16 @@ An error action remains in `turns` and `error_events` only.  It is never an SFT 
 subsequent legal action is rendered from the unchanged environment plus structured
 `LAST TOOL ERROR` and tagged `feedback_recovery`.  Recovery targets are a tagged subset of student
 success, not duplicated records.  Sampling weights may expose them more often.
+
+### Empty-result filtering
+
+`causal-empty-result-target-filter-v1` treats an empty relation like recoverable environment
+feedback, not a positive demonstration. A successful intermediate call with an explicit
+`row_count=0` stays in `steps` and subsequent history but is marked `sft_target_eligible=false`;
+the next grounded correction may still be supervised. If `answer_from_context` cites a table whose
+resident `row_count=0`, the whole trajectory is excluded from training. A scalar answer whose 1x1
+table contains numeric zero is not empty and remains eligible. Manifests report empty context-only
+steps and excluded terminal-empty trajectories separately.
 
 ### Teacher fallback and Decision Correction
 
@@ -70,11 +163,15 @@ state when applicable.
 ## Admission gates
 
 - BIRD train only; held-out BIRD dev never supplies SFT data.
+- Every source task is a member of a hash-bound nonempty-gold-denotation task pool before rollout;
+  zero-row tasks and tasks that cannot be certified are excluded before provider dispatch.
 - Strict parser and current argument schema.
 - Fresh database replay with matching state snapshots.
 - Correct final denotation for every accepted source branch.
 - No gold SQL, current output, or future factual step reference in model input.
 - Error actions excluded from labels.
+- Empty-row intermediate results excluded from labels while retained in causal context; terminal-
+  empty trajectories excluded wholesale. Grounded 1x1 scalar zero remains eligible.
 - Exact source/protocol/context metadata, teacher/student prompt hashes, public tool-schema hash,
   and state hashes retained.
 - Repeated identical calls, overlong trajectories, overlong reasoning, and target truncation are

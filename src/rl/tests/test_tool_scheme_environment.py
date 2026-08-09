@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [
+    str(ROOT / "src"),
     str(ROOT / "src" / "rl"),
     str(ROOT / "src" / "eval"),
     str(ROOT / "src" / "harness"),
@@ -18,7 +19,10 @@ sys.path[:0] = [
 ]
 
 from tool_environment import create_tool_use_env  # noqa: E402
-from tool_schemes import ACTION_BLOCK_TOOL_SCHEME, ATOMIC_TOOL_SCHEME  # noqa: E402
+from tool_modules.registry import (  # noqa: E402
+    ACTION_BLOCK_TOOL_SCHEME,
+    ATOMIC_TOOL_SCHEME,
+)
 
 
 class ToolSchemeEnvironmentTests(unittest.TestCase):

@@ -33,7 +33,25 @@ a 10-second generated-query timeout, and `bird-set` for that optional Arctic set
 `src/eval/text2sql_passk.py` are direct-SQL controls. Result directories and manifests must not mix
 different denotation contracts.
 
-`src/eval/iterative_sql.py --interface search-values-execute-sql-v2` evaluates the active separate
+The active BIRD-train cohort for all new baseline experiments is the frozen, representative,
+disjoint 300-task file `data/eval_inputs/bird_train_baseline300_v1.jsonl` (SHA-256
+`87b37b307ea2710acdff7d03bdc474a6ba2cdb8ed51b005cff0fe8fa54c67c03`). It covers all 69 train
+databases and was selected against the public database, question-length, and external-knowledge
+distribution of all 6,601 normalized train tasks. The former
+`bird_train_tool_interface_validation200_version4.jsonl` cohort is deprecated for new experiments
+and retained only to reproduce immutable fixed-200 reports. Results across the old 200 and new 300
+are not paired comparisons. The full selection, audit, lifecycle, and mandatory future-change
+procedure is in `baseline_datasets.md`; every evaluation manifest must record the exact cohort path
+and hash.
+
+The completed version51 / `native-tool-bundle` fixed-200 diagnostic uses the same frozen cohort as
+version50 and historical version24. It scored 147/200 correct and 200/200 legal versus version50 at
+133/200 and 183/200, with 20 paired gains, six regressions (`p=0.00936`), and 17 legal gains with no
+regression. Against version24's 145/200 it had 15 gains and 13 regressions (`p=0.8506`), while using
+1.92x tokens and producing 54 versus 29 process errors. Treat it as the forward provider-tool-call
+diagnostic baseline, not an accuracy or training-data promotion; multi-call turns remain intact.
+
+`src/tool_modules/sql_common/runner.py --interface search-values-execute-sql-v2` evaluates the active separate
 two-tool diagnostic; `search-values-execute-sql-v1` remains selectable only for frozen reproduction.
 It uses the same causal provider loop and hidden
 `bird-set` scorer, but the model sees only bounded database-level `search_values` and
@@ -44,7 +62,50 @@ fresh atomic version39 at 10/15; both arms were 15/15 legal, while v2 used 38.3%
 and 76.5% of its actions. V2 passed engineering stability but failed the preregistered accuracy
 expansion threshold. Keep both diagnostic-only and do not infer SFT/RL admission from replayed
 successes.
-`src/eval/audit_direct_sql_search.py` independently audits both versioned interfaces.
+`src/tool_modules/direct_sql_search/audit.py` independently audits both versioned interfaces.
+
+`src/tool_modules/sql_common/runner.py --interface execute-sql-submit-sql-v6` evaluates the distinct
+`iterative-sql` scheme. The model sees only `execute_sql(sql)` and `submit_sql(sql)`: it must first
+execute the exact final query successfully, then submit that same query. Safety, prior-inspection,
+timeout, syntax, and execution failures are structured state-preserving feedback and do not end the
+episode. A successfully executed submission is terminal and is hidden-scored; wrong-answer or
+verifier information is never returned to the model. The runner records this as diagnostic-only,
+uses the official DeepSeek endpoint guard, and keeps the historical v4, v3, and
+`execute_sql_submit_sql_v2` interfaces only for explicit reproduction. On the 15-task
+development gate, v3 scored 7/15 and the failure-derived v4 scored 12/15, both with 15/15 legal
+termination; all recorded outcomes passed fresh replay and structural/no-hidden-input-key audit.
+Because v4 was optimized on this same set, it requires a new independent holdout before expansion
+and remains ineligible for training. V5 keeps execution semantics fixed while incorporating an
+externally reviewed prompt/context/audit cleanup. On the active baseline300 frozen Prefix20, which
+has zero overlap with the old fixed-200, v5 initially scored 14/20 versus v4 12/20. The completed
+Prefix50 scored 36/50 versus 34/50, with four gains, two regressions, exact paired `p=0.6875`,
+49/50 versus 50/50 legal, 10 versus seven process errors, nearly identical actions, and 12.1% more
+tokens. Stop expansion: v5 remains diagnostic-only and is not a reliable replacement for v4. See
+`docs/reports/evaluation/BIRD_ITERATIVE_SQL_V5_PREFIX50_EXPANSION_20260805_ZH.md`.
+V6 keeps that complete execution/context/feedback contract and adds only an explicit result-table
+rule: scalar = 1x1, each mapped field = one ordered column, and concatenation is legal only when
+the task explicitly requests one formatted/combined string. Its disjoint frozen tasks 51–70 Gate20
+scored 12/20 versus v5 12/20, with one gain, one regression, 20/20 legal in both arms, and +2.8%
+tokens. Because that slice had no direct multi-field-name target or explicit-concatenation control,
+the target rule remains unvalidated and v6 is not promoted. See
+`docs/reports/evaluation/BIRD_ITERATIVE_SQL_V6_DISJOINT_GATE20_20260805_ZH.md`.
+The subsequent zero-overlap Target Gate20 scored 15/20 for v6 versus 10/20 for v5, with five gains,
+zero regressions, 20/20 legal in both arms, 99 versus 111 actions, one versus six process errors,
+and 339,600 versus 371,036 tokens. Multi-field targets improved from 1/6 to 5/6 and all 10 valid
+single-field/ordinary controls were retained. All numeric preregistration gates and audits passed.
+The intended `field1+field2` combined-string controls were semantically invalid—the reference also
+required separate columns—so this authorizes a new representative paired gate, not SFT/RL or an
+anti-overseparation claim. See
+`docs/reports/evaluation/BIRD_ITERATIVE_SQL_V6_TARGET_GATE20_RESULT_20260805_ZH.md`.
+The subsequent user-authorized v6-only baseline300 run reused the audited tasks 51–70 and requested
+the missing 280 episodes. It scored **215/300 (71.67%)** with **298/300 legal**; all 300 records
+passed fresh replay and structure audit. Because tasks 1–70 had already been consumed during v5/v6
+development or diagnosis, the primary generalization read is the untouched tasks 71–300:
+**168/230 (73.04%)** with **228/230 legal**. Both clean 115-task halves scored 84/115. The full run
+used 1,698 actions, produced 72 process errors, and consumed 7,000,561 tokens. This is a single-arm
+absolute-capability result: no v5 arm was run on the clean 230, so it cannot establish an overall
+v6-over-v5 gain or a comparison with another scheme. Keep v6 diagnostic-only. See
+`docs/reports/evaluation/BIRD_ITERATIVE_SQL_V6_FLASH_FULL300_20260805_ZH.md`.
 
 Direct-SQL input construction is separately versioned in `src/eval/direct_sql_prompt.py`.
 `canonical-json-v1` preserves the historical JSON full-schema control. The diagnostic
@@ -95,7 +156,7 @@ greedy run produces 1,534 trajectories at comparable order of compute and is the
 primary comparison. Fixed-prefix scoring remains a secondary behavioral diagnostic. K=4 sampling is
 deferred to at most the final selected method and must never replace the full-dev greedy result.
 
-`src/eval/evaluate_relational_program.py` is the diagnostic evaluator for the separate
+`src/tool_modules/relational_program/evaluator.py` is the diagnostic evaluator for the separate
 `relational-program-v6` scheme. It uses the same hidden `bird-set` terminal scorer and causal
 model↔harness loop. Its exclusive model prompt exposes only `observe`, `relational_program`, and
 `answer_from_context`; the harness derives a DAG from exact program-local parameter references and
@@ -107,7 +168,8 @@ lower to unchanged harness-grounded producing-step references. A current-node jo
 `diagnostic_only_pending_protocol_scale_gate`; they cannot be admitted to SFT or RL from evaluation
 success alone.
 
-`src/eval/evaluate_batch_plan.py` defaults to the separate `action-block-v34` diagnostic. A work
+`src/tool_modules/action_block/evaluator.py` defaults to the separate `action-block-v34`
+diagnostic. A work
 turn is an ordered 1..8 sequence of atomic operations, not a declarative program. The model
 declares no DAG, dependency fields, result root, exports, or handles. Same-block backward
 references connect already-determined consecutive operations; the harness returns one complete

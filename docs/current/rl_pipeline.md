@@ -40,6 +40,15 @@ silently cross a prompt contract.
 - `src/rl/frameworks/accelerate/`: the frozen single-GPU QLoRA REINFORCE baseline. It remains an
   audit/equivalence reference and must not receive new optimizer features.
 
+Algorithm names in experiment reports follow the active loss, not the trainer class name. The
+TRL class is named `TransitionGRPOTrainer`, but only result-only experiments use K-way
+group-standardized reward advantages. Process experiments pass exact per-turn harness rewards as
+advantages into the same tokenwise PPO-clipped surrogate; they use neither a learned value model
+nor group-relative normalization. Rank-only experiments set the policy-loss coefficient to zero.
+Exact-prefix Action-DPO and streaming OPD + repair DPO use separate standalone trainers and are
+neither PPO nor GRPO. Frozen per-experiment settings and the Rank definition are recorded in
+`docs/reports/rl/RL_METHODS_AND_PAPER_PROVENANCE_20260805_ZH.md`.
+
 The historical Verl integration is archived under `archive/code/experimental_backends/verl/` and
 is not a supported training entry point. It concatenated multi-turn transcripts, which is not
 equivalent to the active rolling-state contract where every assistant turn has a separately rebuilt
@@ -66,6 +75,13 @@ earlier erroneous turns; this behavior is retained only as the control condition
 the actor's own trajectory. Model-authored reasoning and plan text never determine factual credit.
 Local protocol, argument, and execution errors remain assigned to the event that caused them;
 recovery credit is assigned to the later legal action that uses the feedback.
+
+Version52-version53 native bundles additionally record `native_bundle_rl_statistics`: bundle-size and call
+status histograms, later references to produced handles/steps, preservation of structured error
+feedback, and the shape of the next-turn correction. These are harness-derived descriptive
+statistics only. Observational calls are explicitly labeled `observational_credit_unresolved`; the
+statistics do not become reward, do not retroactively make an errored bundle a positive target, and
+do not flatten several calls from one provider turn into independent policy turns.
 
 The current per-turn reward is:
 

@@ -165,6 +165,30 @@ class ExportSftDatasetTests(unittest.TestCase):
             self.assertEqual(manifest["kept"], 0)
             self.assertEqual(manifest["dropped_trajectory_ids"], ["too_long"])
 
+    def test_legacy_export_drops_trajectory_with_empty_result_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "train.jsonl"
+            item = trajectory("empty_result")
+            item["steps"][0]["tool_output"] = {
+                "table": "group_001",
+                "columns": ["count_1"],
+                "rows": [],
+                "row_count": 0,
+            }
+            source.write_text(json.dumps(item) + "\n", encoding="utf-8")
+
+            output = root / "out.jsonl"
+            manifest = build("train", 10000, source, output)
+
+            self.assertEqual(manifest["kept"], 0)
+            self.assertEqual(manifest["dropped_empty_result"], 1)
+            self.assertEqual(
+                manifest["dropped_empty_result_trajectory_ids"],
+                ["empty_result"],
+            )
+            self.assertEqual(output.read_text(encoding="utf-8"), "")
+
     def test_build_rejects_duplicate_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

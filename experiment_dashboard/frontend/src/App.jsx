@@ -61,6 +61,7 @@ const api = {
     return payload;
   },
   experiments: () => api.request("/api/experiments"),
+  researchSummary: () => api.request("/api/research-summary"),
   records: (id, source, page, pageSize = 8) =>
     api.request(
       `/api/experiments/${id}/records?source=${source}&page=${page}&page_size=${pageSize}`,
@@ -205,6 +206,576 @@ function Empty({ title, detail }) {
       <strong>{title}</strong>
       <span>{detail}</span>
     </div>
+  );
+}
+
+const artifactCategoryLabels = {
+  all: "全部",
+  reports: "正式报告",
+  evaluation: "评测结果",
+  trajectories: "轨迹数据",
+  "eval-inputs": "冻结输入",
+  table_rl: "服务器产物",
+  workspace: "工作区",
+};
+
+function ResearchOverview({ summary }) {
+  const [artifactCategory, setArtifactCategory] = useState("all");
+  const [artifactQuery, setArtifactQuery] = useState("");
+  const [diagnosticFamily, setDiagnosticFamily] = useState("all");
+  const [copiedPath, setCopiedPath] = useState("");
+
+  const fullDevData = (summary?.full_dev_runs || []).map((item) => ({
+    ...item,
+    accuracyPct: Number((item.accuracy * 100).toFixed(2)),
+    validPct: Number(((item.valid / item.total) * 100).toFixed(2)),
+  }));
+  const baseline = fullDevData.find((item) => item.id === "sft2");
+  const directSqlData = (summary?.direct_sql_runs || []).map((item) => ({
+    ...item,
+    name: item.id === "coder-direct-greedy" ? "greedy" : `pass@${item.k}`,
+    accuracyPct: Number((item.accuracy * 100).toFixed(2)),
+  }));
+  const coderToolSftData = (summary?.coder_tool_sft_runs || []).map((item) => ({
+    ...item,
+    accuracyPct: Number((item.accuracy * 100).toFixed(2)),
+  }));
+  const coderComparisonData = ["greedy", "pass@1", "pass@2", "pass@4"].map((name) => {
+    const directSql = directSqlData.find((item) => item.name === name);
+    const toolSft = coderToolSftData.find((item) => item.name === name);
+    return {
+      name,
+      directSqlPct: directSql?.accuracyPct,
+      directSqlCorrect: directSql?.correct,
+      toolSftPct: toolSft?.accuracyPct,
+      toolSftCorrect: toolSft?.correct,
+      total: directSql?.total || toolSft?.total,
+    };
+  });
+  const omnisql = summary?.omnisql_comparison || {};
+  const omnisqlGreedy = omnisql.greedy || [];
+  const omnisqlPaired = omnisql.paired || [];
+  const omnisqlFailureTypes = omnisql.greedy_failure_types || [];
+  const omnisqlPassK = omnisql.pass_k || [];
+  const fixed200Data = (summary?.fixed200_runs || [])
+    .filter((item) => item.total === 200)
+    .map((item) => ({
+      ...item,
+      accuracyPct: Number(((item.correct / item.total) * 100).toFixed(1)),
+      legalPct: Number.isFinite(item.legal)
+        ? Number(((item.legal / item.total) * 100).toFixed(1))
+        : null,
+    }));
+  const diagnosticFamilies = [
+    "all",
+    ...new Set((summary?.diagnostic_runs || []).map((item) => item.family)),
+  ];
+  const diagnostics = (summary?.diagnostic_runs || []).filter(
+    (item) => diagnosticFamily === "all" || item.family === diagnosticFamily,
+  );
+  const papersById = new Map((summary?.rl_papers || []).map((paper) => [paper.id, paper]));
+  const normalizedQuery = artifactQuery.trim().toLowerCase();
+  const artifacts = (summary?.artifacts || []).filter((item) => (
+    (artifactCategory === "all" || item.category === artifactCategory)
+      && (!normalizedQuery || item.path.toLowerCase().includes(normalizedQuery))
+  ));
+  const copyPath = async (path) => {
+    await navigator.clipboard.writeText(path);
+    setCopiedPath(path);
+    window.setTimeout(() => setCopiedPath(""), 1400);
+  };
+
+  if (!summary) {
+    return <main className="content"><Empty title="研究统计不可用" detail="没有加载到统一实验摘要。" /></main>;
+  }
+
+  return (
+    <main className="content research-overview">
+      <header className="page-header">
+        <div>
+          <p className="eyebrow">Research evidence map</p>
+          <h1>{summary.title}</h1>
+          <p>{summary.period.start} 至 {summary.period.end}；正式结果、监督效率与原始产物统一索引。</p>
+        </div>
+        <div className="header-date">
+          <Clock3 size={16} />
+          更新于 {summary.period.updated}
+        </div>
+      </header>
+
+      <section className="research-contract">
+        <strong>完整评测口径</strong>
+        <span>{summary.evaluation_contract}</span>
+        <code>{summary.source_index}</code>
+      </section>
+
+      <section className="metric-strip">
+        <Metric
+          label="Teacher-union60 完整评测"
+          value={`${summary.headline.best_full_dev_correct}/${summary.headline.best_full_dev_total}`}
+          detail={`${summary.headline.best_full_dev_run} · ${pct(summary.headline.best_full_dev_correct / summary.headline.best_full_dev_total)}`}
+          icon={Gauge}
+        />
+        <Metric
+          label="相对 SFT2"
+          value={`+${summary.headline.best_full_dev_correct - summary.headline.sft2_correct}`}
+          detail="union60 的单次完整评测净分数"
+          icon={Activity}
+        />
+        <Metric
+          label="已结构化正式结果"
+          value={summary.coverage.full_dev_runs + summary.coverage.diagnostic_runs}
+          detail={`${summary.coverage.full_dev_runs} 个 full-dev · ${summary.coverage.diagnostic_runs} 个诊断`}
+          icon={FlaskConical}
+        />
+        <Metric
+          label="数据与报告入口"
+          value={summary.coverage.artifact_paths}
+          detail={`${summary.coverage.local_artifacts_available} 个本地可用 · ${summary.coverage.remote_artifacts} 个远端`}
+          icon={HardDrive}
+        />
+      </section>
+
+      <section className="finding-grid">
+        {summary.findings.map((item, index) => (
+          <article className="finding-card" key={item.title}>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <strong>{item.title}</strong>
+            <p>{item.detail}</p>
+          </article>
+        ))}
+      </section>
+
+      <section className="panel rl-lineage-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>RL 方法谱系与论文来源</h2>
+            <p>记录已经实际训练的方法、监督信号、信用粒度、评测数字及对应论文来源。</p>
+          </div>
+          <span className="unit">{summary.rl_method_families.length} families · {summary.rl_experiments.length} runs</span>
+        </div>
+        <div className="rl-boundary-note">
+          <strong>{summary.rl_implementation_note.title}</strong>
+          <span>{summary.rl_implementation_note.exp1}</span>
+          <span>{summary.rl_implementation_note.process}</span>
+          <span>{summary.rl_implementation_note.other}</span>
+          <span>{summary.rl_implementation_note.rank}</span>
+          <code>docs/reports/rl/RL_METHODS_AND_PAPER_PROVENANCE_20260805_ZH.md</code>
+        </div>
+        <div className="rl-method-grid">
+          {summary.rl_method_families.map((method) => (
+            <article key={method.id}>
+              <header>
+                <div>
+                  <span>{method.experiments.join(" · ")}</span>
+                  <strong>{method.label}</strong>
+                </div>
+                <b>{method.provenance}</b>
+              </header>
+              <dl>
+                <div><dt>训练信号</dt><dd>{method.signal}</dd></div>
+                <div><dt>信用粒度</dt><dd>{method.credit}</dd></div>
+                <div><dt>实测数据</dt><dd>{method.result}</dd></div>
+              </dl>
+              <footer>
+                {method.paper_ids.map((paperId) => {
+                  const paper = papersById.get(paperId);
+                  return paper ? <a key={paper.id} href={paper.url} target="_blank" rel="noreferrer">{paper.short} ↗</a> : null;
+                })}
+              </footer>
+            </article>
+          ))}
+        </div>
+        <details className="rl-experiment-details">
+          <summary>展开 Exp0–18 与 teacher-union 的算法、训练配置和实测结果</summary>
+          <div className="table-scroll research-table">
+            <table>
+              <thead><tr><th>实验</th><th>方法</th><th>实际算法</th><th>训练数据 / 更新</th><th>优化配置</th><th>信号 / mask</th><th>评测口径</th><th>结果</th><th>数值比较 / 记录</th></tr></thead>
+              <tbody>
+                {summary.rl_experiments.map((item) => (
+                  <tr key={item.id}>
+                    <td><strong>{item.id}</strong></td>
+                    <td>{item.method}</td>
+                    <td>{item.algorithm}</td>
+                    <td>{item.training}</td>
+                    <td><code>{item.optimization}</code></td>
+                    <td>{item.change}</td>
+                    <td><code>{item.scope}</code></td>
+                    <td>{item.result}</td>
+                    <td>{item.comparison}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+        <div className="paper-library">
+          <div className="paper-library-heading">
+            <div><strong>原始论文索引</strong><span>点击标题打开 DOI / arXiv 原始页面。</span></div>
+            <b>{summary.rl_papers.length} papers</b>
+          </div>
+          <div className="paper-grid">
+            {summary.rl_papers.map((paper) => (
+              <a key={paper.id} href={paper.url} target="_blank" rel="noreferrer">
+                <span>{paper.year}</span>
+                <strong>{paper.title}</strong>
+                <p>{paper.relation}</p>
+              </a>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="research-chart-grid">
+        <div className="panel research-chart-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>SFT2 → RL 完整评测</h2>
+              <p>同一模型、同一 BIRD-dev1534 greedy@1 口径；绿色虚线为 SFT2。</p>
+            </div>
+            <span className="unit">accuracy %</span>
+          </div>
+          <div className="research-tall-chart">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 760, height: 510 }}>
+              <BarChart data={fullDevData} layout="vertical" margin={{ top: 12, right: 28, bottom: 10, left: 6 }}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" domain={[49, 52]} tickFormatter={(value) => `${value}%`} />
+                <YAxis type="category" dataKey="label" width={116} tick={{ fontSize: 11 }} />
+                <Tooltip
+                  formatter={(value, name, item) => [
+                    `${value}% · ${item.payload.correct}/${item.payload.total}`,
+                    "执行准确率",
+                  ]}
+                  labelFormatter={(label, items) => `${label} · ${items?.[0]?.payload?.method || ""}`}
+                />
+                <ReferenceLine x={baseline?.accuracyPct} stroke="#087f5b" strokeDasharray="5 4" />
+                <Bar dataKey="accuracyPct" radius={[0, 4, 4, 0]}>
+                  {fullDevData.map((item) => (
+                    <Cell
+                      key={item.id}
+                      fill={item.id === "union60" ? "#087f5b" : item.id === "sft2" ? "#7a8d81" : "#82aa9b"}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="panel research-chart-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Coder-7B Direct SQL / Tool SFT</h2>
+              <p>BIRD-dev 1534 · greedy + sampled K=4 · strict official EX</p>
+            </div>
+            <span className="unit">BIRD-dev 1534</span>
+          </div>
+          <div className="research-short-chart">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 520, height: 320 }}>
+              <LineChart data={coderComparisonData} margin={{ top: 22, right: 30, bottom: 12, left: 6 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
+                <YAxis domain={[45, 70]} tickFormatter={(value) => `${value}%`} />
+                <Tooltip
+                  formatter={(value, name, item) => {
+                    const isDirect = name === "directSqlPct";
+                    const correct = isDirect ? item.payload.directSqlCorrect : item.payload.toolSftCorrect;
+                    return [`${value}% · ${correct}/${item.payload.total}`, isDirect ? "Direct SQL" : "Tool SFT"];
+                  }}
+                />
+                <Legend formatter={(value) => value === "directSqlPct" ? "Direct SQL" : "Tool SFT"} />
+                <Line type="monotone" dataKey="directSqlPct" stroke="#4976a8" strokeWidth={3} dot={{ r: 5 }} />
+                <Line type="monotone" dataKey="toolSftPct" stroke="#087f5b" strokeWidth={3} dot={{ r: 5 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div><h2>OmniSQL · Greedy</h2></div>
+          <span className="unit">{omnisql.dataset} · {omnisql.total} 题</span>
+        </div>
+        <div className="table-scroll research-table">
+          <table>
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th>训练</th>
+                <th>接口</th>
+                <th>评测协议 / 输入</th>
+                <th>Correct</th>
+                <th>Accuracy</th>
+                <th>Valid / Legal</th>
+                <th>平均步骤</th>
+              </tr>
+            </thead>
+            <tbody>
+              {omnisqlGreedy.map((item) => (
+                <tr key={item.id}>
+                  <td><strong>{item.label}</strong><br /><span>{item.model}</span></td>
+                  <td>{item.training}</td>
+                  <td>{item.interface}</td>
+                  <td><code>{item.protocol}</code></td>
+                  <td>{item.correct}/{item.total}</td>
+                  <td>{fixed(item.accuracy * 100, 2)}%</td>
+                  <td>{Number.isFinite(item.valid) ? `${item.valid}/${item.total} · ${fixed((item.valid / item.total) * 100, 2)}%` : "—"}</td>
+                  <td>{fixed(item.average_steps, 2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="research-chart-grid">
+        <div className="panel">
+          <div className="panel-heading">
+            <div><h2>OmniSQL SFT 后 · Greedy 逐题配对</h2></div>
+            <span className="unit">{omnisql.total} 题</span>
+          </div>
+          <div className="table-scroll research-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>对照</th>
+                  <th>都正确</th>
+                  <th>OmniSQL SFT 后独有</th>
+                  <th>对照独有</th>
+                  <th>都错误</th>
+                  <th>Net</th>
+                  <th>Δ pp</th>
+                </tr>
+              </thead>
+              <tbody>
+                {omnisqlPaired.map((item) => (
+                  <tr key={item.reference}>
+                    <td><strong>{item.reference}</strong></td>
+                    <td>{item.both_correct}</td>
+                    <td>{item.omnisql_after_only}</td>
+                    <td>{item.reference_only}</td>
+                    <td>{item.both_wrong}</td>
+                    <td>{item.net_correct > 0 ? "+" : ""}{item.net_correct}</td>
+                    <td>{item.delta_pp > 0 ? "+" : ""}{fixed(item.delta_pp, 2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-heading">
+            <div><h2>OmniSQL · Pass@k</h2></div>
+            <span className="unit">{omnisql.dataset}</span>
+          </div>
+          <div className="table-scroll research-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>模型</th>
+                  <th>协议</th>
+                  <th>Pass@1</th>
+                  <th>Pass@2</th>
+                  <th>Pass@4</th>
+                  <th>Sample valid</th>
+                  <th>平均步骤</th>
+                </tr>
+              </thead>
+              <tbody>
+                {omnisqlPassK.map((item) => (
+                  <tr key={item.id}>
+                    <td><strong>{item.label}</strong></td>
+                    <td><code>{item.protocol}</code></td>
+                    {["1", "2", "4"].map((k) => (
+                      <td key={k}>{item.pass_at?.[k] ? `${item.pass_at[k].correct}/${item.pass_at[k].total} · ${fixed(item.pass_at[k].accuracy * 100, 2)}%` : "—"}</td>
+                    ))}
+                    <td>{Number.isFinite(item.sample_valid) ? `${item.sample_valid}/${item.sample_total} · ${fixed(item.sample_valid_rate * 100, 2)}%` : "—"}</td>
+                    <td>{fixed(item.average_steps, 2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div><h2>Greedy 终止类型</h2></div>
+          <span className="unit">count</span>
+        </div>
+        <div className="table-scroll research-table">
+          <table>
+            <thead><tr><th>failure_type</th><th>OmniSQL SFT 后</th><th>SFT2 checkpoint-1682</th></tr></thead>
+            <tbody>
+              {omnisqlFailureTypes.map((item) => (
+                <tr key={item.failure_type}>
+                  <td><code>{item.failure_type}</code></td>
+                  <td>{item.omnisql_after_sft}</td>
+                  <td>{item.sft2}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel supervision-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Teacher-union 信用分配与数据效率</h2>
+            <p>真实 streaming student rollout；dense MOPD 与 verified same-prefix repair DPO 分开统计。</p>
+          </div>
+          <span className="unit">60 → 120 tasks</span>
+        </div>
+        <div className="supervision-grid">
+          {summary.supervision_runs.map((run) => {
+            const repairRate = run.repair_generated ? run.repair_correct / run.repair_generated : 0;
+            const dpoRate = run.student_failed ? run.strong_dpo_tasks / run.student_failed : 0;
+            return (
+              <article className="supervision-card" key={run.id}>
+                <header>
+                  <div><strong>{run.label}</strong><span>{run.questions} 题 · {run.optimizer_updates} 次更新</span></div>
+                  <b>{run.student_correct}/{run.questions}</b>
+                </header>
+                <div className="supervision-flow">
+                  <div><span>失败题</span><strong>{run.student_failed}</strong></div>
+                  <i>→</i>
+                  <div><span>生成 repair</span><strong>{run.repair_generated}</strong></div>
+                  <i>→</i>
+                  <div><span>验证正确</span><strong>{run.repair_correct}</strong></div>
+                  <i>→</i>
+                  <div className="accent"><span>强 DPO 题</span><strong>{run.strong_dpo_tasks}</strong></div>
+                </div>
+                <div className="efficiency-row">
+                  <label><span>Repair 正确率</span><strong>{pct(repairRate)}</strong><i style={{ width: `${repairRate * 100}%` }} /></label>
+                  <label><span>失败题→强 DPO</span><strong>{pct(dpoRate)}</strong><i style={{ width: `${dpoRate * 100}%` }} /></label>
+                  <label><span>Dense teacher 覆盖</span><strong>{pct(run.dense_teacher_tasks / run.questions)}</strong><i style={{ width: `${(run.dense_teacher_tasks / run.questions) * 100}%` }} /></label>
+                </div>
+                <footer>
+                  <span>合法 repair {run.repair_legal}</span>
+                  <span>弱 / 无 repair {run.weak_repair_tasks} / {run.no_repair_tasks}</span>
+                  <span>策略 token {compact.format(run.active_policy_tokens)}</span>
+                  <span>mean A {run.mean_dense_advantage.toExponential(2)}</span>
+                </footer>
+              </article>
+            );
+          })}
+        </div>
+        <div className="table-scroll research-table">
+          <table>
+            <thead><tr><th>配对比较</th><th>Gains</th><th>Regressions</th><th>Net</th><th>Exact paired p</th></tr></thead>
+            <tbody>
+              {summary.paired_comparisons.map((item) => (
+                <tr key={item.label}>
+                  <td><strong>{item.label}</strong></td>
+                  <td className="text-ok">{item.gains}</td>
+                  <td className="text-warn">{item.regressions}</td>
+                  <td className={item.net > 0 ? "text-ok" : "text-warn"}>{item.net > 0 ? "+" : ""}{item.net}</td>
+                  <td>{fixed(item.exact_p, 5)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="research-chart-grid">
+        <div className="panel research-chart-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>固定 200 题：Atomic 与 Native</h2>
+              <p>相同 frozen cohort；正确率与合法终止率并列，token 成本在表内保留。</p>
+            </div>
+            <span className="unit">fixed200</span>
+          </div>
+          <div className="research-short-chart">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} initialDimension={{ width: 680, height: 320 }}>
+              <BarChart data={fixed200Data} margin={{ top: 22, right: 16, bottom: 28, left: 2 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="label" interval={0} tick={{ fontSize: 10 }} />
+                <YAxis domain={[60, 102]} tickFormatter={(value) => `${value}%`} />
+                <Tooltip formatter={(value, name) => [`${value}%`, name === "accuracyPct" ? "正确率" : "合法终止率"]} />
+                <Legend formatter={(value) => value === "accuracyPct" ? "正确率" : "合法终止率"} />
+                <Bar dataKey="accuracyPct" fill="#087f5b" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="legalPct" fill="#9ab4a8" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="native-cost-list">
+            {fixed200Data.map((item) => (
+              <div key={item.id}>
+                <strong>{item.label}</strong>
+                <span>{item.correct}/200 correct · {Number.isFinite(item.errors) ? `${item.errors} errors` : "errors 未报告"}</span>
+                <code>{Number.isFinite(item.tokens) ? `${compact.format(item.tokens)} tokens` : "tokens 未报告"}</code>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel diagnostics-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>工具设计实验数据矩阵</h2>
+              <p>每行列出实验 cohort、correct、reference 和数值差。</p>
+            </div>
+            <span className="unit">{diagnostics.length} runs</span>
+          </div>
+          <div className="diagnostic-filter">
+            {diagnosticFamilies.map((family) => (
+              <button key={family} className={diagnosticFamily === family ? "active" : ""} onClick={() => setDiagnosticFamily(family)}>
+                {family === "all" ? "全部" : family}
+              </button>
+            ))}
+          </div>
+          <div className="diagnostic-list">
+            {diagnostics.map((item) => {
+              const delta = item.correct - item.reference_correct;
+              return (
+                <article key={`${item.label}-${item.cohort}`}>
+                  <div><span>{item.family} · {item.cohort}</span><strong>{item.label}</strong></div>
+                  <div className="diagnostic-score"><strong>{item.correct}/{item.total}</strong><span>vs {item.reference} {item.reference_correct}/{item.total}</span></div>
+                  <b className={delta > 0 ? "positive" : delta < 0 ? "negative" : "neutral"}>{delta > 0 ? "+" : ""}{delta}</b>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <section className="panel artifact-panel">
+        <div className="panel-heading artifact-heading">
+          <div>
+            <h2>全部实验数据与报告入口</h2>
+            <p>由两周总索引自动抽取并去重；远端路径不在页面加载时执行 SSH。</p>
+          </div>
+          <span className="unit">显示 {artifacts.length} / {summary.artifacts.length}</span>
+        </div>
+        <div className="artifact-toolbar">
+          <div className="diagnostic-filter">
+            {Object.entries(artifactCategoryLabels).map(([category, label]) => (
+              <button key={category} className={artifactCategory === category ? "active" : ""} onClick={() => setArtifactCategory(category)}>{label}</button>
+            ))}
+          </div>
+          <input value={artifactQuery} onChange={(event) => setArtifactQuery(event.target.value)} placeholder="搜索目录、报告或实验名" />
+        </div>
+        <div className="artifact-list">
+          {artifacts.map((item) => (
+            <article key={item.path}>
+              <span className={`artifact-state ${item.remote ? "remote" : item.available ? "available" : "missing"}`}>
+                {item.remote ? <Server size={13} /> : item.category === "reports" ? <FileJson size={13} /> : <Database size={13} />}
+                {item.remote ? "REMOTE" : item.available ? item.kind.toUpperCase() : "MISSING"}
+              </span>
+              <code title={item.path}>{item.path}</code>
+              <button onClick={() => copyPath(item.path)}>{copiedPath === item.path ? "已复制" : "复制路径"}</button>
+            </article>
+          ))}
+          {!artifacts.length ? <Empty title="没有匹配路径" detail="清除筛选或换一个关键词。" /> : null}
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -1477,6 +2048,10 @@ function Sidebar({ view, onView, collapsed, onToggle, mobileOpen, onMobileClose 
           {!collapsed ? <div><strong>Tabular RL</strong><span>Experiment Console</span></div> : null}
         </div>
         <nav>
+          <button className={view === "research" ? "active" : ""} onClick={() => onView("research")}>
+            <Gauge size={19} />
+            {!collapsed ? <span>研究总览</span> : null}
+          </button>
           <button className={view === "overview" ? "active" : ""} onClick={() => onView("overview")}>
             <Activity size={19} />
             {!collapsed ? <span>实验总览</span> : null}
@@ -1500,9 +2075,10 @@ function Sidebar({ view, onView, collapsed, onToggle, mobileOpen, onMobileClose 
 
 export default function App() {
   const [experiments, setExperiments] = useState([]);
+  const [researchSummary, setResearchSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [view, setView] = useState("overview");
+  const [view, setView] = useState("research");
   const [selectedId, setSelectedId] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -1510,7 +2086,12 @@ export default function App() {
   const load = async () => {
     try {
       setError("");
-      setExperiments(await api.experiments());
+      const [nextExperiments, nextResearchSummary] = await Promise.all([
+        api.experiments(),
+        api.researchSummary(),
+      ]);
+      setExperiments(nextExperiments);
+      setResearchSummary(nextResearchSummary);
     } catch (reason) {
       setError(reason.message);
     } finally {
@@ -1548,6 +2129,8 @@ export default function App() {
         <main className="content"><Empty title="控制台加载失败" detail={error} /></main>
       ) : selected ? (
         <ExperimentDetail experiment={selected} onBack={() => setSelectedId(null)} onUpdated={load} />
+      ) : view === "research" ? (
+        <ResearchOverview summary={researchSummary} />
       ) : view === "playground" ? (
         <Playground />
       ) : view === "construction" ? (

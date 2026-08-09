@@ -1,0 +1,51 @@
+{
+  "schema_version": "dense-reward-gradient-alignment-audit-v1",
+  "measurement": "exact saved tokens; SFT2 QLoRA initialization; no rollout and no update",
+  "example_index": 5027,
+  "transitions": 16,
+  "trajectories": 4,
+  "positive_transitions": 8,
+  "negative_transitions": 8,
+  "reward_categories": {
+    "incorrect_other_clean": 8,
+    "correct_key_evidence": 2,
+    "correct_key_backslice": 4,
+    "correct_terminal": 2
+  },
+  "response_tokens": 2282,
+  "tool_tokens": 568,
+  "rank": {
+    "pairs": 4,
+    "mean_rank_loss_before_coefficient": 0.6934716451977206,
+    "trajectory_scores": {
+      "rl_5027_sample_0": -0.06464082933962345,
+      "rl_5027_sample_1": -0.06464082933962345,
+      "rl_5027_sample_2": -0.07112906966358423,
+      "rl_5027_sample_3": -0.07112906966358423
+    }
+  },
+  "gradients": {
+    "norms": {
+      "policy_positive_full": 0.2995685662574094,
+      "policy_negative_full": 0.13795485191705364,
+      "rank_full": 0.03137432563994412,
+      "policy_tool_only": 0.1768847388777187
+    },
+    "cosines": {
+      "policy_positive_full::policy_negative_full": -0.8548286042674608,
+      "policy_positive_full::rank_full": 0.4059548626568487,
+      "policy_positive_full::policy_tool_only": 0.4385602277345,
+      "policy_negative_full::rank_full": 0.1271799450221859,
+      "policy_negative_full::policy_tool_only": -0.24400711697138414,
+      "rank_full::policy_tool_only": 0.4084101457060087
+    },
+    "derived": {
+      "policy_full_norm": 0.19523824157008315,
+      "policy_positive_negative_net_over_sum_norm": 0.446234952141994,
+      "policy_rank_cosine": 0.7127517925515556,
+      "policy_plus_rank_norm": 0.21871030180403972,
+      "policy_rank_net_over_sum_norm": 0.9651287415200428,
+      "policy_full_tool_only_cosine": 0.5005007838916432
+    }
+  }
+}

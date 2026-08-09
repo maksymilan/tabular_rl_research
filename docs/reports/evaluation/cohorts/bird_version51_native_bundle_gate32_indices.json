@@ -1,0 +1,8 @@
+{
+  "name": "bird-version51-native-bundle-gate32",
+  "selection_source": "version50 fixed200 all.jsonl",
+  "selection_policy": "first 16 sorted incorrect tasks with multi-call/content carrier rejection plus first 16 sorted correct tasks with no carrier rejection",
+  "targets": [4, 40, 74, 362, 541, 858, 1002, 1018, 1167, 1461, 1530, 1535, 1560, 1569, 1692, 1730],
+  "controls": [128, 165, 201, 207, 216, 327, 473, 582, 650, 769, 770, 833, 843, 1177, 1206, 1208],
+  "indices": [4, 40, 74, 362, 541, 858, 1002, 1018, 1167, 1461, 1530, 1535, 1560, 1569, 1692, 1730, 128, 165, 201, 207, 216, 327, 473, 582, 650, 769, 770, 833, 843, 1177, 1206, 1208]
+}

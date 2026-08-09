@@ -1,0 +1,20 @@
+{
+  "all_samples": {
+    "argument_validation_error": 23,
+    "context_overflow": 31,
+    "correct": 789,
+    "execution_error": 5,
+    "max_steps": 151,
+    "protocol_error": 60,
+    "wrong_answer": 475
+  },
+  "first_sample": {
+    "argument_validation_error": 23,
+    "context_overflow": 31,
+    "correct": 789,
+    "execution_error": 5,
+    "max_steps": 151,
+    "protocol_error": 60,
+    "wrong_answer": 475
+  }
+}

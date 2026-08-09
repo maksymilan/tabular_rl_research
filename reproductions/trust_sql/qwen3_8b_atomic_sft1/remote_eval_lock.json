@@ -1,0 +1,105 @@
+{
+  "schema_version": "qwen3-atomic-v26-all-newgnn-lock-v1",
+  "runtime": {
+    "path": "/home/dengyan/tabular_rl_outputs/runtime/version26-4cd47c957fc6ae791e76a10594c8cd22f4d3b6de",
+    "source_commit": "4cd47c957fc6ae791e76a10594c8cd22f4d3b6de",
+    "content_tree_sha256": "5fecf5b40447c956a470957022ca4eff8ba9ea0804a4e070b9742959edc00bab",
+    "rolling_system_prompt_sha256": "848598074e653648d52b58dfa1a54dd777beabae16cb91d83c4ba1a54b5d7316"
+  },
+  "evaluation_input": {
+    "source_logical_name": "bird_dev_20240627.jsonl",
+    "source_sha256": "8bf5a8bfe93ab49788656e2cc789bf80e729e0ec5f7f40159be01a1ab7b923e0",
+    "derived_logical_name": "bird_dev_20240627.newgnn.jsonl",
+    "derived_sha256": "636e096babe2db9dde096b655ed01a0e1e6aae1ea5cbf4e952770e02841721f5",
+    "manifest_sha256": "e5e310fd8315969775f2b920872c1e4ca1fa9f0f86fdf39442899c4bf6fcf6b3",
+    "records": 1534,
+    "remote_db_root": "/home/dengyan/tabular_rl_project/data/bird/dev_20240627/dev_databases",
+    "databases": {
+      "california_schools": {
+        "records": 89,
+        "sha256": "986817d793479801ed55133e55aa27e335422c0cd3866b54a3d6317b7c5f09c1"
+      },
+      "card_games": {
+        "records": 191,
+        "sha256": "c98bdb57fe7474da798b407785544b9af0daaad5d61fd21e2a73309493bc1227"
+      },
+      "codebase_community": {
+        "records": 186,
+        "sha256": "92101be6d2a9f6adceea59d38f6d1c556087f9eea1432432a21268cb1348036d"
+      },
+      "debit_card_specializing": {
+        "records": 64,
+        "sha256": "b3d149ad05746dbbe5116e229e17e18f09c39db43cf117d9ef3441753608b691"
+      },
+      "european_football_2": {
+        "records": 129,
+        "sha256": "e4d361dbeec6591a4b315877c0c481da05c8ff5a3d389b34d6e17b6f15bee4e0"
+      },
+      "financial": {
+        "records": 106,
+        "sha256": "d15d89cdb068a202b6f2b99342af44dffc1d52545b39ceaf62efdc0ba570101e"
+      },
+      "formula_1": {
+        "records": 174,
+        "sha256": "17185981cd747f6cdc374cb02a6096db3130e6ec2ddc582fe1686a28fb4c4c8a"
+      },
+      "student_club": {
+        "records": 158,
+        "sha256": "eb89bcfe97eefa386a27904ec5aa15159811a7eac894ec659a36e48fa9f76b77"
+      },
+      "superhero": {
+        "records": 129,
+        "sha256": "75e94a2c3236ee3bb2c01fb97a1c4b4c1c269bcefd4eab1d04be323d2d0825b1"
+      },
+      "thrombosis_prediction": {
+        "records": 163,
+        "sha256": "e7e16d74b4731b4b8d33fdbe8c29cd5622620788ce8d1f335631f65fc7cf1db9"
+      },
+      "toxicology": {
+        "records": 145,
+        "sha256": "f5fa7f21af1ad878ff8fef1b0582b8cb2d7ed63dbac65ff16d2ba05667650c5b"
+      }
+    }
+  },
+  "model": {
+    "repository": "Qwen/Qwen3-8B",
+    "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+    "path": "/home/dengyan/models/Qwen3-8B-TrustSQL-baseline",
+    "shards_sha256": {
+      "model-00001-of-00005.safetensors": "31d6a825ae35f11fb85b195b4c42c146c051e446433125a215336abdf95cbf5f",
+      "model-00002-of-00005.safetensors": "5991236cea6fe21f3d43cab0f0e84448734fbbe0789816202989f2ddc9d18282",
+      "model-00003-of-00005.safetensors": "c5185c4794be2d8a9784d5753c9922db38df478ce11f9ed0b415b7304d896836",
+      "model-00004-of-00005.safetensors": "b5ee7de71fbf17db3d5704e0c8f2bc7d005ca9e1d7ca2aeb19827b0cfcaa917a",
+      "model-00005-of-00005.safetensors": "20c2d6366ab85c90786ccdd829cd2b9e7d30ef3b2ebbb998280e7e4014b542ff"
+    }
+  },
+  "adapter": {
+    "path": "/home/dengyan/tabular_rl_outputs/checkpoints/qwen3-8b-bird-atomic-v26-sft1-6400-qlora/checkpoint-560",
+    "checkpoint_name": "checkpoint-560",
+    "global_step": 560,
+    "files_sha256": {
+      "adapter_model.safetensors": "3ecbbe3dbb65bb26d0308b09d20496c0023b3090ecc44a36c98bb51024efbab5",
+      "adapter_config.json": "537dbc946a7131d59e294a8729ace4aa145d73e59f4cf8556360ea507ce4435a",
+      "trainer_state.json": "97e529475d8c4f68dc88bc1f80370dacab478a681629f5f99003c39c70e9600a"
+    }
+  },
+  "evaluation_contract": {
+    "questions": 1534,
+    "n_samples": 1,
+    "pass_k": "1",
+    "temperature": 0,
+    "top_p": 1,
+    "max_steps": 30,
+    "max_tokens": 2048,
+    "context_mode": "rolling-legal-history",
+    "history_turns": 4,
+    "rolling_prompt_variant": "full",
+    "rolling_observation_style": "resident",
+    "denotation_comparison": "bird-set",
+    "enable_thinking": true,
+    "reasoning_parser": null,
+    "max_num_seqs": 4,
+    "workers": 4,
+    "max_inflight_requests": 4
+  }
+}

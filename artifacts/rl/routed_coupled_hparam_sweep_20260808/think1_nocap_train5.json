@@ -1,0 +1,251 @@
+{
+  "schema_version": "routed-coupled-reward-smoke-v1",
+  "measurement": "exact frozen tokens; independent reset to SFT2 for each LR",
+  "train_example_indices": [
+    3044,
+    4050,
+    1626,
+    5040,
+    5027
+  ],
+  "retention_example_indices": [
+    4692
+  ],
+  "think_weight": 1.0,
+  "action_weight": 1.0,
+  "rank_coefficient": 0.0,
+  "negative_scales": [
+    0.5
+  ],
+  "negative_grad_ratio_cap": null,
+  "routing": {
+    "positive": [
+      "correct_key_backslice",
+      "correct_key_evidence",
+      "correct_terminal"
+    ],
+    "negative": [
+      "severe_local_error"
+    ],
+    "neutral": [
+      "correct_other_clean",
+      "incorrect_other_clean"
+    ],
+    "normalization": "mean over routed-active transitions per question"
+  },
+  "train_categories": {
+    "correct_key_evidence": 8,
+    "correct_key_backslice": 22,
+    "correct_terminal": 8,
+    "incorrect_other_clean": 56,
+    "severe_local_error": 11,
+    "correct_other_clean": 3
+  },
+  "active_train_transitions": 49,
+  "retention_correct_transitions": 8,
+  "variants": [
+    {
+      "learning_rate": 4e-06,
+      "negative_scale": 0.5,
+      "negative_grad_ratio_cap": null,
+      "weight_decay": 0.01,
+      "steps": [
+        {
+          "step": 1,
+          "example_index": 3044,
+          "active_transitions": 7,
+          "positive_transitions": 4,
+          "negative_transitions": 3,
+          "negative_grad_ratio_cap": null,
+          "positive_grad_norm": null,
+          "negative_grad_norm": null,
+          "negative_grad_scale_applied": 1.0,
+          "loss": -0.012745875399559736,
+          "grad_norm_before_clip": 0.9988207221031189,
+          "clip_triggered": false
+        },
+        {
+          "step": 2,
+          "example_index": 4050,
+          "active_transitions": 12,
+          "positive_transitions": 10,
+          "negative_transitions": 2,
+          "negative_grad_ratio_cap": null,
+          "positive_grad_norm": null,
+          "negative_grad_norm": null,
+          "negative_grad_scale_applied": 1.0,
+          "loss": 0.013348472421057522,
+          "grad_norm_before_clip": 0.44107356667518616,
+          "clip_triggered": false
+        },
+        {
+          "step": 3,
+          "example_index": 1626,
+          "active_transitions": 9,
+          "positive_transitions": 6,
+          "negative_transitions": 3,
+          "negative_grad_ratio_cap": null,
+          "positive_grad_norm": null,
+          "negative_grad_norm": null,
+          "negative_grad_scale_applied": 1.0,
+          "loss": 0.007110407808795571,
+          "grad_norm_before_clip": 0.28876161575317383,
+          "clip_triggered": false
+        },
+        {
+          "step": 4,
+          "example_index": 5040,
+          "active_transitions": 13,
+          "positive_transitions": 10,
+          "negative_transitions": 3,
+          "negative_grad_ratio_cap": null,
+          "positive_grad_norm": null,
+          "negative_grad_norm": null,
+          "negative_grad_scale_applied": 1.0,
+          "loss": 0.006437103380449116,
+          "grad_norm_before_clip": 0.40965062379837036,
+          "clip_triggered": false
+        },
+        {
+          "step": 5,
+          "example_index": 5027,
+          "active_transitions": 8,
+          "positive_transitions": 8,
+          "negative_transitions": 0,
+          "negative_grad_ratio_cap": null,
+          "positive_grad_norm": null,
+          "negative_grad_norm": null,
+          "negative_grad_scale_applied": 1.0,
+          "loss": 0.025815183762460947,
+          "grad_norm_before_clip": 1.0175892114639282,
+          "clip_triggered": true
+        }
+      ],
+      "raw_adapter_update_norm": 0.0697017391106481,
+      "raw_adapter_update_over_reference": 0.0018943209600323257,
+      "deltas": {
+        "active": {
+          "transitions": 57,
+          "think_mean_delta": 0.0022336181678008615,
+          "think_mean_abs_delta": 0.020659874389438254,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 0.19298245614035087,
+          "action_mean_delta": -0.003709197691286566,
+          "action_mean_abs_delta": 0.011249000908264861,
+          "action_reward_aligned_fraction": 0.7017543859649122,
+          "action_decrease_fraction": 0.38596491228070173,
+          "joint_mean_delta": -0.0014755771609774807,
+          "joint_mean_abs_delta": 0.031891553679056335,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.19298245614035087
+        },
+        "positive": {
+          "transitions": 46,
+          "think_mean_delta": 0.01418401169307206,
+          "think_mean_abs_delta": 0.01418401169307206,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 0.0,
+          "action_mean_delta": 0.0046606687939718386,
+          "action_mean_abs_delta": 0.0046669188543546625,
+          "action_reward_aligned_fraction": 0.6956521739130435,
+          "action_decrease_fraction": 0.30434782608695654,
+          "joint_mean_delta": 0.018844681103592335,
+          "joint_mean_abs_delta": 0.018844681103592335,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        },
+        "correct_key_evidence": {
+          "transitions": 10,
+          "think_mean_delta": 0.009127232432365417,
+          "think_mean_abs_delta": 0.009127232432365417,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 0.0,
+          "action_mean_delta": 3.270900060670101e-06,
+          "action_mean_abs_delta": 9.025590907185688e-06,
+          "action_reward_aligned_fraction": 0.4,
+          "action_decrease_fraction": 0.6,
+          "joint_mean_delta": 0.009130503982305527,
+          "joint_mean_abs_delta": 0.009130503982305527,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        },
+        "correct_key_backslice": {
+          "transitions": 26,
+          "think_mean_delta": 0.012003836293633167,
+          "think_mean_abs_delta": 0.012003836293633167,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 0.0,
+          "action_mean_delta": 0.0015487053189924783,
+          "action_mean_abs_delta": 0.001557549775498046,
+          "action_reward_aligned_fraction": 0.6923076923076923,
+          "action_decrease_fraction": 0.3076923076923077,
+          "joint_mean_delta": 0.013552542489308577,
+          "joint_mean_abs_delta": 0.013552542489308577,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        },
+        "correct_terminal": {
+          "transitions": 10,
+          "think_mean_delta": 0.024909246992319823,
+          "think_mean_abs_delta": 0.024909246992319823,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 0.0,
+          "action_mean_delta": 0.017409171722829343,
+          "action_mean_abs_delta": 0.017409171722829343,
+          "action_reward_aligned_fraction": 1.0,
+          "action_decrease_fraction": 0.0,
+          "joint_mean_delta": 0.04231841862201691,
+          "joint_mean_abs_delta": 0.04231841862201691,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        },
+        "negative": {
+          "transitions": 11,
+          "think_mean_delta": -0.047740754756060516,
+          "think_mean_abs_delta": 0.047740754756060516,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 1.0,
+          "action_mean_delta": -0.03871045753873081,
+          "action_mean_abs_delta": 0.03877407131552569,
+          "action_reward_aligned_fraction": 0.7272727272727273,
+          "action_decrease_fraction": 0.7272727272727273,
+          "joint_mean_delta": -0.0864512026309967,
+          "joint_mean_abs_delta": 0.0864512026309967,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 1.0
+        },
+        "severe_local_error": {
+          "transitions": 11,
+          "think_mean_delta": -0.047740754756060516,
+          "think_mean_abs_delta": 0.047740754756060516,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 1.0,
+          "action_mean_delta": -0.03871045753873081,
+          "action_mean_abs_delta": 0.03877407131552569,
+          "action_reward_aligned_fraction": 0.7272727272727273,
+          "action_decrease_fraction": 0.7272727272727273,
+          "joint_mean_delta": -0.0864512026309967,
+          "joint_mean_abs_delta": 0.0864512026309967,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 1.0
+        },
+        "retention_correct": {
+          "transitions": 8,
+          "think_mean_delta": 0.005049741826951504,
+          "think_mean_abs_delta": 0.005049741826951504,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 0.0,
+          "action_mean_delta": 0.007658275892026722,
+          "action_mean_abs_delta": 0.007665265933610499,
+          "action_reward_aligned_fraction": 0.5,
+          "action_decrease_fraction": 0.5,
+          "joint_mean_delta": 0.01270801480859518,
+          "joint_mean_abs_delta": 0.01270801480859518,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        }
+      },
+      "adapter_dir": "/home/dengyan/tabular_rl_outputs/diagnostics/routed_coupled_hparam_sweep_20260808/think1_nocap_adapters/lr_4e-06_neg_0p5"
+    }
+  ]
+}

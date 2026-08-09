@@ -1,0 +1,52 @@
+{
+  "status": "partial_contract_reproduction_complete_paper_training_blocked",
+  "updated_on": "2026-08-06",
+  "paper": {
+    "title": "TRUST-SQL: Tool-Integrated Multi-Turn Reinforcement Learning for Text-to-SQL over Unknown Schemas",
+    "arxiv": "2603.16448v2",
+    "pdf_sha256": "f9a85b93a88cd8c48780c558f24da9c1090a3a8b1de4889df894c9d289008473"
+  },
+  "source": {
+    "repository": "https://github.com/JaneEyre0530/TrustSQL",
+    "commit": "89df0661ad6b8e29ed8e61f7c950fbc2c1678b08",
+    "released_rl_jsonl_sha256": "af68f0d0d1d89fd9d4f40e5f5f028131fa0ca55a71675f2598cbbba26c9ab414"
+  },
+  "table_rl": {
+    "host": "dell-PowerEdge-T640",
+    "gpus": [
+      "NVIDIA GeForce RTX 3090 24576 MiB",
+      "NVIDIA GeForce RTX 3090 24576 MiB"
+    ],
+    "paper_scale_ready": false,
+    "remote_root": "/home/dengyan/tabular_rl_outputs/reproductions/trust_sql"
+  },
+  "observed": {
+    "source_reward_protocol_smoke": "passed",
+    "released_rl_records": 11642,
+    "bird_records": 6948,
+    "spider_records": 4694,
+    "database_ids_resolved": "215/215",
+    "actor_prompt_exact_gold_sql_leaks": 0,
+    "schema_catalog_label_issue_records": 382,
+    "gold_sql_execution_issues_under_10_seconds": 477,
+    "gold_sql_non_timeout_failures": 353,
+    "gold_sql_non_timeout_failures_by_family": {
+      "bird": 350,
+      "spider": 3
+    },
+    "gold_sql_non_timeout_failure_affected_databases": 6,
+    "gold_sql_timeouts_at_10_seconds": 124,
+    "gold_sql_timeout_note": "The timeout subset is load-sensitive; the two preceding 16-worker audits observed 126 and 129 timeouts.",
+    "gold_and_schema_issue_overlap": 351
+  },
+  "training": {
+    "started": false,
+    "reason": "Unreleased SFT initialization, mismatched public database contents, missing pinned runtime, and insufficient GPU memory/count make a faithful paper run impossible on this host."
+  },
+  "remote_artifacts": {
+    "upstream_audit": "/home/dengyan/tabular_rl_outputs/reproductions/trust_sql/manifests/upstream_audit.json",
+    "host_preflight": "/home/dengyan/tabular_rl_outputs/reproductions/trust_sql/manifests/host_preflight.json",
+    "released_data_full_audit": "/home/dengyan/tabular_rl_outputs/reproductions/trust_sql/manifests/released_rl_data_full_audit.json",
+    "status": "/home/dengyan/tabular_rl_outputs/reproductions/trust_sql/manifests/reproduction_status.json"
+  }
+}

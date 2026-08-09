@@ -10,6 +10,88 @@ SPEC.loader.exec_module(server)
 
 
 class DashboardDataTests(unittest.TestCase):
+    def test_research_summary_covers_formal_results_and_artifacts(self):
+        summary = server.load_research_summary()
+        self.assertEqual(summary["headline"]["best_full_dev_correct"], 785)
+        self.assertEqual(len(summary["full_dev_runs"]), 10)
+        self.assertEqual(
+            next(item for item in summary["full_dev_runs"] if item["id"] == "strict120")["correct"],
+            765,
+        )
+        self.assertGreaterEqual(len(summary["diagnostic_runs"]), 16)
+        self.assertGreaterEqual(summary["coverage"]["artifact_paths"], 50)
+        self.assertGreater(summary["coverage"]["local_artifacts_available"], 20)
+        self.assertGreater(summary["coverage"]["remote_artifacts"], 10)
+        self.assertTrue(any(
+            item["path"].endswith("BIRD_VERSION51_NATIVE_TOOL_BUNDLE_FIXED200_20260805_ZH.md")
+            for item in summary["artifacts"]
+        ))
+        self.assertEqual(len(summary["rl_method_families"]), 7)
+        self.assertEqual(len(summary["rl_experiments"]), 21)
+        self.assertGreaterEqual(len(summary["rl_papers"]), 12)
+        self.assertEqual(
+            next(item for item in summary["rl_experiments"] if item["id"] == "Exp15")["result"],
+            "776/1534",
+        )
+        self.assertEqual(
+            next(item for item in summary["rl_experiments"] if item["id"] == "Exp15")["comparison"],
+            "vs SFT2: +14",
+        )
+        self.assertEqual(
+            next(item for item in summary["rl_experiments"] if item["id"] == "Exp15")["training"],
+            "32题 / 36 pair / 32 step",
+        )
+        self.assertEqual(
+            next(item for item in summary["full_dev_runs"] if item["id"] == "exp15")["training_tasks"],
+            32,
+        )
+        self.assertEqual(
+            next(item for item in summary["rl_experiments"] if item["id"] == "Strict120")["training"],
+            "120题 · batch2 / 60 batch / 53 step",
+        )
+        self.assertIn("GRPO-style", summary["rl_implementation_note"]["exp1"])
+        self.assertTrue(all(
+            {"algorithm", "training", "optimization"}.issubset(item)
+            for item in summary["rl_experiments"]
+        ))
+        self.assertTrue(all("decision" not in item for item in summary["rl_experiments"]))
+        mopd = next(item for item in summary["rl_papers"] if item["id"] == "mopd")
+        self.assertEqual(mopd["url"], "https://arxiv.org/abs/2606.30406")
+        self.assertTrue(any(
+            item["path"].endswith("RL_METHODS_AND_PAPER_PROVENANCE_20260805_ZH.md")
+            for item in summary["artifacts"]
+        ))
+        omnisql = summary["omnisql_comparison"]
+        self.assertEqual(omnisql["total"], 1534)
+        self.assertEqual(
+            [(item["id"], item["correct"]) for item in omnisql["greedy"]],
+            [
+                ("omnisql-before-sft", 983),
+                ("omnisql-after-sft", 789),
+                ("sft2-checkpoint-1682", 762),
+            ],
+        )
+        self.assertEqual(
+            omnisql["pass_k"][0]["pass_at"]["4"]["correct"],
+            1033,
+        )
+        self.assertEqual(
+            next(
+                item for item in omnisql["paired"]
+                if item["reference"] == "SFT2 checkpoint-1682"
+            )["net_correct"],
+            27,
+        )
+        self.assertEqual(
+            [(item["name"], item["correct"]) for item in summary["coder_tool_sft_runs"]],
+            [
+                ("greedy", 734),
+                ("pass@1", 778),
+                ("pass@2", 924),
+                ("pass@4", 1033),
+            ],
+        )
+
     def test_registry_experiments_have_metrics(self):
         experiments = server.load_registry()
         self.assertGreaterEqual(len(experiments), 5)

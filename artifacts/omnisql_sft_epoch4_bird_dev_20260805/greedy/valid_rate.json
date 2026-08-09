@@ -1,0 +1,17 @@
+{
+  "first_sample": {
+    "valid": 1264,
+    "total": 1534,
+    "rate": 0.8239895697522817
+  },
+  "all_samples": {
+    "valid": 1264,
+    "total": 1534,
+    "rate": 0.8239895697522817
+  },
+  "any_valid_per_question": {
+    "valid": 1264,
+    "total": 1534,
+    "rate": 0.8239895697522817
+  }
+}

@@ -42,12 +42,23 @@ SYSTEM_PROMPT = CANONICAL_SYSTEM_PROMPT
 
 def extract_sql(text: str) -> str | None:
     # Thinking models reason first, so grade only the query inside <answer></answer> when present;
-    # otherwise fall back to scanning the whole reply (also covers non-thinking direct output).
+    # otherwise prefer a fenced SQL block before scanning prose. The latter order matters for
+    # prompts that explicitly request Markdown: explanations such as "Select the required column"
+    # must not be prepended to the executable query inside the following code block.
     answer = re.search(r"<answer>(.*?)</answer>", text, re.S | re.I)
     candidate = answer.group(1) if answer else text
     candidate = re.sub(r"<think>.*?</think>", " ", candidate, flags=re.S | re.I)
-    cleaned = re.sub(r"```(?:sql)?", "", candidate, flags=re.I).strip()
-    match = re.search(r"\b(?:WITH|SELECT)\b.*", cleaned, re.S | re.I)
+
+    fenced_blocks = re.findall(r"```(?:sql)?\s*(.*?)```", candidate, re.S | re.I)
+    for fenced in fenced_blocks:
+        sql = _extract_sql_statement(fenced)
+        if sql is not None:
+            return sql
+    return _extract_sql_statement(candidate)
+
+
+def _extract_sql_statement(candidate: str) -> str | None:
+    match = re.search(r"\b(?:WITH|SELECT)\b.*", candidate.strip(), re.S | re.I)
     if not match:
         return None
     sql = match.group(0)

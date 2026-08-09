@@ -15,7 +15,7 @@ F profile。可执行源码优先级高于本文档：
 |---|---|
 | Tool scheme | `atomic` |
 | Protocol | `version39` |
-| Scheme registry | `tool-scheme-registry-v4` |
+| Scheme registry | `tool-scheme-registry-v11` |
 | Canonical action carrier | `think-json-v1` |
 | 默认历史策略 | 最近 4 个合法 assistant/observation pair |
 | BIRD denotation metric | `bird-set` |

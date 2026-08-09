@@ -1,0 +1,74 @@
+{
+  "schema_version": "routed-coupled-scale-training-cohort-v1",
+  "seed": 20260808,
+  "source": "/home/dengyan/tabular_rl_outputs/phase8_controlled_20260801/balanced_mixed60_dense_uniform_seed101",
+  "selection_rule": "include all five prior smoke questions; fill to 7 challenging, 7 moderate, and 6 simple using low active-transition-count questions whose complete question has valid think-plus-JSON carriers and whose longest active transition is at most 5000 tokens, breaking ties by frozen source order",
+  "train_example_indices_in_optimizer_order": [
+    3044,
+    1188,
+    1295,
+    5027,
+    3102,
+    3700,
+    4692,
+    1626,
+    4579,
+    2837,
+    5040,
+    2376,
+    2263,
+    4050,
+    3345,
+    3395,
+    5623,
+    104,
+    4505,
+    733
+  ],
+  "difficulty_counts": {
+    "challenging": 7,
+    "moderate": 7,
+    "simple": 6
+  },
+  "prior_smoke_indices": [3044, 4050, 1626, 5040, 5027],
+  "retention_example_indices": [3797, 4800, 2810],
+  "carrier_gate": "every transition in every selected training or retention question decodes to a complete think-plus-JSON carrier",
+  "carrier_gate_replacements": {
+    "1116": 5623,
+    "5067": 2376,
+    "5390": 104,
+    "652": 3797,
+    "3180": 4800
+  },
+  "expected_active_transitions": 220,
+  "attempt0": {
+    "status": "failed_before_artifact",
+    "completed_optimizer_steps": 3,
+    "failure_batch": [3395, 2913, 104, 4505, 733],
+    "failure": "CUDA OOM on the 5778-token active transition from example 2913; both independent arms failed at the same row",
+    "resume": false,
+    "preserved_logs": ["lr12e6_train20.log", "lr6e6_train20.log"]
+  },
+  "retry1_memory_controls": {
+    "replacement": "2913 -> 5623 within the same moderate difficulty stratum",
+    "replacement_max_active_tokens": 3339,
+    "pytorch_cuda_alloc_conf": "expandable_segments:True"
+  },
+  "question_batch_size": 5,
+  "expected_optimizer_steps": 4,
+  "fixed_recipe": {
+    "think_weight": 0.5,
+    "action_weight": 1.0,
+    "negative_scale": 0.5,
+    "loss_normalization": "category_mean",
+    "category_weights": {
+      "correct_key_evidence": 2.0,
+      "correct_key_backslice": 2.0,
+      "correct_terminal": 0.25,
+      "severe_local_error": 1.0
+    },
+    "weight_decay": 0.01
+  },
+  "learning_rate_arms": [1.2e-5, 6.0e-6],
+  "candidate_selection_before_evaluation": "prefer an adapter update/reference ratio in [0.0020, 0.0035]; if both or neither qualify, prefer the lower update ratio; do not inspect evaluation outcomes before selection"
+}

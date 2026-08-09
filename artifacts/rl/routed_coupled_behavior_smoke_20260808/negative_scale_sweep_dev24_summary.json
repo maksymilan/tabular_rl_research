@@ -1,0 +1,696 @@
+{
+  "schema_version": "routed-coupled-behavior-smoke-summary-v1",
+  "indices": [
+    13,
+    14,
+    116,
+    213,
+    219,
+    250,
+    415,
+    446,
+    570,
+    746,
+    760,
+    773,
+    775,
+    946,
+    995,
+    1026,
+    1108,
+    1139,
+    1169,
+    1342,
+    1407,
+    1511,
+    1521,
+    1531
+  ],
+  "difficulty_counts": {
+    "moderate": 8,
+    "challenging": 8,
+    "simple": 8
+  },
+  "baseline": {
+    "correct": 12,
+    "total": 24,
+    "accuracy": 0.5,
+    "legal": 20,
+    "legal_rate": 0.8333333333333334,
+    "mean_steps": 10.625,
+    "difficulty": {
+      "simple": {
+        "correct": 4,
+        "total": 8
+      },
+      "moderate": {
+        "correct": 3,
+        "total": 8
+      },
+      "challenging": {
+        "correct": 5,
+        "total": 8
+      }
+    },
+    "adjacent_exact_repeat_calls": 0,
+    "questions_with_adjacent_exact_repeat": 0,
+    "action_count": 177
+  },
+  "candidates": {
+    "neg0": {
+      "correct": 10,
+      "total": 24,
+      "accuracy": 0.4166666666666667,
+      "legal": 18,
+      "legal_rate": 0.75,
+      "mean_steps": 10.541666666666666,
+      "difficulty": {
+        "simple": {
+          "correct": 5,
+          "total": 8
+        },
+        "moderate": {
+          "correct": 2,
+          "total": 8
+        },
+        "challenging": {
+          "correct": 3,
+          "total": 8
+        }
+      },
+      "adjacent_exact_repeat_calls": 0,
+      "questions_with_adjacent_exact_repeat": 0,
+      "action_count": 182,
+      "vs_sft2": {
+        "gains": [
+          14
+        ],
+        "regressions": [
+          773,
+          1026,
+          1139
+        ],
+        "net": -2,
+        "exact_p": 0.625,
+        "legal_gains": [
+          13,
+          1108
+        ],
+        "legal_regressions": [
+          116,
+          446,
+          773,
+          1139
+        ],
+        "legal_net": -2,
+        "legal_exact_p": 0.6875,
+        "action_sequence_changed": [
+          13,
+          14,
+          116,
+          213,
+          219,
+          250,
+          415,
+          446,
+          570,
+          760,
+          773,
+          775,
+          995,
+          1026,
+          1108,
+          1139,
+          1169,
+          1342,
+          1407,
+          1511,
+          1521,
+          1531
+        ],
+        "action_sequence_changed_count": 22,
+        "first_action_changed": [
+          13,
+          219,
+          775,
+          1108,
+          1169,
+          1511
+        ],
+        "first_action_changed_count": 6
+      }
+    },
+    "neg0p25": {
+      "correct": 8,
+      "total": 24,
+      "accuracy": 0.3333333333333333,
+      "legal": 14,
+      "legal_rate": 0.5833333333333334,
+      "mean_steps": 10.333333333333334,
+      "difficulty": {
+        "simple": {
+          "correct": 4,
+          "total": 8
+        },
+        "moderate": {
+          "correct": 2,
+          "total": 8
+        },
+        "challenging": {
+          "correct": 2,
+          "total": 8
+        }
+      },
+      "adjacent_exact_repeat_calls": 2,
+      "questions_with_adjacent_exact_repeat": 2,
+      "action_count": 167,
+      "vs_sft2": {
+        "gains": [],
+        "regressions": [
+          773,
+          775,
+          1026,
+          1139
+        ],
+        "net": -4,
+        "exact_p": 0.125,
+        "legal_gains": [
+          13
+        ],
+        "legal_regressions": [
+          14,
+          250,
+          415,
+          446,
+          773,
+          775,
+          1139
+        ],
+        "legal_net": -6,
+        "legal_exact_p": 0.0703125,
+        "action_sequence_changed": [
+          13,
+          14,
+          116,
+          213,
+          219,
+          250,
+          415,
+          446,
+          760,
+          773,
+          775,
+          995,
+          1026,
+          1108,
+          1139,
+          1169,
+          1342,
+          1511,
+          1521,
+          1531
+        ],
+        "action_sequence_changed_count": 20,
+        "first_action_changed": [
+          13,
+          219,
+          1511,
+          1521
+        ],
+        "first_action_changed_count": 4
+      }
+    },
+    "neg0p5": {
+      "correct": 11,
+      "total": 24,
+      "accuracy": 0.4583333333333333,
+      "legal": 19,
+      "legal_rate": 0.7916666666666666,
+      "mean_steps": 10.291666666666666,
+      "difficulty": {
+        "simple": {
+          "correct": 5,
+          "total": 8
+        },
+        "moderate": {
+          "correct": 2,
+          "total": 8
+        },
+        "challenging": {
+          "correct": 4,
+          "total": 8
+        }
+      },
+      "adjacent_exact_repeat_calls": 1,
+      "questions_with_adjacent_exact_repeat": 1,
+      "action_count": 178,
+      "vs_sft2": {
+        "gains": [
+          14,
+          415
+        ],
+        "regressions": [
+          773,
+          775,
+          1026
+        ],
+        "net": -1,
+        "exact_p": 1.0,
+        "legal_gains": [
+          13,
+          1108
+        ],
+        "legal_regressions": [
+          116,
+          773,
+          775
+        ],
+        "legal_net": -1,
+        "legal_exact_p": 1.0,
+        "action_sequence_changed": [
+          13,
+          14,
+          116,
+          213,
+          219,
+          250,
+          415,
+          446,
+          760,
+          773,
+          775,
+          995,
+          1026,
+          1108,
+          1139,
+          1169,
+          1342,
+          1407,
+          1511,
+          1521,
+          1531
+        ],
+        "action_sequence_changed_count": 21,
+        "first_action_changed": [
+          13,
+          219,
+          1511,
+          1531
+        ],
+        "first_action_changed_count": 4
+      }
+    },
+    "neg1": {
+      "correct": 11,
+      "total": 24,
+      "accuracy": 0.4583333333333333,
+      "legal": 17,
+      "legal_rate": 0.7083333333333334,
+      "mean_steps": 11.375,
+      "difficulty": {
+        "simple": {
+          "correct": 5,
+          "total": 8
+        },
+        "moderate": {
+          "correct": 3,
+          "total": 8
+        },
+        "challenging": {
+          "correct": 3,
+          "total": 8
+        }
+      },
+      "adjacent_exact_repeat_calls": 1,
+      "questions_with_adjacent_exact_repeat": 1,
+      "action_count": 181,
+      "vs_sft2": {
+        "gains": [
+          14,
+          1108
+        ],
+        "regressions": [
+          760,
+          773,
+          1026
+        ],
+        "net": -1,
+        "exact_p": 1.0,
+        "legal_gains": [
+          13,
+          1108
+        ],
+        "legal_regressions": [
+          116,
+          415,
+          446,
+          760,
+          773
+        ],
+        "legal_net": -3,
+        "legal_exact_p": 0.453125,
+        "action_sequence_changed": [
+          13,
+          14,
+          116,
+          213,
+          219,
+          250,
+          415,
+          446,
+          760,
+          773,
+          775,
+          946,
+          995,
+          1026,
+          1108,
+          1169,
+          1342,
+          1407,
+          1511,
+          1521,
+          1531
+        ],
+        "action_sequence_changed_count": 21,
+        "first_action_changed": [
+          13,
+          1511,
+          1531
+        ],
+        "first_action_changed_count": 3
+      }
+    }
+  },
+  "candidate_pairwise": {
+    "neg0p25_vs_neg0": {
+      "gains": [],
+      "regressions": [
+        14,
+        775
+      ],
+      "net": -2,
+      "exact_p": 0.5,
+      "legal_gains": [
+        116
+      ],
+      "legal_regressions": [
+        14,
+        250,
+        415,
+        775,
+        1108
+      ],
+      "legal_net": -4,
+      "legal_exact_p": 0.21875,
+      "action_sequence_changed": [
+        13,
+        14,
+        116,
+        213,
+        250,
+        415,
+        446,
+        570,
+        760,
+        773,
+        775,
+        995,
+        1026,
+        1108,
+        1169,
+        1342,
+        1407,
+        1511,
+        1521,
+        1531
+      ],
+      "action_sequence_changed_count": 20,
+      "first_action_changed": [
+        775,
+        1108,
+        1169,
+        1521
+      ],
+      "first_action_changed_count": 4
+    },
+    "neg0p5_vs_neg0": {
+      "gains": [
+        415,
+        1139
+      ],
+      "regressions": [
+        775
+      ],
+      "net": 1,
+      "exact_p": 1.0,
+      "legal_gains": [
+        446,
+        1139
+      ],
+      "legal_regressions": [
+        775
+      ],
+      "legal_net": 1,
+      "legal_exact_p": 1.0,
+      "action_sequence_changed": [
+        13,
+        14,
+        116,
+        213,
+        250,
+        415,
+        446,
+        570,
+        760,
+        773,
+        775,
+        995,
+        1026,
+        1108,
+        1139,
+        1169,
+        1342,
+        1407,
+        1511,
+        1521,
+        1531
+      ],
+      "action_sequence_changed_count": 21,
+      "first_action_changed": [
+        775,
+        1108,
+        1169,
+        1531
+      ],
+      "first_action_changed_count": 4
+    },
+    "neg1_vs_neg0": {
+      "gains": [
+        1108,
+        1139
+      ],
+      "regressions": [
+        760
+      ],
+      "net": 1,
+      "exact_p": 1.0,
+      "legal_gains": [
+        1139
+      ],
+      "legal_regressions": [
+        415,
+        760
+      ],
+      "legal_net": -1,
+      "legal_exact_p": 1.0,
+      "action_sequence_changed": [
+        13,
+        14,
+        116,
+        213,
+        219,
+        250,
+        415,
+        446,
+        570,
+        760,
+        773,
+        775,
+        946,
+        995,
+        1026,
+        1108,
+        1139,
+        1169,
+        1342,
+        1407,
+        1511,
+        1531
+      ],
+      "action_sequence_changed_count": 22,
+      "first_action_changed": [
+        219,
+        775,
+        1108,
+        1169,
+        1531
+      ],
+      "first_action_changed_count": 5
+    },
+    "neg0p5_vs_neg0p25": {
+      "gains": [
+        14,
+        415,
+        1139
+      ],
+      "regressions": [],
+      "net": 3,
+      "exact_p": 0.25,
+      "legal_gains": [
+        14,
+        250,
+        415,
+        446,
+        1108,
+        1139
+      ],
+      "legal_regressions": [
+        116
+      ],
+      "legal_net": 5,
+      "legal_exact_p": 0.125,
+      "action_sequence_changed": [
+        13,
+        14,
+        116,
+        250,
+        415,
+        446,
+        773,
+        775,
+        995,
+        1026,
+        1108,
+        1139,
+        1169,
+        1342,
+        1407,
+        1521,
+        1531
+      ],
+      "action_sequence_changed_count": 17,
+      "first_action_changed": [
+        1521,
+        1531
+      ],
+      "first_action_changed_count": 2
+    },
+    "neg1_vs_neg0p25": {
+      "gains": [
+        14,
+        775,
+        1108,
+        1139
+      ],
+      "regressions": [
+        760
+      ],
+      "net": 3,
+      "exact_p": 0.375,
+      "legal_gains": [
+        14,
+        250,
+        775,
+        1108,
+        1139
+      ],
+      "legal_regressions": [
+        116,
+        760
+      ],
+      "legal_net": 3,
+      "legal_exact_p": 0.453125,
+      "action_sequence_changed": [
+        13,
+        14,
+        116,
+        219,
+        250,
+        415,
+        446,
+        760,
+        773,
+        775,
+        946,
+        995,
+        1026,
+        1108,
+        1139,
+        1169,
+        1342,
+        1407,
+        1511,
+        1521,
+        1531
+      ],
+      "action_sequence_changed_count": 21,
+      "first_action_changed": [
+        219,
+        1521,
+        1531
+      ],
+      "first_action_changed_count": 3
+    },
+    "neg1_vs_neg0p5": {
+      "gains": [
+        775,
+        1108
+      ],
+      "regressions": [
+        415,
+        760
+      ],
+      "net": 0,
+      "exact_p": 1.0,
+      "legal_gains": [
+        775
+      ],
+      "legal_regressions": [
+        415,
+        446,
+        760
+      ],
+      "legal_net": -2,
+      "legal_exact_p": 0.625,
+      "action_sequence_changed": [
+        13,
+        14,
+        116,
+        219,
+        250,
+        415,
+        446,
+        760,
+        775,
+        946,
+        995,
+        1026,
+        1108,
+        1139,
+        1169,
+        1342,
+        1407,
+        1511,
+        1521,
+        1531
+      ],
+      "action_sequence_changed_count": 20,
+      "first_action_changed": [
+        219,
+        1531
+      ],
+      "first_action_changed_count": 2
+    }
+  }
+}

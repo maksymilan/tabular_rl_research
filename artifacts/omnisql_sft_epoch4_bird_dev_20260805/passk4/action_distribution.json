@@ -1,0 +1,67 @@
+{
+  "total_actions": 45592,
+  "counts": {
+    "answer_from_context": 5325,
+    "condition_filter": 12229,
+    "describe_table": 6738,
+    "extreme_value_select": 1066,
+    "group_aggregate": 3348,
+    "inspect_column": 2919,
+    "join_tables": 3864,
+    "plan": 24,
+    "project": 2939,
+    "read_subtable": 6183,
+    "scalar_compute": 868,
+    "set_op": 89
+  },
+  "rates": {
+    "answer_from_context": 0.11679680645727321,
+    "condition_filter": 0.2682268819091069,
+    "describe_table": 0.1477890858045271,
+    "extreme_value_select": 0.023381294964028777,
+    "group_aggregate": 0.0734339357782067,
+    "inspect_column": 0.06402439024390244,
+    "join_tables": 0.08475171082646078,
+    "plan": 0.0005264081417792595,
+    "project": 0.06446306369538515,
+    "read_subtable": 0.13561589752588174,
+    "scalar_compute": 0.019038427794349885,
+    "set_op": 0.0019520968590980873
+  },
+  "by_trajectory_outcome": {
+    "correct": {
+      "total_actions": 20915,
+      "counts": {
+        "answer_from_context": 3286,
+        "condition_filter": 5182,
+        "describe_table": 3481,
+        "extreme_value_select": 480,
+        "group_aggregate": 1604,
+        "inspect_column": 1001,
+        "join_tables": 1777,
+        "plan": 2,
+        "project": 1499,
+        "read_subtable": 2271,
+        "scalar_compute": 314,
+        "set_op": 18
+      }
+    },
+    "incorrect": {
+      "total_actions": 24677,
+      "counts": {
+        "answer_from_context": 2039,
+        "condition_filter": 7047,
+        "describe_table": 3257,
+        "extreme_value_select": 586,
+        "group_aggregate": 1744,
+        "inspect_column": 1918,
+        "join_tables": 2087,
+        "plan": 22,
+        "project": 1440,
+        "read_subtable": 3912,
+        "scalar_compute": 554,
+        "set_op": 71
+      }
+    }
+  }
+}

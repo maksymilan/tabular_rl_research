@@ -29,12 +29,13 @@ from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(ROOT, "src"))
 sys.path.insert(0, HERE)
 
 from protocol import (SYSTEM_PROMPT, PROTOCOL_VERSION, assistant_message,  # noqa: E402
                       first_user_message, protocol_hash, state_context_message,
                       tool_schema_hash)
-from tool_schemes import (  # noqa: E402
+from tool_modules.registry import (  # noqa: E402
     ATOMIC_TOOL_SCHEME,
     TOOL_SCHEME_REGISTRY_VERSION,
     assert_record_tool_scheme,
@@ -42,6 +43,11 @@ from tool_schemes import (  # noqa: E402
 from sft_dataset_registry import (  # noqa: E402
     sharegpt_dataset_entry,
     write_sharegpt_dataset_info,
+)
+from training_result_quality import (  # noqa: E402
+    EMPTY_RESULT_POLICY_VERSION,
+    empty_result_target_reason,
+    trajectory_has_empty_terminal_evidence,
 )
 
 CHARS_PER_TOKEN = 3.5  # rough for English+JSON; manifest reports char counts too
@@ -160,8 +166,9 @@ def build(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
 
-    source_count = kept = dropped = 0
+    source_count = kept = dropped = dropped_empty_result = 0
     dropped_ids: list[str] = []
+    dropped_empty_result_ids: list[str] = []
     toks: list[int] = []
     chars: list[int] = []
     len_hist = collections.Counter()
@@ -181,6 +188,20 @@ def build(
                 if trajectory_id in seen_ids:
                     raise ValueError(f"{source}:{line_no}: duplicate trajectory_id {trajectory_id!r}")
                 seen_ids.add(trajectory_id)
+
+                # This legacy exporter applies loss to every GPT turn and cannot retain an empty
+                # result action as context-only. Fail closed by dropping the whole trajectory;
+                # the current rolling exporter can preserve that context and mask only its target.
+                has_empty_intermediate = any(
+                    empty_result_target_reason(step) is not None
+                    for step in traj.get("steps") or []
+                )
+                if has_empty_intermediate or trajectory_has_empty_terminal_evidence(
+                    traj.get("steps") or []
+                ):
+                    dropped_empty_result += 1
+                    dropped_empty_result_ids.append(trajectory_id)
+                    continue
 
                 rec = convert(traj)
                 t = est_tokens(rec)
@@ -224,6 +245,13 @@ def build(
         "kept": kept,
         "dropped_overlong": dropped,
         "dropped_trajectory_ids": dropped_ids,
+        "dropped_empty_result": dropped_empty_result,
+        "dropped_empty_result_trajectory_ids": dropped_empty_result_ids,
+        "empty_result_policy": {
+            "version": EMPTY_RESULT_POLICY_VERSION,
+            "legacy_multiturn_export": "drop-whole-trajectory-because-all-gpt-turns-receive-loss",
+            "preferred_exporter": "src/sft/build_rolling_sft_data.py",
+        },
         "max_est_tokens": max_est_tokens,
         "token_estimate_method": f"characters / {CHARS_PER_TOKEN}",
         "est_tokens": {"p50": pct(.5), "p90": pct(.9), "p95": pct(.95),

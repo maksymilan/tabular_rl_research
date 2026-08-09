@@ -1,0 +1,26 @@
+{
+  "metric_note": "mean_token_entropy_lower_bound treats probability mass outside the requested top-logprobs as one bucket; mean_token_surprisal is exact for sampled tokens",
+  "coverage": {
+    "with_logprobs": 6136,
+    "total_trajectories": 6136,
+    "rate": 1.0
+  },
+  "all": {
+    "trajectories": 6136,
+    "mean_trajectory_action_logprob": -153.13088863835085,
+    "mean_token_surprisal": 0.07382403828884357,
+    "mean_token_entropy_lower_bound": 0.115033401173277
+  },
+  "correct": {
+    "trajectories": 3286,
+    "mean_trajectory_action_logprob": -71.40164623626421,
+    "mean_token_surprisal": 0.06366184238594215,
+    "mean_token_entropy_lower_bound": 0.09867724075735612
+  },
+  "incorrect": {
+    "trajectories": 2850,
+    "mean_trajectory_action_logprob": -247.36327128159883,
+    "mean_token_surprisal": 0.08554087188075025,
+    "mean_token_entropy_lower_bound": 0.13389176718265103
+  }
+}

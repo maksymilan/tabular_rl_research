@@ -1,0 +1,215 @@
+diff --git a/trustsql_eval/file_manager.py b/trustsql_eval/file_manager.py
+index 3b5bcaf..e849f25 100644
+--- a/trustsql_eval/file_manager.py
++++ b/trustsql_eval/file_manager.py
+@@ -38,8 +38,10 @@ class FileManager:
+         os.makedirs(self.args.output_folder, exist_ok=True)
+         
+         try:
+-            with open(file_path, 'w', encoding='utf-8') as f:
++            temporary_path = f"{file_path}.tmp.{os.getpid()}.{threading.get_ident()}"
++            with open(temporary_path, 'w', encoding='utf-8') as f:
+                 json.dump(results, f, ensure_ascii=False, indent=2)
++            os.replace(temporary_path, file_path)
+             print(f"Saved results to: {file_path}")
+         except Exception as e:
+             print(f"Error saving to {file_path}: {e}")
+@@ -49,7 +51,16 @@ class FileManager:
+         instance_id = result["instance_id"]
+         
+         with self.file_locks[instance_id]:
+             existing_results = self.load_instance_results(instance_id)
++            rollout_idx = result.get("rollout_idx")
++            existing_results = [
++                existing
++                for existing in existing_results
++                if not (
++                    isinstance(existing, dict)
++                    and existing.get("rollout_idx") == rollout_idx
++                )
++            ]
+             existing_results.append(result)
+             self.save_instance_results(instance_id, existing_results)
+             
+diff --git a/trustsql_eval/llm_agent_batch_async.py b/trustsql_eval/llm_agent_batch_async.py
+index ab717e1..a16d7fa 100644
+--- a/trustsql_eval/llm_agent_batch_async.py
++++ b/trustsql_eval/llm_agent_batch_async.py
+@@ -1,5 +1,6 @@
+ import random
+ import json
++import inspect
+ import os
+ import time
+ import asyncio
+@@ -55,8 +56,9 @@ class BatchLLMAgent:
+         # Set environment variables at init time if needed
+         if hasattr(args, 'cuda_visible_devices'):
+             os.environ['CUDA_VISIBLE_DEVICES'] = str(args.cuda_visible_devices)
+-        # Disable V1 engine
+-        os.environ['VLLM_USE_V1'] = '0'
++        # The released evaluator forced the removed vLLM V0 engine. Modern
++        # vLLM (used on table_rl) supports this agent through the V1 engine.
++        os.environ.pop('VLLM_USE_V1', None)
+ 
+         # Lazy initialization of vLLM async engine
+         self.llm_engine = None
+@@ -172,7 +174,6 @@ class BatchLLMAgent:
+                 'model': self.args.model,
+                 'trust_remote_code': True,
+                 'tensor_parallel_size': world_size,
+-                'disable_log_requests': False,
+             }
+ 
+             # Apply RoPE configuration
+@@ -199,6 +200,16 @@ class BatchLLMAgent:
+ 
+             print(f"  GPU memory utilization: {engine_args_dict['gpu_memory_utilization']}")
+ 
++            # The released code targeted an older AsyncEngineArgs API. Let
++            # the model config own RoPE on newer vLLM and drop only arguments
++            # that the installed engine no longer accepts.
++            supported_engine_args = inspect.signature(AsyncEngineArgs).parameters
++            unsupported_engine_args = sorted(set(engine_args_dict) - set(supported_engine_args))
++            for argument in unsupported_engine_args:
++                engine_args_dict.pop(argument)
++            if unsupported_engine_args:
++                print(f"  Compatibility: omitted unsupported engine args: {unsupported_engine_args}")
++
+             # 4. Initialize async engine
+             print(f"\nInitializing AsyncLLMEngine...")
+             print(f"Engine configuration: {engine_args_dict}")
+@@ -282,6 +293,7 @@ class BatchLLMAgent:
+             'top_p': self.args.top_p,
+             'max_tokens': self.args.max_new_tokens,
+             'n': 1,
++            'seed': self.args.seed,
+         }
+ 
+         if stop_token_ids:
+@@ -352,9 +364,28 @@ class BatchLLMAgent:
+         completed = set()
+         if not os.path.exists(self.args.output_folder):
+             return completed
++        expected_rollouts = set(range(self.args.rollout_number))
+         for filename in os.listdir(self.args.output_folder):
+             if filename.endswith('.json'):
+-                completed.add(filename[:-5])
++                path = os.path.join(self.args.output_folder, filename)
++                try:
++                    with open(path, 'r', encoding='utf-8') as stream:
++                        payload = json.load(stream)
++                    if not isinstance(payload, list):
++                        continue
++                    observed_rollouts = {
++                        int(result['rollout_idx'])
++                        for result in payload
++                        if (
++                            isinstance(result, dict)
++                            and 'rollout_idx' in result
++                            and not result.get('error')
++                        )
++                    }
++                    if expected_rollouts.issubset(observed_rollouts):
++                        completed.add(filename[:-5])
++                except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
++                    continue
+         return completed
+ 
+     def initialize_conversation(self, item: Dict[str, Any], rollout_idx: int) -> ConversationState:
+@@ -519,7 +550,7 @@ class BatchLLMAgent:
+             print("\n✓ All instances have been completed successfully!")
+             return
+ 
+-        random.shuffle(items)
++        random.Random(self.args.seed).shuffle(items)
+ 
+         # 2. Initialize vLLM async engine
+         self._initialize_vllm()
+@@ -564,7 +595,9 @@ class BatchLLMAgent:
+         print("=" * 70)
+ 
+-        # Exit directly without cleaning up vLLM to avoid hangs
+-        os._exit(0)
++        # Modern vLLM exposes a bounded synchronous shutdown. Closing it here
++        # prevents orphan EngineCore/workers from retaining GPUs and log pipes.
++        if self.llm_engine is not None:
++            self.llm_engine.shutdown(timeout=30)
+ 
+     def run(self):
+         """Synchronous entry point."""
+@@ -573,9 +606,10 @@ class BatchLLMAgent:
+         except KeyboardInterrupt:
+             print("\n\n✗ Interrupted by user")
+         except Exception as e:
+             print(f"\n✗ Fatal error: {e}")
+             traceback.print_exc()
++            raise
+         finally:
+             import gc
+             gc.collect()
+             torch.cuda.empty_cache()
+diff --git a/trustsql_eval/main_batch_async.py b/trustsql_eval/main_batch_async.py
+index 3d28a0c..d86e144 100644
+--- a/trustsql_eval/main_batch_async.py
++++ b/trustsql_eval/main_batch_async.py
+@@ -18,6 +18,10 @@ def main():
+     parser.add_argument("--temperature", type=float, default=0.7, help="Temperature")
+     parser.add_argument("--top_p", type=float, default=0.9, help="Top-p")
+     parser.add_argument("--max_new_tokens", type=int, default=4096, help="Max new tokens")
++    parser.add_argument("--seed", type=int, default=20260806, help="Generation and input-order seed")
++    parser.add_argument("--repetition_penalty", type=float, default=1.05)
++    parser.add_argument("--presence_penalty", type=float, default=0.1)
++    parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
+ 
+     # Jinja template settings
+     parser.add_argument('--template_dir', type=str, default=None)
+diff --git a/trustsql_eval/message_processor.py b/trustsql_eval/message_processor.py
+index efcc57d..f3d3e2b 100644
+--- a/trustsql_eval/message_processor.py
++++ b/trustsql_eval/message_processor.py
+@@ -2,6 +2,7 @@ import re
+ import os
+ import sqlite3
+ import asyncio
++import time
+ from typing import Dict, List, Optional, Tuple
+ import json
+ from concurrent.futures import ThreadPoolExecutor
+@@ -85,7 +86,13 @@ def _find_db_path(databases_path: str, db_id: str) -> Optional[str]:
+     return None
+ 
+ 
+-def _execute_sql_sync(db_id: str, sql_query: str, databases_path: str, max_rows: int = 100) -> Dict:
++def _execute_sql_sync(
++    db_id: str,
++    sql_query: str,
++    databases_path: str,
++    timeout: float,
++    max_rows: int = 30,
++) -> Dict:
+     """
+     Synchronously execute a SQL query (used inside the thread pool).
+     Compatible with both BIRD and Spider2 path formats.
+@@ -109,6 +116,11 @@ def _execute_sql_sync(db_id: str, sql_query: str, databases_path: str, max_rows:
+         )
+         conn.row_factory = sqlite3.Row
+ 
++        started = time.monotonic()
++        conn.set_progress_handler(
++            lambda: int(time.monotonic() - started > timeout), 10_000
++        )
++
+         cursor = conn.cursor()
+         cursor.execute(sql_query)
+ 
+@@ -160,7 +172,8 @@ async def execute_sql_local(db_id: str, sql_query: str, databases_path: str, tim
+                     _execute_sql_sync,
+                     db_id,
+                     sql_query,
+-                    databases_path
++                    databases_path,
++                    timeout,
+                 ),
+                 timeout=timeout
+             )

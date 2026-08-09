@@ -1,23 +1,33 @@
 # Canonical Execution Contract
 
-Status: active contract for **new** SFT generation, evaluation, and RL episodes under
-`version26`. `src/sft/protocol.py` is executable authority; this document makes
-the ownership boundaries explicit. Old trajectory artifacts remain replay inputs, not examples of
-the public action interface.
+Status: active shared harness contract across current tool schemes. The forward provider-tool-call
+prompt diagnostic is version54 / `native-tool-bundle`; version26 is a frozen historical checkpoint
+control, not the base for new feature work. `src/sft/protocol.py`, the selected scheme protocol,
+and `src/tool_modules/registry.py` are executable authority. Old trajectory artifacts remain replay
+inputs, not examples of the current public action interface.
+
+The `iterative-sql-v6` scheme uses the same immutable SQLite source and hidden `bird-set` scorer
+but a separate SQL state machine: `execute_sql` adds factual previews to `CURRENT SQL STATE`, while
+an invalid `submit_sql` adds only structured `LAST SQL ERROR` and does not mutate successful state.
+Its exact boundary is documented in `docs/current/iterative_sql_tool_scheme_zh.md`.
 
 ## One Episode, One State Machine
 
 An episode is a sequence of model actions against one immutable source database and one
 harness-managed resident state.
 
-1. The active renderer starts with the catalog, question, and optional external knowledge, then
-   retains at most four successful assistant/observation pairs. The current user message contains
-   resident environment state and, only after an error, `LAST TOOL ERROR`.
-2. The canonical action has exactly one non-empty `<think>` block followed directly by one complete
+1. The original atomic renderer starts with the catalog, question, and optional external
+   knowledge, then retains at most four successful assistant/observation pairs. Version51-version54 instead
+   retains four actual provider assistant turns, each followed by all matching tool results. The
+   latest tool result carries resident state and error feedback.
+2. The canonical atomic action has exactly one non-empty `<think>` block followed directly by one complete
    raw JSON object with exact `tool` and `arguments` keys. An API with native reasoning transport
    receives one provider-specific prompt and emits the same reason/tool action across its two
-   fields.
-3. The harness strictly parses, validates, executes, records the action, and updates resident state.
+   fields. Version51-version54 use the provider's structured assistant message as the authoritative carrier:
+   one turn may contain 1..8 direct primitive calls.
+3. The harness strictly validates, executes, records, and updates resident state. For version51-version54,
+   every call is validated against the shared bundle pre-state before any call executes, then each
+   primitive is executed/audited in provider order.
 4. The next model input is rebuilt from resident state and bounded rolling legal history. Rejected
    assistant text is excluded; full schemas, values, and rows remain present only once in resident
    state.
@@ -38,8 +48,8 @@ For new DeepSeek episodes, the only active external endpoint is the official
 used as a provider, proxy, or fallback. The Beta FIM completion endpoint is outside this tool-use
 execution contract; see `provider_api.md`.
 
-A provider adapter is allowed only before the strict parser when an API explicitly transports a
-model-authored action across separate fields. For example, the DS Flash adapter accepts exactly
+A provider adapter is allowed only at the selected scheme boundary when an API explicitly transports a
+model-authored action across separate fields. For example, the atomic DS Flash adapter accepts exactly
 `reasoning_content` plus the one visible action shape selected for that experiment: either one raw
 JSON action under JSON Output or one complete tool-call block without that constraint. It preserves
 both raw fields in the audit record and carries that existing reasoning into the canonical
@@ -48,6 +58,12 @@ partial provider envelopes. All other shapes still go to the strict parser uncha
 normally. The selected
 carrier, request controls, adapter use, and raw provider identity are recorded in turns and
 manifests.
+
+Version51-version54 do not pass through the atomic text parser. They preserve the complete provider
+assistant message, ignores assistant content for execution, validates the structured function
+names/arguments without repair, and returns one native tool-result message for every call id.
+Primitive records carry their shared model-turn identity so storage and replay do not invent
+intermediate model observations.
 
 The API-facing prompt must contain only the selected provider envelope. For DS Flash, positive
 instructions to emit a visible `<think>` block are removed before the split-field contract and its
@@ -294,8 +310,10 @@ state rebuilding needs per-turn loss accounting rather than one appended transcr
 
 ## Migration Rule
 
-Do not mix naming contracts inside one dataset or evaluation. New diagnostic episodes use
-`version25`, but new SFT construction remains gated on the frozen 200-task accuracy requirement.
+Do not mix naming contracts inside one dataset or evaluation. New provider-tool-call diagnostics
+branch from `version54` / `native-tool-bundle`; the original atomic local baseline remains
+version39, and version26 is historical checkpoint control only. New SFT construction remains gated
+on the selected scheme's explicit exporter and training-admission requirements.
 Historical artifacts retain their original model-visible contracts and may only enter
 replay-compatible paths. SFT, evaluation, and RL use the same student runtime prompt; the external
 teacher receives a strict superset whose extra guidance is not exported into student records.

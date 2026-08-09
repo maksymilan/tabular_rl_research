@@ -118,6 +118,19 @@ def main() -> int:
     parser.add_argument("--cutoff-len", type=int, default=4096)
     parser.add_argument("--template", default="qwen")
     parser.add_argument(
+        "--enable-thinking",
+        action="store_true",
+        help="Explicitly enable the reasoning model's thinking-mode chat template.",
+    )
+    parser.add_argument(
+        "--preserve-thinking",
+        action="store_true",
+        help=(
+            "Preserve reasoning blocks in masked assistant history. This must match the "
+            "training config and inference chat template for reasoning models such as Qwen3."
+        ),
+    )
+    parser.add_argument(
         "--filter-policy",
         choices=["complete-target", "full-prefix"],
         default="complete-target",
@@ -128,7 +141,13 @@ def main() -> int:
         parser.error("--cutoff-len must be positive")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
-    data_args = DataArguments(template=args.template, cutoff_len=args.cutoff_len, mask_history=True)
+    data_args = DataArguments(
+        template=args.template,
+        cutoff_len=args.cutoff_len,
+        mask_history=True,
+        preserve_thinking=args.preserve_thinking,
+        enable_thinking=args.enable_thinking,
+    )
     template = get_template_and_fix_tokenizer(tokenizer, data_args)
     processor = SupervisedDatasetProcessor(template, tokenizer, None, data_args)
 
@@ -206,6 +225,8 @@ def main() -> int:
         "template": args.template,
         "cutoff_len": args.cutoff_len,
         "mask_history": True,
+        "preserve_thinking": args.preserve_thinking,
+        "enable_thinking": args.enable_thinking,
         "filter_policy": args.filter_policy,
         "records": len(kept) + len(dropped),
         "total": len(kept) + len(dropped),

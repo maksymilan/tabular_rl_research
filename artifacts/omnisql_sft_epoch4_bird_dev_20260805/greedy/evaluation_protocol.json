@@ -1,0 +1,23 @@
+{
+  "mode": "greedy",
+  "questions": 1534,
+  "trajectories": 1534,
+  "n_samples": [
+    1
+  ],
+  "temperature": [
+    0.0
+  ],
+  "top_p": [
+    1.0
+  ],
+  "max_steps": [
+    30
+  ],
+  "protocol_version": [
+    "version36"
+  ],
+  "denotation_comparison": [
+    "bird-set"
+  ]
+}

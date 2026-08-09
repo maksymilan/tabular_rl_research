@@ -16,16 +16,22 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "src" / "sft"))
 
-from tool_schemes import (  # noqa: E402
+from tool_modules.registry import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
     DIRECT_SQL_SEARCH_TOOL_SCHEME,
+    ITERATIVE_SQL_TOOL_SCHEME,
+    NATIVE_TOOL_BUNDLE_SCHEME,
     RELATIONAL_PROGRAM_TOOL_SCHEME,
     TOOL_SCHEME_NAMES,
 )
-from direct_sql_search_protocol import DIRECT_SQL_SEARCH_INTERFACE  # noqa: E402
+from tool_modules.direct_sql_search.protocol import (  # noqa: E402
+    DIRECT_SQL_SEARCH_INTERFACE,
+)
+from tool_modules.iterative_sql.protocol import ITERATIVE_SQL_INTERFACE  # noqa: E402
 
 
 def runner_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
@@ -34,20 +40,41 @@ def runner_argv(tool_scheme: str, forwarded: list[str]) -> list[str]:
     if tool_scheme == ATOMIC_TOOL_SCHEME:
         script = HERE / "rollout.py"
         return [sys.executable, str(script), *forwarded]
+    if tool_scheme == NATIVE_TOOL_BUNDLE_SCHEME:
+        script = ROOT / "src" / "sft" / "generate_teacher_rollouts.py"
+        return [
+            sys.executable,
+            str(script),
+            *forwarded,
+            "--atomic-protocol-version",
+            "version54",
+            "--deepseek-carrier",
+            "native-tool-bundle",
+            "--diagnostic-only",
+        ]
     if tool_scheme == ACTION_BLOCK_TOOL_SCHEME:
-        script = HERE / "evaluate_batch_plan.py"
+        script = ROOT / "src" / "tool_modules" / "action_block" / "evaluator.py"
         return [sys.executable, str(script), *forwarded]
     if tool_scheme == RELATIONAL_PROGRAM_TOOL_SCHEME:
-        script = HERE / "evaluate_relational_program.py"
+        script = ROOT / "src" / "tool_modules" / "relational_program" / "evaluator.py"
         return [sys.executable, str(script), *forwarded]
     if tool_scheme == DIRECT_SQL_SEARCH_TOOL_SCHEME:
-        script = HERE / "iterative_sql.py"
+        script = ROOT / "src" / "tool_modules" / "sql_common" / "runner.py"
         return [
             sys.executable,
             str(script),
             *forwarded,
             "--interface",
             DIRECT_SQL_SEARCH_INTERFACE,
+        ]
+    if tool_scheme == ITERATIVE_SQL_TOOL_SCHEME:
+        script = ROOT / "src" / "tool_modules" / "sql_common" / "runner.py"
+        return [
+            sys.executable,
+            str(script),
+            *forwarded,
+            "--interface",
+            ITERATIVE_SQL_INTERFACE,
         ]
     raise ValueError(f"unsupported tool scheme: {tool_scheme}")
 

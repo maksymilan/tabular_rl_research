@@ -32,10 +32,16 @@ from transformers import (
 )
 
 ROOT = Path(__file__).resolve().parents[4]
-sys.path[:0] = [str(ROOT / "src" / "rl"), str(ROOT / "src" / "eval"), str(ROOT / "src" / "harness"), str(ROOT / "src" / "sft")]
+sys.path[:0] = [
+    str(ROOT / "src"),
+    str(ROOT / "src" / "rl"),
+    str(ROOT / "src" / "eval"),
+    str(ROOT / "src" / "harness"),
+    str(ROOT / "src" / "sft"),
+]
 
 from tool_environment import create_tool_use_env  # noqa: E402
-from tool_schemes import (  # noqa: E402
+from tool_modules.registry import (  # noqa: E402
     ACTION_BLOCK_TOOL_SCHEME,
     ATOMIC_TOOL_SCHEME,
     TOOL_SCHEME_NAMES,

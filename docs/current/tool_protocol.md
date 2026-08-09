@@ -3,10 +3,12 @@
 Status: index-level contract for the currently implemented trajectory format. This file does not
 replace code; it points to the source of truth and records what must not drift.
 
-This document describes the original `atomic` scheme. The independently selectable
-`action-block` scheme is indexed in `docs/current/tool_schemes.md` and
-`src/eval/batch_plan_protocol.py`. A model is given exactly one scheme; the two top-level action
-spaces are never merged in one prompt.
+This document describes the original `atomic` scheme and indexes its version51-version54
+primitive-compatible `native-tool-bundle` successors. The independently selectable non-atomic schemes are indexed in
+`docs/current/tool_schemes.md`; the new two-action SQL protocol is specified by
+`docs/current/iterative_sql_tool_scheme_zh.md` and
+`src/tool_modules/iterative_sql/protocol.py`. A model is
+given exactly one scheme; top-level action spaces are never merged in one prompt.
 
 ## Sources of Truth
 
@@ -22,6 +24,18 @@ spaces are never merged in one prompt.
 - Isolated atomic version41 prompt module: `src/sft/atomic_version41_prompt.py`
 - Isolated atomic version42 terminal-column protocol: `src/sft/atomic_version42.py`
 - Isolated atomic version43 unique-bare terminal resolver: `src/sft/atomic_version43.py`
+- Isolated atomic version50 native function-call carrier: `src/sft/atomic_version50.py` and
+  `src/tool_modules/native_tool_bundle/provider_tools.py`
+- Forward version51 native bundle protocol: `src/tool_modules/native_tool_bundle/protocol.py`,
+  `src/tool_modules/native_tool_bundle/provider_tools.py`, and
+  `src/sft/generate_teacher_rollouts.py`
+- Version52 compact native prompt and statistics:
+  `src/tool_modules/native_tool_bundle/compact_protocol.py`,
+  `src/tool_modules/native_tool_bundle/compact_prompt.py`, and
+  `src/tool_modules/native_tool_bundle/bundle_credit.py`
+- Version53 reviewed role-separated native prompt:
+  `src/tool_modules/native_tool_bundle/reviewed_protocol.py` and
+  `src/tool_modules/native_tool_bundle/reviewed_prompt.py`
 - Harness provenance sidecars: `src/harness/provenance.py`
 - Visible-cell binding semantics: `src/harness/observation_binding.py`
 - Scalar `value_ref` grounding: `src/harness/scalar_grounding.py`
@@ -331,7 +345,50 @@ Public version mapping:
   SFT/RL. See
   `docs/reports/evaluation/BIRD_ATOMIC_CONTEXT_HANDLE_CARD_ABLATION_GATE16_20260731_ZH.md` and
   `docs/reports/evaluation/BIRD_ATOMIC_VERSION49_CONTEXT_STABILITY_K3_GATE8_20260731_ZH.md`;
-- future changes increment only the integer (`version50`, `version51`, ...).
+- `version50`: returns to version39's public tools, prompt semantics, execution, canonical state,
+  recent-4 context, and exact-table terminal. It changes only the DeepSeek-facing action carrier
+  from native reasoning plus visible JSON Output to native reasoning plus official function calls.
+  The tools schema is deterministically rendered from the same `MODEL_ARG_SCHEMA`; native responses
+  are converted without argument repair to the canonical internal action before the shared parser.
+  Thinking-mode history returns original reasoning and call ids. The diagnostic uses
+  `tool_choice=auto` because the provider rejects `required`, then locally enforces exactly one
+  call. Its completed user-authorized fixed-200 scored 133/200 correct and 183/200 legal versus
+  historical version24 at 145/200 and 197/200; process errors rose from 29 to 166 and tokens nearly
+  doubled. Replay, structural, no-leak, and native-lowering audits passed, but the behavioral gate
+  failed. Version50 is rejected and ineligible for SFT/RL;
+- `version51`: keeps the version39 primitive function schema and harness semantics, but moves to
+  the distinct `native-tool-bundle` scheme. A provider assistant turn contains 1..8 calls chosen
+  from one visible pre-state; every call is prevalidated before any executes and receives a
+  matching tool-result message. Non-empty assistant content is audit-only. Terminal calls must be
+  alone. Primitive steps retain their shared model-turn identity rather than pretending the model
+  observed intermediate results. Its frozen Gate32 scored 22/32 versus version50 16/32, with six
+  gains and no regressions. Its completed fixed-200 scored 147/200 with 200/200 legal versus
+  version50 at 133/200 and 183/200; 20 paired gains and six regressions were significant, carrier
+  protocol errors fell from 124 to two, and all replay/structure/provider-history/no-leak audits
+  passed. Historical version24 remained statistically tied at 145/200 and used about half the
+  tokens. Version51 is the frozen diagnostic base for version52+, but is not SFT/RL eligible;
+- `version52`: keeps every version51 tool, argument, execution, state, carrier, bundle-pre-state,
+  recent-four history, and terminal behavior. Native JSON schemas become the sole argument-shape
+  authority, eliminating the duplicate textual tool catalog, long teacher tool descriptions, and
+  call cookbook. Soft scheduling defaults to one call, normally uses at most three, favors
+  independent perception, restricts parallel filters to grounded hypotheses, and normally isolates
+  relational operators; the harness still permits at most eight and enforces terminal as exactly
+  one call. Structured error results remain in provider history and the later correction is the
+  learnable target boundary. Fact-only call annotations are statistics, not reward. Static
+  fixed-200 counterfactual request rendering falls 45.4% in message characters; no live gate has
+  yet promoted accuracy or measured provider tokens. Version52 remains diagnostic-only;
+- `version53`: keeps version52 tools and execution unchanged, separates the shared runtime kernel
+  from teacher-only generation, adds data-as-data, risk-triggered join-cardinality,
+  source-versus-derived representation, correctness-first scheduling, and distinct-handle
+  independent-filter rules, and removes harness-only prompt prose. Static teacher prompt plus
+  native schema falls from 16,769 to 15,168 characters. This is not a live behavior result and
+  version53 remains diagnostic-only;
+- `version54`: keeps the version53 student prompt, carrier, eleven non-plan functions, execution,
+  state, history, feedback, and terminal semantics; removes only public `plan` and its stale
+  teacher-only evidence sentence. Its v54-only teacher1500 Prefix200 absolute gate is
+  preregistered, not yet completed; passing every gate conditionally opens the remaining 1,300
+  frozen tasks without a v53 comparison;
+- future changes increment only the integer (`version55`, `version56`, ...).
 
 Historical-control note: a separate branch at `deaa0e4` rebuilt original version24 and added only
 bounded `search_values`, retaining plan, `read_subtable`, raw schema, and exact-table terminal
@@ -340,8 +397,8 @@ semantics. Fresh version24 reproduced 41/50 versus the original 42/50; the searc
 historical ablation and not part of the current protocol progression. See
 `docs/reports/evaluation/BIRD_VERSION24_BOUNDED_SEARCH_SINGLE_VARIABLE_GATE50_20260730_ZH.md`.
 
-The current version39 diagnostic tool set remains the one in
-`src/sft/protocol.py::TOOL_SPECS`:
+The version39 atomic baseline and version51-version53 native-bundle line share the complete tool
+set in `src/sft/protocol.py::TOOL_SPECS`; version54 uses the same set minus `plan`:
 
 - `condition_filter`
 - `plan`

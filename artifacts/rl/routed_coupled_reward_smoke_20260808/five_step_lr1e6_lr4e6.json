@@ -1,0 +1,404 @@
+{
+  "schema_version": "routed-coupled-reward-smoke-v1",
+  "measurement": "exact frozen tokens; independent reset to SFT2 for each LR",
+  "train_example_indices": [
+    3044,
+    4050,
+    1626,
+    5040,
+    5027
+  ],
+  "retention_example_indices": [
+    4692
+  ],
+  "think_weight": 0.5,
+  "action_weight": 1.0,
+  "rank_coefficient": 0.0,
+  "routing": {
+    "positive": [
+      "correct_key_backslice",
+      "correct_key_evidence",
+      "correct_terminal"
+    ],
+    "negative": [
+      "severe_local_error"
+    ],
+    "neutral": [
+      "correct_other_clean",
+      "incorrect_other_clean"
+    ],
+    "normalization": "mean over routed-active transitions per question"
+  },
+  "train_categories": {
+    "correct_key_evidence": 8,
+    "correct_key_backslice": 22,
+    "correct_terminal": 8,
+    "incorrect_other_clean": 56,
+    "severe_local_error": 11,
+    "correct_other_clean": 3
+  },
+  "active_train_transitions": 49,
+  "retention_correct_transitions": 8,
+  "variants": [
+    {
+      "learning_rate": 1e-06,
+      "weight_decay": 0.01,
+      "steps": [
+        {
+          "step": 1,
+          "example_index": 3044,
+          "active_transitions": 7,
+          "positive_transitions": 4,
+          "negative_transitions": 3,
+          "loss": -0.025210213963873684,
+          "grad_norm_before_clip": 1.3873322010040283,
+          "clip_triggered": true
+        },
+        {
+          "step": 2,
+          "example_index": 4050,
+          "active_transitions": 12,
+          "positive_transitions": 10,
+          "negative_transitions": 2,
+          "loss": 0.005337672133464366,
+          "grad_norm_before_clip": 0.28271597623825073,
+          "clip_triggered": false
+        },
+        {
+          "step": 3,
+          "example_index": 1626,
+          "active_transitions": 9,
+          "positive_transitions": 6,
+          "negative_transitions": 3,
+          "loss": 0.001128318253904581,
+          "grad_norm_before_clip": 0.18159309029579163,
+          "clip_triggered": false
+        },
+        {
+          "step": 4,
+          "example_index": 5040,
+          "active_transitions": 13,
+          "positive_transitions": 10,
+          "negative_transitions": 3,
+          "loss": -0.0009967203659471124,
+          "grad_norm_before_clip": 0.42455533146858215,
+          "clip_triggered": false
+        },
+        {
+          "step": 5,
+          "example_index": 5027,
+          "active_transitions": 8,
+          "positive_transitions": 8,
+          "negative_transitions": 0,
+          "loss": 0.01601781276986003,
+          "grad_norm_before_clip": 0.7040178775787354,
+          "clip_triggered": false
+        }
+      ],
+      "raw_adapter_update_norm": 0.01761411995082407,
+      "raw_adapter_update_over_reference": 0.00047870823656783417,
+      "deltas": {
+        "active": {
+          "transitions": 57,
+          "think_mean_delta": -3.280245551937505e-05,
+          "think_mean_abs_delta": 0.004209351742215324,
+          "think_reward_aligned_fraction": 0.8421052631578947,
+          "think_decrease_fraction": 0.3157894736842105,
+          "action_mean_delta": -0.0008477768633862357,
+          "action_mean_abs_delta": 0.002996980464670566,
+          "action_reward_aligned_fraction": 0.8070175438596491,
+          "action_decrease_fraction": 0.2807017543859649,
+          "joint_mean_delta": -0.0008641772887162995,
+          "joint_mean_abs_delta": 0.005076388648727484,
+          "joint_reward_aligned_fraction": 0.9122807017543859,
+          "joint_decrease_fraction": 0.24561403508771928
+        },
+        "positive": {
+          "transitions": 46,
+          "think_mean_delta": 0.0024970307865220566,
+          "think_mean_abs_delta": 0.002665324986952802,
+          "think_reward_aligned_fraction": 0.8260869565217391,
+          "think_decrease_fraction": 0.17391304347826086,
+          "action_mean_delta": 0.0013269364805597909,
+          "action_mean_abs_delta": 0.0013296582101643055,
+          "action_reward_aligned_fraction": 0.8260869565217391,
+          "action_decrease_fraction": 0.17391304347826086,
+          "joint_mean_delta": 0.002575451994071836,
+          "joint_mean_abs_delta": 0.0026380538778460545,
+          "joint_reward_aligned_fraction": 0.9130434782608695,
+          "joint_decrease_fraction": 0.08695652173913043
+        },
+        "correct_key_evidence": {
+          "transitions": 10,
+          "think_mean_delta": 0.0016713477671146393,
+          "think_mean_abs_delta": 0.0017126984894275665,
+          "think_reward_aligned_fraction": 0.7,
+          "think_decrease_fraction": 0.3,
+          "action_mean_delta": 4.605662070389371e-06,
+          "action_mean_abs_delta": 1.5651542889827395e-05,
+          "action_reward_aligned_fraction": 0.7,
+          "action_decrease_fraction": 0.3,
+          "joint_mean_delta": 0.0008402798324823379,
+          "joint_mean_abs_delta": 0.0008542116731405259,
+          "joint_reward_aligned_fraction": 0.9,
+          "joint_decrease_fraction": 0.1
+        },
+        "correct_key_backslice": {
+          "transitions": 26,
+          "think_mean_delta": 0.0018768877937243534,
+          "think_mean_abs_delta": 0.0021587349474430084,
+          "think_reward_aligned_fraction": 0.8076923076923077,
+          "think_decrease_fraction": 0.19230769230769232,
+          "action_mean_delta": 0.00036314298687592294,
+          "action_mean_abs_delta": 0.00036370993893797277,
+          "action_reward_aligned_fraction": 0.8076923076923077,
+          "action_decrease_fraction": 0.19230769230769232,
+          "joint_mean_delta": 0.0013015872010817896,
+          "joint_mean_abs_delta": 0.0014069859798137958,
+          "joint_reward_aligned_fraction": 0.8846153846153846,
+          "joint_decrease_fraction": 0.11538461538461539
+        },
+        "correct_terminal": {
+          "transitions": 10,
+          "think_mean_delta": 0.0049350855872035025,
+          "think_mean_abs_delta": 0.0049350855872035025,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 0.0,
+          "action_mean_delta": 0.005155130382627248,
+          "action_mean_abs_delta": 0.005155130382627248,
+          "action_reward_aligned_fraction": 1.0,
+          "action_decrease_fraction": 0.0,
+          "joint_mean_delta": 0.007622672617435456,
+          "joint_mean_abs_delta": 0.007622672617435456,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        },
+        "negative": {
+          "transitions": 11,
+          "think_mean_delta": -0.010612105104056272,
+          "think_mean_abs_delta": 0.010666190900585869,
+          "think_reward_aligned_fraction": 0.9090909090909091,
+          "think_decrease_fraction": 0.9090909090909091,
+          "action_mean_delta": -0.009942032665342347,
+          "action_mean_abs_delta": 0.009969418983514928,
+          "action_reward_aligned_fraction": 0.7272727272727273,
+          "action_decrease_fraction": 0.7272727272727273,
+          "joint_mean_delta": -0.015248081562193956,
+          "joint_mean_abs_delta": 0.015273061326958916,
+          "joint_reward_aligned_fraction": 0.9090909090909091,
+          "joint_decrease_fraction": 0.9090909090909091
+        },
+        "severe_local_error": {
+          "transitions": 11,
+          "think_mean_delta": -0.010612105104056272,
+          "think_mean_abs_delta": 0.010666190900585869,
+          "think_reward_aligned_fraction": 0.9090909090909091,
+          "think_decrease_fraction": 0.9090909090909091,
+          "action_mean_delta": -0.009942032665342347,
+          "action_mean_abs_delta": 0.009969418983514928,
+          "action_reward_aligned_fraction": 0.7272727272727273,
+          "action_decrease_fraction": 0.7272727272727273,
+          "joint_mean_delta": -0.015248081562193956,
+          "joint_mean_abs_delta": 0.015273061326958916,
+          "joint_reward_aligned_fraction": 0.9090909090909091,
+          "joint_decrease_fraction": 0.9090909090909091
+        },
+        "retention_correct": {
+          "transitions": 8,
+          "think_mean_delta": 0.0007863566279411316,
+          "think_mean_abs_delta": 0.0010353103280067444,
+          "think_reward_aligned_fraction": 0.5,
+          "think_decrease_fraction": 0.5,
+          "action_mean_delta": 0.002341016363061499,
+          "action_mean_abs_delta": 0.002341016363061499,
+          "action_reward_aligned_fraction": 1.0,
+          "action_decrease_fraction": 0.0,
+          "joint_mean_delta": 0.002734193578362465,
+          "joint_mean_abs_delta": 0.002734193578362465,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        }
+      }
+    },
+    {
+      "learning_rate": 4e-06,
+      "weight_decay": 0.01,
+      "steps": [
+        {
+          "step": 1,
+          "example_index": 3044,
+          "active_transitions": 7,
+          "positive_transitions": 4,
+          "negative_transitions": 3,
+          "loss": -0.025210213963873684,
+          "grad_norm_before_clip": 1.3873322010040283,
+          "clip_triggered": true
+        },
+        {
+          "step": 2,
+          "example_index": 4050,
+          "active_transitions": 12,
+          "positive_transitions": 10,
+          "negative_transitions": 2,
+          "loss": 0.0053099244250915945,
+          "grad_norm_before_clip": 0.28209564089775085,
+          "clip_triggered": false
+        },
+        {
+          "step": 3,
+          "example_index": 1626,
+          "active_transitions": 9,
+          "positive_transitions": 6,
+          "negative_transitions": 3,
+          "loss": 0.0011010353628080338,
+          "grad_norm_before_clip": 0.18087446689605713,
+          "clip_triggered": false
+        },
+        {
+          "step": 4,
+          "example_index": 5040,
+          "active_transitions": 13,
+          "positive_transitions": 10,
+          "negative_transitions": 3,
+          "loss": -0.0009651037107687443,
+          "grad_norm_before_clip": 0.4140353500843048,
+          "clip_triggered": false
+        },
+        {
+          "step": 5,
+          "example_index": 5027,
+          "active_transitions": 8,
+          "positive_transitions": 8,
+          "negative_transitions": 0,
+          "loss": 0.015363458544015884,
+          "grad_norm_before_clip": 0.7085621953010559,
+          "clip_triggered": false
+        }
+      ],
+      "raw_adapter_update_norm": 0.0704127420812603,
+      "raw_adapter_update_over_reference": 0.0019136442631099986,
+      "deltas": {
+        "active": {
+          "transitions": 57,
+          "think_mean_delta": -0.0007432589242071437,
+          "think_mean_abs_delta": 0.015514359809458256,
+          "think_reward_aligned_fraction": 0.9473684210526315,
+          "think_decrease_fraction": 0.24561403508771928,
+          "action_mean_delta": -0.007000242365967624,
+          "action_mean_abs_delta": 0.014820431849569249,
+          "action_reward_aligned_fraction": 0.8421052631578947,
+          "action_decrease_fraction": 0.3157894736842105,
+          "joint_mean_delta": -0.007371872238684119,
+          "joint_mean_abs_delta": 0.022558146238065603,
+          "joint_reward_aligned_fraction": 0.9824561403508771,
+          "joint_decrease_fraction": 0.21052631578947367
+        },
+        "positive": {
+          "transitions": 46,
+          "think_mean_delta": 0.009130948121942904,
+          "think_mean_abs_delta": 0.009172372540216083,
+          "think_reward_aligned_fraction": 0.9347826086956522,
+          "think_decrease_fraction": 0.06521739130434782,
+          "action_mean_delta": 0.004836945786258223,
+          "action_mean_abs_delta": 0.004841208256632102,
+          "action_reward_aligned_fraction": 0.8260869565217391,
+          "action_decrease_fraction": 0.17391304347826086,
+          "joint_mean_delta": 0.009402419845371143,
+          "joint_mean_abs_delta": 0.00941535445821026,
+          "joint_reward_aligned_fraction": 0.9782608695652174,
+          "joint_decrease_fraction": 0.021739130434782608
+        },
+        "correct_key_evidence": {
+          "transitions": 10,
+          "think_mean_delta": 0.0059602376073598865,
+          "think_mean_abs_delta": 0.0059602376073598865,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 0.0,
+          "action_mean_delta": 5.872709516552277e-06,
+          "action_mean_abs_delta": 8.167214764398522e-06,
+          "action_reward_aligned_fraction": 0.8,
+          "action_decrease_fraction": 0.2,
+          "joint_mean_delta": 0.0029859920963644982,
+          "joint_mean_abs_delta": 0.0029859920963644982,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        },
+        "correct_key_backslice": {
+          "transitions": 26,
+          "think_mean_delta": 0.007866428376963506,
+          "think_mean_abs_delta": 0.0079397177323699,
+          "think_reward_aligned_fraction": 0.8846153846153846,
+          "think_decrease_fraction": 0.11538461538461539,
+          "action_mean_delta": 0.0016233125075954236,
+          "action_mean_abs_delta": 0.001629971299315422,
+          "action_reward_aligned_fraction": 0.7692307692307693,
+          "action_decrease_fraction": 0.23076923076923078,
+          "joint_mean_delta": 0.005556526808784558,
+          "joint_mean_abs_delta": 0.005579411123807614,
+          "joint_reward_aligned_fraction": 0.9615384615384616,
+          "joint_decrease_fraction": 0.038461538461538464
+        },
+        "correct_terminal": {
+          "transitions": 10,
+          "think_mean_delta": 0.015589409973472357,
+          "think_mean_abs_delta": 0.015589409973472357,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 0.0,
+          "action_mean_delta": 0.018023465387523176,
+          "action_mean_abs_delta": 0.018023465387523176,
+          "action_reward_aligned_fraction": 1.0,
+          "action_decrease_fraction": 0.0,
+          "joint_mean_delta": 0.025818169489502905,
+          "joint_mean_abs_delta": 0.025818169489502905,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        },
+        "negative": {
+          "transitions": 11,
+          "think_mean_delta": -0.04203539748083462,
+          "think_mean_abs_delta": 0.04203539748083462,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 1.0,
+          "action_mean_delta": -0.056501211002548436,
+          "action_mean_abs_delta": 0.05655173051094276,
+          "action_reward_aligned_fraction": 0.9090909090909091,
+          "action_decrease_fraction": 0.9090909090909091,
+          "joint_mean_delta": -0.07751891186291521,
+          "joint_mean_abs_delta": 0.07751891186291521,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 1.0
+        },
+        "severe_local_error": {
+          "transitions": 11,
+          "think_mean_delta": -0.04203539748083462,
+          "think_mean_abs_delta": 0.04203539748083462,
+          "think_reward_aligned_fraction": 1.0,
+          "think_decrease_fraction": 1.0,
+          "action_mean_delta": -0.056501211002548436,
+          "action_mean_abs_delta": 0.05655173051094276,
+          "action_reward_aligned_fraction": 0.9090909090909091,
+          "action_decrease_fraction": 0.9090909090909091,
+          "joint_mean_delta": -0.07751891186291521,
+          "joint_mean_abs_delta": 0.07751891186291521,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 1.0
+        },
+        "retention_correct": {
+          "transitions": 8,
+          "think_mean_delta": 0.0029748324304819107,
+          "think_mean_abs_delta": 0.003064362332224846,
+          "think_reward_aligned_fraction": 0.75,
+          "think_decrease_fraction": 0.25,
+          "action_mean_delta": 0.007151287820306607,
+          "action_mean_abs_delta": 0.007151287820306607,
+          "action_reward_aligned_fraction": 1.0,
+          "action_decrease_fraction": 0.0,
+          "joint_mean_delta": 0.00863870233297348,
+          "joint_mean_abs_delta": 0.00863870233297348,
+          "joint_reward_aligned_fraction": 1.0,
+          "joint_decrease_fraction": 0.0
+        }
+      }
+    }
+  ]
+}

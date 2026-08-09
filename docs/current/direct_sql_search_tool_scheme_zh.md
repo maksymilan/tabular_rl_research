@@ -2,8 +2,8 @@
 
 ## 结论
 
-Direct-SQL-search 是一个与 atomic、action-block、relational-program 互斥的第四种 tool
-scheme。模型每轮只看到两个工具：
+Direct-SQL-search 是一个在 registry v4 引入、与其他 tool scheme 互斥的独立方案。模型
+每轮只看到两个工具：
 
 1. `search_values(query, table?, column?, limit?, offset?)`；
 2. `execute_sql(sql, mode)`，其中 `mode="inspect"` 返回执行反馈，`mode="final"` 终止并
@@ -103,13 +103,14 @@ SQL 经历真实环境反馈，不能退化为 one-shot submission。
 
 ## 实现位置
 
-- 协议、公开 schema、strict parser：`src/sft/direct_sql_search_protocol.py`；
-- 执行、provider loop、隐藏判分：`src/eval/iterative_sql.py --interface
+- 协议、公开 schema、strict parser：`src/tool_modules/direct_sql_search/protocol.py`；
+- 共享只读 SQL 执行、provider loop、隐藏判分：`src/tool_modules/sql_common/runner.py --interface
   search-values-execute-sql-v2`；v1 为显式 replay/复现兼容入口；
-- scheme registry：`src/sft/tool_schemes.py` (`tool-scheme-registry-v4`)；
+- scheme registry：`src/tool_modules/registry.py` (`tool-scheme-registry-v11`；本方案在 v4 引入，
+  v6 新增独立 iterative-sql，v7/v8 只推进该独立 scheme)；
 - 统一 evaluation / teacher launcher：`src/eval/run_tool_scheme.py` 与
   `src/sft/generate_tool_scheme_rollouts.py`；
-- fresh replay / structural audit：`src/eval/audit_direct_sql_search.py`。
+- fresh replay / structural audit：`src/tool_modules/direct_sql_search/audit.py`。
 
 推荐入口：
 

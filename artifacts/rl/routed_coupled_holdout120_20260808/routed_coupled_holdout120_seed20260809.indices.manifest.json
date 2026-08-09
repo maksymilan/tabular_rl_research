@@ -1,0 +1,38 @@
+{
+  "tasks": "data/eval_inputs/bird_dev_20240627.jsonl",
+  "indices": "data/eval_inputs/routed_coupled_holdout120_seed20260809.indices.json",
+  "seed": 20260809,
+  "equal_difficulty": true,
+  "excluded_indices": [
+    13,
+    14,
+    116,
+    213,
+    219,
+    250,
+    415,
+    446,
+    570,
+    746,
+    760,
+    773,
+    775,
+    946,
+    995,
+    1026,
+    1108,
+    1139,
+    1169,
+    1342,
+    1407,
+    1511,
+    1521,
+    1531
+  ],
+  "total": 120,
+  "difficulty": {
+    "simple": 40,
+    "moderate": 40,
+    "challenging": 40
+  }
+}
