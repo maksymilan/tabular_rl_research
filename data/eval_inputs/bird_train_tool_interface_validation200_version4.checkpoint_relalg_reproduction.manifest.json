@@ -1,0 +1,30 @@
+{
+  "schema_version": "checkpoint-relalg-historical-dataset-certification-v1",
+  "status": "frozen_historical_reproduction_only",
+  "purpose": "Reproduce checkpoint-relalg behavior on the deprecated atomic fixed-200 cohort for a paired historical comparison; not a current baseline or training source.",
+  "provenance": {
+    "legacy_manifest": "data/eval_inputs/bird_train_tool_interface_validation200_version4.manifest.json",
+    "legacy_manifest_sha256": "4433aece19cb44f82e1c5721e6715e3186b7e5fd73046d83842074293fd8c620",
+    "legacy_manifest_historical_sha256_before_deprecation_annotation": "ad306abfbaa0539dd0586830b8cf83c633011053af1c52abd13f9becef0cf12e",
+    "legacy_status": "deprecated_for_new_experiments",
+    "historical_atomic_reference": "version24",
+    "historical_atomic_bird_set_correct": 145,
+    "historical_atomic_task_count": 200
+  },
+  "outputs": {
+    "harness_tasks": {
+      "path": "data/eval_inputs/bird_train_tool_interface_validation200_version4.jsonl",
+      "sha256": "6b469215ac96e09c1046fee539ff4c4885b58e9b7a0b6fdb2187082267dcde36",
+      "records": 200
+    }
+  },
+  "selection": {
+    "algorithm": "preserve-legacy-fixed200-manifest-order-v1",
+    "position_example_id_sequence_sha256": "07d19fe779b7e92a9dc978110f71a927c3f794952914757904273a375a2cb319",
+    "preserved_cohort": {
+      "task_ids_and_order_preserved": true,
+      "unique_example_ids": 200,
+      "database_count": 57
+    }
+  }
+}
