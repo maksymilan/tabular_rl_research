@@ -556,6 +556,33 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 "atomic",
                 checkpoint_guidance_profile="restore-target-v2",
             )
+        restore_probe = get_system_prompt(
+            "atomic",
+            teacher=True,
+            checkpoint_guidance_profile="restore-probe-v3",
+        )
+        self.assertIn("TEACHER RESTORE-PROBE V3 DIAGNOSTIC GUIDANCE", restore_probe)
+        self.assertIn("__restore_probe_missing_column__", restore_probe)
+        self.assertIn("perform exactly one restore probe", restore_probe)
+        self.assertIn("must never be used as an SFT or RL target", restore_probe)
+        self.assertNotEqual(restore_probe, restore_target)
+        self.assertNotEqual(
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                checkpoint_guidance_profile="restore-probe-v3",
+            ),
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                checkpoint_guidance_profile="restore-target-v2",
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "teacher-only"):
+            get_system_prompt(
+                "atomic",
+                checkpoint_guidance_profile="restore-probe-v3",
+            )
         for implementation_detail in ("snapshot hash", "reward", "SQLite", "error code", "provider validator"):
             self.assertNotIn(implementation_detail, teacher)
         self.assertLess(len(teacher), 5000)

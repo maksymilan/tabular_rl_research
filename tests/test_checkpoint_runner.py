@@ -327,6 +327,7 @@ def test_checkpoint_stress_guidance_is_identity_bound_and_replayable(tmp_path):
     [
         ("restore-trigger-v1", "TEACHER RESTORE-TRIGGER DIAGNOSTIC GUIDANCE"),
         ("restore-target-v2", "TEACHER RESTORE-TARGET V2 DIAGNOSTIC GUIDANCE"),
+        ("restore-probe-v3", "TEACHER RESTORE-PROBE V3 DIAGNOSTIC GUIDANCE"),
     ],
 )
 def test_restore_guidance_executes_and_replays_a_recovery_branch(
@@ -387,6 +388,105 @@ def test_restore_guidance_executes_and_replays_a_recovery_branch(
     forged = deepcopy(record)
     forged["checkpoint_guidance_profile"] = "adaptive-v1"
     assert not audit_record(forged)["passed"]
+
+
+def test_atomic_restore_probe_discards_the_disposable_branch(tmp_path):
+    task = _task(tmp_path)
+    client = FakeClient(
+        [
+            [("describe_table", {"tables": ["items"]})],
+            [
+                (
+                    "filter_rows",
+                    {
+                        "table": "items",
+                        "conditions": {
+                            "op": ">=",
+                            "left": {"column": "id"},
+                            "right": {"value": 1},
+                        },
+                    },
+                )
+            ],
+            [
+                (
+                    "commit_checkpoint",
+                    {
+                        "progress_summary": ["Confirmed the item population."],
+                        "remaining_uncertainties": ["The final count remains."],
+                        "next_targets": ["Run the restore probe."],
+                    },
+                )
+            ],
+            [
+                (
+                    "project",
+                    {
+                        "table": "filter_001",
+                        "outputs": [{"expression": {"column": "id"}}],
+                    },
+                )
+            ],
+            [
+                (
+                    "project",
+                    {
+                        "table": "project_002",
+                        "outputs": [
+                            {
+                                "expression": {
+                                    "column": "__restore_probe_missing_column__"
+                                }
+                            }
+                        ],
+                    },
+                )
+            ],
+            [
+                (
+                    "restore_checkpoint",
+                    {
+                        "checkpoint_id": "checkpoint_001",
+                        "reason": "The deliberate probe invalidated the disposable branch.",
+                        "next_targets": ["Build the grounded count relation."],
+                    },
+                )
+            ],
+            [
+                (
+                    "aggregate",
+                    {
+                        "table": "filter_001",
+                        "group_by": [],
+                        "metrics": [{"op": "count", "column": "*", "as": "n"}],
+                    },
+                )
+            ],
+            [("answer", {"table": "aggregate_004"})],
+        ]
+    )
+    record = run_episode(
+        task,
+        task_position=0,
+        mode="atomic",
+        client=client,
+        checkpoint_guidance_profile="restore-probe-v3",
+        runtime_config=RuntimeConfig(),
+        max_model_turns=10,
+        max_tokens=128,
+        max_completion_tokens=256,
+        api_retries=2,
+    )
+    assert record["correct"] and record["legal"]
+    assert record["restore_count"] == 1
+    assert record["turns"][4]["result"]["error"]["code"] == "unknown_column"
+    assert record["turns"][5]["result"]["phase_transition"] == "restore"
+    recovery = record["final_runtime"]["checkpoint_history"][-1]
+    assert recovery["created_by"] == "restore_checkpoint"
+    assert recovery["snapshot"]["active_artifact_ids"] == ["filter_001"]
+    assert "project_002" not in record["turns"][6]["model_input"][-1]["content"]
+    assert audit_record(record)["passed"]
+    assert fresh_replay_record(record, task)["passed"]
 
 
 def test_multiple_native_calls_are_one_state_preserving_semantic_error(tmp_path):

@@ -1,0 +1,11 @@
+TEACHER RESTORE-PROBE V3 DIAGNOSTIC GUIDANCE
+This Atomic-only diagnostic tests exact rollback through one deliberately abandoned branch. It is audit-only and must never be used as an SFT or RL target.
+
+For every episode, perform exactly one restore probe before answer:
+1. Build and inspect a stable answer-relevant intermediate relation, then call commit_checkpoint exactly once. Remember the returned checkpoint_id. Never target root.
+2. In the new phase, create one successful disposable relation artifact derived from the committed state. It must not be the final answer artifact.
+3. On the very next turn, deliberately call project on that disposable artifact with the single input column name __restore_probe_missing_column__. Use the normal project argument shape. This reserved probe column is intentionally absent and must produce a state-preserving unknown_column error. Do not repair the project locally.
+4. On the very next turn, call restore_checkpoint targeting the checkpoint_id returned in step 1. State that the deliberate probe invalidated the disposable branch and set a genuinely different next target.
+5. Continue from the restored state. Do not repeat the probe, do not reuse the discarded artifact, and do not recreate the abandoned sequence unchanged.
+
+If commit_checkpoint, the disposable artifact action, the deliberate project, or restore_checkpoint is rejected, repair only that protocol step from the Harness error. Do not answer before one successful restore. Checkpoints and this synthetic error are control flow, never answer evidence.
