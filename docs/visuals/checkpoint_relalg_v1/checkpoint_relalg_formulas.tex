@@ -1,0 +1,102 @@
+\documentclass[12pt]{article}
+\usepackage[margin=0.5in]{geometry}
+\usepackage{mathptmx}
+\usepackage{amsmath,amssymb}
+\pagestyle{empty}
+\begin{document}
+
+\section*{Checkpoint-RelAlg Formula Source}
+
+\paragraph{F01 — Rendered causal context.}
+\[
+M_t = \operatorname{Render}\!\left(Q,K,T_t,C_{0:k},S_t,E_t\right).
+\]
+
+\paragraph{F02 — Exactly one authored action.}
+\[
+a_t \sim \pi_\theta(\,\cdot\mid M_t),
+\qquad \left|\operatorname{AuthoredActions}_t\right| = 1.
+\]
+
+\paragraph{F03 — Authority partition.}
+\[
+\mathcal{C}_{\mathrm{task}} = Q\oplus K,
+\qquad \mathcal{F}_{\mathrm{db}} = S_t,
+\qquad C_{0:k}\not\vdash \text{database facts}.
+\]
+
+\paragraph{F04 — Mode tool surfaces.}
+\[
+\mathcal{T}_{D}=\mathcal{P}\cup\{\operatorname{execute\_sql}\}\cup\mathcal{C},
+\quad
+\mathcal{T}_{A}=\mathcal{P}\cup\mathcal{R}\cup\mathcal{C},
+\quad
+\mathcal{T}_{H}=\mathcal{T}_{D}\cup\mathcal{T}_{A}.
+\]
+
+\paragraph{F05 — Immutable relation artifact.}
+\[
+A=\left\langle h,k,\left\langle c_i:\tau_i\right\rangle_{i=1}^{m},
+n,\omega,d\right\rangle.
+\]
+
+\paragraph{F06 — Selected relational operators.}
+\[
+\sigma_p(R),\qquad
+\pi_{\langle e_i\to a_i\rangle_{i=1}^{m}}(R),\qquad
+R\bowtie_\theta S,\qquad
+\gamma_{G;\langle f_i(c_i)\to a_i\rangle}(R),\qquad
+\tau_K(R).
+\]
+
+\paragraph{F07 — Bag join multiplicity.}
+\[
+\mu_{R\bowtie_\theta S}(r,s)
+=\mu_R(r)\,\mu_S(s)\,\mathbf{1}[\theta(r,s)].
+\]
+
+\paragraph{F08 — Checkpoint snapshot.}
+\[
+C_k=\langle D_k,A_k,O_k,U_k,h_k\rangle,
+\qquad
+h_k=\operatorname{SHA256}\!\left(\operatorname{canon}(S_k)\right).
+\]
+
+\paragraph{F09 — Restore transition.}
+\[
+\operatorname{Restore}(C_j):\quad
+S\leftarrow S(C_j),\qquad
+\mathcal{P}_{\mathrm{active}}
+\leftarrow \operatorname{Ancestors}(C_j)\cup\{C_{\mathrm{recovery}}\}.
+\]
+
+\paragraph{F10 — State-preserving failure.}
+\[
+S_{t+1}=
+\begin{cases}
+\operatorname{Apply}(S_t,a_t), & \operatorname{valid}(a_t),\\
+S_t, & \operatorname{rejected}(a_t)\lor\operatorname{failed}(a_t),
+\end{cases}
+\qquad
+H(S_{t+1})=H(S_t)\ \text{on failure}.
+\]
+
+\paragraph{F11 — Grounded answer and official score.}
+\[
+\widehat{R}=\operatorname{Artifact}(a_T),
+\qquad
+\operatorname{Acc}_{\mathrm{official}}
+=\mathbf{1}\!\left[\operatorname{Set}(\widehat{R})
+=\operatorname{Set}(R^*)\right].
+\]
+
+\paragraph{F12 — Strict artifact audit.}
+\[
+\operatorname{Strict}(\widehat{R},R^*)
+=\operatorname{Schema}\land
+\operatorname{Rows}_{\mathrm{multiset/sequence}}\land
+\operatorname{NULL}\land
+\operatorname{Multiplicity}.
+\]
+
+\end{document}

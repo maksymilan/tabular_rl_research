@@ -1,0 +1,162 @@
+{
+  "equation_renderer": "latex + dvisvgm --no-fonts",
+  "equation_source": "checkpoint_relalg_formulas.tex",
+  "font_family": "Times New Roman",
+  "omnigraffle_sources": [
+    "01_checkpoint_relalg_system_architecture.graffle",
+    "02_checkpoint_relalg_tool_surface.graffle",
+    "03_checkpoint_relalg_checkpoint_reasoning.graffle",
+    "04_checkpoint_relalg_causal_execution_audit.graffle",
+    "05_checkpoint_relalg_visual_standard.graffle"
+  ],
+  "outputs": {
+    "01_checkpoint_relalg_system_architecture.graffle": {
+      "bytes": 320258,
+      "sha256": "3e0cd576506ce6f45672ab568fb2646d668da0e02cea1fa149c8348374cfd58a"
+    },
+    "01_checkpoint_relalg_system_architecture.pdf": {
+      "bytes": 228653,
+      "sha256": "7089b4212c8d9d147551194db89eee173c0ed2eeb7e31c5b053b3b86ec3b6311"
+    },
+    "01_checkpoint_relalg_system_architecture.png": {
+      "bytes": 411372,
+      "sha256": "b9f0f5e79e9fd6ec22af3943b6cc64610c7fc38c1c47c1a44c5a3e7b24d9b121"
+    },
+    "01_checkpoint_relalg_system_architecture.svg": {
+      "bytes": 79651,
+      "sha256": "8a823538131dfc7e7744788267a3030236b2725958730274f9327dd5a1dc22d0"
+    },
+    "02_checkpoint_relalg_tool_surface.graffle": {
+      "bytes": 188801,
+      "sha256": "47b682a443799310a0a178461972eaaee14fdea76f69b6bb83e06ed860198d97"
+    },
+    "02_checkpoint_relalg_tool_surface.pdf": {
+      "bytes": 204544,
+      "sha256": "43a2bc862e50126bc2a2a7e4625f7b45bc3c391ae23a755de4fd00083d3c0173"
+    },
+    "02_checkpoint_relalg_tool_surface.png": {
+      "bytes": 306562,
+      "sha256": "5b3f5257a7d98b2fc457b1f03fe980a2b73bd2462be5dbb801ac3c6546ff9b92"
+    },
+    "02_checkpoint_relalg_tool_surface.svg": {
+      "bytes": 128561,
+      "sha256": "7ce3b22907b201de2f285846fd873c1d6056163b9d4df64009dc7c8d6c30b87a"
+    },
+    "03_checkpoint_relalg_checkpoint_reasoning.graffle": {
+      "bytes": 188277,
+      "sha256": "18efb3710938d5e53e362bc7ef1b912568896f852e231518ad6322784878b7dd"
+    },
+    "03_checkpoint_relalg_checkpoint_reasoning.pdf": {
+      "bytes": 200993,
+      "sha256": "975717254a72d27ddffad2b6044c7bfd691615340394f0a9fc6bd45a82ec8310"
+    },
+    "03_checkpoint_relalg_checkpoint_reasoning.png": {
+      "bytes": 249686,
+      "sha256": "d2ddaa3ed66eeef7ef3ce85b850fc6fad567cffea4cb0068a643b738ed877946"
+    },
+    "03_checkpoint_relalg_checkpoint_reasoning.svg": {
+      "bytes": 81159,
+      "sha256": "7f746ea902cbf332bdadf623fc0e784a1c3ed87091d5525f96e6407107bf6570"
+    },
+    "04_checkpoint_relalg_causal_execution_audit.graffle": {
+      "bytes": 244706,
+      "sha256": "53cb1dfebc21cde2177b5fd46903b2daca90802ca32bf0015b12569b33e931fb"
+    },
+    "04_checkpoint_relalg_causal_execution_audit.pdf": {
+      "bytes": 177989,
+      "sha256": "2f3b66a0b67d8a38b2efe890261338af9553232fa95ea1cd6864467fe1f1969d"
+    },
+    "04_checkpoint_relalg_causal_execution_audit.png": {
+      "bytes": 311578,
+      "sha256": "32bd36ed2eb8d7d462beb618f4a7daab245124aa6eb3c25f605b7bf46e3560f9"
+    },
+    "04_checkpoint_relalg_causal_execution_audit.svg": {
+      "bytes": 98540,
+      "sha256": "ced68698a63ff8bf2a737b627bcea2f1e9aea11df756e97430093a2e1f2bac4e"
+    },
+    "05_checkpoint_relalg_visual_standard.graffle": {
+      "bytes": 239558,
+      "sha256": "17f0be25300c456ee30b5a4883dd43ae56ee0ad472af1ae5eb1023a8cb89c843"
+    },
+    "05_checkpoint_relalg_visual_standard.pdf": {
+      "bytes": 201893,
+      "sha256": "8329a82eaf4cad5e12b471395944332a881f4012093eb80558273e18ab56af65"
+    },
+    "05_checkpoint_relalg_visual_standard.png": {
+      "bytes": 305909,
+      "sha256": "a67f7aa3bac4571eb0228517e9b7659e7cd43065f77cb8272789653ae61ad435"
+    },
+    "05_checkpoint_relalg_visual_standard.svg": {
+      "bytes": 47804,
+      "sha256": "4ae535f9b5675d543efb82bd91a55e3b6a621ebc35616ed717a3da93e4edd2e1"
+    },
+    "CHECKPOINT_RELALG_VISUAL_STANDARD.md": {
+      "bytes": 9342,
+      "sha256": "4714b99c1e6ef2cc7c3ef2dca4946d739cf4dbb3a861d1bc923f73e8867ff40d"
+    },
+    "F01.svg": {
+      "bytes": 18294,
+      "sha256": "baf5460c6ce9a7c86a86f9e761218acb9d399c730b446760bef086b83e1d1159"
+    },
+    "F02.svg": {
+      "bytes": 19429,
+      "sha256": "402388e534dc2a66b8185add68fbafb1eb4bc1d7cd2a2bea4e4533debecfd82c"
+    },
+    "F03.svg": {
+      "bytes": 27474,
+      "sha256": "d02bf54d7c1f4cc1c537613a43d204c3478efdf7579e28642280293c94a8a68a"
+    },
+    "F04.svg": {
+      "bytes": 27677,
+      "sha256": "67f9de7f683f9cb5d6e1179202a7c3f578f2b7d1121b3a13904041933bb0927a"
+    },
+    "F05.svg": {
+      "bytes": 15341,
+      "sha256": "b96e0e9c2adc609f8e9f752dc40fe191a3cefa21ec6760a894d0a7040f230951"
+    },
+    "F06.svg": {
+      "bytes": 26041,
+      "sha256": "939d7737707bead1757b1fc4824418e95d2509f25c99ceaf5ff75784482ed9ad"
+    },
+    "F07.svg": {
+      "bytes": 11839,
+      "sha256": "c5e567ab6a27c2bb1cb68a34db9428fc6b77c7794c595c0fe17f2e39b66bdf48"
+    },
+    "F08.svg": {
+      "bytes": 21113,
+      "sha256": "6e57cb3cc339cc224551f794a49fe14632bade80cb08057dbb6d1ab99cb47336"
+    },
+    "F09.svg": {
+      "bytes": 26187,
+      "sha256": "adaed7e96069cbdb51045b730130fc4660cff40ee222d62c68193de373c40613"
+    },
+    "F10.svg": {
+      "bytes": 26759,
+      "sha256": "32c080c3434070e89f8b63bc6044a332a040a12b8943ebe7579757f520a28c71"
+    },
+    "F11.svg": {
+      "bytes": 19218,
+      "sha256": "a424f63f20942eec76a3c5fc07128bb979dadfe7817aad924835f068827aa386"
+    },
+    "F12.svg": {
+      "bytes": 28363,
+      "sha256": "73a3d2ad51362ea3fd3a8485c0b4cbec18d40b91179d4ecf0c5b1dabf9680736"
+    },
+    "README.md": {
+      "bytes": 2871,
+      "sha256": "15be420952e45967cb2ec88d33e1ccb07caee4e5571654e7070bf0c14178acc6"
+    },
+    "checkpoint_relalg_formulas.pdf": {
+      "bytes": 90993,
+      "sha256": "c83b9684f7ef61b422d7826a2531ed52a178f52903b69634b45a9f692a5a3747"
+    },
+    "checkpoint_relalg_formulas.tex": {
+      "bytes": 2492,
+      "sha256": "bd7072f7c7e21faface76f2a7b9a38226608c5b25fff8b0009cacc5736ecca00"
+    }
+  },
+  "protocol_version": "checkpoint-relalg-v1",
+  "schema_version": "checkpoint-relalg-visual-artifact-manifest-v1",
+  "source_commit": "9128028cd06f114392864a3d4f4818b897d9f2c5",
+  "visual_standard_version": "checkpoint-relalg-visual-standard-v1"
+}
