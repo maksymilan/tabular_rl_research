@@ -183,3 +183,11 @@ Chat Completions 返回 `HTTP 402 / Insufficient Balance`。该 transport-failur
 Atomic、Hybrid 的能力或准确率，也没有向后两种 mode 重复发送必败请求。完整边界见
 `docs/reports/evaluation/CHECKPOINT_RELALG_V1_CAUSAL_SMOKE_20260809_ZH.md`。余额恢复后必须在
 同一 official-only、no-fallback 边界下重新完成三模式 smoke。
+
+余额恢复后完成了首个 100 题因果数据诊断：冻结 teacher1500 前 100 题、Hybrid、A/Text-JSON、
+官方 `deepseek-v4-flash`。结果为 63/100 `bird-set`、42/100 strict artifact、56/100 schema
+match、99/100 合法终止；100/100 结构审计与 fresh replay 全部通过，581 次 provider attempt
+全部绑定 Flash，总计 11,677,199 tokens。该运行没有使用 checkpoint/restore，且 21 条
+`bird-set` 成功存在 schema 不精确，因此不构成 checkpoint 能力或训练准入证据。最多 42 条
+可暂记为严格正确的 scheme-local 候选，仍不得进入现有 SFT/RL。完整报告见
+`docs/reports/evaluation/CHECKPOINT_RELALG_V1_FLASH_TEXT_JSON_HYBRID_PREFIX100_20260809_ZH.md`。

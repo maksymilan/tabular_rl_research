@@ -71,6 +71,14 @@ Start at `docs/current/README.md`.
   three-mode pilot result. Atomic/Hybrid were not sent redundant requests and no third-party
   fallback was used. See
   `docs/reports/evaluation/CHECKPOINT_RELALG_V1_CAUSAL_SMOKE_20260809_ZH.md`.
+- After balance recovery, the frozen teacher1500 Prefix100 ran causally with official
+  `deepseek-v4-flash`, Hybrid, and the diagnostic A/Text-JSON carrier. It scored 63/100 `bird-set`,
+  42/100 strict artifact, 56/100 schema match, and 99/100 legal termination. All 100 records passed
+  structure and fresh replay; 581 provider attempts used 11,677,199 tokens and all response model
+  identities were Flash. No episode used checkpoint/restore. Treat at most the 42 strict records as
+  scheme-local training candidates: checkpoint-relalg still has no approved exporter or SFT/RL
+  admission, and none may be mixed into the atomic pipeline. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_V1_FLASH_TEXT_JSON_HYBRID_PREFIX100_20260809_ZH.md`.
 - The original atomic protocol remains supported for ongoing RL work, frozen controls, and exact
   reproduction. Version54 / `native-tool-bundle` remains a diagnostic control/reproduction line
   and does not gain RL admission. Do not delete either line, mix their
