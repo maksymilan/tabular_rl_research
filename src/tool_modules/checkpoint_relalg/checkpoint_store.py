@@ -16,15 +16,20 @@ CHECKPOINT_COMMIT_ELIGIBILITY_NONE = "none"
 CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1 = (
     "checkpoint-relalg-ordinal-milestone-progress-v1"
 )
+CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1 = (
+    "checkpoint-relalg-initial-target-ordinal-milestone-v1"
+)
 CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES = (
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
 )
 CHECKPOINT_MILESTONE_PRODUCER_TOOLS = frozenset(
     {"filter_rows", "join", "group_aggregate", "set_operation"}
 )
 FIRST_COMMIT_MIN_MILESTONE_PRODUCERS = 2
 LATER_COMMIT_MIN_MILESTONE_PRODUCERS = 3
+BOOTSTRAP_TARGET_MIN_TARGETS = 2
 _GOAL_TRAILING_PUNCTUATION = " .!?;:\u3002\uff01\uff1f\uff1b\uff1a"
 
 
@@ -330,7 +335,7 @@ class CheckpointStore:
         )
         self._ensure_checkpoint_budget()
         self._ensure_distinct_checkpoint_goal(targets)
-        self._ensure_checkpoint_phase_progress()
+        created_by = self._ensure_checkpoint_phase_progress(targets)
         parent_id = self.active_checkpoint_id
         if parent_id not in self.nodes:
             raise StateError(
@@ -349,7 +354,7 @@ class CheckpointStore:
             remaining_uncertainties=uncertainties,
             next_targets=targets,
             snapshot=snapshot,
-            created_by="commit_checkpoint",
+            created_by=created_by,
             sequence=self._checkpoint_counter,
         )
         self.nodes[checkpoint_id] = node
@@ -383,16 +388,35 @@ class CheckpointStore:
                 error_type="argument_validation_error",
             )
 
-    def _ensure_checkpoint_phase_progress(self) -> None:
+    def _ensure_checkpoint_phase_progress(self, targets: tuple[str, ...]) -> str:
         if (
             self.checkpoint_commit_eligibility_policy
             == CHECKPOINT_COMMIT_ELIGIBILITY_NONE
         ):
-            return
+            return "commit_checkpoint"
+
         if (
             self.checkpoint_commit_eligibility_policy
-            != CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+            == CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1
+            and self._is_pristine_bootstrap_phase()
         ):
+            if len(targets) < BOOTSTRAP_TARGET_MIN_TARGETS:
+                raise StateError(
+                    "checkpoint_bootstrap_targets_insufficient",
+                    "an initial target checkpoint must partition at least two targets",
+                    {
+                        "policy": self.checkpoint_commit_eligibility_policy,
+                        "minimum_target_count": BOOTSTRAP_TARGET_MIN_TARGETS,
+                        "target_count": len(targets),
+                    },
+                    error_type="state_validation_error",
+                )
+            return "bootstrap_checkpoint"
+
+        if self.checkpoint_commit_eligibility_policy not in {
+            CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+            CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
+        }:
             raise AssertionError(
                 "unhandled checkpoint commit eligibility policy "
                 f"{self.checkpoint_commit_eligibility_policy!r}"
@@ -426,7 +450,7 @@ class CheckpointStore:
         producer_count = len(qualifying_steps)
         new_artifact_count = len(new_active_artifacts)
         if producer_count >= quota and new_artifact_count >= quota:
-            return
+            return "commit_checkpoint"
         raise StateError(
             "checkpoint_phase_progress_insufficient",
             "the current phase has not reached the checkpoint progress quota",
@@ -442,6 +466,19 @@ class CheckpointStore:
                 ),
             },
             error_type="state_validation_error",
+        )
+
+    def _is_pristine_bootstrap_phase(self) -> bool:
+        return (
+            self.checkpoint_count == 0
+            and self.active_checkpoint_id == "root"
+            and self.state.phase_id == "phase_000"
+            and not self.state.current_targets
+            and not self.state.steps
+            and not self.state.discovered_schema_ids
+            and not self.state.active_artifact_ids
+            and not self.state.active_observation_ids
+            and not self.state.usable_step_ids
         )
 
     def restore(
@@ -582,6 +619,8 @@ class CheckpointStore:
 
 
 __all__ = [
+    "BOOTSTRAP_TARGET_MIN_TARGETS",
+    "CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1",
     "CHECKPOINT_COMMIT_ELIGIBILITY_NONE",
     "CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1",
     "CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES",

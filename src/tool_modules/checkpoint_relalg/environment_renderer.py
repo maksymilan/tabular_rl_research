@@ -147,8 +147,12 @@ def _render_history(checkpoints: CheckpointStore) -> list[str]:
     ]
     for node in sorted(checkpoints.nodes.values(), key=lambda item: item.sequence):
         parent = node.parent_id if node.parent_id is not None else "-"
-        restored = ", restored" if node.created_by == "restore_checkpoint" else ""
-        lines.append(f"{node.checkpoint_id}({parent}, {node.status}{restored})")
+        transition = ""
+        if node.created_by == "restore_checkpoint":
+            transition = ", restored"
+        elif node.created_by == "bootstrap_checkpoint":
+            transition = ", initial-targets"
+        lines.append(f"{node.checkpoint_id}({parent}, {node.status}{transition})")
         if node.phase_targets:
             lines.append("  phase: " + " | ".join(node.phase_targets))
         elif node.checkpoint_id != "root":

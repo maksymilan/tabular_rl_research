@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from src.tool_modules.checkpoint_relalg.checkpoint_store import (
+    BOOTSTRAP_TARGET_MIN_TARGETS,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
     CHECKPOINT_MILESTONE_PRODUCER_TOOLS,
@@ -453,6 +455,78 @@ def test_ordinal_milestone_commit_eligibility_counts_current_phase_artifacts() -
     )
     assert second.parent_id == first.checkpoint_id
     assert state.phase_id == "phase_002"
+
+
+def test_initial_target_policy_bootstraps_only_a_pristine_multi_target_phase() -> None:
+    assert BOOTSTRAP_TARGET_MIN_TARGETS == 2
+    state = EnvironmentState(catalog())
+    store = CheckpointStore(
+        state,
+        checkpoint_commit_eligibility_policy=(
+            CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1
+        ),
+    )
+    before = state.logical_hash()
+    with pytest.raises(StateError) as rejected:
+        store.commit(
+            ["Initial decomposition only; no database evidence exists yet."],
+            ["The final grain is unresolved."],
+            ["Ground the requested population."],
+        )
+    assert rejected.value.code == "checkpoint_bootstrap_targets_insufficient"
+    assert rejected.value.type == "state_validation_error"
+    assert state.logical_hash() == before
+    assert store.checkpoint_count == 0
+
+    bootstrap = store.commit(
+        ["Initial decomposition only; no database evidence exists yet."],
+        ["The exact join grain remains unresolved."],
+        [
+            "Ground the requested population and join grain.",
+            "Construct and verify the exact answer relation.",
+        ],
+    )
+    assert bootstrap.created_by == "bootstrap_checkpoint"
+    assert bootstrap.snapshot.active_artifact_ids == frozenset()
+    assert store.checkpoint_count == 1
+    assert state.phase_id == "phase_001"
+    assert state.current_targets == bootstrap.next_targets
+    rendered = EnvironmentRenderer().render("Who?", "none", state, store)
+    assert "checkpoint_001(root, active_path, initial-targets)" in rendered
+
+    add_fact_bundle(state, state.allocate_artifact_handle("filter"), tool="filter_rows")
+    add_fact_bundle(state, state.allocate_artifact_handle("join"), tool="join")
+    milestone = store.commit(
+        ["The population and join grain are grounded."],
+        ["The final output relation remains."],
+        ["Aggregate and verify the requested output."],
+    )
+    assert milestone.created_by == "commit_checkpoint"
+    assert milestone.parent_id == bootstrap.checkpoint_id
+    assert store.checkpoint_count == 2
+
+
+def test_initial_target_policy_keeps_zero_bootstrap_path_for_simple_tasks() -> None:
+    state = EnvironmentState(catalog())
+    store = CheckpointStore(
+        state,
+        checkpoint_commit_eligibility_policy=(
+            CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1
+        ),
+    )
+    add_fact_bundle(state, state.allocate_artifact_handle("filter"), tool="filter_rows")
+    add_fact_bundle(
+        state,
+        state.allocate_artifact_handle("aggregate"),
+        tool="group_aggregate",
+    )
+    milestone = store.commit(
+        ["The simple task now has two grounded producers."],
+        [],
+        ["Verify the exact answer relation."],
+    )
+    assert milestone.created_by == "commit_checkpoint"
+    assert store.checkpoint_count == 1
 
 
 def test_renderer_keeps_all_history_as_working_memory_not_evidence() -> None:

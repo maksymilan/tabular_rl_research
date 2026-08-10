@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .checkpoint_store import (
+    BOOTSTRAP_TARGET_MIN_TARGETS,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
     CHECKPOINT_GOAL_POLICY_VERSION,
@@ -59,6 +61,7 @@ CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3 = "semantic-milestone-v3"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4 = "semantic-milestone-v4"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5 = "semantic-milestone-v5"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6 = "semantic-milestone-v6"
+CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET = "initial-target-v1"
 CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_STANDARD,
     CHECKPOINT_GUIDANCE_PROFILE_STRESS,
@@ -71,6 +74,7 @@ CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
+    CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
 )
 DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
@@ -1518,6 +1522,8 @@ def checkpoint_commit_eligibility_for_guidance_profile(profile: str | None) -> s
         CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
     }:
         return CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+    if active_profile == CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET:
+        return CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1
     return CHECKPOINT_COMMIT_ELIGIBILITY_NONE
 
 
@@ -1527,7 +1533,7 @@ def checkpoint_commit_eligibility_manifest(policy: str | None) -> dict[str, Any]
     active_policy = normalize_checkpoint_commit_eligibility_policy(policy)
     if active_policy == CHECKPOINT_COMMIT_ELIGIBILITY_NONE:
         return None
-    return {
+    manifest = {
         "policy": active_policy,
         "first_commit_min_milestone_producers": (
             FIRST_COMMIT_MIN_MILESTONE_PRODUCERS
@@ -1538,6 +1544,17 @@ def checkpoint_commit_eligibility_manifest(policy: str | None) -> dict[str, Any]
         "milestone_producer_tools": sorted(CHECKPOINT_MILESTONE_PRODUCER_TOOLS),
         "requires_new_active_artifacts_at_least_quota": True,
     }
+    if active_policy == CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1:
+        manifest.update(
+            {
+                "allows_initial_target_checkpoint": True,
+                "initial_target_checkpoint_must_be_first_action": True,
+                "initial_target_min_targets": BOOTSTRAP_TARGET_MIN_TARGETS,
+                "initial_target_checkpoint_counts_toward_max_checkpoints": True,
+                "initial_target_checkpoint_counts_as_milestone_commit": False,
+            }
+        )
+    return manifest
 
 
 def assistant_carrier_protocol(carrier: str | None = None) -> str:
@@ -1585,6 +1602,7 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
+            CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
         }
         and not (active_mode == "atomic" and semantic_profile)
     ):
@@ -1627,6 +1645,9 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6: (
                 "teacher_checkpoint_semantic_milestone_v6"
             ),
+            CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET: (
+                "teacher_checkpoint_initial_target"
+            ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(checkpoint_fragment))
         if semantic_profile:
@@ -1667,6 +1688,7 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
+            CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
         }
     ):
         # Keep the actionable turn check after the large Text-JSON schema block.
@@ -1686,6 +1708,9 @@ def get_system_prompt(
             ),
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6: (
                 "teacher_checkpoint_semantic_milestone_v6_tail"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET: (
+                "teacher_checkpoint_initial_target_tail"
             ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(tail_name))
@@ -1895,6 +1920,7 @@ __all__ = [
     "CARRIER_POLICY_VERSION",
     "CARRIER_TEXT_JSON",
     "CHECKPOINT_GUIDANCE_PROFILES",
+    "CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET",
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TARGET",
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_PROBE",
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER",

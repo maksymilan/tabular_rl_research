@@ -17,6 +17,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     CARRIER_NATIVE_TOOL_CALLS,
     CARRIER_TEXT_JSON,
     CHECKPOINT_GUIDANCE_PROFILES,
+    CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
     MAX_EXPRESSION_DEPTH,
@@ -37,6 +38,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     validate_tool_call,
 )
 from tool_modules.checkpoint_relalg.checkpoint_store import (  # noqa: E402
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
 )
@@ -189,6 +191,7 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
         )
         for old_profile in CHECKPOINT_GUIDANCE_PROFILES:
             if old_profile in {
+                CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
                 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
                 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
             }:
@@ -198,6 +201,54 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
                 old_profile,
             )
+
+    def test_initial_target_profile_separates_simple_and_hard_bootstrap(self):
+        prompt = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_TEXT_JSON,
+            checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+        )
+        self.assertIn("TEACHER INITIAL-TARGET V1 CHECKPOINT GUIDANCE", prompt)
+        self.assertIn("simple task", prompt)
+        self.assertIn("zero initial checkpoint", prompt)
+        self.assertIn("For a hard task only, the first action MUST", prompt)
+        self.assertIn("two or three distinct semantic work targets", prompt)
+        self.assertGreater(
+            prompt.rfind("INITIAL-TARGET V1 TURN CHECK"),
+            prompt.rfind("EXACT TOOL SCHEMAS FOR ATOMIC MODE"),
+        )
+        policy = checkpoint_commit_eligibility_for_guidance_profile(
+            CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET
+        )
+        self.assertEqual(policy, CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1)
+        manifest = checkpoint_commit_eligibility_manifest(policy)
+        self.assertEqual(manifest["first_commit_min_milestone_producers"], 2)
+        self.assertEqual(manifest["later_commit_min_milestone_producers"], 3)
+        self.assertIs(manifest["allows_initial_target_checkpoint"], True)
+        self.assertIs(
+            manifest["initial_target_checkpoint_must_be_first_action"], True
+        )
+        self.assertEqual(manifest["initial_target_min_targets"], 2)
+        self.assertIs(
+            manifest["initial_target_checkpoint_counts_as_milestone_commit"],
+            False,
+        )
+        self.assertNotEqual(
+            carrier_protocol_hash(
+                "atomic",
+                CARRIER_TEXT_JSON,
+                ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+                policy,
+            ),
+            carrier_protocol_hash(
+                "atomic",
+                CARRIER_TEXT_JSON,
+                ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+                CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+            ),
+        )
 
     def test_commit_eligibility_changes_protocol_identity_not_tool_schema(self):
         for carrier in (CARRIER_NATIVE_TOOL_CALLS, CARRIER_TEXT_JSON):
