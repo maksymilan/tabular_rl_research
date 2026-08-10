@@ -16,7 +16,15 @@ from .errors import CheckpointRelalgError, structured_error
 from .executors import SQLiteRelationalExecutor
 from .expression import RelAlgValidationError, column_type_map, quote_identifier
 from .predicate import PredicateCompiler
-from .protocol import ATOMIC_TOOLS, ProtocolValidationError, normalize_mode, validate_tool_call
+from .protocol import (
+    ATOMIC_TOOLS,
+    DEFAULT_ATOMIC_OPERATOR_PROFILE,
+    SEMANTIC_ATOMIC_TOOLS,
+    ProtocolValidationError,
+    normalize_atomic_operator_profile,
+    normalize_mode,
+    validate_tool_call,
+)
 from .relation_artifact import (
     Column,
     ForeignKey,
@@ -210,11 +218,17 @@ class CheckpointRelalgRuntime:
         connection: sqlite3.Connection,
         *,
         mode: str,
+        atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
         config: RuntimeConfig | None = None,
         current_targets: Sequence[str] = (),
     ) -> None:
         self.connection = connection
         self.mode = normalize_mode(mode)
+        self.atomic_operator_profile = normalize_atomic_operator_profile(
+            atomic_operator_profile
+        )
+        if self.atomic_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE and self.mode != "atomic":
+            raise ValueError("semantic-v2 is currently isolated to atomic mode")
         self.config = config or RuntimeConfig()
         self.state = EnvironmentState(
             load_source_catalog(connection),
@@ -273,7 +287,12 @@ class CheckpointRelalgRuntime:
                 terminal=True,
             )
         try:
-            validated = validate_tool_call(self.mode, tool, arguments)
+            validated = validate_tool_call(
+                self.mode,
+                tool,
+                arguments,
+                atomic_operator_profile=self.atomic_operator_profile,
+            )
             output, terminal = self._dispatch(str(tool), validated)
             artifact_payload = output.get("artifact") if isinstance(output, Mapping) else None
             artifact_table = (
@@ -423,7 +442,7 @@ class CheckpointRelalgRuntime:
                 max_rows=self.config.max_artifact_rows,
             )
             return {"artifact": artifact.to_payload()}, False
-        if tool in ATOMIC_TOOLS:
+        if tool in {*ATOMIC_TOOLS, *SEMANTIC_ATOMIC_TOOLS}:
             artifact = self.executor.execute(tool, args)
             return {"artifact": artifact.to_payload()}, False
         if tool == "commit_checkpoint":
@@ -655,7 +674,7 @@ class CheckpointRelalgRuntime:
         return self.executor.collect_relation_rows(self.terminal_table)
 
     def audit_state(self) -> dict[str, Any]:
-        return {
+        payload = {
             "mode": self.mode,
             "primitive_calls": self.primitive_calls,
             "errors": self.error_count,
@@ -670,6 +689,9 @@ class CheckpointRelalgRuntime:
             "checkpoint_count": self.checkpoints.checkpoint_count,
             "restore_count": self.checkpoints.restore_count,
         }
+        if self.atomic_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE:
+            payload["atomic_operator_profile"] = self.atomic_operator_profile
+        return payload
 
 
 __all__ = [

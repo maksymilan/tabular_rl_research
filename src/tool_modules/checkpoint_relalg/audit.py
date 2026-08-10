@@ -22,6 +22,7 @@ from .protocol import (
     CARRIER_NATIVE_TOOL_CALLS,
     CARRIER_POLICY_VERSION,
     DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
+    DEFAULT_ATOMIC_OPERATOR_PROFILE,
     DEFAULT_CARRIER,
     CHECKPOINT_POLICY_VERSION,
     DIALECT,
@@ -34,6 +35,7 @@ from .protocol import (
     get_system_prompt,
     prompt_hash,
     normalize_carrier,
+    normalize_atomic_operator_profile,
     normalize_checkpoint_guidance_profile,
     tool_schema_hash,
 )
@@ -258,6 +260,13 @@ def _runtime_identity_issues(record: Mapping[str, Any], *, root: str) -> list[st
     mode = record.get("mode")
     carrier = record.get("carrier", DEFAULT_CARRIER)
     try:
+        atomic_operator_profile = normalize_atomic_operator_profile(
+            record.get("atomic_operator_profile", DEFAULT_ATOMIC_OPERATOR_PROFILE)
+        )
+    except ValueError:
+        atomic_operator_profile = DEFAULT_ATOMIC_OPERATOR_PROFILE
+        issues.append(f"{root}.atomic_operator_profile is invalid")
+    try:
         checkpoint_guidance_profile = normalize_checkpoint_guidance_profile(
             record.get(
                 "checkpoint_guidance_profile",
@@ -269,7 +278,7 @@ def _runtime_identity_issues(record: Mapping[str, Any], *, root: str) -> list[st
         issues.append(f"{root}.checkpoint_guidance_profile is invalid")
     if mode in {"direct", "atomic", "hybrid"} and carrier in CARRIERS:
         if _canonical(record.get("capability_manifest")) != _canonical(
-            capability_manifest(mode, carrier)
+            capability_manifest(mode, carrier, atomic_operator_profile)
         ):
             issues.append(f"{root}.capability_manifest does not match the current mode")
         if "carrier" in record:
@@ -289,6 +298,7 @@ def _runtime_identity_issues(record: Mapping[str, Any], *, root: str) -> list[st
             expected_scheme = build_checkpoint_relalg_tool_scheme(
                 mode=mode,
                 carrier=carrier,
+                atomic_operator_profile=atomic_operator_profile,
             ).manifest_fields()
             for field, expected in expected_scheme.items():
                 if field in {
@@ -299,13 +309,16 @@ def _runtime_identity_issues(record: Mapping[str, Any], *, root: str) -> list[st
                     continue
                 if _canonical(record.get(field)) != _canonical(expected):
                     issues.append(f"{root}.{field} does not match the current tool scheme")
-            if record.get("tool_schema_hash") != tool_schema_hash(mode):
+            if record.get("tool_schema_hash") != tool_schema_hash(
+                mode, atomic_operator_profile
+            ):
                 issues.append(f"{root}.tool_schema_hash does not match current protocol")
             if record.get("prompt_hash") != prompt_hash(
                 mode,
                 teacher=True,
                 carrier=carrier,
                 checkpoint_guidance_profile=checkpoint_guidance_profile,
+                atomic_operator_profile=atomic_operator_profile,
             ):
                 issues.append(f"{root}.prompt_hash does not match current protocol")
     return issues
@@ -336,6 +349,13 @@ def audit_record(record: Mapping[str, Any], *, record_index: int = 0) -> dict[st
     except ValueError:
         issues.append(f"{root}.checkpoint_guidance_profile is invalid")
         checkpoint_guidance_profile = DEFAULT_CHECKPOINT_GUIDANCE_PROFILE
+    try:
+        atomic_operator_profile = normalize_atomic_operator_profile(
+            record.get("atomic_operator_profile", DEFAULT_ATOMIC_OPERATOR_PROFILE)
+        )
+    except ValueError:
+        issues.append(f"{root}.atomic_operator_profile is invalid")
+        atomic_operator_profile = DEFAULT_ATOMIC_OPERATOR_PROFILE
     if carrier_declared:
         if record.get("carrier_ablation_protocol_version") != CARRIER_ABLATION_PROTOCOL_VERSION:
             issues.append(f"{root}.carrier_ablation_protocol_version is invalid")
@@ -349,13 +369,16 @@ def audit_record(record: Mapping[str, Any], *, record_index: int = 0) -> dict[st
     if mode not in {"direct", "atomic", "hybrid"}:
         issues.append(f"{root}.mode is invalid: {mode!r}")
     else:
-        if record.get("tool_schema_sha256") != tool_schema_hash(mode):
+        if record.get("tool_schema_sha256") != tool_schema_hash(
+            mode, atomic_operator_profile
+        ):
             issues.append(f"{root}.tool_schema_sha256 does not match current protocol")
         if record.get("teacher_prompt_sha256") != prompt_hash(
             mode,
             teacher=True,
             carrier=carrier,
             checkpoint_guidance_profile=checkpoint_guidance_profile,
+            atomic_operator_profile=atomic_operator_profile,
         ):
             issues.append(f"{root}.teacher_prompt_sha256 does not match current protocol")
     issues.extend(_runtime_identity_issues(record, root=root))
@@ -436,6 +459,7 @@ def audit_record(record: Mapping[str, Any], *, record_index: int = 0) -> dict[st
                     teacher=True,
                     carrier=carrier,
                     checkpoint_guidance_profile=checkpoint_guidance_profile,
+                    atomic_operator_profile=atomic_operator_profile,
                 ):
                     issues.append(f"{path}.model_input system prompt differs from current teacher prompt")
                 if (
@@ -1119,7 +1143,11 @@ def audit_record(record: Mapping[str, Any], *, record_index: int = 0) -> dict[st
                     calls = []
                 result_messages = turn.get("tool_result_messages")
                 result_messages_field = "tool_result_messages"
-                validator = validate_native_assistant_message
+                validator = lambda active_mode, active_message: validate_native_assistant_message(  # noqa: E731
+                    active_mode,
+                    active_message,
+                    atomic_operator_profile=atomic_operator_profile,
+                )
                 attempted_from_message = attempted_action_from_native_message
                 error_type = NativeToolCallError
                 rejection_field = "native_rejection"
@@ -1134,7 +1162,11 @@ def audit_record(record: Mapping[str, Any], *, record_index: int = 0) -> dict[st
                 calls = []
                 result_messages = turn.get("text_result_messages")
                 result_messages_field = "text_result_messages"
-                validator = validate_text_json_assistant_message
+                validator = lambda active_mode, active_message: validate_text_json_assistant_message(  # noqa: E731
+                    active_mode,
+                    active_message,
+                    atomic_operator_profile=atomic_operator_profile,
+                )
                 attempted_from_message = attempted_action_from_text_json_message
                 error_type = TextJSONActionError
                 rejection_field = "text_json_rejection"
@@ -1523,6 +1555,15 @@ def fresh_replay_record(
         issues.append(
             f"record[{record_index}].checkpoint_guidance_profile is invalid under fresh replay"
         )
+    try:
+        atomic_operator_profile = normalize_atomic_operator_profile(
+            record.get("atomic_operator_profile", DEFAULT_ATOMIC_OPERATOR_PROFILE)
+        )
+    except ValueError:
+        atomic_operator_profile = DEFAULT_ATOMIC_OPERATOR_PROFILE
+        issues.append(
+            f"record[{record_index}].atomic_operator_profile is invalid under fresh replay"
+        )
     db_path = task.get("db_path")
     if not isinstance(db_path, str) or not db_path:
         return {
@@ -1555,6 +1596,7 @@ def fresh_replay_record(
         runtime = CheckpointRelalgRuntime(
             connection,
             mode=str(record.get("mode")),
+            atomic_operator_profile=atomic_operator_profile,
             config=config,
         )
         for turn_index, turn in enumerate(record.get("turns") or []):
@@ -1585,6 +1627,7 @@ def fresh_replay_record(
                         teacher=True,
                         carrier=carrier,
                         checkpoint_guidance_profile=checkpoint_guidance_profile,
+                        atomic_operator_profile=atomic_operator_profile,
                     ),
                 }
                 if _canonical(model_input[0]) != _canonical(expected_system):
@@ -1611,11 +1654,19 @@ def fresh_replay_record(
             assistant = turn.get("assistant_message")
             if isinstance(assistant, Mapping):
                 if carrier == CARRIER_NATIVE_TOOL_CALLS:
-                    validator = validate_native_assistant_message
+                    validator = lambda active_mode, active_message: validate_native_assistant_message(  # noqa: E731
+                        active_mode,
+                        active_message,
+                        atomic_operator_profile=atomic_operator_profile,
+                    )
                     error_type = NativeToolCallError
                     attempted_from_message = attempted_action_from_native_message
                 else:
-                    validator = validate_text_json_assistant_message
+                    validator = lambda active_mode, active_message: validate_text_json_assistant_message(  # noqa: E731
+                        active_mode,
+                        active_message,
+                        atomic_operator_profile=atomic_operator_profile,
+                    )
                     error_type = TextJSONActionError
                     attempted_from_message = attempted_action_from_text_json_message
                 try:
@@ -1920,6 +1971,7 @@ def _manifest_binding_report(
         "atomic_tools",
         "max_batch_calls",
         "mode",
+        "atomic_operator_profile",
         "tool_schema_sha256",
         "student_prompt_sha256",
         "teacher_prompt_sha256",

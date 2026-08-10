@@ -117,6 +117,46 @@ def _task(tmp_path: Path):
     }
 
 
+def test_semantic_atomic_runner_and_fresh_replay_are_profile_bound(tmp_path):
+    task = _task(tmp_path)
+    client = FakeClient(
+        [
+            [
+                (
+                    "group_aggregate",
+                    {
+                        "table": "items",
+                        "group_by": [],
+                        "metrics": [{"op": "count", "column": "*", "as": "n"}],
+                    },
+                )
+            ],
+            [("answer", {"table": "group_aggregate_001"})],
+        ]
+    )
+    record = run_episode(
+        task,
+        task_position=0,
+        mode="atomic",
+        atomic_operator_profile="semantic-v2",
+        client=client,
+        runtime_config=RuntimeConfig(),
+        max_model_turns=4,
+        max_tokens=128,
+        max_completion_tokens=256,
+        api_retries=2,
+    )
+    assert record["correct"] and record["legal"]
+    assert record["atomic_operator_profile"] == "semantic-v2"
+    assert "commit_checkpoint" in record["top_level_tools"]
+    assert "restore_checkpoint" in record["top_level_tools"]
+    assert "sort" not in record["top_level_tools"]
+    assert record["atomic_calls"] == 1
+    assert record["phase_execution_styles"] == {"phase_000": "atomic_only"}
+    assert audit_record(record)["passed"]
+    assert fresh_replay_record(record, task)["passed"]
+
+
 def test_operational_resume_preserves_original_start_and_rejects_identity_drift(
     tmp_path: Path,
 ):

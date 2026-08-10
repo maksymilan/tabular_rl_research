@@ -10,7 +10,11 @@ import json
 from copy import deepcopy
 from typing import Any, Mapping
 
-from .protocol import ProtocolValidationError, validate_model_action
+from .protocol import (
+    DEFAULT_ATOMIC_OPERATOR_PROFILE,
+    ProtocolValidationError,
+    validate_model_action,
+)
 
 
 TEXT_RESULT_MESSAGE_TYPE = "checkpoint_relalg_tool_result"
@@ -47,6 +51,8 @@ def _decode_visible_action(content: Any) -> dict[str, Any]:
 def validate_text_json_assistant_message(
     mode: str,
     message: Mapping[str, Any],
+    *,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
 ) -> dict[str, Any]:
     """Lower one exact ``{tool, arguments}`` object from visible content."""
 
@@ -79,7 +85,11 @@ def validate_text_json_assistant_message(
         )
     raw_action = _decode_visible_action(message.get("content"))
     try:
-        action = validate_model_action(raw_action, mode=mode)
+        action = validate_model_action(
+            raw_action,
+            mode=mode,
+            atomic_operator_profile=atomic_operator_profile,
+        )
     except ProtocolValidationError as exc:
         raise TextJSONActionError(exc.message, code=exc.code, path=exc.path) from exc
     return {

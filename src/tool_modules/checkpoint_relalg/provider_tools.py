@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any, Mapping, Sequence
 
 from .protocol import (
+    DEFAULT_ATOMIC_OPERATOR_PROFILE,
     MODE_TOOLS,
     NATIVE_ASSISTANT_CARRIER,
     ProtocolValidationError,
@@ -25,16 +26,22 @@ class NativeToolCallError(ProtocolValidationError):
     """The provider response is not one legal native function call."""
 
 
-def native_tools(mode: str) -> list[dict[str, Any]]:
-    return provider_tool_definitions(mode)
+def native_tools(
+    mode: str,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
+) -> list[dict[str, Any]]:
+    return provider_tool_definitions(mode, atomic_operator_profile)
 
 
 get_provider_tools = native_tools
 provider_tools_for_mode = native_tools
 
 
-def native_tools_sha256(mode: str) -> str:
-    return tool_schema_hash(mode)
+def native_tools_sha256(
+    mode: str,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
+) -> str:
+    return tool_schema_hash(mode, atomic_operator_profile)
 
 
 def _decode_arguments(raw_arguments: Any) -> dict[str, Any]:
@@ -67,6 +74,8 @@ def _decode_arguments(raw_arguments: Any) -> dict[str, Any]:
 def validate_native_tool_calls(
     mode: str,
     tool_calls: Sequence[Mapping[str, Any]] | Any,
+    *,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
 ) -> dict[str, Any]:
     """Lower exactly one provider-native call to a canonical action record."""
     active_mode = normalize_mode(mode)
@@ -146,7 +155,12 @@ def validate_native_tool_calls(
         )
     arguments = _decode_arguments(raw_arguments)
     try:
-        validated = validate_arguments(name, arguments, mode=active_mode)
+        validated = validate_arguments(
+            name,
+            arguments,
+            mode=active_mode,
+            atomic_operator_profile=atomic_operator_profile,
+        )
     except ProtocolValidationError as exc:
         raise NativeToolCallError(exc.message, code=exc.code, path=exc.path) from exc
     call_id = call.get("id")
@@ -165,6 +179,8 @@ lower_native_tool_calls = validate_native_tool_calls
 def validate_native_assistant_message(
     mode: str,
     message: Mapping[str, Any],
+    *,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
 ) -> dict[str, Any]:
     """Validate the call-bearing portion of one native assistant message.
 
@@ -198,7 +214,11 @@ def validate_native_assistant_message(
             code="unexpected_field",
             path="$.",
         )
-    action = validate_native_tool_calls(mode, message.get("tool_calls"))
+    action = validate_native_tool_calls(
+        mode,
+        message.get("tool_calls"),
+        atomic_operator_profile=atomic_operator_profile,
+    )
     action["reasoning_content"] = message.get("reasoning_content")
     action["assistant_content"] = message.get("content")
     return action

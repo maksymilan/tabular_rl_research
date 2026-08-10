@@ -51,6 +51,13 @@ CHECKPOINT_GUIDANCE_PROFILES = (
 )
 DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
+ATOMIC_OPERATOR_PROFILE_MICRO = "micro-v1"
+ATOMIC_OPERATOR_PROFILE_SEMANTIC = "semantic-v2"
+ATOMIC_OPERATOR_PROFILES = (
+    ATOMIC_OPERATOR_PROFILE_MICRO,
+    ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+)
+DEFAULT_ATOMIC_OPERATOR_PROFILE = ATOMIC_OPERATOR_PROFILE_MICRO
 
 CANONICAL_TYPES = (
     "NULL",
@@ -610,6 +617,56 @@ AGGREGATE_METRIC = {
 }
 
 
+SEMANTIC_AGGREGATE_METRIC = {"oneOf": []}
+SEMANTIC_COLUMN_OUTPUT = _object(
+    {"column": COLUMN_NAME, "as": OUTPUT_IDENTIFIER},
+    required=("column",),
+)
+SEMANTIC_METRIC_CONDITION = {
+    "oneOf": [
+        _object(
+            {
+                "column": COLUMN_NAME,
+                "op": {"type": "string", "enum": list(COMPARISON_OPERATORS)},
+                "value": LITERAL_VALUE,
+            },
+            required=("column", "op", "value"),
+        ),
+        _object(
+            {
+                "column": COLUMN_NAME,
+                "op": {"type": "string", "enum": ["is_null", "is_not_null"]},
+            },
+            required=("column", "op"),
+        ),
+    ]
+}
+SCALAR_VALUE_REF = {
+    "oneOf": [
+        _object({"column": COLUMN_NAME}, required=("column",)),
+        _object({"value": {"type": "number"}}, required=("value",)),
+    ]
+}
+SCALAR_FORMULA = _object(
+    {
+        "op": {"type": "string", "enum": ["add", "subtract", "multiply", "divide"]},
+        "left": SCALAR_VALUE_REF,
+        "right": SCALAR_VALUE_REF,
+        "multiplier": {"type": "number", "default": 1},
+        "round_digits": {"type": "integer", "minimum": 0, "maximum": 10},
+        "as": OUTPUT_IDENTIFIER,
+    },
+    required=("op", "left", "right", "as"),
+)
+for _semantic_metric in AGGREGATE_METRIC["oneOf"]:
+    _variant = deepcopy(dict(_semantic_metric))
+    _variant["properties"] = {
+        **dict(_variant.get("properties", {})),
+        "where": SEMANTIC_METRIC_CONDITION,
+    }
+    SEMANTIC_AGGREGATE_METRIC["oneOf"].append(_variant)
+
+
 def _tool(
     description: str,
     parameters: Mapping[str, Any],
@@ -779,6 +836,59 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         ),
         "atomic",
     ),
+    "shape_rows": _tool(
+        "Select or alias final columns and optionally remove exact duplicate rows.",
+        _object(
+            {
+                "table": TABLE_NAME,
+                "outputs": _array(SEMANTIC_COLUMN_OUTPUT, minimum=1),
+                "distinct": {"type": "boolean", "default": False},
+            },
+            required=("table", "outputs"),
+        ),
+        "semantic-atomic",
+        "projection",
+    ),
+    "group_aggregate": _tool(
+        "Group one fixed input population and compute globally or locally conditioned metrics.",
+        _object(
+            {
+                "table": TABLE_NAME,
+                "group_by": _array(COLUMN_NAME, unique=True),
+                "metrics": _array(SEMANTIC_AGGREGATE_METRIC, minimum=1),
+            },
+            required=("table", "group_by", "metrics"),
+        ),
+        "semantic-atomic",
+        "aggregation",
+    ),
+    "scalar_compute": _tool(
+        "Compute final scalar expressions from an existing exactly-one-row relation.",
+        _object(
+            {
+                "table": TABLE_NAME,
+                "outputs": _array(SCALAR_FORMULA, minimum=1),
+            },
+            required=("table", "outputs"),
+        ),
+        "semantic-atomic",
+        "scalar",
+    ),
+    "rank_select": _tool(
+        "Rank one fixed input, take top-k rows with explicit ties, and project answer columns.",
+        _object(
+            {
+                "table": TABLE_NAME,
+                "order_by": _array(ORDER_KEY, minimum=1),
+                "top_k": {"type": "integer", "minimum": 1},
+                "with_ties": {"type": "boolean", "default": False},
+                "outputs": _array(SEMANTIC_COLUMN_OUTPUT, minimum=1),
+            },
+            required=("table", "order_by", "top_k", "outputs"),
+        ),
+        "semantic-atomic",
+        "ranking",
+    ),
     "commit_checkpoint": _tool(
         "End a semantic phase, record new progress, and set the next phase targets.",
         _object(
@@ -839,6 +949,15 @@ ATOMIC_TOOLS = (
     "limit",
     "add_rank",
 )
+SEMANTIC_ATOMIC_TOOLS = (
+    "filter_rows",
+    "shape_rows",
+    "join",
+    "group_aggregate",
+    "scalar_compute",
+    "rank_select",
+    "set_operation",
+)
 CONTROL_TOOLS = ("commit_checkpoint", "restore_checkpoint", "answer")
 MODE_TOOLS: dict[str, tuple[str, ...]] = {
     "direct": (*PERCEPTION_TOOLS, "execute_sql", *CONTROL_TOOLS),
@@ -852,7 +971,9 @@ TOOL_SPECS = {name: definition.description for name, definition in TOOL_DEFINITI
 
 def _assert_definition_integrity() -> None:
     expected = set(TOOL_DEFINITIONS)
-    surfaced = set().union(*(set(names) for names in MODE_TOOLS.values()))
+    surfaced = set().union(*(set(names) for names in MODE_TOOLS.values())) | set(
+        SEMANTIC_ATOMIC_TOOLS
+    )
     if expected != surfaced:
         raise RuntimeError(
             f"tool definitions and mode surfaces drifted: missing={sorted(expected - surfaced)}, "
@@ -873,6 +994,32 @@ def normalize_mode(mode: str) -> str:
     if mode not in MODE_TOOLS:
         raise ValueError(f"unknown checkpoint-relalg mode {mode!r}; expected one of {MODES}")
     return mode
+
+
+def normalize_atomic_operator_profile(profile: str | None) -> str:
+    value = (
+        DEFAULT_ATOMIC_OPERATOR_PROFILE
+        if profile is None
+        else str(profile).strip().lower()
+    )
+    if value not in ATOMIC_OPERATOR_PROFILES:
+        raise ValueError(
+            f"unknown atomic operator profile {profile!r}; expected one of {ATOMIC_OPERATOR_PROFILES}"
+        )
+    return value
+
+
+def tools_for_profile(
+    mode: str,
+    atomic_operator_profile: str | None = None,
+) -> tuple[str, ...]:
+    active_mode = normalize_mode(mode)
+    profile = normalize_atomic_operator_profile(atomic_operator_profile)
+    if profile == ATOMIC_OPERATOR_PROFILE_MICRO:
+        return MODE_TOOLS[active_mode]
+    if active_mode != "atomic":
+        raise ValueError("semantic-v2 is currently isolated to atomic mode")
+    return (*PERCEPTION_TOOLS, *SEMANTIC_ATOMIC_TOOLS, *CONTROL_TOOLS)
 
 
 def _contains_ref(value: Any) -> bool:
@@ -903,9 +1050,13 @@ for _name, _schema in PARAMETER_SCHEMAS.items():
     MODEL_ARG_SCHEMA[_name] = (_required, _properties - _required)
 
 
-def provider_tool_definitions(mode: str) -> list[dict[str, Any]]:
+def provider_tool_definitions(
+    mode: str,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
+) -> list[dict[str, Any]]:
     """Generate the exact provider-native function surface for ``mode``."""
     active_mode = normalize_mode(mode)
+    active_tools = tools_for_profile(active_mode, atomic_operator_profile)
     return [
         {
             "type": "function",
@@ -915,7 +1066,7 @@ def provider_tool_definitions(mode: str) -> list[dict[str, Any]]:
                 "parameters": parameter_schema(name),
             },
         }
-        for name in MODE_TOOLS[active_mode]
+        for name in active_tools
     ]
 
 
@@ -932,16 +1083,19 @@ def _canonical_json(value: Any) -> str:
     )
 
 
-def tool_schema_hash(mode: str | None = None) -> str:
+def tool_schema_hash(
+    mode: str | None = None,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
+) -> str:
     """Hash one mode surface, or all isolated surfaces when ``mode`` is omitted."""
     payload: Any
     if mode is None:
         payload = {
-            active_mode: provider_tool_definitions(active_mode)
+            active_mode: provider_tool_definitions(active_mode, atomic_operator_profile)
             for active_mode in MODES
         }
     else:
-        payload = provider_tool_definitions(normalize_mode(mode))
+        payload = provider_tool_definitions(normalize_mode(mode), atomic_operator_profile)
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
@@ -1188,7 +1342,7 @@ def _validate_ast_operators(node: Mapping[str, Any], *, path: str = "$") -> None
 def _walk_ast_roots(value: Any, *, parent_key: str | None = None) -> list[Mapping[str, Any]]:
     roots: list[Mapping[str, Any]] = []
     if isinstance(value, dict):
-        if parent_key in {"conditions", "expression"}:
+        if parent_key in {"conditions", "expression", "where"}:
             roots.append(value)
             return roots
         for key, item in value.items():
@@ -1201,13 +1355,15 @@ def _walk_ast_roots(value: Any, *, parent_key: str | None = None) -> list[Mappin
 
 def _validate_reserved_output_names(tool: str, arguments: Mapping[str, Any]) -> None:
     candidates: list[tuple[str, Any]] = []
-    if tool == "project" and isinstance(arguments.get("outputs"), list):
+    if tool in {"project", "shape_rows", "scalar_compute", "rank_select"} and isinstance(
+        arguments.get("outputs"), list
+    ):
         candidates.extend(
             (f"$.arguments.outputs[{index}].as", output.get("as"))
             for index, output in enumerate(arguments["outputs"])
             if isinstance(output, Mapping) and "as" in output
         )
-    elif tool == "aggregate" and isinstance(arguments.get("metrics"), list):
+    elif tool in {"aggregate", "group_aggregate"} and isinstance(arguments.get("metrics"), list):
         candidates.extend(
             (f"$.arguments.metrics[{index}].as", metric.get("as"))
             for index, metric in enumerate(arguments["metrics"])
@@ -1229,10 +1385,12 @@ def validate_arguments(
     arguments: Mapping[str, Any],
     *,
     mode: str = "hybrid",
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
 ) -> dict[str, Any]:
     """Validate one call against the same schema supplied to the provider."""
     active_mode = normalize_mode(mode)
-    if tool not in MODE_TOOLS[active_mode]:
+    active_tools = tools_for_profile(active_mode, atomic_operator_profile)
+    if tool not in active_tools:
         if tool in TOOL_DEFINITIONS:
             raise ProtocolValidationError(
                 f"tool {tool!r} is unavailable in {active_mode!r} mode",
@@ -1261,11 +1419,27 @@ def validate_arguments(
     return normalized
 
 
-def validate_tool_call(mode: str, tool: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-    return validate_arguments(tool, arguments, mode=mode)
+def validate_tool_call(
+    mode: str,
+    tool: str,
+    arguments: Mapping[str, Any],
+    *,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
+) -> dict[str, Any]:
+    return validate_arguments(
+        tool,
+        arguments,
+        mode=mode,
+        atomic_operator_profile=atomic_operator_profile,
+    )
 
 
-def validate_model_action(action: Mapping[str, Any], *, mode: str = "hybrid") -> dict[str, Any]:
+def validate_model_action(
+    action: Mapping[str, Any],
+    *,
+    mode: str = "hybrid",
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
+) -> dict[str, Any]:
     """Validate the canonical single-action envelope used by replay/tests."""
     if not isinstance(action, Mapping):
         raise ProtocolValidationError("action must be an object", path="$")
@@ -1285,7 +1459,12 @@ def validate_model_action(action: Mapping[str, Any], *, mode: str = "hybrid") ->
     tool = action["tool"]
     if not isinstance(tool, str):
         raise ProtocolValidationError("tool must be a string", path="$.tool")
-    arguments = validate_arguments(tool, action["arguments"], mode=mode)
+    arguments = validate_arguments(
+        tool,
+        action["arguments"],
+        mode=mode,
+        atomic_operator_profile=atomic_operator_profile,
+    )
     return {"tool": tool, "arguments": arguments}
 
 
@@ -1332,15 +1511,22 @@ def get_system_prompt(
     teacher: bool = False,
     carrier: str = DEFAULT_CARRIER,
     checkpoint_guidance_profile: str = DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
 ) -> str:
     """Build Shared Core + one short mode clause + optional teacher-only guidance."""
     active_mode = normalize_mode(mode)
     active_carrier = normalize_carrier(carrier)
+    active_operator_profile = normalize_atomic_operator_profile(atomic_operator_profile)
+    tools_for_profile(active_mode, active_operator_profile)
     active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
         checkpoint_guidance_profile
     )
+    semantic_profile = active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC
     shared_core = _prompt_fragment("shared_core")
-    fragments = [shared_core, _prompt_fragment(active_mode)]
+    fragments = [
+        shared_core,
+        _prompt_fragment("atomic_semantic" if semantic_profile else active_mode),
+    ]
     if teacher:
         checkpoint_fragment = {
             CHECKPOINT_GUIDANCE_PROFILE_STANDARD: "teacher_checkpoint",
@@ -1356,6 +1542,8 @@ def get_system_prompt(
             ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(checkpoint_fragment))
+        if semantic_profile:
+            fragments.append(_prompt_fragment("teacher_atomic_semantic"))
     elif active_checkpoint_guidance != DEFAULT_CHECKPOINT_GUIDANCE_PROFILE:
         raise ValueError("non-default checkpoint guidance is teacher-only")
     if active_carrier == CARRIER_TEXT_JSON:
@@ -1372,7 +1560,7 @@ def get_system_prompt(
         # transport wrapper that could be mistaken for the action envelope.
         compact_schemas = _canonical_json([
             deepcopy(item["function"])
-            for item in provider_tool_definitions(active_mode)
+            for item in provider_tool_definitions(active_mode, active_operator_profile)
         ])
         fragments.append(
             "TEXT-JSON CARRIER (diagnostic-only)\n"
@@ -1395,9 +1583,11 @@ def prompt_hash(
     teacher: bool = False,
     carrier: str = DEFAULT_CARRIER,
     checkpoint_guidance_profile: str = DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
 ) -> str:
     active_mode = normalize_mode(mode)
     active_carrier = normalize_carrier(carrier)
+    active_operator_profile = normalize_atomic_operator_profile(atomic_operator_profile)
     active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
         checkpoint_guidance_profile
     )
@@ -1411,8 +1601,11 @@ def prompt_hash(
             teacher=teacher,
             carrier=active_carrier,
             checkpoint_guidance_profile=active_checkpoint_guidance,
+            atomic_operator_profile=active_operator_profile,
         ),
     }
+    if active_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE:
+        payload["atomic_operator_profile"] = active_operator_profile
     if active_checkpoint_guidance != DEFAULT_CHECKPOINT_GUIDANCE_PROFILE:
         payload["checkpoint_guidance_profile"] = active_checkpoint_guidance
     # Preserve the frozen native prompt hashes.  Native is the implicit v1
@@ -1423,11 +1616,16 @@ def prompt_hash(
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
-def carrier_protocol_hash(mode: str, carrier: str = DEFAULT_CARRIER) -> str:
+def carrier_protocol_hash(
+    mode: str,
+    carrier: str = DEFAULT_CARRIER,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
+) -> str:
     """Hash one carrier-specific protocol while preserving the native v1 identity."""
 
     active_mode = normalize_mode(mode)
     active_carrier = normalize_carrier(carrier)
+    active_operator_profile = normalize_atomic_operator_profile(atomic_operator_profile)
     payload = {
         "protocol_version": PROTOCOL_VERSION,
         "mode": active_mode,
@@ -1435,9 +1633,12 @@ def carrier_protocol_hash(mode: str, carrier: str = DEFAULT_CARRIER) -> str:
             active_mode,
             teacher=False,
             carrier=active_carrier,
+            atomic_operator_profile=active_operator_profile,
         ),
-        "tool_schema_sha256": tool_schema_hash(active_mode),
+        "tool_schema_sha256": tool_schema_hash(active_mode, active_operator_profile),
     }
+    if active_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE:
+        payload["atomic_operator_profile"] = active_operator_profile
     if active_carrier != CARRIER_NATIVE_TOOL_CALLS:
         payload.update({
             "carrier_policy_version": CARRIER_POLICY_VERSION,
@@ -1450,10 +1651,13 @@ def carrier_protocol_hash(mode: str, carrier: str = DEFAULT_CARRIER) -> str:
 def capability_manifest(
     mode: str,
     carrier: str = DEFAULT_CARRIER,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
 ) -> dict[str, Any]:
     """Generate a frozen, serializable account of one isolated mode surface."""
     active_mode = normalize_mode(mode)
     active_carrier = normalize_carrier(carrier)
+    active_operator_profile = normalize_atomic_operator_profile(atomic_operator_profile)
+    active_tools = tools_for_profile(active_mode, active_operator_profile)
     manifest = {
         "protocol_version": PROTOCOL_VERSION,
         "scheme": SCHEME,
@@ -1470,17 +1674,22 @@ def capability_manifest(
         "max_calls_per_turn": 1,
         "min_tool_calls_per_turn": 1,
         "max_tool_calls_per_turn": 1,
-        "tools": list(MODE_TOOLS[active_mode]),
+        "tools": list(active_tools),
         "tool_capabilities": {
             name: sorted(TOOL_DEFINITIONS[name].capabilities)
-            for name in MODE_TOOLS[active_mode]
+            for name in active_tools
         },
-        "tool_schema_sha256": tool_schema_hash(active_mode),
-        "student_prompt_sha256": prompt_hash(active_mode, carrier=active_carrier),
+        "tool_schema_sha256": tool_schema_hash(active_mode, active_operator_profile),
+        "student_prompt_sha256": prompt_hash(
+            active_mode,
+            carrier=active_carrier,
+            atomic_operator_profile=active_operator_profile,
+        ),
         "teacher_prompt_sha256": prompt_hash(
             active_mode,
             teacher=True,
             carrier=active_carrier,
+            atomic_operator_profile=active_operator_profile,
         ),
         "max_expression_predicate_depth": MAX_EXPRESSION_DEPTH,
         "canonical_types": list(CANONICAL_TYPES),
@@ -1493,6 +1702,9 @@ def capability_manifest(
         ],
         "predicate_operators": list(PREDICATE_OPERATORS),
     }
+    if active_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE:
+        manifest["atomic_operator_profile"] = active_operator_profile
+        manifest["checkpoint_tools_model_visible"] = True
     # Keep the default native capability manifest byte-for-byte compatible.
     # The A/B record and run manifest still carry the explicit carrier name.
     if active_carrier != CARRIER_NATIVE_TOOL_CALLS:
@@ -1516,6 +1728,9 @@ CAPABILITY_MANIFESTS = {mode: capability_manifest(mode) for mode in MODES}
 __all__ = [
     "ADMISSION_STATUS",
     "ATOMIC_TOOLS",
+    "ATOMIC_OPERATOR_PROFILES",
+    "ATOMIC_OPERATOR_PROFILE_MICRO",
+    "ATOMIC_OPERATOR_PROFILE_SEMANTIC",
     "BACKEND",
     "BINARY_EXPRESSION_OPERATORS",
     "CANONICAL_TYPES",
@@ -1536,6 +1751,7 @@ __all__ = [
     "CONTROL_TOOLS",
     "DEFAULT_CARRIER",
     "DEFAULT_CHECKPOINT_GUIDANCE_PROFILE",
+    "DEFAULT_ATOMIC_OPERATOR_PROFILE",
     "MAX_AST_DEPTH",
     "MAX_EXPRESSION_DEPTH",
     "MODE_TOOLS",
@@ -1549,6 +1765,7 @@ __all__ = [
     "EXECUTOR_VERSION",
     "PARAMETER_SCHEMAS",
     "PERCEPTION_TOOLS",
+    "SEMANTIC_ATOMIC_TOOLS",
     "PREDICATE_OPERATORS",
     "PROTOCOL_VERSION",
     "ProtocolValidationError",
@@ -1571,11 +1788,13 @@ __all__ = [
     "normalize_mode",
     "normalize_carrier",
     "normalize_checkpoint_guidance_profile",
+    "normalize_atomic_operator_profile",
     "parameter_schema",
     "prompt_hash",
     "provider_tool_definitions",
     "tool_schema_hash",
     "tools_for_mode",
+    "tools_for_profile",
     "validate_arguments",
     "validate_model_action",
     "validate_tool_call",

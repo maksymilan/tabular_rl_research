@@ -59,6 +59,13 @@ Start at `docs/current/README.md`.
   context in this order: question, optional external knowledge, current phase targets, checkpoint
   history, current environment state, and optional last error. The external teacher adds only short
   checkpoint-use guidance. See `docs/current/checkpoint_relalg_v1_zh.md`.
+- Atomic operator granularity is now an explicit, identity-bound profile. `micro-v1` remains the
+  frozen default for exact replay. `semantic-v2` is an isolated diagnostic profile under the same
+  `mode=atomic`; it replaces several mechanical chains with `shape_rows`, conditional
+  `group_aggregate`, grounded `scalar_compute`, and tie-explicit `rank_select`. It retains
+  model-visible `commit_checkpoint` and `restore_checkpoint` plus the same Harness snapshot and
+  audit semantics. The two profiles have distinct prompt/schema/protocol hashes and must not be
+  mixed. `semantic-v2` has no behavior or SFT/RL promotion until a paired causal gate passes.
 - “Forward” identifies the development base; it is not a behavior or training promotion.
   `checkpoint-relalg-v1` remains diagnostic-only until fresh replay, structure, provider-history,
   no-leak, behavior, scheme-aware export, and explicit SFT/RL admission gates pass. Gold SQL and

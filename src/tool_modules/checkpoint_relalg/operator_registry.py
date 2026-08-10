@@ -25,7 +25,7 @@ class OperatorSpec:
     preserves_duplicates: bool
 
 
-_SPECS = (
+_MICRO_SPECS = (
     OperatorSpec(
         "filter_rows",
         1,
@@ -100,12 +100,52 @@ _SPECS = (
     ),
 )
 
-OPERATOR_SPECS: Mapping[str, OperatorSpec] = MappingProxyType({spec.name: spec for spec in _SPECS})
+_SEMANTIC_SPECS = (
+    OperatorSpec(
+        "shape_rows",
+        1,
+        "shape",
+        "clear",
+        "Project declared expressions and optionally eliminate exact duplicate output rows.",
+        False,
+    ),
+    OperatorSpec(
+        "group_aggregate",
+        1,
+        "group_aggregate",
+        "clear",
+        "Filter one population, group once, and compute globally or locally conditioned metrics.",
+        False,
+    ),
+    OperatorSpec(
+        "scalar_compute",
+        1,
+        "scalar_compute",
+        "preserve",
+        "Compute grounded expressions from an exactly-one-row relation.",
+        True,
+    ),
+    OperatorSpec(
+        "rank_select",
+        1,
+        "rank_select",
+        "establish",
+        "Filter, rank, select top-k with explicit ties, and project declared outputs.",
+        True,
+    ),
+)
+
+OPERATOR_SPECS: Mapping[str, OperatorSpec] = MappingProxyType(
+    {spec.name: spec for spec in _MICRO_SPECS}
+)
+SEMANTIC_OPERATOR_SPECS: Mapping[str, OperatorSpec] = MappingProxyType(
+    {spec.name: spec for spec in _SEMANTIC_SPECS}
+)
 
 
 def get_operator_spec(name: str) -> OperatorSpec:
     try:
-        return OPERATOR_SPECS[name]
+        return OPERATOR_SPECS.get(name) or SEMANTIC_OPERATOR_SPECS[name]
     except KeyError as exc:
         from .expression import RelAlgValidationError
 
@@ -114,4 +154,10 @@ def get_operator_spec(name: str) -> OperatorSpec:
         ) from exc
 
 
-__all__ = ["OPERATOR_SPECS", "OperatorSpec", "OrderingEffect", "get_operator_spec"]
+__all__ = [
+    "OPERATOR_SPECS",
+    "SEMANTIC_OPERATOR_SPECS",
+    "OperatorSpec",
+    "OrderingEffect",
+    "get_operator_spec",
+]

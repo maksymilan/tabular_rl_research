@@ -336,7 +336,7 @@ class SQLiteRelationalExecutor:
         args: Mapping[str, Any],
         artifact_handle: str | None = None,
     ) -> RelationArtifact:
-        """Execute one of the nine registered atomic operators."""
+        """Execute one registered micro or semantic atomic operator."""
 
         spec = get_operator_spec(tool)
         method = getattr(self, f"_{tool}")
@@ -354,16 +354,22 @@ class SQLiteRelationalExecutor:
             # ``'abc'`` participates in numeric arithmetic as zero).  The
             # checkpoint-relalg IR is not: every operand must actually match
             # its canonical column type before an operator may consume it.
-            # Validate all relation arguments inside the same deadline and
+            # Validate consumed relation values inside the same deadline and
             # savepoint as the operation so dirty source data cannot silently
-            # change typed semantics.
+            # change typed semantics.  Frozen micro operators still consume
+            # and publish their full relation schema.
             seen_inputs: set[str] = set()
             for argument_name in ("table", "left", "right"):
                 relation_name = args.get(argument_name)
                 if not isinstance(relation_name, str) or relation_name in seen_inputs:
                     continue
                 relation = self._relation(relation_name)
-                self._validate_canonical_values(relation, _columns(relation))
+                input_columns = _columns(relation)
+                if argument_name == "table":
+                    input_columns = self._semantic_consumed_columns(
+                        tool, args, relation, input_columns
+                    )
+                self._validate_canonical_values(relation, input_columns)
                 seen_inputs.add(relation_name)
             artifact = method(args, handle)
             deadline.stop()
@@ -416,6 +422,62 @@ class SQLiteRelationalExecutor:
                 "relational operation failed after validation",
                 details={"tool": tool, "exception": type(exc).__name__},
             ) from exc
+
+    @staticmethod
+    def _semantic_consumed_columns(
+        tool: str,
+        args: Mapping[str, Any],
+        relation: SourceRelation | RelationArtifact,
+        default: Sequence[Column],
+    ) -> Sequence[Column]:
+        """Validate only values a semantic macro actually consumes or publishes.
+
+        The frozen micro operators keep their original all-column materialization
+        boundary.  Semantic macros project a narrower artifact, so an unrelated
+        dirty source column must not poison an otherwise canonical computation.
+        Exact column existence is still validated by the operator compiler.
+        """
+
+        names: list[Any] = []
+        if tool == "shape_rows":
+            names.extend(
+                item.get("column")
+                for item in args.get("outputs", [])
+                if isinstance(item, Mapping)
+            )
+        elif tool == "scalar_compute":
+            for item in args.get("outputs", []):
+                if not isinstance(item, Mapping):
+                    continue
+                for field in ("left", "right"):
+                    operand = item.get(field)
+                    if isinstance(operand, Mapping) and "column" in operand:
+                        names.append(operand.get("column"))
+        elif tool == "group_aggregate":
+            names.extend(args.get("group_by", []))
+            for item in args.get("metrics", []):
+                if not isinstance(item, Mapping):
+                    continue
+                if item.get("column") != "*":
+                    names.append(item.get("column"))
+                condition = item.get("where")
+                if isinstance(condition, Mapping):
+                    names.append(condition.get("column"))
+        elif tool == "rank_select":
+            names.extend(
+                item.get("column")
+                for item in args.get("order_by", [])
+                if isinstance(item, Mapping)
+            )
+            names.extend(
+                item.get("column")
+                for item in args.get("outputs", [])
+                if isinstance(item, Mapping)
+            )
+        else:
+            return default
+        selected = {name for name in names if isinstance(name, str)}
+        return tuple(column for column in relation.columns if column.name in selected)
 
     def run_readonly_queries(
         self,
@@ -1009,6 +1071,196 @@ class SQLiteRelationalExecutor:
             semantics={"outputs": canonical_outputs},
         )
 
+    def _compile_column_outputs(
+        self,
+        relation: SourceRelation | RelationArtifact,
+        raw_outputs: Any,
+        *,
+        path_prefix: str = "arguments.outputs",
+    ) -> tuple[list[str], list[Column], list[dict[str, Any]]]:
+        outputs = _array(raw_outputs, path=path_prefix, minimum=1)
+        source_types = column_type_map(_columns(relation))
+        select: list[str] = []
+        result_columns: list[Column] = []
+        canonical_outputs: list[dict[str, Any]] = []
+        names: set[str] = set()
+        for index, raw_output in enumerate(outputs):
+            path = f"{path_prefix}[{index}]"
+            output = _keys(raw_output, required={"column"}, optional={"as"}, path=path)
+            column = output["column"]
+            if column not in source_types:
+                raise RelAlgStateValidationError(
+                    "unknown_column", f"unknown exact output column {column!r}", path=f"{path}.column"
+                )
+            alias = require_simple_identifier(output.get("as", column), path=f"{path}.as")
+            key = sqlite_identifier_key(alias)
+            if key in names:
+                raise RelAlgValidationError(
+                    "duplicate_output_column", f"duplicate output {alias!r}", path=path
+                )
+            names.add(key)
+            expression = self._typed_column_sql(
+                Column(name=column, canonical_type=source_types[column]), "src"
+            )
+            select.append(f"{expression} AS {quote_identifier(alias)}")
+            result_columns.append(Column(name=alias, canonical_type=source_types[column]))
+            canonical_outputs.append(dict(output))
+        return select, result_columns, canonical_outputs
+
+    def _shape_rows(self, raw: Mapping[str, Any], handle: str) -> RelationArtifact:
+        args = _keys(raw, required={"table", "outputs"}, optional={"distinct"})
+        relation = self._relation(args["table"])
+        distinct = args.get("distinct", False)
+        if not isinstance(distinct, bool):
+            raise RelAlgValidationError(
+                "invalid_arguments", "distinct must be boolean", path="arguments.distinct"
+            )
+        select, columns, canonical_outputs = self._compile_column_outputs(
+            relation, args["outputs"]
+        )
+        keyword = "DISTINCT " if distinct else ""
+        ordinal = None if distinct else self._preserved_ordinal(relation, "src")
+        if ordinal:
+            select.append(f"{ordinal} AS {quote_identifier(_HIDDEN_ORDINAL)}")
+        sql = (
+            f"SELECT {keyword}{', '.join(select)} FROM {_relation_sql(relation)} AS "
+            f"{quote_identifier('src')}"
+        )
+        if ordinal:
+            sql += f" ORDER BY {ordinal}"
+        return self._materialize(
+            handle,
+            "shape",
+            columns,
+            () if distinct else _ordered_by(relation),
+            sql,
+            (),
+            inputs=[_relation_name(relation)],
+            semantics={"outputs": canonical_outputs, "distinct": distinct},
+        )
+
+    def _scalar_compute(self, raw: Mapping[str, Any], handle: str) -> RelationArtifact:
+        args = _keys(raw, required={"table", "outputs"})
+        relation = self._relation(args["table"])
+        if relation.row_count != 1:
+            raise RelAlgValidationError(
+                "scalar_input_not_single_row",
+                "scalar_compute requires an exactly-one-row input relation",
+                details={"table": _relation_name(relation), "row_count": relation.row_count},
+            )
+        outputs = _array(args["outputs"], path="arguments.outputs", minimum=1)
+        compiler = ExpressionCompiler(_columns(relation), table_alias="src")
+        select: list[str] = []
+        params: list[Any] = []
+        columns: list[Column] = []
+        canonical_outputs: list[dict[str, Any]] = []
+        names: set[str] = set()
+        for index, raw_output in enumerate(outputs):
+            path = f"arguments.outputs[{index}]"
+            output = _keys(
+                raw_output,
+                required={"op", "left", "right", "as"},
+                optional={"multiplier", "round_digits"},
+                path=path,
+            )
+            op = output["op"]
+            if op not in {"add", "subtract", "multiply", "divide"}:
+                raise RelAlgValidationError(
+                    "unsupported_expression_operator",
+                    f"unsupported scalar formula {op!r}",
+                    path=f"{path}.op",
+                )
+            operands: list[dict[str, Any]] = []
+            source_types = column_type_map(_columns(relation))
+            for field in ("left", "right"):
+                raw_operand = output[field]
+                if not isinstance(raw_operand, Mapping) or set(raw_operand) not in (
+                    {"column"},
+                    {"value"},
+                ):
+                    raise RelAlgValidationError(
+                        "invalid_arguments",
+                        "scalar operands require exactly column or numeric value",
+                        path=f"{path}.{field}",
+                    )
+                operand = dict(raw_operand)
+                if "column" in operand:
+                    if operand["column"] not in source_types:
+                        raise RelAlgStateValidationError(
+                            "unknown_column",
+                            f"unknown exact scalar column {operand['column']!r}",
+                            path=f"{path}.{field}.column",
+                        )
+                else:
+                    value = operand["value"]
+                    if (
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not math.isfinite(float(value))
+                    ):
+                        raise RelAlgValidationError(
+                            "invalid_arguments",
+                            "scalar literal must be a finite number",
+                            path=f"{path}.{field}.value",
+                        )
+                operands.append(operand)
+            expression_ast: dict[str, Any] = {
+                "op": op,
+                "args": operands,
+            }
+            multiplier = output.get("multiplier", 1)
+            if (
+                isinstance(multiplier, bool)
+                or not isinstance(multiplier, (int, float))
+                or not math.isfinite(float(multiplier))
+            ):
+                raise RelAlgValidationError(
+                    "invalid_arguments", "multiplier must be numeric", path=f"{path}.multiplier"
+                )
+            if multiplier != 1:
+                expression_ast = {
+                    "op": "multiply",
+                    "args": [expression_ast, {"value": multiplier}],
+                }
+            if "round_digits" in output:
+                digits = _integer(
+                    output["round_digits"], path=f"{path}.round_digits", minimum=0
+                )
+                if digits > 10:
+                    raise RelAlgValidationError(
+                        "invalid_arguments", "round_digits must be <= 10", path=f"{path}.round_digits"
+                    )
+                expression_ast = {
+                    "op": "round",
+                    "args": [expression_ast, {"value": digits}],
+                }
+            expression = compiler.compile(expression_ast, path=path)
+            alias = require_simple_identifier(output["as"], path=f"{path}.as")
+            key = sqlite_identifier_key(alias)
+            if key in names:
+                raise RelAlgValidationError(
+                    "duplicate_output_column", f"duplicate output {alias!r}", path=path
+                )
+            names.add(key)
+            select.append(f"{expression.sql} AS {quote_identifier(alias)}")
+            params.extend(expression.params)
+            columns.append(Column(name=alias, canonical_type=expression.canonical_type))
+            canonical_outputs.append(dict(output))
+        sql = (
+            f"SELECT {', '.join(select)} FROM {_relation_sql(relation)} AS "
+            f"{quote_identifier('src')}"
+        )
+        return self._materialize(
+            handle,
+            "scalar_compute",
+            columns,
+            (),
+            sql,
+            params,
+            inputs=[_relation_name(relation)],
+            semantics={"outputs": canonical_outputs, "requires_single_row": True},
+        )
+
     def _join(self, raw: Mapping[str, Any], handle: str) -> RelationArtifact:
         args = _keys(
             raw,
@@ -1236,6 +1488,170 @@ class SQLiteRelationalExecutor:
             (),
             inputs=[_relation_name(relation)],
             semantics={"group_by": group_by, "metrics": canonical_metrics},
+        )
+
+    def _group_aggregate(self, raw: Mapping[str, Any], handle: str) -> RelationArtifact:
+        args = _keys(
+            raw,
+            required={"table", "group_by", "metrics"},
+        )
+        relation = self._relation(args["table"])
+        columns = _columns(relation)
+        types = column_type_map(columns)
+        group_by = _array(args["group_by"], path="arguments.group_by")
+        if (
+            any(not isinstance(name, str) for name in group_by)
+            or len({sqlite_identifier_key(name) for name in group_by}) != len(group_by)
+        ):
+            raise RelAlgValidationError(
+                "invalid_arguments",
+                "group_by must contain unique exact column names",
+                path="arguments.group_by",
+            )
+        for index, name in enumerate(group_by):
+            if name not in types:
+                raise RelAlgStateValidationError(
+                    "unknown_column",
+                    f"unknown exact group column {name!r}",
+                    path=f"arguments.group_by[{index}]",
+                )
+        metrics = _array(args["metrics"], path="arguments.metrics", minimum=1)
+        result_columns = [Column(name=name, canonical_type=types[name]) for name in group_by]
+        output_names = {sqlite_identifier_key(name) for name in group_by}
+        select = [self._typed_column_sql(Column(name=name, canonical_type=types[name]), "src") for name in group_by]
+        params: list[Any] = []
+        canonical_metrics: list[dict[str, Any]] = []
+        for index, raw_metric in enumerate(metrics):
+            path = f"arguments.metrics[{index}]"
+            metric = _keys(
+                raw_metric,
+                required={"op", "column", "as"},
+                optional={"distinct", "where"},
+                path=path,
+            )
+            op, column = metric["op"], metric["column"]
+            alias = require_simple_identifier(metric["as"], path=f"{path}.as")
+            distinct = metric.get("distinct", False)
+            if not isinstance(distinct, bool):
+                raise RelAlgValidationError(
+                    "invalid_arguments", "distinct must be boolean", path=f"{path}.distinct"
+                )
+            if op not in _AGGREGATES:
+                raise RelAlgValidationError(
+                    "unsupported_aggregate", f"unsupported aggregate {op!r}", path=f"{path}.op"
+                )
+            if not isinstance(column, str) or (column != "*" and column not in types):
+                raise RelAlgStateValidationError(
+                    "unknown_column",
+                    f"unknown exact metric column {column!r}",
+                    path=f"{path}.column",
+                )
+            if column == "*" and (op != "count" or distinct):
+                raise RelAlgValidationError(
+                    "invalid_aggregate",
+                    "only count(*) with distinct=false is valid",
+                    path=path,
+                )
+            alias_key = sqlite_identifier_key(alias)
+            if alias_key in output_names:
+                raise RelAlgValidationError(
+                    "duplicate_output_column",
+                    f"duplicate aggregate output {alias!r}",
+                    path=f"{path}.as",
+                )
+            output_names.add(alias_key)
+            if op in {"sum", "avg"} and types[column] not in {"INTEGER", "REAL"}:
+                raise RelAlgValidationError(
+                    "type_mismatch",
+                    f"{op} requires an INTEGER or REAL column",
+                    path=f"{path}.column",
+                )
+            if op in {"min", "max"} and types[column] == "BLOB":
+                raise RelAlgValidationError(
+                    "type_mismatch", f"{op} does not support BLOB", path=f"{path}.column"
+                )
+            output_type = "INTEGER" if op == "count" else "REAL" if op == "avg" else types[column]
+            if column == "*":
+                operand = "*"
+            else:
+                operand = self._typed_column_sql(
+                    Column(name=column, canonical_type=types[column]), "src"
+                )
+                if distinct:
+                    operand = f"DISTINCT {operand}"
+            metric_sql = f"{op.upper()}({operand})"
+            canonical_metric = {
+                "op": op,
+                "column": column,
+                "distinct": distinct,
+                "as": alias,
+            }
+            if "where" in metric:
+                raw_condition = _keys(
+                    metric["where"],
+                    required={"column", "op"},
+                    optional={"value"},
+                    path=f"{path}.where",
+                )
+                condition_column = raw_condition["column"]
+                if condition_column not in types:
+                    raise RelAlgStateValidationError(
+                        "unknown_column",
+                        f"unknown exact condition column {condition_column!r}",
+                        path=f"{path}.where.column",
+                    )
+                condition_op = raw_condition["op"]
+                if condition_op in {"is_null", "is_not_null"}:
+                    if "value" in raw_condition:
+                        raise RelAlgValidationError(
+                            "invalid_arguments",
+                            "null checks do not accept value",
+                            path=f"{path}.where.value",
+                        )
+                    predicate_ast = {
+                        "op": condition_op,
+                        "value": {"column": condition_column},
+                    }
+                else:
+                    if condition_op not in _JOIN_OPS or "value" not in raw_condition:
+                        raise RelAlgValidationError(
+                            "invalid_arguments",
+                            "metric condition requires a comparison op and value",
+                            path=f"{path}.where",
+                        )
+                    predicate_ast = {
+                        "op": condition_op,
+                        "left": {"column": condition_column},
+                        "right": {"value": raw_condition["value"]},
+                    }
+                predicate = PredicateCompiler(columns, table_alias="src").compile(
+                    predicate_ast, path=f"{path}.where"
+                )
+                metric_sql += f" FILTER (WHERE {predicate.sql})"
+                params.extend(predicate.params)
+                canonical_metric["where"] = dict(raw_condition)
+            select.append(f"{metric_sql} AS {quote_identifier(alias)}")
+            result_columns.append(Column(name=alias, canonical_type=output_type))
+            canonical_metrics.append(canonical_metric)
+        sql = (
+            f"SELECT {', '.join(select)} FROM {_relation_sql(relation)} AS "
+            f"{quote_identifier('src')}"
+        )
+        if group_by:
+            sql += " GROUP BY " + ", ".join(
+                self._typed_column_sql(Column(name=name, canonical_type=types[name]), "src")
+                for name in group_by
+            )
+        semantics: dict[str, Any] = {"group_by": group_by, "metrics": canonical_metrics}
+        return self._materialize(
+            handle,
+            "group_aggregate",
+            result_columns,
+            (),
+            sql,
+            params,
+            inputs=[_relation_name(relation)],
+            semantics=semantics,
         )
 
     def _distinct(self, raw: Mapping[str, Any], handle: str) -> RelationArtifact:
@@ -1466,6 +1882,79 @@ class SQLiteRelationalExecutor:
                 "method": method,
                 "as": alias,
             },
+        )
+
+    def _rank_select(self, raw: Mapping[str, Any], handle: str) -> RelationArtifact:
+        args = _keys(
+            raw,
+            required={"table", "order_by", "top_k", "outputs"},
+            optional={"with_ties"},
+        )
+        relation = self._relation(args["table"])
+        columns = _columns(relation)
+        keys = self._validate_order_keys(
+            args["order_by"], columns, path="arguments.order_by", minimum=1
+        )
+        top_k = _integer(args["top_k"], path="arguments.top_k", minimum=1)
+        with_ties = args.get("with_ties", False)
+        if not isinstance(with_ties, bool):
+            raise RelAlgValidationError(
+                "invalid_arguments", "with_ties must be boolean", path="arguments.with_ties"
+            )
+        select, result_columns, canonical_outputs = self._compile_column_outputs(
+            relation, args["outputs"]
+        )
+        params: list[Any] = []
+        semantic_terms = self._order_terms(keys, "src", columns)
+        deterministic_keys = [
+            {"column": column.name, "direction": "asc", "nulls": "last"}
+            for column in columns
+            if column.canonical_type != "BLOB"
+        ]
+        deterministic_terms = semantic_terms + self._order_terms(
+            deterministic_keys, "src", columns
+        )
+        rank_function = "RANK" if with_ties else "ROW_NUMBER"
+        select.append(
+            f"{rank_function}() OVER (ORDER BY {', '.join(semantic_terms)}) AS "
+            f"{quote_identifier('__semantic_rank')}"
+        )
+        select.append(
+            f"ROW_NUMBER() OVER (ORDER BY {', '.join(deterministic_terms)}) AS "
+            f"{quote_identifier(_HIDDEN_ORDINAL)}"
+        )
+        inner_sql = (
+            f"SELECT {', '.join(select)} FROM {_relation_sql(relation)} AS "
+            f"{quote_identifier('src')}"
+        )
+        visible = ", ".join(quote_identifier(column.name) for column in result_columns)
+        outer = quote_identifier("ranked")
+        sql = (
+            f"WITH {outer} AS ({inner_sql}) SELECT {visible}, "
+            f"{quote_identifier(_HIDDEN_ORDINAL)} FROM {outer} WHERE "
+            f"{quote_identifier('__semantic_rank')} <= ? ORDER BY "
+            f"{quote_identifier(_HIDDEN_ORDINAL)}"
+        )
+        params.append(top_k)
+        semantic_order = tuple(
+            OrderingKey(column=item["column"], direction=item["direction"], nulls=item["nulls"])
+            for item in keys
+        )
+        semantics: dict[str, Any] = {
+            "order_by": keys,
+            "top_k": top_k,
+            "with_ties": with_ties,
+            "outputs": canonical_outputs,
+        }
+        return self._materialize(
+            handle,
+            "rank_select",
+            result_columns,
+            semantic_order,
+            sql,
+            params,
+            inputs=[_relation_name(relation)],
+            semantics=semantics,
         )
 
     # ------------------------------------------------------------------

@@ -1,0 +1,2 @@
+TEACHER SEMANTIC-ATOMIC GUIDANCE
+Use the shortest grounded relational program whose semantics are already determined. Prefer group_aggregate over parallel filtered branches, scalar_compute over joining one-row metric tables, and rank_select over separate sort/limit/project steps. Keep join separate when its observed cardinality determines the next decision. Do not invent filters, singleton assumptions, tie rules, units, or output aliases; audit the final artifact against every requested output slot before answer.

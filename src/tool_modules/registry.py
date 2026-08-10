@@ -61,6 +61,7 @@ class ToolScheme:
     teacher_prompt_hash: str | None = None
     admission_status: str | None = None
     provider_response_envelope_version: str | None = None
+    atomic_operator_profile: str | None = None
 
     def manifest_fields(self) -> dict[str, Any]:
         payload = {
@@ -82,6 +83,7 @@ class ToolScheme:
             "provider_response_envelope_version": (
                 self.provider_response_envelope_version
             ),
+            "atomic_operator_profile": self.atomic_operator_profile,
         }
         payload.update({key: value for key, value in optional.items() if value is not None})
         return payload
@@ -195,6 +197,7 @@ def build_checkpoint_relalg_tool_scheme(
     *,
     mode: str,
     carrier: str = "native-tool-calls",
+    atomic_operator_profile: str = "micro-v1",
 ) -> ToolScheme:
     """Build the forward checkpointed Direct/Atomic/Hybrid scheme.
 
@@ -203,15 +206,17 @@ def build_checkpoint_relalg_tool_scheme(
     """
     from tool_modules.checkpoint_relalg.protocol import (
         ADMISSION_STATUS,
-        MODE_TOOLS,
+        DEFAULT_ATOMIC_OPERATOR_PROFILE,
         PROTOCOL_VERSION,
         assistant_carrier_protocol,
         carrier_protocol_hash,
         get_system_prompt,
         normalize_carrier,
+        normalize_atomic_operator_profile,
         normalize_mode,
         prompt_hash,
         tool_schema_hash,
+        tools_for_profile,
     )
     from tool_modules.checkpoint_relalg.provider import (
         provider_response_envelope_protocol_hash,
@@ -220,28 +225,32 @@ def build_checkpoint_relalg_tool_scheme(
 
     active_mode = normalize_mode(mode)
     active_carrier = normalize_carrier(carrier)
+    active_operator_profile = normalize_atomic_operator_profile(atomic_operator_profile)
     student_prompt = get_system_prompt(
         active_mode,
         teacher=False,
         carrier=active_carrier,
+        atomic_operator_profile=active_operator_profile,
     )
     student_hash = prompt_hash(
         active_mode,
         teacher=False,
         carrier=active_carrier,
+        atomic_operator_profile=active_operator_profile,
     )
     teacher_hash = prompt_hash(
         active_mode,
         teacher=True,
         carrier=active_carrier,
+        atomic_operator_profile=active_operator_profile,
     )
-    schema_hash = tool_schema_hash(active_mode)
+    schema_hash = tool_schema_hash(active_mode, active_operator_profile)
     response_envelope_version = provider_response_envelope_version(active_carrier)
     identity = provider_response_envelope_protocol_hash(
-        carrier_protocol_hash(active_mode, active_carrier),
+        carrier_protocol_hash(active_mode, active_carrier, active_operator_profile),
         active_carrier,
     )
-    tools = tuple(MODE_TOOLS[active_mode])
+    tools = tuple(tools_for_profile(active_mode, active_operator_profile))
     return ToolScheme(
         name=CHECKPOINT_RELALG_TOOL_SCHEME,
         protocol_version=PROTOCOL_VERSION,
@@ -269,6 +278,11 @@ def build_checkpoint_relalg_tool_scheme(
         teacher_prompt_hash=teacher_hash,
         admission_status=ADMISSION_STATUS,
         provider_response_envelope_version=response_envelope_version,
+        atomic_operator_profile=(
+            active_operator_profile
+            if active_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE
+            else None
+        ),
     )
 
 

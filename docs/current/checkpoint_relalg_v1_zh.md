@@ -54,6 +54,23 @@ artifact。
 | `atomic` | 感知工具，加 `filter_rows`、`project`、`join`、`aggregate`、`distinct`、`set_operation`、`sort`、`limit`、`add_rank` | 只通过 typed relational algebra 逐步构造关系 |
 | `hybrid` | direct 与 atomic 的并集 | 可在同一统一状态中选择 SQL 或 typed operators，但每轮仍只能调用一个工具 |
 
+Atomic 另有显式、隔离的算子粒度配置 `--atomic-operator-profile`：
+
+- `micro-v1` 是冻结默认面，保留上表九个机械原子算子、历史 prompt/schema/hash 与精确重放；
+- `semantic-v2` 是 2026-08-10 开始的 diagnostic 优化面，不改变 `mode=atomic`，把一个任务级
+  决策所需的确定性机械步骤合并为 `shape_rows`、`group_aggregate`、`scalar_compute` 与
+  `rank_select`。其中条件聚合可在同一固定 population/grain 上表达扁平 metric-local `where`，
+  `rank_select` 显式绑定排序、top-k、tie policy 与最终投影；population 仍由可检查、可复用的
+  `filter_rows` artifact 决定。Harness 仍在一个
+  savepoint 中 typed-lower、物化一个最终 artifact，并保存完整 derivation，模型不会获得任意
+  SQL 或通用 action block。
+
+`semantic-v2` **保留** `commit_checkpoint` 与 `restore_checkpoint`。优化的是一个 phase 内的
+机械决策长度，不是删除 phase control：稳定 population、grain、join、aggregation 或 ranking
+里程碑仍可 commit，后续矛盾或错误分支仍可精确 restore。该配置有独立 profile、prompt、schema
+与 protocol hash；不得与 `micro-v1` 轨迹混合或事后改标签。当前仍为 diagnostic-only，尚无
+行为提升或训练准入结论。
+
 三种 mode 共享：
 
 - `commit_checkpoint`：提交已经形成的语义里程碑；
@@ -188,6 +205,8 @@ Atomic、Hybrid 的能力或准确率，也没有向后两种 mode 重复发送�
 官方 `deepseek-v4-flash`。结果为 63/100 `bird-set`、42/100 strict artifact、56/100 schema
 match、99/100 合法终止；100/100 结构审计与 fresh replay 全部通过，581 次 provider attempt
 全部绑定 Flash，总计 11,677,199 tokens。该运行没有使用 checkpoint/restore，且 21 条
-`bird-set` 成功存在 schema 不精确，因此不构成 checkpoint 能力或训练准入证据。最多 42 条
+`bird-set` 成功未通过 strict audit：其中 18 条是纯列标签/schema 差异，另 3 条是
+duplicate multiplicity 差异，不能把 21 条统一描述为 schema 错误。因此该批不构成 checkpoint
+能力或训练准入证据。最多 42 条
 可暂记为严格正确的 scheme-local 候选，仍不得进入现有 SFT/RL。完整报告见
 `docs/reports/evaluation/CHECKPOINT_RELALG_V1_FLASH_TEXT_JSON_HYBRID_PREFIX100_20260809_ZH.md`。

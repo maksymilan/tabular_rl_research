@@ -30,6 +30,22 @@ def test_checkpoint_scheme_is_forward_but_diagnostic_and_mode_explicit():
     assert len({direct.protocol_hash, atomic.protocol_hash, hybrid.protocol_hash}) == 3
 
 
+def test_semantic_atomic_profile_has_distinct_identity_and_keeps_checkpoints():
+    micro = build_checkpoint_relalg_tool_scheme(mode="atomic")
+    semantic = build_checkpoint_relalg_tool_scheme(
+        mode="atomic",
+        atomic_operator_profile="semantic-v2",
+    )
+    assert semantic.atomic_operator_profile == "semantic-v2"
+    assert semantic.protocol_hash != micro.protocol_hash
+    assert semantic.tool_schema_hash != micro.tool_schema_hash
+    assert "group_aggregate" in semantic.atomic_tools
+    assert "rank_select" in semantic.atomic_tools
+    assert "sort" not in semantic.top_level_tools
+    assert "commit_checkpoint" in semantic.top_level_tools
+    assert "restore_checkpoint" in semantic.top_level_tools
+
+
 def test_unified_launchers_route_checkpoint_scheme_to_its_own_runner():
     forwarded = ["--", "--mode", "hybrid", "--result-dir", "/tmp/result", "--n", "1"]
     evaluated = runner_argv(CHECKPOINT_RELALG_TOOL_SCHEME, forwarded)

@@ -33,7 +33,9 @@ from provider_client import load_api_config  # noqa: E402
 from tool_modules.checkpoint_relalg.audit import audit_result_dir  # noqa: E402
 from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     ADMISSION_STATUS,
+    ATOMIC_OPERATOR_PROFILES,
     ATOMIC_TOOLS,
+    SEMANTIC_ATOMIC_TOOLS,
     BACKEND,
     CARRIERS,
     CARRIER_ABLATION_PROTOCOL_VERSION,
@@ -42,6 +44,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     CHECKPOINT_GUIDANCE_PROFILES,
     CHECKPOINT_POLICY_VERSION,
     DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
+    DEFAULT_ATOMIC_OPERATOR_PROFILE,
     DEFAULT_CARRIER,
     DIALECT,
     ENVIRONMENT_RENDERER_VERSION,
@@ -53,6 +56,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     carrier_experiment_arm,
     get_system_prompt,
     normalize_checkpoint_guidance_profile,
+    normalize_atomic_operator_profile,
     normalize_carrier,
     prompt_hash,
     provider_tool_definitions,
@@ -1043,7 +1047,11 @@ def _phase_execution_styles(turns: list[Mapping[str, Any]]) -> dict[str, str]:
             tools_by_phase[str(turn.get("phase_id_before"))].append(action["tool"])
     result: dict[str, str] = {}
     for phase_id, tools in tools_by_phase.items():
-        relevant = [tool for tool in tools if tool == "execute_sql" or tool in ATOMIC_TOOLS]
+        relevant = [
+            tool
+            for tool in tools
+            if tool == "execute_sql" or tool in {*ATOMIC_TOOLS, *SEMANTIC_ATOMIC_TOOLS}
+        ]
         kinds = ["sql" if tool == "execute_sql" else "atomic" for tool in relevant]
         if not kinds:
             style = "perception_or_control_only"
@@ -1103,7 +1111,7 @@ def _process_metrics(
         calls.append((str(checkpoint_id), str(tool or "native_rejection")))
         if tool == "execute_sql":
             sql_calls += 1
-        elif tool in ATOMIC_TOOLS:
+        elif tool in {*ATOMIC_TOOLS, *SEMANTIC_ATOMIC_TOOLS}:
             atomic_calls += 1
         error = result.get("error")
         if isinstance(error, Mapping) and isinstance(error.get("code"), str):
@@ -1179,6 +1187,7 @@ def run_episode(
     mode: str,
     client: DeepSeekNativeClient,
     carrier: str = DEFAULT_CARRIER,
+    atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
     checkpoint_guidance_profile: str = DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
     experiment_arm: str | None = None,
     within_batch_order: str | None = None,
@@ -1192,6 +1201,7 @@ def run_episode(
     batch_guard: BatchRequestGuard | None = None,
 ) -> dict[str, Any]:
     active_carrier = normalize_carrier(carrier)
+    active_operator_profile = normalize_atomic_operator_profile(atomic_operator_profile)
     active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
         checkpoint_guidance_profile
     )
@@ -1207,6 +1217,7 @@ def run_episode(
     runtime = CheckpointRelalgRuntime(
         connection,
         mode=mode,
+        atomic_operator_profile=active_operator_profile,
         config=runtime_config,
     )
     system_prompt = get_system_prompt(
@@ -1214,8 +1225,9 @@ def run_episode(
         teacher=True,
         carrier=active_carrier,
         checkpoint_guidance_profile=active_checkpoint_guidance,
+        atomic_operator_profile=active_operator_profile,
     )
-    tools = provider_tool_definitions(mode)
+    tools = provider_tool_definitions(mode, active_operator_profile)
     phase_history: list[dict[str, Any]] = []
     turns: list[dict[str, Any]] = []
     provider_usage: Counter[str] = Counter()
@@ -1410,9 +1422,17 @@ def run_episode(
 
             try:
                 if active_carrier == CARRIER_NATIVE_TOOL_CALLS:
-                    action = validate_native_assistant_message(mode, response.message)
+                    action = validate_native_assistant_message(
+                        mode,
+                        response.message,
+                        atomic_operator_profile=active_operator_profile,
+                    )
                 else:
-                    action = validate_text_json_assistant_message(mode, response.message)
+                    action = validate_text_json_assistant_message(
+                        mode,
+                        response.message,
+                        atomic_operator_profile=active_operator_profile,
+                    )
                 canonical_action = {
                     "tool": action["tool"],
                     "arguments": deepcopy(action["arguments"]),
@@ -1528,7 +1548,11 @@ def run_episode(
     example_index = task.get("example_index", task.get("index", task_position))
     if isinstance(example_index, bool) or not isinstance(example_index, int):
         example_index = task_position
-    scheme = build_checkpoint_relalg_tool_scheme(mode=mode, carrier=active_carrier)
+    scheme = build_checkpoint_relalg_tool_scheme(
+        mode=mode,
+        carrier=active_carrier,
+        atomic_operator_profile=active_operator_profile,
+    )
     process_metrics = _process_metrics(
         turns,
         final_runtime=final_runtime,
@@ -1539,14 +1563,16 @@ def run_episode(
     record = {
         **(dict(artifact_identity_fields) if artifact_identity_fields else {}),
         **scheme.manifest_fields(),
-        "capability_manifest": capability_manifest(mode, active_carrier),
+        "capability_manifest": capability_manifest(
+            mode, active_carrier, active_operator_profile
+        ),
         "backend": BACKEND,
         "dialect": DIALECT,
         "environment_renderer_version": ENVIRONMENT_RENDERER_VERSION,
         "checkpoint_policy_version": CHECKPOINT_POLICY_VERSION,
         "checkpoint_guidance_profile": active_checkpoint_guidance,
         "executor_version": EXECUTOR_VERSION,
-        "tool_schema_hash": tool_schema_hash(mode),
+        "tool_schema_hash": tool_schema_hash(mode, active_operator_profile),
         "carrier_ablation_protocol_version": CARRIER_ABLATION_PROTOCOL_VERSION,
         "carrier_policy_version": CARRIER_POLICY_VERSION,
         "experiment_arm": active_experiment_arm,
@@ -1557,6 +1583,7 @@ def run_episode(
             teacher=True,
             carrier=active_carrier,
             checkpoint_guidance_profile=active_checkpoint_guidance,
+            atomic_operator_profile=active_operator_profile,
         ),
         "example_index": example_index,
         "task_position": task_position,
@@ -1570,6 +1597,7 @@ def run_episode(
             teacher=True,
             carrier=active_carrier,
             checkpoint_guidance_profile=active_checkpoint_guidance,
+            atomic_operator_profile=active_operator_profile,
         ),
         "runtime_config": _runtime_config_payload(
             runtime_config,
@@ -1627,6 +1655,9 @@ def build_manifest(
     batch_limits: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     active_carrier = normalize_carrier(getattr(args, "carrier", DEFAULT_CARRIER))
+    active_operator_profile = normalize_atomic_operator_profile(
+        getattr(args, "atomic_operator_profile", DEFAULT_ATOMIC_OPERATOR_PROFILE)
+    )
     active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
         getattr(
             args,
@@ -1645,6 +1676,7 @@ def build_manifest(
     scheme = build_checkpoint_relalg_tool_scheme(
         mode=args.mode,
         carrier=active_carrier,
+        atomic_operator_profile=active_operator_profile,
     )
     config = RuntimeConfig(
         max_primitive_calls=args.max_primitive_calls,
@@ -1658,14 +1690,16 @@ def build_manifest(
     strict_batch = dataset_identity is not None
     manifest = {
         **scheme.manifest_fields(),
-        "capability_manifest": capability_manifest(args.mode, active_carrier),
+        "capability_manifest": capability_manifest(
+            args.mode, active_carrier, active_operator_profile
+        ),
         "backend": BACKEND,
         "dialect": DIALECT,
         "environment_renderer_version": ENVIRONMENT_RENDERER_VERSION,
         "checkpoint_policy_version": CHECKPOINT_POLICY_VERSION,
         "checkpoint_guidance_profile": active_checkpoint_guidance,
         "executor_version": EXECUTOR_VERSION,
-        "tool_schema_hash": tool_schema_hash(args.mode),
+        "tool_schema_hash": tool_schema_hash(args.mode, active_operator_profile),
         "carrier_ablation_protocol_version": CARRIER_ABLATION_PROTOCOL_VERSION,
         "carrier_policy_version": CARRIER_POLICY_VERSION,
         "experiment_arm": experiment_arm,
@@ -1676,6 +1710,7 @@ def build_manifest(
             teacher=True,
             carrier=active_carrier,
             checkpoint_guidance_profile=active_checkpoint_guidance,
+            atomic_operator_profile=active_operator_profile,
         ),
         "runner": RUNNER_VERSION if strict_batch else LEGACY_RUNNER_VERSION,
         "run_started_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -1695,6 +1730,7 @@ def build_manifest(
             teacher=True,
             carrier=active_carrier,
             checkpoint_guidance_profile=active_checkpoint_guidance,
+            atomic_operator_profile=active_operator_profile,
         ),
         "runtime_config": _runtime_config_payload(config, max_model_turns=args.max_model_turns),
         "max_tokens": args.max_tokens,
@@ -1730,6 +1766,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Run causal checkpoint-relalg-v1 diagnostics with official DeepSeek."
     )
     parser.add_argument("--mode", choices=MODES, required=True)
+    parser.add_argument(
+        "--atomic-operator-profile",
+        choices=ATOMIC_OPERATOR_PROFILES,
+        default=DEFAULT_ATOMIC_OPERATOR_PROFILE,
+    )
     parser.add_argument("--carrier", choices=CARRIERS, default=DEFAULT_CARRIER)
     parser.add_argument(
         "--checkpoint-guidance-profile",
@@ -1810,6 +1851,8 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("completion token bounds are invalid")
     if args.dataset_manifest is None:
         raise SystemExit("--dataset-manifest is required for v2 diagnostic runs")
+    if args.atomic_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE and args.mode != "atomic":
+        raise SystemExit("semantic-v2 is currently isolated to --mode atomic")
     expected_arm = carrier_experiment_arm(args.carrier)
     if args.experiment_arm is not None and args.experiment_arm != expected_arm:
         raise SystemExit(
@@ -1858,6 +1901,7 @@ def main(argv: list[str] | None = None) -> int:
             "tool_scheme": SCHEME,
             "protocol_version": PROTOCOL_VERSION,
             "mode": args.mode,
+            "atomic_operator_profile": args.atomic_operator_profile,
             "carrier": args.carrier,
             "carrier_ablation_protocol_version": CARRIER_ABLATION_PROTOCOL_VERSION,
             "carrier_policy_version": CARRIER_POLICY_VERSION,
@@ -1876,12 +1920,15 @@ def main(argv: list[str] | None = None) -> int:
             ]["selection_identity_sha256"],
             "batch_control_version": BATCH_CONTROL_VERSION,
             "batch_limits": batch_limits,
-            "tool_schema_sha256": tool_schema_hash(args.mode),
+            "tool_schema_sha256": tool_schema_hash(
+                args.mode, args.atomic_operator_profile
+            ),
             "teacher_prompt_sha256": prompt_hash(
                 args.mode,
                 teacher=True,
                 carrier=args.carrier,
                 checkpoint_guidance_profile=args.checkpoint_guidance_profile,
+                atomic_operator_profile=args.atomic_operator_profile,
             ),
             "result_dir": str(args.result_dir),
             "admission_status": ADMISSION_STATUS,
@@ -1987,6 +2034,7 @@ def main(argv: list[str] | None = None) -> int:
                     task,
                     task_position=position,
                     mode=args.mode,
+                    atomic_operator_profile=args.atomic_operator_profile,
                     client=client,
                     carrier=args.carrier,
                     checkpoint_guidance_profile=args.checkpoint_guidance_profile,
