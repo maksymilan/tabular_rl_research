@@ -583,6 +583,47 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 "atomic",
                 checkpoint_guidance_profile="restore-probe-v3",
             )
+        semantic_milestone = get_system_prompt(
+            "atomic",
+            teacher=True,
+            checkpoint_guidance_profile="semantic-milestone-v1",
+            atomic_operator_profile="semantic-v2",
+        )
+        self.assertIn(
+            "TEACHER SEMANTIC MILESTONE V1 CHECKPOINT GUIDANCE",
+            semantic_milestone,
+        )
+        self.assertIn("before a fifth successful", semantic_milestone)
+        self.assertIn("does not require restore_checkpoint", semantic_milestone)
+        self.assertIn("never asks for a synthetic error", semantic_milestone)
+        self.assertNotEqual(semantic_milestone, teacher)
+        self.assertNotEqual(
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                checkpoint_guidance_profile="semantic-milestone-v1",
+                atomic_operator_profile="semantic-v2",
+            ),
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                checkpoint_guidance_profile="adaptive-v1",
+                atomic_operator_profile="semantic-v2",
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "requires atomic mode"):
+            get_system_prompt(
+                "atomic",
+                teacher=True,
+                checkpoint_guidance_profile="semantic-milestone-v1",
+                atomic_operator_profile="micro-v1",
+            )
+        with self.assertRaisesRegex(ValueError, "requires atomic mode"):
+            get_system_prompt(
+                "direct",
+                teacher=True,
+                checkpoint_guidance_profile="semantic-milestone-v1",
+            )
         for implementation_detail in ("snapshot hash", "reward", "SQLite", "error code", "provider validator"):
             self.assertNotIn(implementation_detail, teacher)
         self.assertLess(len(teacher), 5000)

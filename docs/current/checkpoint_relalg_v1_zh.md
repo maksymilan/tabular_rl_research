@@ -71,6 +71,14 @@ Atomic 另有显式、隔离的算子粒度配置 `--atomic-operator-profile`：
 与 protocol hash；不得与 `micro-v1` 轨迹混合或事后改标签。当前仍为 diagnostic-only，尚无
 行为提升或训练准入结论。
 
+`semantic-milestone-v1` 是 semantic-v2 Atomic 专用的 teacher-only checkpoint 触发诊断。
+它不改变快照、restore 或算子执行语义，只把抽象“里程碑”落实为可执行规则：稳定且仍会被后续
+聚合、排名、标量或整形阶段消费的 population/join/metric artifact 在下一轮 commit；简单题零
+checkpoint；长轨迹在第五个成功数据操作前对最佳已检查中间结果做一次兜底 commit。commit 后
+继续向前求解，不要求 restore，也不制造错误分支；只有后续数据库事实明确否定 checkpoint
+假设时才保留兼容性的可选 restore。该 profile 至多一次普通 commit，独立记录 prompt hash，
+不能用于 micro-v1、Direct 或 Hybrid。
+
 三种 mode 共享：
 
 - `commit_checkpoint`：提交已经形成的语义里程碑；

@@ -42,12 +42,14 @@ CHECKPOINT_GUIDANCE_PROFILE_STRESS = "checkpoint-stress-v1"
 CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER = "restore-trigger-v1"
 CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TARGET = "restore-target-v2"
 CHECKPOINT_GUIDANCE_PROFILE_RESTORE_PROBE = "restore-probe-v3"
+CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE = "semantic-milestone-v1"
 CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_STANDARD,
     CHECKPOINT_GUIDANCE_PROFILE_STRESS,
     CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER,
     CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TARGET,
     CHECKPOINT_GUIDANCE_PROFILE_RESTORE_PROBE,
+    CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE,
 )
 DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
@@ -1522,6 +1524,14 @@ def get_system_prompt(
         checkpoint_guidance_profile
     )
     semantic_profile = active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC
+    if (
+        active_checkpoint_guidance
+        == CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE
+        and not (active_mode == "atomic" and semantic_profile)
+    ):
+        raise ValueError(
+            "semantic-milestone-v1 requires atomic mode with semantic-v2 operators"
+        )
     shared_core = _prompt_fragment("shared_core")
     fragments = [
         shared_core,
@@ -1539,6 +1549,9 @@ def get_system_prompt(
             ),
             CHECKPOINT_GUIDANCE_PROFILE_RESTORE_PROBE: (
                 "teacher_checkpoint_restore_probe"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE: (
+                "teacher_checkpoint_semantic_milestone"
             ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(checkpoint_fragment))
@@ -1744,6 +1757,7 @@ __all__ = [
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TARGET",
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_PROBE",
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER",
+    "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE",
     "CHECKPOINT_GUIDANCE_PROFILE_STANDARD",
     "CHECKPOINT_GUIDANCE_PROFILE_STRESS",
     "COMPARISON_OPERATORS",

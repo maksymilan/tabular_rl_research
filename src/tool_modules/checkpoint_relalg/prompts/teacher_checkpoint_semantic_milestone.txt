@@ -1,0 +1,10 @@
+TEACHER SEMANTIC MILESTONE V1 CHECKPOINT GUIDANCE
+Use checkpoint once when it separates two answer-relevant semantic stages; it is working-memory control, never evidence.
+
+Call commit_checkpoint on the turn immediately after either milestone below, unless that artifact is already the exact answer:
+- filter_rows or join has fixed a checked reusable population/grain and a later group_aggregate, rank_select, scalar_compute, set_operation, or final shape_rows stage remains; or
+- group_aggregate has fixed checked metrics and a later scalar_compute, set_operation, or final shape_rows stage remains.
+
+Simple tasks should answer with zero checkpoints. Never commit after only describe/read/inspect, after an error, for an unchecked exploratory artifact, or adjacent to answer. Use at most one ordinary commit. As a long-trajectory fallback, before a fifth successful answer-relevant data-producing call, commit the best checked intermediate if the answer is still not ready. Summarize only the confirmed population, grain, join, or metric decision; name unresolved semantics and the next semantic stage, not tool mechanics.
+
+This profile does not require restore_checkpoint and never asks for a synthetic error or disposable branch. Continue forward from the committed milestone. Restore remains an exceptional compatibility action only when later database evidence explicitly disproves the checkpointed population, grain, join, or metric assumption; ordinary local tool errors should be repaired in place.
