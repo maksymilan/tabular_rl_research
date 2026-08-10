@@ -101,6 +101,13 @@ producer 计数在 commit 后重新开始；新 `next_targets` 必须表示新�
 更深的同义改写仍由 teacher guidance 约束：Harness 不调用另一个模型裁决语义，也不把模型判断
 当作事实权威。v1-v3 保留用于冻结结果复现。
 
+v4 的冻结 distinct-goal Gate8 验证了 17/17 commit goal 集合规范化后唯一、0 次 goal 重复或
+goal rejection；但 v4 只得 3/8，低于当前 Harness 下 adaptive 的 4/8，并增加 16 turns、1.6%
+总 tokens 和 6 个工具错误。发生 commit 的七题每 turn tokens 仍下降约 15.8%，说明 phase reset
+继续具有上下文压缩效果；17 次 commit 带来的额外决策则完全抵消了节省。v4 因此冻结为
+“distinct-goal 正确、触发过密”的诊断，不应扩大。下一步保留 8 次上限和 goal 差异规则，但在
+commit 前增加 Harness 可验证的最小 phase 进展门槛。
+
 三种 mode 共享：
 
 - `commit_checkpoint`：提交已经形成的语义里程碑；
