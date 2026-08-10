@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .checkpoint_store import CHECKPOINT_GOAL_POLICY_VERSION, MAX_CHECKPOINTS
+
 
 PROTOCOL_VERSION = "checkpoint-relalg-v1"
 SCHEME = "checkpoint-relalg"
@@ -36,7 +38,7 @@ ADMISSION_STATUS = "diagnostic-only"
 BACKEND = "sqlite"
 DIALECT = "sqlite"
 ENVIRONMENT_RENDERER_VERSION = "checkpoint-relalg-environment-renderer-v1"
-CHECKPOINT_POLICY_VERSION = "checkpoint-relalg-semantic-checkpoint-v1"
+CHECKPOINT_POLICY_VERSION = "checkpoint-relalg-semantic-checkpoint-v2-distinct-goals"
 CHECKPOINT_GUIDANCE_PROFILE_STANDARD = "adaptive-v1"
 CHECKPOINT_GUIDANCE_PROFILE_STRESS = "checkpoint-stress-v1"
 CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER = "restore-trigger-v1"
@@ -45,6 +47,7 @@ CHECKPOINT_GUIDANCE_PROFILE_RESTORE_PROBE = "restore-probe-v3"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE = "semantic-milestone-v1"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2 = "semantic-milestone-v2"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3 = "semantic-milestone-v3"
+CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4 = "semantic-milestone-v4"
 CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_STANDARD,
     CHECKPOINT_GUIDANCE_PROFILE_STRESS,
@@ -54,6 +57,7 @@ CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
+    CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
 )
 DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
@@ -896,7 +900,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         "ranking",
     ),
     "commit_checkpoint": _tool(
-        "End a semantic phase, record new progress, and set the next phase targets.",
+        "Commit a semantic phase with new targets distinct from current and active-path goals; max 8.",
         _object(
             {
                 "progress_summary": _array(
@@ -1534,6 +1538,7 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
         }
         and not (active_mode == "atomic" and semantic_profile)
     ):
@@ -1566,6 +1571,9 @@ def get_system_prompt(
             ),
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3: (
                 "teacher_checkpoint_semantic_milestone_v3"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4: (
+                "teacher_checkpoint_semantic_milestone_v4"
             ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(checkpoint_fragment))
@@ -1604,16 +1612,22 @@ def get_system_prompt(
         in {
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
         }
     ):
         # Keep the actionable turn check after the large Text-JSON schema block.
         # Native transport also benefits from making it the last system clause.
-        tail_name = (
-            "teacher_checkpoint_semantic_milestone_v3_tail"
-            if active_checkpoint_guidance
-            == CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3
-            else "teacher_checkpoint_semantic_milestone_v2_tail"
-        )
+        tail_name = {
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2: (
+                "teacher_checkpoint_semantic_milestone_v2_tail"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3: (
+                "teacher_checkpoint_semantic_milestone_v3_tail"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4: (
+                "teacher_checkpoint_semantic_milestone_v4_tail"
+            ),
+        }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(tail_name))
     return "\n\n".join(fragments)
 
@@ -1672,6 +1686,8 @@ def carrier_protocol_hash(
     active_operator_profile = normalize_atomic_operator_profile(atomic_operator_profile)
     payload = {
         "protocol_version": PROTOCOL_VERSION,
+        "checkpoint_policy_version": CHECKPOINT_POLICY_VERSION,
+        "checkpoint_goal_policy_version": CHECKPOINT_GOAL_POLICY_VERSION,
         "mode": active_mode,
         "student_prompt_sha256": prompt_hash(
             active_mode,
@@ -1712,6 +1728,8 @@ def capability_manifest(
         "dialect": DIALECT,
         "environment_renderer_version": ENVIRONMENT_RENDERER_VERSION,
         "checkpoint_policy_version": CHECKPOINT_POLICY_VERSION,
+        "checkpoint_goal_policy_version": CHECKPOINT_GOAL_POLICY_VERSION,
+        "max_checkpoints": MAX_CHECKPOINTS,
         "executor_version": EXECUTOR_VERSION,
         "assistant_carrier": assistant_carrier_protocol(active_carrier),
         "single_tool_call_per_turn": True,
@@ -1791,6 +1809,7 @@ __all__ = [
     "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE",
     "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2",
     "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3",
+    "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4",
     "CHECKPOINT_GUIDANCE_PROFILE_STANDARD",
     "CHECKPOINT_GUIDANCE_PROFILE_STRESS",
     "COMPARISON_OPERATORS",

@@ -9,7 +9,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from .checkpoint_store import CheckpointStore
+from .checkpoint_store import MAX_CHECKPOINTS, CheckpointStore
 from .environment_renderer import EnvironmentRenderer
 from .environment_state import EnvironmentState, Observation, StateError, StepRecord
 from .errors import CheckpointRelalgError, structured_error
@@ -199,6 +199,8 @@ class RuntimeConfig:
             or self.max_cell_bytes < 1
         ):
             raise ValueError("primitive-call and artifact storage limits must be positive")
+        if self.max_checkpoints > MAX_CHECKPOINTS:
+            raise ValueError(f"max_checkpoints must not exceed {MAX_CHECKPOINTS}")
         if self.max_cell_bytes > self.max_artifact_bytes:
             raise ValueError("max_cell_bytes must not exceed max_artifact_bytes")
         if (

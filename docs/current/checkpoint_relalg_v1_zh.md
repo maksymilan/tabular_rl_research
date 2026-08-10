@@ -91,7 +91,15 @@ v2 的四题触发复验达到 4/4 episode commit、0 restore，但 phase reset 
 共提交 9 次 checkpoint，导致 turns/tokens 增加且没有正确率收益。该结果冻结为 over-trigger
 诊断。`semantic-milestone-v3` 保留同一首次触发规则，只增加一个优先级更高的全局检查：
 `CHECKPOINT HISTORY` 只要存在非 root checkpoint，之后所有 phase 永久禁止再次 commit。
-若 v3 仍不能稳定做到每题至多一次，下一步应采用 Harness 级硬约束，而不是继续增加 prompt。
+Gate12 后确认“全局至多一次”只适合作为隔离 phase-reset 机械效果的实验控制，不是最终设计：
+真正的多阶段任务应允许多个有意义的 checkpoint。
+
+`semantic-milestone-v4` 恢复多阶段 commit，最多使用 Harness 的 8 次全局预算。每个 phase 的
+producer 计数在 commit 后重新开始；新 `next_targets` 必须表示新的语义目标，不能与当前 phase
+或 active checkpoint path 上任何旧目标相同。Harness 对 NFKC、大小写、空白、末尾标点和数组
+顺序做确定性归一化，拒绝显然相同、重复或循环回旧目标的 commit，并保证失败不改变状态。
+更深的同义改写仍由 teacher guidance 约束：Harness 不调用另一个模型裁决语义，也不把模型判断
+当作事实权威。v1-v3 保留用于冻结结果复现。
 
 三种 mode 共享：
 
@@ -154,6 +162,7 @@ checkpoint 保存一个 Harness 验证过的状态快照和简短语义里程碑
 `system + user context` 开始；完整历史仍留在不可变 audit artifact 中。
 
 checkpoint、restore、artifact、step、错误和总轮数预算全部由 Harness 配置并写入 manifest。
+checkpoint 的协议级硬上限为 8；配置只能进一步收紧，不能提高。
 达到上限必须产生稳定、可解释的终止或错误，不得通过隐藏清理、覆盖 handle 或重编号规避。
 
 ## 6. 动态上下文与 prompt 规则

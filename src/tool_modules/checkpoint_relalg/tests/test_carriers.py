@@ -201,22 +201,22 @@ def _response(message: dict, *, finish_reason: str = "tool_calls", tokens: int =
     }
 
 
-def test_frozen_native_prompt_hashes_and_scheme_identity() -> None:
+def test_frozen_native_prompt_hashes_and_current_scheme_identity() -> None:
     expected = {
         "direct": (
             "87d47b6f4e461a2a53d0d216f5f1013a79222b87502a2f5013506d901a28d13a",
             "adc69b25324931f0cc812420d18907a04c2ca7080078dc588a119440e6de5e39",
-            "de9f4b37c5a00f0c48505f6aa782dd20e72d733c84ec9424e124e0531d547fe0",
+            "95a4459d9dc6e82e47a26276f2cb65425ad687048b44fd798eb6d4db234ab64e",
         ),
         "atomic": (
             "f96420049880be892156020872fab5cf9c40e33e36c8d9d5069797f707899b0a",
             "aa1310a40ee6e2051d1b789f7386c11506afa30621df10f6e77a19554ba257b0",
-            "f9f55ffe3d49d7b77026a5ff2e0b423bc65be7368592534826801fc14eb05d07",
+            "20fe6f989ac7ee7a1c677cd155649723e4827cd6762d17554c8161ecd9a0215f",
         ),
         "hybrid": (
             "4141bb734d9d6e3833f76d0cc98e4d0294ddcb4dad339da4af830cda46b0f033",
             "a56411e22781add41f3768ce2a5d5a1ef0ee937829157184aa8eb7ec0d2ad72f",
-            "c4870af823f7ef6b4092493f7ab43991b4a3d4331ab48d4dd06d6f4f0cd9100f",
+            "7dc4ac3580e425f89873307647165aa32343e03874c749bb09ed4e8b2f5b817c",
         ),
     }
     for mode, (student, teacher, protocol_identity) in expected.items():

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from src.tool_modules.checkpoint_relalg.checkpoint_store import CheckpointStore
+from src.tool_modules.checkpoint_relalg.checkpoint_store import (
+    MAX_CHECKPOINTS,
+    CheckpointStore,
+)
 from src.tool_modules.checkpoint_relalg.environment_renderer import EnvironmentRenderer
 from src.tool_modules.checkpoint_relalg.environment_state import (
     EnvironmentState,
@@ -275,6 +278,60 @@ def test_checkpoint_text_validation_is_structural_and_bounded() -> None:
         store.commit(["x" * 513], [], ["target"])
     with pytest.raises(StateError):
         store.commit(["progress"], [], [])
+
+
+def test_checkpoint_goals_must_be_distinct_across_the_active_path() -> None:
+    state = EnvironmentState(catalog())
+    store = CheckpointStore(state)
+    store.commit(["Population fixed."], [], ["Compute customer totals."])
+    store.commit(["Totals computed."], [], ["Rank the resulting customers."])
+    before_hash = state.logical_hash()
+    before_phase = state.phase_id
+    before_count = store.checkpoint_count
+
+    with pytest.raises(StateError) as caught:
+        store.commit(
+            ["A later phase tried to cycle back."],
+            [],
+            ["  COMPUTE   CUSTOMER TOTALS  "],
+        )
+
+    assert caught.value.code == "checkpoint_goal_not_distinct"
+    assert "checkpoint_001" in caught.value.details["conflicts"]
+    assert state.logical_hash() == before_hash
+    assert state.phase_id == before_phase
+    assert store.checkpoint_count == before_count
+
+
+def test_checkpoint_goal_order_and_cosmetic_punctuation_do_not_create_novelty() -> None:
+    state = EnvironmentState(catalog())
+    store = CheckpointStore(state)
+    store.commit(
+        ["Stable milestone."],
+        [],
+        ["Confirm the output grain!", "Compute the final metric."],
+    )
+    with pytest.raises(StateError) as caught:
+        store.commit(
+            ["No new milestone."],
+            [],
+            [" compute the final metric ", "CONFIRM THE OUTPUT GRAIN"],
+        )
+    assert caught.value.code == "checkpoint_goal_not_distinct"
+
+    with pytest.raises(StateError) as duplicate:
+        CheckpointStore(EnvironmentState(catalog())).commit(
+            ["Milestone."],
+            [],
+            ["Rank customers.", " rank   CUSTOMERS "],
+        )
+    assert duplicate.value.code == "checkpoint_goal_not_distinct"
+
+
+def test_checkpoint_store_has_a_global_eight_checkpoint_ceiling() -> None:
+    assert MAX_CHECKPOINTS == 8
+    with pytest.raises(ValueError, match="0 to 8"):
+        CheckpointStore(EnvironmentState(catalog()), max_checkpoints=9)
 
 
 def test_renderer_keeps_all_history_as_working_memory_not_evidence() -> None:

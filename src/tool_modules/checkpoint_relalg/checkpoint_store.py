@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Iterable
+import unicodedata
 
 from .environment_state import EnvironmentState, StateError
+
+
+MAX_CHECKPOINTS = 8
+CHECKPOINT_GOAL_POLICY_VERSION = "active-path-distinct-normalized-goals-v1"
+_GOAL_TRAILING_PUNCTUATION = " .!?;:\u3002\uff01\uff1f\uff1b\uff1a"
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +136,38 @@ def _bounded_strings(
     return result
 
 
+def _canonical_goal_set(targets: Iterable[str]) -> frozenset[str]:
+    """Canonicalize model-authored phase goals for deterministic novelty checks.
+
+    This deliberately recognizes only obvious textual equivalence.  The Harness
+    never asks another model to judge goal semantics and never treats a
+    paraphrase detector as factual authority.
+    """
+
+    normalized: list[str] = []
+    for target in targets:
+        text = unicodedata.normalize("NFKC", target)
+        text = re.sub(r"\s+", " ", text).strip().casefold()
+        text = text.rstrip(_GOAL_TRAILING_PUNCTUATION)
+        if not text:
+            raise StateError(
+                "invalid_checkpoint_goal",
+                "next_targets must contain a substantive phase goal",
+                {"field": "next_targets"},
+                error_type="argument_validation_error",
+            )
+        normalized.append(text)
+    canonical = frozenset(normalized)
+    if len(canonical) != len(normalized):
+        raise StateError(
+            "checkpoint_goal_not_distinct",
+            "next_targets contains duplicate goals after normalization",
+            {"field": "next_targets", "conflict_scope": "same_checkpoint"},
+            error_type="argument_validation_error",
+        )
+    return canonical
+
+
 class CheckpointStore:
     """Own the checkpoint tree and apply exact branch membership restores."""
 
@@ -136,13 +175,19 @@ class CheckpointStore:
         self,
         state: EnvironmentState,
         *,
-        max_checkpoints: int = 32,
+        max_checkpoints: int = MAX_CHECKPOINTS,
         max_restores: int = 8,
     ) -> None:
         if not isinstance(state, EnvironmentState):
             raise TypeError("state must be an EnvironmentState")
-        if isinstance(max_checkpoints, bool) or not isinstance(max_checkpoints, int) or max_checkpoints < 0:
-            raise ValueError("max_checkpoints must be a non-negative integer")
+        if (
+            isinstance(max_checkpoints, bool)
+            or not isinstance(max_checkpoints, int)
+            or not 0 <= max_checkpoints <= MAX_CHECKPOINTS
+        ):
+            raise ValueError(
+                f"max_checkpoints must be an integer from 0 to {MAX_CHECKPOINTS}"
+            )
         if isinstance(max_restores, bool) or not isinstance(max_restores, int) or max_restores < 0:
             raise ValueError("max_restores must be a non-negative integer")
         self.state = state
@@ -255,6 +300,7 @@ class CheckpointStore:
             maximum=3,
         )
         self._ensure_checkpoint_budget()
+        self._ensure_distinct_checkpoint_goal(targets)
         parent_id = self.active_checkpoint_id
         if parent_id not in self.nodes:
             raise StateError(
@@ -282,6 +328,30 @@ class CheckpointStore:
         return node
 
     commit_checkpoint = commit
+
+    def _ensure_distinct_checkpoint_goal(self, targets: tuple[str, ...]) -> None:
+        proposed = _canonical_goal_set(targets)
+        conflicts: list[str] = []
+        current_targets = tuple(self.state.current_targets)
+        if current_targets and proposed == _canonical_goal_set(current_targets):
+            conflicts.append("current_phase")
+        for checkpoint_id in self.active_checkpoint_path:
+            node = self.nodes[checkpoint_id]
+            if node.next_targets and proposed == _canonical_goal_set(node.next_targets):
+                conflicts.append(checkpoint_id)
+        if conflicts:
+            raise StateError(
+                "checkpoint_goal_not_distinct",
+                (
+                    "next_targets must define a new phase goal distinct from the "
+                    "current phase and every checkpoint on the active path"
+                ),
+                {
+                    "field": "next_targets",
+                    "conflicts": sorted(set(conflicts)),
+                },
+                error_type="argument_validation_error",
+            )
 
     def restore(
         self,
@@ -420,4 +490,10 @@ class CheckpointStore:
         ]
 
 
-__all__ = ["CheckpointNode", "CheckpointSnapshot", "CheckpointStore"]
+__all__ = [
+    "CHECKPOINT_GOAL_POLICY_VERSION",
+    "MAX_CHECKPOINTS",
+    "CheckpointNode",
+    "CheckpointSnapshot",
+    "CheckpointStore",
+]

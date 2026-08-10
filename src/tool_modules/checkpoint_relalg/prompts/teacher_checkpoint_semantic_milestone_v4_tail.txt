@@ -1,0 +1,2 @@
+MILESTONE V4 TURN CHECK
+If this phase has two successful intermediate relation producers and another data-producing stage remains, the next action MUST be commit_checkpoint with a genuinely new next_targets goal not used by the current phase or active checkpoint path. Otherwise continue or answer. At most eight commits are available; restore is not required.

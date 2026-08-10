@@ -73,6 +73,38 @@ def test_rejected_call_preserves_environment_hash():
     assert runtime.state.logical_hash() == before
 
 
+def test_repeated_checkpoint_goal_is_a_state_preserving_structured_error():
+    runtime = CheckpointRelalgRuntime(_connection(), mode="atomic")
+    first = runtime.apply(
+        "commit_checkpoint",
+        {
+            "progress_summary": ["Fixed the requested population."],
+            "remaining_uncertainties": [],
+            "next_targets": ["Compute the final aggregate."],
+        },
+    )
+    assert first["status"] == "success"
+    before = runtime.state.logical_hash()
+    repeated = runtime.apply(
+        "commit_checkpoint",
+        {
+            "progress_summary": ["Restated the same phase goal."],
+            "remaining_uncertainties": [],
+            "next_targets": [" compute the final AGGREGATE! "],
+        },
+    )
+    assert repeated["status"] == "error"
+    assert repeated["error"]["code"] == "checkpoint_goal_not_distinct"
+    assert repeated["error"]["type"] == "argument_validation_error"
+    assert runtime.checkpoints.checkpoint_count == 1
+    assert runtime.state.logical_hash() == before
+
+
+def test_runtime_rejects_checkpoint_budgets_above_eight():
+    with pytest.raises(ValueError, match="must not exceed 8"):
+        RuntimeConfig(max_checkpoints=9)
+
+
 def test_checkpoint_restore_deactivates_later_artifact_and_keeps_monotonic_ids():
     runtime = CheckpointRelalgRuntime(_connection(), mode="atomic")
     runtime.apply("describe_table", {"tables": ["customers"]})

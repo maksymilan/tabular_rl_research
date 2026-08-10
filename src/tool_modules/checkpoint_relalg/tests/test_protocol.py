@@ -665,6 +665,22 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
             )
         )
         self.assertNotEqual(semantic_milestone_v3, semantic_milestone_v2)
+        semantic_milestone_v4 = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier="text-json",
+            checkpoint_guidance_profile="semantic-milestone-v4",
+            atomic_operator_profile="semantic-v2",
+        )
+        self.assertIn("up to the Harness limit of eight", semantic_milestone_v4)
+        self.assertIn("substantively new semantic goal", semantic_milestone_v4)
+        self.assertIn("restart the count for the new phase", semantic_milestone_v4)
+        self.assertTrue(
+            semantic_milestone_v4.endswith(
+                "At most eight commits are available; restore is not required."
+            )
+        )
+        self.assertNotEqual(semantic_milestone_v4, semantic_milestone_v3)
         for implementation_detail in ("snapshot hash", "reward", "SQLite", "error code", "provider validator"):
             self.assertNotIn(implementation_detail, teacher)
         self.assertLess(len(teacher), 5000)
