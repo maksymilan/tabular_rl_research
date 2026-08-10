@@ -650,6 +650,21 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 checkpoint_guidance_profile="semantic-milestone-v2",
                 atomic_operator_profile="micro-v1",
             )
+        semantic_milestone_v3 = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier="text-json",
+            checkpoint_guidance_profile="semantic-milestone-v3",
+            atomic_operator_profile="semantic-v2",
+        )
+        self.assertIn("first inspect CHECKPOINT HISTORY", semantic_milestone_v3)
+        self.assertIn("commit_checkpoint is forbidden", semantic_milestone_v3)
+        self.assertTrue(
+            semantic_milestone_v3.endswith(
+                "If the exact answer is ready, answer. Restore is not required."
+            )
+        )
+        self.assertNotEqual(semantic_milestone_v3, semantic_milestone_v2)
         for implementation_detail in ("snapshot hash", "reward", "SQLite", "error code", "provider validator"):
             self.assertNotIn(implementation_detail, teacher)
         self.assertLess(len(teacher), 5000)

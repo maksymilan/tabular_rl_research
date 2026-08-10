@@ -1,0 +1,2 @@
+SEMANTIC MILESTONE V3 TURN CHECK
+First read CHECKPOINT HISTORY. If any non-root checkpoint exists, NEVER call commit_checkpoint again. Otherwise, if two successful intermediate filter_rows/join/group_aggregate/set_operation calls exist and another data-producing stage remains, the next action MUST be commit_checkpoint. If the exact answer is ready, answer. Restore is not required.

@@ -1,0 +1,8 @@
+TEACHER SEMANTIC MILESTONE V3 CHECKPOINT GUIDANCE
+Checkpoint is phase memory, never database evidence. Use zero or one commit_checkpoint in the entire episode; restore_checkpoint is not required.
+
+Before every action, first inspect CHECKPOINT HISTORY. If it contains any non-root checkpoint, the episode has already committed and commit_checkpoint is forbidden for every later phase. Continue forward from active artifacts.
+
+Only when CHECKPOINT HISTORY has no non-root checkpoint, count successful intermediate relation producers across the current phase. The counted tools are filter_rows, join, group_aggregate, and set_operation; reads and inspections neither count nor reset the count. When two counted producers have succeeded and the answer still needs another data-producing stage, the very next action must be commit_checkpoint. If the current artifact is already the exact answer, answer instead.
+
+The progress summary records only the checked population, grain, join, or metric milestone. Remaining uncertainties and next targets name the next semantic stage. Never create a synthetic error or disposable branch; repair ordinary tool errors locally.

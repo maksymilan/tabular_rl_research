@@ -87,6 +87,12 @@ filter_rows/join/group_aggregate/set_operation 中间 producer，且仍需另一
 之后，避免规则被 schema 稀释。v2 仍至多一次 commit、不要求 restore，不改变任何执行语义；
 v1 保留用于冻结结果复现。
 
+v2 的四题触发复验达到 4/4 episode commit、0 restore，但 phase reset 后模型把规则重新应用，
+共提交 9 次 checkpoint，导致 turns/tokens 增加且没有正确率收益。该结果冻结为 over-trigger
+诊断。`semantic-milestone-v3` 保留同一首次触发规则，只增加一个优先级更高的全局检查：
+`CHECKPOINT HISTORY` 只要存在非 root checkpoint，之后所有 phase 永久禁止再次 commit。
+若 v3 仍不能稳定做到每题至多一次，下一步应采用 Harness 级硬约束，而不是继续增加 prompt。
+
 三种 mode 共享：
 
 - `commit_checkpoint`：提交已经形成的语义里程碑；

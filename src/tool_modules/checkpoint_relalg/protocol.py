@@ -44,6 +44,7 @@ CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TARGET = "restore-target-v2"
 CHECKPOINT_GUIDANCE_PROFILE_RESTORE_PROBE = "restore-probe-v3"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE = "semantic-milestone-v1"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2 = "semantic-milestone-v2"
+CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3 = "semantic-milestone-v3"
 CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_STANDARD,
     CHECKPOINT_GUIDANCE_PROFILE_STRESS,
@@ -52,6 +53,7 @@ CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_RESTORE_PROBE,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2,
+    CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
 )
 DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
@@ -1531,6 +1533,7 @@ def get_system_prompt(
         in {
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2,
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
         }
         and not (active_mode == "atomic" and semantic_profile)
     ):
@@ -1560,6 +1563,9 @@ def get_system_prompt(
             ),
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2: (
                 "teacher_checkpoint_semantic_milestone_v2"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3: (
+                "teacher_checkpoint_semantic_milestone_v3"
             ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(checkpoint_fragment))
@@ -1595,11 +1601,20 @@ def get_system_prompt(
     if (
         teacher
         and active_checkpoint_guidance
-        == CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2
+        in {
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2,
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
+        }
     ):
         # Keep the actionable turn check after the large Text-JSON schema block.
         # Native transport also benefits from making it the last system clause.
-        fragments.append(_prompt_fragment("teacher_checkpoint_semantic_milestone_v2_tail"))
+        tail_name = (
+            "teacher_checkpoint_semantic_milestone_v3_tail"
+            if active_checkpoint_guidance
+            == CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3
+            else "teacher_checkpoint_semantic_milestone_v2_tail"
+        )
+        fragments.append(_prompt_fragment(tail_name))
     return "\n\n".join(fragments)
 
 
@@ -1775,6 +1790,7 @@ __all__ = [
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER",
     "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE",
     "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2",
+    "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3",
     "CHECKPOINT_GUIDANCE_PROFILE_STANDARD",
     "CHECKPOINT_GUIDANCE_PROFILE_STRESS",
     "COMPARISON_OPERATORS",
