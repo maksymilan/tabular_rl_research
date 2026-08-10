@@ -1,0 +1,8 @@
+TEACHER SEMANTIC MILESTONE V6 CHECKPOINT GUIDANCE
+Checkpoint is bounded phase memory, never database evidence. Simple tasks should answer with zero checkpoints. A long task may use multiple commit_checkpoint calls, up to the Harness limit of eight, when it genuinely moves through different semantic goals. Restore is optional and only for a verified wrong branch.
+
+Before every action, inspect CURRENT PHASE TARGETS and CHECKPOINT HISTORY. Count successful intermediate filter_rows, join, group_aggregate, and set_operation calls in the current phase; reads, inspections, shape_rows, scalar_compute, rank_select, failed calls, and rejected checkpoint attempts do not count. If CHECKPOINT HISTORY has no accepted checkpoint, the current-phase quota is two counted producers. After any accepted checkpoint, the quota is three counted producers since the previous accepted checkpoint.
+
+When the applicable quota is met, the answer still needs another counted data-producing stage, and a genuinely new phase goal exists, the next action MUST be commit_checkpoint before that stage. Otherwise continue in the current phase or answer.
+
+Every commit must set next_targets to a substantively new semantic goal. It must differ from the current phase targets and every goal already recorded on the active checkpoint path. Reordering, case changes, whitespace changes, or paraphrasing an old goal does not create progress. If no new phase goal exists, continue in the current phase or answer instead of committing.

@@ -18,6 +18,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     CARRIER_TEXT_JSON,
     CHECKPOINT_GUIDANCE_PROFILES,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
+    CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
     MAX_EXPRESSION_DEPTH,
     MODE_TOOLS,
     MODES,
@@ -101,7 +102,7 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 self.assertFalse(parameters["additionalProperties"])
                 self.assertLessEqual(len(tool["function"]["description"]), 100)
 
-    def test_semantic_milestone_v5_binds_guidance_to_fixed_eligibility(self):
+    def test_semantic_milestone_v5_and_v6_bind_to_fixed_eligibility(self):
         prompt = get_system_prompt(
             "atomic",
             teacher=True,
@@ -119,14 +120,53 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 "At most eight commits are available; restore is optional."
             )
         )
-
-        policy = checkpoint_commit_eligibility_for_guidance_profile(
-            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5
-        )
         self.assertEqual(
-            policy,
-            CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                carrier=CARRIER_TEXT_JSON,
+                checkpoint_guidance_profile=(
+                    CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5
+                ),
+                atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+            ),
+            "b3f8ed39e0a03be67d99c1a298f3cf110e0c8f96a0e25170562104012ebe26eb",
         )
+
+        v6_prompt = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_TEXT_JSON,
+            checkpoint_guidance_profile=(
+                CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6
+            ),
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+        )
+        self.assertIn("TEACHER SEMANTIC MILESTONE V6 CHECKPOINT GUIDANCE", v6_prompt)
+        self.assertIn("has no accepted checkpoint", v6_prompt)
+        self.assertIn("the current-phase quota is two counted producers", v6_prompt)
+        self.assertIn("the quota is three counted producers", v6_prompt)
+        self.assertIn("the next action MUST be commit_checkpoint", v6_prompt)
+        self.assertGreater(
+            v6_prompt.rfind("MILESTONE V6 TURN CHECK"),
+            v6_prompt.rfind("EXACT TOOL SCHEMAS FOR ATOMIC MODE"),
+        )
+        self.assertTrue(
+            v6_prompt.endswith(
+                "At most eight commits are available; restore is optional."
+            )
+        )
+        self.assertNotEqual(v6_prompt, prompt)
+
+        for profile in (
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
+        ):
+            self.assertEqual(
+                checkpoint_commit_eligibility_for_guidance_profile(profile),
+                CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+            )
+        policy = CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
         self.assertEqual(
             checkpoint_commit_eligibility_manifest(policy),
             {
@@ -148,7 +188,10 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
             )
         )
         for old_profile in CHECKPOINT_GUIDANCE_PROFILES:
-            if old_profile == CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5:
+            if old_profile in {
+                CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
+                CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
+            }:
                 continue
             self.assertEqual(
                 checkpoint_commit_eligibility_for_guidance_profile(old_profile),

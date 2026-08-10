@@ -1,0 +1,2 @@
+MILESTONE V6 TURN CHECK
+If CHECKPOINT HISTORY has no accepted checkpoint: after two successful current-phase filter_rows, join, group_aggregate, or set_operation producers, when the answer still needs another such producer and a genuinely new next_targets goal exists, the next action MUST be commit_checkpoint. If any accepted checkpoint exists: the same rule is mandatory after three such producers since the previous accepted checkpoint. Otherwise continue or answer. At most eight commits are available; restore is optional.

@@ -58,6 +58,7 @@ CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2 = "semantic-milestone-v2"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3 = "semantic-milestone-v3"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4 = "semantic-milestone-v4"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5 = "semantic-milestone-v5"
+CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6 = "semantic-milestone-v6"
 CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_STANDARD,
     CHECKPOINT_GUIDANCE_PROFILE_STRESS,
@@ -69,6 +70,7 @@ CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
+    CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
 )
 DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
@@ -1511,7 +1513,10 @@ def checkpoint_commit_eligibility_for_guidance_profile(profile: str | None) -> s
     """Map one frozen teacher profile to its deterministic Harness policy."""
 
     active_profile = normalize_checkpoint_guidance_profile(profile)
-    if active_profile == CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5:
+    if active_profile in {
+        CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
+        CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
+    }:
         return CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
     return CHECKPOINT_COMMIT_ELIGIBILITY_NONE
 
@@ -1579,6 +1584,7 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
         }
         and not (active_mode == "atomic" and semantic_profile)
     ):
@@ -1617,6 +1623,9 @@ def get_system_prompt(
             ),
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5: (
                 "teacher_checkpoint_semantic_milestone_v5"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6: (
+                "teacher_checkpoint_semantic_milestone_v6"
             ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(checkpoint_fragment))
@@ -1657,6 +1666,7 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
         }
     ):
         # Keep the actionable turn check after the large Text-JSON schema block.
@@ -1673,6 +1683,9 @@ def get_system_prompt(
             ),
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5: (
                 "teacher_checkpoint_semantic_milestone_v5_tail"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6: (
+                "teacher_checkpoint_semantic_milestone_v6_tail"
             ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(tail_name))
@@ -1890,6 +1903,7 @@ __all__ = [
     "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3",
     "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4",
     "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5",
+    "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6",
     "CHECKPOINT_GUIDANCE_PROFILE_STANDARD",
     "CHECKPOINT_GUIDANCE_PROFILE_STRESS",
     "checkpoint_commit_eligibility_for_guidance_profile",

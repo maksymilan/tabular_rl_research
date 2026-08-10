@@ -165,8 +165,12 @@ def test_semantic_atomic_runner_and_fresh_replay_are_profile_bound(tmp_path):
     assert fresh_replay_record(record, task)["passed"]
 
 
-def test_semantic_milestone_v5_policy_is_bound_in_manifest_record_and_replay(
-    tmp_path,
+@pytest.mark.parametrize(
+    "guidance_profile",
+    ["semantic-milestone-v5", "semantic-milestone-v6"],
+)
+def test_semantic_milestone_ordinal_policy_is_bound_in_manifest_record_and_replay(
+    tmp_path, guidance_profile,
 ):
     task = _task(tmp_path)
     policy = CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
@@ -230,7 +234,7 @@ def test_semantic_milestone_v5_policy_is_bound_in_manifest_record_and_replay(
         task_position=0,
         mode="atomic",
         atomic_operator_profile="semantic-v2",
-        checkpoint_guidance_profile="semantic-milestone-v5",
+        checkpoint_guidance_profile=guidance_profile,
         client=client,
         runtime_config=RuntimeConfig(
             checkpoint_commit_eligibility_policy=policy,
@@ -243,7 +247,7 @@ def test_semantic_milestone_v5_policy_is_bound_in_manifest_record_and_replay(
 
     eligibility = record["capability_manifest"]["checkpoint_commit_eligibility"]
     assert record["correct"] and record["legal"]
-    assert record["checkpoint_guidance_profile"] == "semantic-milestone-v5"
+    assert record["checkpoint_guidance_profile"] == guidance_profile
     assert record["checkpoint_commit_eligibility_policy"] == policy
     assert record["runtime_config"]["checkpoint_commit_eligibility_policy"] == policy
     assert record["final_runtime"]["checkpoint_commit_eligibility_policy"] == policy
@@ -270,7 +274,7 @@ def test_semantic_milestone_v5_policy_is_bound_in_manifest_record_and_replay(
             mode="atomic",
             carrier="native-tool-calls",
             atomic_operator_profile="semantic-v2",
-            checkpoint_guidance_profile="semantic-milestone-v5",
+            checkpoint_guidance_profile=guidance_profile,
             experiment_arm=None,
             within_batch_order=None,
             tasks_json=tasks_path,
@@ -325,7 +329,7 @@ def test_semantic_milestone_v5_policy_is_bound_in_manifest_record_and_replay(
         assert not audit_record(tampered)["passed"]
         assert not fresh_replay_record(tampered, task)["passed"]
 
-    # Even synchronized identity-field relabeling cannot turn the actual v5 provider
+    # Even synchronized identity-field relabeling cannot turn the actual provider
     # prompt/history into a v4 episode.
     synchronized = deepcopy(record)
     synchronized["checkpoint_guidance_profile"] = "semantic-milestone-v4"
