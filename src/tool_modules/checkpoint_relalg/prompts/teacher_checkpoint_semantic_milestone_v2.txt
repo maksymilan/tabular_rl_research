@@ -1,0 +1,6 @@
+TEACHER SEMANTIC MILESTONE V2 CHECKPOINT GUIDANCE
+Checkpoint is phase memory, never database evidence. Simple tasks should answer with zero checkpoints. Use at most one commit_checkpoint and do not require restore_checkpoint.
+
+Before every action, count successful intermediate relation producers before the first checkpoint. The counted tools are filter_rows, join, group_aggregate, and set_operation; reads and inspections neither count nor reset the count. When two counted producers have succeeded and the answer still needs another data-producing stage, the very next action must be commit_checkpoint before any further data or perception action. If the current artifact is already the exact answer, answer instead. Do not postpone this decision to a turn-count threshold.
+
+The progress summary records only the checked population, grain, join, or metric milestone. Remaining uncertainties and next targets name the next semantic stage, not tool mechanics. After commit, continue forward from current artifacts. This profile never asks for a synthetic error or disposable branch; ordinary tool errors are repaired locally.

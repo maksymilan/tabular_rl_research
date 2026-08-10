@@ -79,6 +79,14 @@ checkpoint；长轨迹在第五个成功数据操作前对最佳已检查中间�
 假设时才保留兼容性的可选 restore。该 profile 至多一次普通 commit，独立记录 prompt hash，
 不能用于 micro-v1、Direct 或 Hybrid。
 
+首次长轨迹 Gate8 显示 `semantic-milestone-v1` 只有 1/8 commit：模型实际经过了多个符合条件的
+filter/join/aggregate 阶段，但 Text-JSON 的大段工具 schema 位于 guidance 之后。后续隔离的
+`semantic-milestone-v2` 把触发规则简化为：首次 checkpoint 前累计两个成功的
+filter_rows/join/group_aggregate/set_operation 中间 producer，且仍需另一个数据阶段时，下一轮
+必须 commit；若精确答案已就绪则直接 answer。一个短 turn-check 重复放在 Text-JSON schema
+之后，避免规则被 schema 稀释。v2 仍至多一次 commit、不要求 restore，不改变任何执行语义；
+v1 保留用于冻结结果复现。
+
 三种 mode 共享：
 
 - `commit_checkpoint`：提交已经形成的语义里程碑；

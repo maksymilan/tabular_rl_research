@@ -1,0 +1,2 @@
+SEMANTIC MILESTONE V2 TURN CHECK
+If no checkpoint has been committed, two successful intermediate filter_rows/join/group_aggregate/set_operation calls already exist, and another data-producing stage remains, your next action MUST be commit_checkpoint. If the exact answer artifact is ready, answer instead. Restore is not required.

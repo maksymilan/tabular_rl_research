@@ -624,6 +624,32 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 teacher=True,
                 checkpoint_guidance_profile="semantic-milestone-v1",
             )
+        semantic_milestone_v2 = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier="text-json",
+            checkpoint_guidance_profile="semantic-milestone-v2",
+            atomic_operator_profile="semantic-v2",
+        )
+        self.assertIn(
+            "TEACHER SEMANTIC MILESTONE V2 CHECKPOINT GUIDANCE",
+            semantic_milestone_v2,
+        )
+        self.assertTrue(
+            semantic_milestone_v2.endswith(
+                "If the exact answer artifact is ready, answer instead. Restore is not required."
+            )
+        )
+        self.assertIn("two counted producers", semantic_milestone_v2)
+        self.assertIn("next action MUST be commit_checkpoint", semantic_milestone_v2)
+        self.assertNotEqual(semantic_milestone_v2, semantic_milestone)
+        with self.assertRaisesRegex(ValueError, "requires atomic mode"):
+            get_system_prompt(
+                "atomic",
+                teacher=True,
+                checkpoint_guidance_profile="semantic-milestone-v2",
+                atomic_operator_profile="micro-v1",
+            )
         for implementation_detail in ("snapshot hash", "reward", "SQLite", "error code", "provider validator"):
             self.assertNotIn(implementation_detail, teacher)
         self.assertLess(len(teacher), 5000)
