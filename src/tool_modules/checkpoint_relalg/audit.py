@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import quote
 
+from .checkpoint_store import CHECKPOINT_COMMIT_ELIGIBILITY_NONE
 from .protocol import (
     ADMISSION_STATUS,
     BACKEND,
@@ -32,6 +33,7 @@ from .protocol import (
     SCHEME,
     capability_manifest,
     carrier_experiment_arm,
+    checkpoint_commit_eligibility_for_guidance_profile,
     get_system_prompt,
     prompt_hash,
     normalize_carrier,
@@ -276,9 +278,38 @@ def _runtime_identity_issues(record: Mapping[str, Any], *, root: str) -> list[st
     except ValueError:
         checkpoint_guidance_profile = DEFAULT_CHECKPOINT_GUIDANCE_PROFILE
         issues.append(f"{root}.checkpoint_guidance_profile is invalid")
+    expected_commit_eligibility = checkpoint_commit_eligibility_for_guidance_profile(
+        checkpoint_guidance_profile
+    )
+    actual_commit_eligibility = record.get(
+        "checkpoint_commit_eligibility_policy",
+        CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+    )
+    if actual_commit_eligibility != expected_commit_eligibility:
+        issues.append(
+            f"{root}.checkpoint_commit_eligibility_policy does not match guidance profile"
+        )
+    runtime_payload = record.get("runtime_config")
+    runtime_commit_eligibility = (
+        runtime_payload.get(
+            "checkpoint_commit_eligibility_policy",
+            CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+        )
+        if isinstance(runtime_payload, Mapping)
+        else CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+    )
+    if runtime_commit_eligibility != expected_commit_eligibility:
+        issues.append(
+            f"{root}.runtime_config checkpoint commit eligibility does not match guidance profile"
+        )
     if mode in {"direct", "atomic", "hybrid"} and carrier in CARRIERS:
         if _canonical(record.get("capability_manifest")) != _canonical(
-            capability_manifest(mode, carrier, atomic_operator_profile)
+            capability_manifest(
+                mode,
+                carrier,
+                atomic_operator_profile,
+                expected_commit_eligibility,
+            )
         ):
             issues.append(f"{root}.capability_manifest does not match the current mode")
         if "carrier" in record:
@@ -299,6 +330,7 @@ def _runtime_identity_issues(record: Mapping[str, Any], *, root: str) -> list[st
                 mode=mode,
                 carrier=carrier,
                 atomic_operator_profile=atomic_operator_profile,
+                checkpoint_commit_eligibility_policy=expected_commit_eligibility,
             ).manifest_fields()
             for field, expected in expected_scheme.items():
                 if field in {
@@ -1555,6 +1587,9 @@ def fresh_replay_record(
         issues.append(
             f"record[{record_index}].checkpoint_guidance_profile is invalid under fresh replay"
         )
+    expected_commit_eligibility = checkpoint_commit_eligibility_for_guidance_profile(
+        checkpoint_guidance_profile
+    )
     try:
         atomic_operator_profile = normalize_atomic_operator_profile(
             record.get("atomic_operator_profile", DEFAULT_ATOMIC_OPERATOR_PROFILE)
@@ -1592,7 +1627,19 @@ def fresh_replay_record(
             max_cell_bytes=int(
                 runtime_payload.get("max_cell_bytes", 4 * 1024 * 1024)
             ),
+            checkpoint_commit_eligibility_policy=runtime_payload.get(
+                "checkpoint_commit_eligibility_policy",
+                CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+            ),
         )
+        if (
+            config.checkpoint_commit_eligibility_policy
+            != expected_commit_eligibility
+        ):
+            issues.append(
+                f"record[{record_index}].runtime_config checkpoint commit eligibility "
+                "differs from guidance profile under fresh replay"
+            )
         runtime = CheckpointRelalgRuntime(
             connection,
             mode=str(record.get("mode")),
@@ -1982,6 +2029,7 @@ def _manifest_binding_report(
         "environment_renderer_version",
         "checkpoint_policy_version",
         "checkpoint_guidance_profile",
+        "checkpoint_commit_eligibility_policy",
         "executor_version",
         "tool_schema_hash",
         "carrier_ablation_protocol_version",

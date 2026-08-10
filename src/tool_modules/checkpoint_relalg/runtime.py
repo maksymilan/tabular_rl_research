@@ -9,7 +9,12 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from .checkpoint_store import MAX_CHECKPOINTS, CheckpointStore
+from .checkpoint_store import (
+    CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+    MAX_CHECKPOINTS,
+    CheckpointStore,
+    normalize_checkpoint_commit_eligibility_policy,
+)
 from .environment_renderer import EnvironmentRenderer
 from .environment_state import EnvironmentState, Observation, StateError, StepRecord
 from .errors import CheckpointRelalgError, structured_error
@@ -17,6 +22,7 @@ from .executors import SQLiteRelationalExecutor
 from .expression import RelAlgValidationError, column_type_map, quote_identifier
 from .predicate import PredicateCompiler
 from .protocol import (
+    ATOMIC_OPERATOR_PROFILE_SEMANTIC,
     ATOMIC_TOOLS,
     DEFAULT_ATOMIC_OPERATOR_PROFILE,
     SEMANTIC_ATOMIC_TOOLS,
@@ -178,6 +184,7 @@ class RuntimeConfig:
     max_artifact_rows: int = 100_000
     max_artifact_bytes: int = 64 * 1024 * 1024
     max_cell_bytes: int = 4 * 1024 * 1024
+    checkpoint_commit_eligibility_policy: str = CHECKPOINT_COMMIT_ELIGIBILITY_NONE
 
     def __post_init__(self) -> None:
         integer_fields = (
@@ -203,6 +210,13 @@ class RuntimeConfig:
             raise ValueError(f"max_checkpoints must not exceed {MAX_CHECKPOINTS}")
         if self.max_cell_bytes > self.max_artifact_bytes:
             raise ValueError("max_cell_bytes must not exceed max_artifact_bytes")
+        object.__setattr__(
+            self,
+            "checkpoint_commit_eligibility_policy",
+            normalize_checkpoint_commit_eligibility_policy(
+                self.checkpoint_commit_eligibility_policy
+            ),
+        )
         if (
             isinstance(self.sql_timeout_seconds, bool)
             or not isinstance(self.sql_timeout_seconds, (int, float))
@@ -232,6 +246,17 @@ class CheckpointRelalgRuntime:
         if self.atomic_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE and self.mode != "atomic":
             raise ValueError("semantic-v2 is currently isolated to atomic mode")
         self.config = config or RuntimeConfig()
+        if (
+            self.config.checkpoint_commit_eligibility_policy
+            != CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+            and (
+                self.mode != "atomic"
+                or self.atomic_operator_profile != ATOMIC_OPERATOR_PROFILE_SEMANTIC
+            )
+        ):
+            raise ValueError(
+                "checkpoint progress policies are isolated to atomic semantic-v2"
+            )
         self.state = EnvironmentState(
             load_source_catalog(connection),
             current_targets=current_targets,
@@ -240,6 +265,9 @@ class CheckpointRelalgRuntime:
             self.state,
             max_checkpoints=self.config.max_checkpoints,
             max_restores=self.config.max_restores,
+            checkpoint_commit_eligibility_policy=(
+                self.config.checkpoint_commit_eligibility_policy
+            ),
         )
         self.executor = SQLiteRelationalExecutor(
             connection,
@@ -693,6 +721,13 @@ class CheckpointRelalgRuntime:
         }
         if self.atomic_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE:
             payload["atomic_operator_profile"] = self.atomic_operator_profile
+        if (
+            self.config.checkpoint_commit_eligibility_policy
+            != CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+        ):
+            payload["checkpoint_commit_eligibility_policy"] = (
+                self.config.checkpoint_commit_eligibility_policy
+            )
         return payload
 
 

@@ -12,7 +12,12 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
 
 from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
+    ATOMIC_OPERATOR_PROFILE_SEMANTIC,
     ATOMIC_TOOLS,
+    CARRIER_NATIVE_TOOL_CALLS,
+    CARRIER_TEXT_JSON,
+    CHECKPOINT_GUIDANCE_PROFILES,
+    CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
     MAX_EXPRESSION_DEPTH,
     MODE_TOOLS,
     MODES,
@@ -20,12 +25,19 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     SCHEME,
     ProtocolValidationError,
     capability_manifest,
+    carrier_protocol_hash,
+    checkpoint_commit_eligibility_for_guidance_profile,
+    checkpoint_commit_eligibility_manifest,
     get_system_prompt,
     parameter_schema,
     prompt_hash,
     provider_tool_definitions,
     tool_schema_hash,
     validate_tool_call,
+)
+from tool_modules.checkpoint_relalg.checkpoint_store import (  # noqa: E402
+    CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+    CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
 )
 from tool_modules.checkpoint_relalg import protocol as checkpoint_protocol  # noqa: E402
 from tool_modules.checkpoint_relalg.provider_tools import (  # noqa: E402
@@ -88,6 +100,113 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 parameters = tool["function"]["parameters"]
                 self.assertFalse(parameters["additionalProperties"])
                 self.assertLessEqual(len(tool["function"]["description"]), 100)
+
+    def test_semantic_milestone_v5_binds_guidance_to_fixed_eligibility(self):
+        prompt = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_TEXT_JSON,
+            checkpoint_guidance_profile=(
+                CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5
+            ),
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+        )
+        self.assertIn("TEACHER SEMANTIC MILESTONE V5 CHECKPOINT GUIDANCE", prompt)
+        self.assertIn("The first checkpoint requires two counted producers", prompt)
+        self.assertIn("Every later checkpoint requires three counted producers", prompt)
+        self.assertTrue(
+            prompt.endswith(
+                "At most eight commits are available; restore is optional."
+            )
+        )
+
+        policy = checkpoint_commit_eligibility_for_guidance_profile(
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5
+        )
+        self.assertEqual(
+            policy,
+            CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+        )
+        self.assertEqual(
+            checkpoint_commit_eligibility_manifest(policy),
+            {
+                "policy": CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+                "first_commit_min_milestone_producers": 2,
+                "later_commit_min_milestone_producers": 3,
+                "milestone_producer_tools": [
+                    "filter_rows",
+                    "group_aggregate",
+                    "join",
+                    "set_operation",
+                ],
+                "requires_new_active_artifacts_at_least_quota": True,
+            },
+        )
+        self.assertIsNone(
+            checkpoint_commit_eligibility_manifest(
+                CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+            )
+        )
+        for old_profile in CHECKPOINT_GUIDANCE_PROFILES:
+            if old_profile == CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5:
+                continue
+            self.assertEqual(
+                checkpoint_commit_eligibility_for_guidance_profile(old_profile),
+                CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+                old_profile,
+            )
+
+    def test_commit_eligibility_changes_protocol_identity_not_tool_schema(self):
+        for carrier in (CARRIER_NATIVE_TOOL_CALLS, CARRIER_TEXT_JSON):
+            baseline_hash = carrier_protocol_hash(
+                "atomic",
+                carrier,
+                ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+                CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+            )
+            v5_hash = carrier_protocol_hash(
+                "atomic",
+                carrier,
+                ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+                CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+            )
+            self.assertNotEqual(v5_hash, baseline_hash)
+
+            baseline = capability_manifest(
+                "atomic",
+                carrier=carrier,
+                atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+                checkpoint_commit_eligibility_policy=(
+                    CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+                ),
+            )
+            v5 = capability_manifest(
+                "atomic",
+                carrier=carrier,
+                atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+                checkpoint_commit_eligibility_policy=(
+                    CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+                ),
+            )
+            self.assertNotEqual(v5, baseline)
+            self.assertNotIn("checkpoint_commit_eligibility", baseline)
+            self.assertEqual(
+                v5["checkpoint_commit_eligibility"],
+                checkpoint_commit_eligibility_manifest(
+                    CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+                ),
+            )
+            for invariant in (
+                "tools",
+                "tool_capabilities",
+                "tool_schema_sha256",
+                "student_prompt_sha256",
+            ):
+                self.assertEqual(v5[invariant], baseline[invariant], invariant)
+            self.assertEqual(
+                v5["tool_schema_sha256"],
+                tool_schema_hash("atomic", ATOMIC_OPERATOR_PROFILE_SEMANTIC),
+            )
 
     def test_every_declared_object_shape_is_closed(self):
         def walk(value):

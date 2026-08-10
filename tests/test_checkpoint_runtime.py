@@ -4,6 +4,9 @@ import sqlite3
 
 import pytest
 
+from tool_modules.checkpoint_relalg.checkpoint_store import (
+    CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+)
 from tool_modules.checkpoint_relalg.runtime import (
     CheckpointRelalgRuntime,
     RuntimeConfig,
@@ -103,6 +106,80 @@ def test_repeated_checkpoint_goal_is_a_state_preserving_structured_error():
 def test_runtime_rejects_checkpoint_budgets_above_eight():
     with pytest.raises(ValueError, match="must not exceed 8"):
         RuntimeConfig(max_checkpoints=9)
+
+
+def test_runtime_checkpoint_commit_eligibility_is_semantic_atomic_only():
+    with pytest.raises(ValueError, match="checkpoint_commit_eligibility_policy"):
+        RuntimeConfig(checkpoint_commit_eligibility_policy="unsupported")
+
+    config = RuntimeConfig(
+        checkpoint_commit_eligibility_policy=(
+            f" {CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1} "
+        )
+    )
+    assert (
+        config.checkpoint_commit_eligibility_policy
+        == CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+    )
+    with pytest.raises(ValueError, match="atomic semantic-v2"):
+        CheckpointRelalgRuntime(_connection(), mode="direct", config=config)
+    with pytest.raises(ValueError, match="atomic semantic-v2"):
+        CheckpointRelalgRuntime(_connection(), mode="atomic", config=config)
+
+
+def test_runtime_enforces_first_semantic_milestone_commit_quota_without_mutation():
+    runtime = CheckpointRelalgRuntime(
+        _connection(),
+        mode="atomic",
+        atomic_operator_profile="semantic-v2",
+        config=RuntimeConfig(
+            checkpoint_commit_eligibility_policy=(
+                CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+            )
+        ),
+    )
+    before = runtime.state.logical_hash()
+    rejected = runtime.apply(
+        "commit_checkpoint",
+        {
+            "progress_summary": ["No grounded milestone yet."],
+            "remaining_uncertainties": [],
+            "next_targets": ["Build a grounded population."],
+        },
+    )
+    assert rejected["status"] == "error"
+    assert rejected["error"]["type"] == "state_validation_error"
+    assert rejected["error"]["code"] == "checkpoint_phase_progress_insufficient"
+    assert rejected["error"]["details"]["quota"] == 2
+    assert runtime.state.logical_hash() == before
+    assert runtime.checkpoints.checkpoint_count == 0
+
+    for country in ("UK", "US"):
+        produced = runtime.apply(
+            "filter_rows",
+            {
+                "table": "customers",
+                "conditions": {
+                    "op": "=",
+                    "left": {"column": "country"},
+                    "right": {"value": country},
+                },
+            },
+        )
+        assert produced["status"] == "success"
+    committed = runtime.apply(
+        "commit_checkpoint",
+        {
+            "progress_summary": ["Two candidate populations are grounded."],
+            "remaining_uncertainties": ["The requested branch remains to be selected."],
+            "next_targets": ["Select and aggregate the requested population."],
+        },
+    )
+    assert committed["status"] == "success"
+    assert runtime.checkpoints.checkpoint_count == 1
+    assert runtime.audit_state()["checkpoint_commit_eligibility_policy"] == (
+        CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+    )
 
 
 def test_checkpoint_restore_deactivates_later_artifact_and_keeps_monotonic_ids():

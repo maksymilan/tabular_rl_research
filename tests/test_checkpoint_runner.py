@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,13 +15,20 @@ from tool_modules.checkpoint_relalg.provider import (
     _normalize_assistant_message,
 )
 from tool_modules.checkpoint_relalg.audit import audit_record, fresh_replay_record
+from tool_modules.checkpoint_relalg.checkpoint_store import (
+    CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+    CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+)
+from tool_modules.checkpoint_relalg.protocol import capability_manifest, prompt_hash
 from tool_modules.checkpoint_relalg.runner import (
     OPERATIONAL_RESUME_POLICY_VERSION,
     _open_artifact_writer,
     _phase_execution_styles,
+    build_manifest,
     run_episode,
 )
 from tool_modules.checkpoint_relalg.runtime import RuntimeConfig
+from tool_modules.registry import build_checkpoint_relalg_tool_scheme
 
 
 class FakeClient:
@@ -155,6 +163,204 @@ def test_semantic_atomic_runner_and_fresh_replay_are_profile_bound(tmp_path):
     assert record["phase_execution_styles"] == {"phase_000": "atomic_only"}
     assert audit_record(record)["passed"]
     assert fresh_replay_record(record, task)["passed"]
+
+
+def test_semantic_milestone_v5_policy_is_bound_in_manifest_record_and_replay(
+    tmp_path,
+):
+    task = _task(tmp_path)
+    policy = CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+    client = FakeClient(
+        [
+            [
+                (
+                    "filter_rows",
+                    {
+                        "table": "items",
+                        "conditions": {
+                            "op": "=",
+                            "left": {"column": "category"},
+                            "right": {"value": "x"},
+                        },
+                    },
+                )
+            ],
+            [
+                (
+                    "filter_rows",
+                    {
+                        "table": "items",
+                        "conditions": {
+                            "op": "=",
+                            "left": {"column": "category"},
+                            "right": {"value": "y"},
+                        },
+                    },
+                )
+            ],
+            [
+                (
+                    "commit_checkpoint",
+                    {
+                        "progress_summary": [
+                            "Two grounded category populations are available."
+                        ],
+                        "remaining_uncertainties": [
+                            "The exact total relation remains to be constructed."
+                        ],
+                        "next_targets": ["Aggregate the complete item population."],
+                    },
+                )
+            ],
+            [
+                (
+                    "group_aggregate",
+                    {
+                        "table": "items",
+                        "group_by": [],
+                        "metrics": [{"op": "count", "column": "*", "as": "n"}],
+                    },
+                )
+            ],
+            [("answer", {"table": "group_aggregate_003"})],
+        ]
+    )
+    record = run_episode(
+        task,
+        task_position=0,
+        mode="atomic",
+        atomic_operator_profile="semantic-v2",
+        checkpoint_guidance_profile="semantic-milestone-v5",
+        client=client,
+        runtime_config=RuntimeConfig(
+            checkpoint_commit_eligibility_policy=policy,
+        ),
+        max_model_turns=8,
+        max_tokens=128,
+        max_completion_tokens=256,
+        api_retries=2,
+    )
+
+    eligibility = record["capability_manifest"]["checkpoint_commit_eligibility"]
+    assert record["correct"] and record["legal"]
+    assert record["checkpoint_guidance_profile"] == "semantic-milestone-v5"
+    assert record["checkpoint_commit_eligibility_policy"] == policy
+    assert record["runtime_config"]["checkpoint_commit_eligibility_policy"] == policy
+    assert record["final_runtime"]["checkpoint_commit_eligibility_policy"] == policy
+    assert eligibility == {
+        "policy": policy,
+        "first_commit_min_milestone_producers": 2,
+        "later_commit_min_milestone_producers": 3,
+        "milestone_producer_tools": [
+            "filter_rows",
+            "group_aggregate",
+            "join",
+            "set_operation",
+        ],
+        "requires_new_active_artifacts_at_least_quota": True,
+    }
+    assert record["checkpoint_count"] == 1
+    assert audit_record(record)["passed"]
+    assert fresh_replay_record(record, task)["passed"]
+
+    tasks_path = tmp_path / "tasks.jsonl"
+    tasks_path.write_text("{}\n", encoding="utf-8")
+    manifest = build_manifest(
+        SimpleNamespace(
+            mode="atomic",
+            carrier="native-tool-calls",
+            atomic_operator_profile="semantic-v2",
+            checkpoint_guidance_profile="semantic-milestone-v5",
+            experiment_arm=None,
+            within_batch_order=None,
+            tasks_json=tasks_path,
+            start=0,
+            n=1,
+            model="fake",
+            max_primitive_calls=30,
+            max_checkpoints=8,
+            max_restores=3,
+            sql_timeout_seconds=20.0,
+            max_artifact_rows=100_000,
+            max_artifact_bytes=64 * 1024 * 1024,
+            max_cell_bytes=4 * 1024 * 1024,
+            max_model_turns=8,
+            max_tokens=128,
+            max_completion_tokens=256,
+            api_retries=2,
+            api_timeout_seconds=300,
+        ),
+        provider_verification={"model": "fake"},
+    )
+    assert manifest["checkpoint_commit_eligibility_policy"] == policy
+    assert manifest["runtime_config"]["checkpoint_commit_eligibility_policy"] == policy
+    assert manifest["capability_manifest"]["checkpoint_commit_eligibility"] == eligibility
+    assert manifest["protocol_hash"] == record["protocol_hash"]
+
+    tampered_values = []
+
+    top_level_tamper = deepcopy(record)
+    top_level_tamper["checkpoint_commit_eligibility_policy"] = (
+        CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+    )
+    tampered_values.append(top_level_tamper)
+
+    runtime_tamper = deepcopy(record)
+    runtime_tamper["runtime_config"]["checkpoint_commit_eligibility_policy"] = (
+        CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+    )
+    tampered_values.append(runtime_tamper)
+
+    capability_tamper = deepcopy(record)
+    capability_tamper["capability_manifest"]["checkpoint_commit_eligibility"][
+        "later_commit_min_milestone_producers"
+    ] = 2
+    tampered_values.append(capability_tamper)
+
+    protocol_tamper = deepcopy(record)
+    protocol_tamper["protocol_hash"] = "forged-protocol-hash"
+    tampered_values.append(protocol_tamper)
+
+    for tampered in tampered_values:
+        assert not audit_record(tampered)["passed"]
+        assert not fresh_replay_record(tampered, task)["passed"]
+
+    # Even synchronized identity-field relabeling cannot turn the actual v5 provider
+    # prompt/history into a v4 episode.
+    synchronized = deepcopy(record)
+    synchronized["checkpoint_guidance_profile"] = "semantic-milestone-v4"
+    synchronized.pop("checkpoint_commit_eligibility_policy")
+    synchronized["runtime_config"].pop("checkpoint_commit_eligibility_policy")
+    synchronized["capability_manifest"] = capability_manifest(
+        "atomic",
+        "native-tool-calls",
+        "semantic-v2",
+        CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+    )
+    synchronized.update(
+        build_checkpoint_relalg_tool_scheme(
+            mode="atomic",
+            carrier="native-tool-calls",
+            atomic_operator_profile="semantic-v2",
+            checkpoint_commit_eligibility_policy=(
+                CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+            ),
+        ).manifest_fields()
+    )
+    synchronized["prompt_hash"] = prompt_hash(
+        "atomic",
+        teacher=True,
+        carrier="native-tool-calls",
+        checkpoint_guidance_profile="semantic-milestone-v4",
+        atomic_operator_profile="semantic-v2",
+    )
+    synchronized["teacher_prompt_sha256"] = synchronized["prompt_hash"]
+    structural = audit_record(synchronized)
+    replay = fresh_replay_record(synchronized, task)
+    assert not structural["passed"]
+    assert not replay["passed"]
+    assert any("system prompt differs" in issue for issue in structural["issues"])
+    assert any("system differs under fresh replay" in issue for issue in replay["issues"])
 
 
 def test_operational_resume_preserves_original_start_and_rejects_identity_drift(

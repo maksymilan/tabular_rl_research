@@ -31,6 +31,9 @@ from artifacts import ArtifactWriter  # noqa: E402
 from denotation import compare_denotations  # noqa: E402
 from provider_client import load_api_config  # noqa: E402
 from tool_modules.checkpoint_relalg.audit import audit_result_dir  # noqa: E402
+from tool_modules.checkpoint_relalg.checkpoint_store import (  # noqa: E402
+    CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+)
 from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     ADMISSION_STATUS,
     ATOMIC_OPERATOR_PROFILES,
@@ -54,6 +57,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     SCHEME,
     capability_manifest,
     carrier_experiment_arm,
+    checkpoint_commit_eligibility_for_guidance_profile,
     get_system_prompt,
     normalize_checkpoint_guidance_profile,
     normalize_atomic_operator_profile,
@@ -1070,7 +1074,7 @@ def _phase_execution_styles(turns: list[Mapping[str, Any]]) -> dict[str, str]:
 
 
 def _runtime_config_payload(config: RuntimeConfig, *, max_model_turns: int) -> dict[str, Any]:
-    return {
+    payload = {
         "max_model_turns": max_model_turns,
         "max_primitive_calls": config.max_primitive_calls,
         "max_checkpoints": config.max_checkpoints,
@@ -1081,6 +1085,14 @@ def _runtime_config_payload(config: RuntimeConfig, *, max_model_turns: int) -> d
         "max_cell_bytes": config.max_cell_bytes,
         "artifact_byte_accounting": ARTIFACT_BYTE_ACCOUNTING_VERSION,
     }
+    if (
+        config.checkpoint_commit_eligibility_policy
+        != CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+    ):
+        payload["checkpoint_commit_eligibility_policy"] = (
+            config.checkpoint_commit_eligibility_policy
+        )
+    return payload
 
 
 def _process_metrics(
@@ -1205,6 +1217,16 @@ def run_episode(
     active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
         checkpoint_guidance_profile
     )
+    active_commit_eligibility = checkpoint_commit_eligibility_for_guidance_profile(
+        active_checkpoint_guidance
+    )
+    if (
+        runtime_config.checkpoint_commit_eligibility_policy
+        != active_commit_eligibility
+    ):
+        raise ValueError(
+            "runtime checkpoint commit eligibility does not match guidance profile"
+        )
     active_experiment_arm = experiment_arm or carrier_experiment_arm(active_carrier)
     if active_experiment_arm != carrier_experiment_arm(active_carrier):
         raise ValueError("experiment arm does not match the frozen carrier mapping")
@@ -1552,6 +1574,7 @@ def run_episode(
         mode=mode,
         carrier=active_carrier,
         atomic_operator_profile=active_operator_profile,
+        checkpoint_commit_eligibility_policy=active_commit_eligibility,
     )
     process_metrics = _process_metrics(
         turns,
@@ -1564,7 +1587,10 @@ def run_episode(
         **(dict(artifact_identity_fields) if artifact_identity_fields else {}),
         **scheme.manifest_fields(),
         "capability_manifest": capability_manifest(
-            mode, active_carrier, active_operator_profile
+            mode,
+            active_carrier,
+            active_operator_profile,
+            active_commit_eligibility,
         ),
         "backend": BACKEND,
         "dialect": DIALECT,
@@ -1644,6 +1670,8 @@ def run_episode(
     }
     if batch_limits is not None:
         record["batch_limits"] = deepcopy(dict(batch_limits))
+    if active_commit_eligibility != CHECKPOINT_COMMIT_ELIGIBILITY_NONE:
+        record["checkpoint_commit_eligibility_policy"] = active_commit_eligibility
     return record
 
 
@@ -1665,6 +1693,9 @@ def build_manifest(
             DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
         )
     )
+    active_commit_eligibility = checkpoint_commit_eligibility_for_guidance_profile(
+        active_checkpoint_guidance
+    )
     experiment_arm = getattr(args, "experiment_arm", None) or carrier_experiment_arm(
         active_carrier
     )
@@ -1677,6 +1708,7 @@ def build_manifest(
         mode=args.mode,
         carrier=active_carrier,
         atomic_operator_profile=active_operator_profile,
+        checkpoint_commit_eligibility_policy=active_commit_eligibility,
     )
     config = RuntimeConfig(
         max_primitive_calls=args.max_primitive_calls,
@@ -1686,12 +1718,16 @@ def build_manifest(
         max_artifact_rows=args.max_artifact_rows,
         max_artifact_bytes=args.max_artifact_bytes,
         max_cell_bytes=args.max_cell_bytes,
+        checkpoint_commit_eligibility_policy=active_commit_eligibility,
     )
     strict_batch = dataset_identity is not None
     manifest = {
         **scheme.manifest_fields(),
         "capability_manifest": capability_manifest(
-            args.mode, active_carrier, active_operator_profile
+            args.mode,
+            active_carrier,
+            active_operator_profile,
+            active_commit_eligibility,
         ),
         "backend": BACKEND,
         "dialect": DIALECT,
@@ -1758,6 +1794,8 @@ def build_manifest(
         manifest.update(deepcopy(dict(dataset_identity)))
         manifest["batch_control_version"] = BATCH_CONTROL_VERSION
         manifest["batch_limits"] = deepcopy(dict(batch_limits))
+    if active_commit_eligibility != CHECKPOINT_COMMIT_ELIGIBILITY_NONE:
+        manifest["checkpoint_commit_eligibility_policy"] = active_commit_eligibility
     return manifest
 
 
@@ -1867,6 +1905,11 @@ def main(argv: list[str] | None = None) -> int:
             max_artifact_rows=args.max_artifact_rows,
             max_artifact_bytes=args.max_artifact_bytes,
             max_cell_bytes=args.max_cell_bytes,
+            checkpoint_commit_eligibility_policy=(
+                checkpoint_commit_eligibility_for_guidance_profile(
+                    args.checkpoint_guidance_profile
+                )
+            ),
         )
         batch_limits = _batch_limits_payload(args)
     except ValueError as exc:

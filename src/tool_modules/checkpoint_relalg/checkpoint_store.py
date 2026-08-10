@@ -12,7 +12,30 @@ from .environment_state import EnvironmentState, StateError
 
 MAX_CHECKPOINTS = 8
 CHECKPOINT_GOAL_POLICY_VERSION = "active-path-distinct-normalized-goals-v1"
+CHECKPOINT_COMMIT_ELIGIBILITY_NONE = "none"
+CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1 = (
+    "checkpoint-relalg-ordinal-milestone-progress-v1"
+)
+CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES = (
+    CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+    CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+)
+CHECKPOINT_MILESTONE_PRODUCER_TOOLS = frozenset(
+    {"filter_rows", "join", "group_aggregate", "set_operation"}
+)
+FIRST_COMMIT_MIN_MILESTONE_PRODUCERS = 2
+LATER_COMMIT_MIN_MILESTONE_PRODUCERS = 3
 _GOAL_TRAILING_PUNCTUATION = " .!?;:\u3002\uff01\uff1f\uff1b\uff1a"
+
+
+def normalize_checkpoint_commit_eligibility_policy(policy: str | None) -> str:
+    value = CHECKPOINT_COMMIT_ELIGIBILITY_NONE if policy is None else str(policy).strip()
+    if value not in CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES:
+        raise ValueError(
+            "checkpoint_commit_eligibility_policy must be one of "
+            f"{CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES}"
+        )
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +200,7 @@ class CheckpointStore:
         *,
         max_checkpoints: int = MAX_CHECKPOINTS,
         max_restores: int = 8,
+        checkpoint_commit_eligibility_policy: str = CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     ) -> None:
         if not isinstance(state, EnvironmentState):
             raise TypeError("state must be an EnvironmentState")
@@ -193,6 +217,11 @@ class CheckpointStore:
         self.state = state
         self.max_checkpoints = max_checkpoints
         self.max_restores = max_restores
+        self.checkpoint_commit_eligibility_policy = (
+            normalize_checkpoint_commit_eligibility_policy(
+                checkpoint_commit_eligibility_policy
+            )
+        )
         self._checkpoint_counter = 0
         self._phase_counter = self._phase_number(state.phase_id)
         self.restore_count = 0
@@ -301,6 +330,7 @@ class CheckpointStore:
         )
         self._ensure_checkpoint_budget()
         self._ensure_distinct_checkpoint_goal(targets)
+        self._ensure_checkpoint_phase_progress()
         parent_id = self.active_checkpoint_id
         if parent_id not in self.nodes:
             raise StateError(
@@ -352,6 +382,67 @@ class CheckpointStore:
                 },
                 error_type="argument_validation_error",
             )
+
+    def _ensure_checkpoint_phase_progress(self) -> None:
+        if (
+            self.checkpoint_commit_eligibility_policy
+            == CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+        ):
+            return
+        if (
+            self.checkpoint_commit_eligibility_policy
+            != CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+        ):
+            raise AssertionError(
+                "unhandled checkpoint commit eligibility policy "
+                f"{self.checkpoint_commit_eligibility_policy!r}"
+            )
+
+        successful_commit_count = sum(
+            node.created_by == "commit_checkpoint" for node in self.nodes.values()
+        )
+        quota = (
+            FIRST_COMMIT_MIN_MILESTONE_PRODUCERS
+            if successful_commit_count == 0
+            else LATER_COMMIT_MIN_MILESTONE_PRODUCERS
+        )
+        phase_start = self.get_checkpoint(self.active_checkpoint_id).snapshot
+        new_active_artifacts = set(self.state.active_artifact_ids).difference(
+            phase_start.active_artifact_ids
+        )
+        qualifying_steps = []
+        for step in self.state.steps.values():
+            if (
+                step.phase_id != self.state.phase_id
+                or step.checkpoint_id != self.active_checkpoint_id
+                or not step.succeeded
+                or step.step_id not in self.state.usable_step_ids
+                or step.tool not in CHECKPOINT_MILESTONE_PRODUCER_TOOLS
+                or not set(step.produced_artifact_ids).intersection(new_active_artifacts)
+            ):
+                continue
+            qualifying_steps.append(step)
+
+        producer_count = len(qualifying_steps)
+        new_artifact_count = len(new_active_artifacts)
+        if producer_count >= quota and new_artifact_count >= quota:
+            return
+        raise StateError(
+            "checkpoint_phase_progress_insufficient",
+            "the current phase has not reached the checkpoint progress quota",
+            {
+                "policy": self.checkpoint_commit_eligibility_policy,
+                "quota": quota,
+                "successful_commit_ordinal": successful_commit_count + 1,
+                "successful_milestone_producer_count": producer_count,
+                "new_active_artifact_count": new_artifact_count,
+                "milestone_tools": sorted(CHECKPOINT_MILESTONE_PRODUCER_TOOLS),
+                "observed_milestone_tools": sorted(
+                    {step.tool for step in qualifying_steps}
+                ),
+            },
+            error_type="state_validation_error",
+        )
 
     def restore(
         self,
@@ -491,9 +582,16 @@ class CheckpointStore:
 
 
 __all__ = [
+    "CHECKPOINT_COMMIT_ELIGIBILITY_NONE",
+    "CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1",
+    "CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES",
     "CHECKPOINT_GOAL_POLICY_VERSION",
+    "CHECKPOINT_MILESTONE_PRODUCER_TOOLS",
+    "FIRST_COMMIT_MIN_MILESTONE_PRODUCERS",
+    "LATER_COMMIT_MIN_MILESTONE_PRODUCERS",
     "MAX_CHECKPOINTS",
     "CheckpointNode",
     "CheckpointSnapshot",
     "CheckpointStore",
+    "normalize_checkpoint_commit_eligibility_policy",
 ]

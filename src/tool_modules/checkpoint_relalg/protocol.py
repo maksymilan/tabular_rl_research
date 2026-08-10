@@ -17,7 +17,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .checkpoint_store import CHECKPOINT_GOAL_POLICY_VERSION, MAX_CHECKPOINTS
+from .checkpoint_store import (
+    CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+    CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+    CHECKPOINT_GOAL_POLICY_VERSION,
+    CHECKPOINT_MILESTONE_PRODUCER_TOOLS,
+    FIRST_COMMIT_MIN_MILESTONE_PRODUCERS,
+    LATER_COMMIT_MIN_MILESTONE_PRODUCERS,
+    MAX_CHECKPOINTS,
+    normalize_checkpoint_commit_eligibility_policy,
+)
 
 
 PROTOCOL_VERSION = "checkpoint-relalg-v1"
@@ -48,6 +57,7 @@ CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE = "semantic-milestone-v1"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2 = "semantic-milestone-v2"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3 = "semantic-milestone-v3"
 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4 = "semantic-milestone-v4"
+CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5 = "semantic-milestone-v5"
 CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_STANDARD,
     CHECKPOINT_GUIDANCE_PROFILE_STRESS,
@@ -58,6 +68,7 @@ CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
+    CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
 )
 DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
@@ -1496,6 +1507,34 @@ def normalize_checkpoint_guidance_profile(profile: str | None) -> str:
     return value
 
 
+def checkpoint_commit_eligibility_for_guidance_profile(profile: str | None) -> str:
+    """Map one frozen teacher profile to its deterministic Harness policy."""
+
+    active_profile = normalize_checkpoint_guidance_profile(profile)
+    if active_profile == CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5:
+        return CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+    return CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+
+
+def checkpoint_commit_eligibility_manifest(policy: str | None) -> dict[str, Any] | None:
+    """Return the identity-bound, content-free parameters for one policy."""
+
+    active_policy = normalize_checkpoint_commit_eligibility_policy(policy)
+    if active_policy == CHECKPOINT_COMMIT_ELIGIBILITY_NONE:
+        return None
+    return {
+        "policy": active_policy,
+        "first_commit_min_milestone_producers": (
+            FIRST_COMMIT_MIN_MILESTONE_PRODUCERS
+        ),
+        "later_commit_min_milestone_producers": (
+            LATER_COMMIT_MIN_MILESTONE_PRODUCERS
+        ),
+        "milestone_producer_tools": sorted(CHECKPOINT_MILESTONE_PRODUCER_TOOLS),
+        "requires_new_active_artifacts_at_least_quota": True,
+    }
+
+
 def assistant_carrier_protocol(carrier: str | None = None) -> str:
     active_carrier = normalize_carrier(carrier)
     if active_carrier == CARRIER_NATIVE_TOOL_CALLS:
@@ -1539,6 +1578,7 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
         }
         and not (active_mode == "atomic" and semantic_profile)
     ):
@@ -1574,6 +1614,9 @@ def get_system_prompt(
             ),
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4: (
                 "teacher_checkpoint_semantic_milestone_v4"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5: (
+                "teacher_checkpoint_semantic_milestone_v5"
             ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(checkpoint_fragment))
@@ -1613,6 +1656,7 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3,
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4,
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
         }
     ):
         # Keep the actionable turn check after the large Text-JSON schema block.
@@ -1626,6 +1670,9 @@ def get_system_prompt(
             ),
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4: (
                 "teacher_checkpoint_semantic_milestone_v4_tail"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5: (
+                "teacher_checkpoint_semantic_milestone_v5_tail"
             ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(tail_name))
@@ -1678,12 +1725,23 @@ def carrier_protocol_hash(
     mode: str,
     carrier: str = DEFAULT_CARRIER,
     atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
+    checkpoint_commit_eligibility_policy: str = CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
 ) -> str:
     """Hash one carrier-specific protocol while preserving the native v1 identity."""
 
     active_mode = normalize_mode(mode)
     active_carrier = normalize_carrier(carrier)
     active_operator_profile = normalize_atomic_operator_profile(atomic_operator_profile)
+    active_commit_eligibility = normalize_checkpoint_commit_eligibility_policy(
+        checkpoint_commit_eligibility_policy
+    )
+    if active_commit_eligibility != CHECKPOINT_COMMIT_ELIGIBILITY_NONE and not (
+        active_mode == "atomic"
+        and active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC
+    ):
+        raise ValueError(
+            "checkpoint commit eligibility is isolated to atomic semantic-v2"
+        )
     payload = {
         "protocol_version": PROTOCOL_VERSION,
         "checkpoint_policy_version": CHECKPOINT_POLICY_VERSION,
@@ -1699,6 +1757,11 @@ def carrier_protocol_hash(
     }
     if active_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE:
         payload["atomic_operator_profile"] = active_operator_profile
+    eligibility_manifest = checkpoint_commit_eligibility_manifest(
+        active_commit_eligibility
+    )
+    if eligibility_manifest is not None:
+        payload["checkpoint_commit_eligibility"] = eligibility_manifest
     if active_carrier != CARRIER_NATIVE_TOOL_CALLS:
         payload.update({
             "carrier_policy_version": CARRIER_POLICY_VERSION,
@@ -1712,11 +1775,22 @@ def capability_manifest(
     mode: str,
     carrier: str = DEFAULT_CARRIER,
     atomic_operator_profile: str = DEFAULT_ATOMIC_OPERATOR_PROFILE,
+    checkpoint_commit_eligibility_policy: str = CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
 ) -> dict[str, Any]:
     """Generate a frozen, serializable account of one isolated mode surface."""
     active_mode = normalize_mode(mode)
     active_carrier = normalize_carrier(carrier)
     active_operator_profile = normalize_atomic_operator_profile(atomic_operator_profile)
+    active_commit_eligibility = normalize_checkpoint_commit_eligibility_policy(
+        checkpoint_commit_eligibility_policy
+    )
+    if active_commit_eligibility != CHECKPOINT_COMMIT_ELIGIBILITY_NONE and not (
+        active_mode == "atomic"
+        and active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC
+    ):
+        raise ValueError(
+            "checkpoint commit eligibility is isolated to atomic semantic-v2"
+        )
     active_tools = tools_for_profile(active_mode, active_operator_profile)
     manifest = {
         "protocol_version": PROTOCOL_VERSION,
@@ -1767,6 +1841,11 @@ def capability_manifest(
     if active_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE:
         manifest["atomic_operator_profile"] = active_operator_profile
         manifest["checkpoint_tools_model_visible"] = True
+    eligibility_manifest = checkpoint_commit_eligibility_manifest(
+        active_commit_eligibility
+    )
+    if eligibility_manifest is not None:
+        manifest["checkpoint_commit_eligibility"] = eligibility_manifest
     # Keep the default native capability manifest byte-for-byte compatible.
     # The A/B record and run manifest still carry the explicit carrier name.
     if active_carrier != CARRIER_NATIVE_TOOL_CALLS:
@@ -1810,8 +1889,11 @@ __all__ = [
     "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2",
     "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V3",
     "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V4",
+    "CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5",
     "CHECKPOINT_GUIDANCE_PROFILE_STANDARD",
     "CHECKPOINT_GUIDANCE_PROFILE_STRESS",
+    "checkpoint_commit_eligibility_for_guidance_profile",
+    "checkpoint_commit_eligibility_manifest",
     "COMPARISON_OPERATORS",
     "CHECKPOINT_POLICY_VERSION",
     "CONTROL_TOOLS",

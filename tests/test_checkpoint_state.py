@@ -3,8 +3,14 @@ from __future__ import annotations
 import pytest
 
 from src.tool_modules.checkpoint_relalg.checkpoint_store import (
+    CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+    CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+    CHECKPOINT_MILESTONE_PRODUCER_TOOLS,
+    FIRST_COMMIT_MIN_MILESTONE_PRODUCERS,
+    LATER_COMMIT_MIN_MILESTONE_PRODUCERS,
     MAX_CHECKPOINTS,
     CheckpointStore,
+    normalize_checkpoint_commit_eligibility_policy,
 )
 from src.tool_modules.checkpoint_relalg.environment_renderer import EnvironmentRenderer
 from src.tool_modules.checkpoint_relalg.environment_state import (
@@ -54,7 +60,12 @@ def artifact(table: str, *, input_table: str = "customers", row_count: int = 2) 
     )
 
 
-def add_fact_bundle(state: EnvironmentState, table: str) -> None:
+def add_fact_bundle(
+    state: EnvironmentState,
+    table: str,
+    *,
+    tool: str = "filter_rows",
+) -> None:
     state.add_artifact(artifact(table))
     observation_id = state.allocate_observation_id()
     state.add_observation(
@@ -63,7 +74,7 @@ def add_fact_bundle(state: EnvironmentState, table: str) -> None:
     state.add_step(
         StepRecord(
             state.allocate_step_id(),
-            "filter_rows",
+            tool,
             "success",
             {"table": table},
             phase_id=state.phase_id,
@@ -332,6 +343,116 @@ def test_checkpoint_store_has_a_global_eight_checkpoint_ceiling() -> None:
     assert MAX_CHECKPOINTS == 8
     with pytest.raises(ValueError, match="0 to 8"):
         CheckpointStore(EnvironmentState(catalog()), max_checkpoints=9)
+
+
+def test_checkpoint_commit_eligibility_policy_normalization_is_canonical() -> None:
+    assert (
+        normalize_checkpoint_commit_eligibility_policy(None)
+        == CHECKPOINT_COMMIT_ELIGIBILITY_NONE
+    )
+    assert (
+        normalize_checkpoint_commit_eligibility_policy(
+            f"  {CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1}  "
+        )
+        == CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+    )
+    with pytest.raises(ValueError, match="checkpoint_commit_eligibility_policy"):
+        normalize_checkpoint_commit_eligibility_policy("unsupported")
+
+
+def test_ordinal_milestone_commit_eligibility_counts_current_phase_artifacts() -> None:
+    assert FIRST_COMMIT_MIN_MILESTONE_PRODUCERS == 2
+    assert LATER_COMMIT_MIN_MILESTONE_PRODUCERS == 3
+    assert CHECKPOINT_MILESTONE_PRODUCER_TOOLS == {
+        "filter_rows",
+        "join",
+        "group_aggregate",
+        "set_operation",
+    }
+    state = EnvironmentState(catalog())
+    store = CheckpointStore(
+        state,
+        checkpoint_commit_eligibility_policy=(
+            CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+        ),
+    )
+
+    first_milestone = state.allocate_artifact_handle("filter")
+    add_fact_bundle(state, first_milestone, tool="filter_rows")
+    mechanical = state.allocate_artifact_handle("shape")
+    add_fact_bundle(state, mechanical, tool="shape_rows")
+    before_hash = state.logical_hash()
+    with pytest.raises(StateError) as first_rejection:
+        store.commit(
+            ["One milestone is not enough."],
+            [],
+            ["Complete another milestone."],
+        )
+    assert first_rejection.value.type == "state_validation_error"
+    assert first_rejection.value.code == "checkpoint_phase_progress_insufficient"
+    assert first_rejection.value.details == {
+        "policy": CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+        "quota": 2,
+        "successful_commit_ordinal": 1,
+        "successful_milestone_producer_count": 1,
+        "new_active_artifact_count": 2,
+        "milestone_tools": sorted(CHECKPOINT_MILESTONE_PRODUCER_TOOLS),
+        "observed_milestone_tools": ["filter_rows"],
+    }
+    assert "One milestone is not enough" not in repr(first_rejection.value.details)
+    assert state.logical_hash() == before_hash
+    assert state.phase_id == "phase_000"
+    assert store.checkpoint_count == 0
+
+    second_milestone = state.allocate_artifact_handle("join")
+    add_fact_bundle(state, second_milestone, tool="join")
+    first = store.commit(
+        ["Two milestones reached."],
+        [],
+        ["Build the final aggregation."],
+    )
+    assert first.checkpoint_id == "checkpoint_001"
+
+    phase_two_first = state.allocate_artifact_handle("aggregate")
+    add_fact_bundle(state, phase_two_first, tool="group_aggregate")
+    phase_two_second = state.allocate_artifact_handle("set")
+    add_fact_bundle(state, phase_two_second, tool="set_operation")
+    state.add_step(
+        StepRecord(
+            state.allocate_step_id(),
+            "filter_rows",
+            "success",
+            {"table": phase_two_first},
+            phase_id=state.phase_id,
+            checkpoint_id=state.checkpoint_id,
+            produced_artifact_ids=(phase_two_first,),
+        )
+    )
+    before_second_rejection = state.logical_hash()
+    with pytest.raises(StateError) as later_rejection:
+        store.commit(
+            ["Three producer records but only two new artifacts."],
+            [],
+            ["Audit one more stable artifact."],
+        )
+    assert later_rejection.value.code == "checkpoint_phase_progress_insufficient"
+    assert later_rejection.value.details["quota"] == 3
+    assert later_rejection.value.details["successful_commit_ordinal"] == 2
+    assert later_rejection.value.details["successful_milestone_producer_count"] == 3
+    assert later_rejection.value.details["new_active_artifact_count"] == 2
+    assert state.logical_hash() == before_second_rejection
+    assert state.phase_id == "phase_001"
+    assert store.checkpoint_count == 1
+
+    phase_two_third = state.allocate_artifact_handle("filter")
+    add_fact_bundle(state, phase_two_third, tool="filter_rows")
+    second = store.commit(
+        ["Three new artifacts reached."],
+        [],
+        ["Prepare the exact final relation."],
+    )
+    assert second.parent_id == first.checkpoint_id
+    assert state.phase_id == "phase_002"
 
 
 def test_renderer_keeps_all_history_as_working_memory_not_evidence() -> None:

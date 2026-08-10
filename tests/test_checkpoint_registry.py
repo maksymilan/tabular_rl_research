@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from tool_modules.checkpoint_relalg.checkpoint_store import (
+    CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+    CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+)
 from eval.run_tool_scheme import runner_argv
 from rl.tool_environment import create_tool_use_env
 from sft.generate_tool_scheme_rollouts import generator_argv
@@ -44,6 +48,27 @@ def test_semantic_atomic_profile_has_distinct_identity_and_keeps_checkpoints():
     assert "sort" not in semantic.top_level_tools
     assert "commit_checkpoint" in semantic.top_level_tools
     assert "restore_checkpoint" in semantic.top_level_tools
+
+
+def test_semantic_checkpoint_eligibility_changes_only_registry_protocol_identity():
+    baseline = build_checkpoint_relalg_tool_scheme(
+        mode="atomic",
+        atomic_operator_profile="semantic-v2",
+        checkpoint_commit_eligibility_policy=CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+    )
+    ordinal = build_checkpoint_relalg_tool_scheme(
+        mode="atomic",
+        atomic_operator_profile="semantic-v2",
+        checkpoint_commit_eligibility_policy=(
+            CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
+        ),
+    )
+
+    assert ordinal.protocol_hash != baseline.protocol_hash
+    assert ordinal.tool_schema_hash == baseline.tool_schema_hash
+    assert ordinal.student_prompt_hash == baseline.student_prompt_hash
+    assert ordinal.system_prompt == baseline.system_prompt
+    assert ordinal.top_level_tools == baseline.top_level_tools
 
 
 def test_unified_launchers_route_checkpoint_scheme_to_its_own_runner():

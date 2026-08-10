@@ -1,0 +1,2 @@
+MILESTONE V5 TURN CHECK
+For the first checkpoint, commit only after two successful current-phase filter_rows, join, group_aggregate, or set_operation producers. For every later checkpoint, commit only after three such producers since the previous accepted checkpoint. Also require another data-producing stage and a genuinely new next_targets goal; otherwise continue or answer. At most eight commits are available; restore is optional.

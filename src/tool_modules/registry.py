@@ -198,6 +198,7 @@ def build_checkpoint_relalg_tool_scheme(
     mode: str,
     carrier: str = "native-tool-calls",
     atomic_operator_profile: str = "micro-v1",
+    checkpoint_commit_eligibility_policy: str = "none",
 ) -> ToolScheme:
     """Build the forward checkpointed Direct/Atomic/Hybrid scheme.
 
@@ -222,10 +223,16 @@ def build_checkpoint_relalg_tool_scheme(
         provider_response_envelope_protocol_hash,
         provider_response_envelope_version,
     )
+    from tool_modules.checkpoint_relalg.checkpoint_store import (
+        normalize_checkpoint_commit_eligibility_policy,
+    )
 
     active_mode = normalize_mode(mode)
     active_carrier = normalize_carrier(carrier)
     active_operator_profile = normalize_atomic_operator_profile(atomic_operator_profile)
+    active_commit_eligibility = normalize_checkpoint_commit_eligibility_policy(
+        checkpoint_commit_eligibility_policy
+    )
     student_prompt = get_system_prompt(
         active_mode,
         teacher=False,
@@ -247,7 +254,12 @@ def build_checkpoint_relalg_tool_scheme(
     schema_hash = tool_schema_hash(active_mode, active_operator_profile)
     response_envelope_version = provider_response_envelope_version(active_carrier)
     identity = provider_response_envelope_protocol_hash(
-        carrier_protocol_hash(active_mode, active_carrier, active_operator_profile),
+        carrier_protocol_hash(
+            active_mode,
+            active_carrier,
+            active_operator_profile,
+            active_commit_eligibility,
+        ),
         active_carrier,
     )
     tools = tuple(tools_for_profile(active_mode, active_operator_profile))
