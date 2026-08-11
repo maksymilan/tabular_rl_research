@@ -1,0 +1,2 @@
+MODEL-CHOICE VERIFIED STAGE DECISION V3
+Choose the stage boundary yourself. Commit now only if this is multi-stage, the exact candidate artifact was successfully read or inspected after its last material change in this phase, no error or semantic choice remains unresolved, and substantial distinct relational work still remains. If any check fails, continue or answer directly. The Harness supplies no producer quota or trigger. Never call restore_checkpoint.

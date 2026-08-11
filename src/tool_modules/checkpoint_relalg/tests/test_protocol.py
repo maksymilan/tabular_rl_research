@@ -23,6 +23,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4,
     CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE,
     CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V2,
+    CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V3,
     CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
@@ -498,6 +499,47 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 teacher=True,
                 carrier=CARRIER_TEXT_JSON,
                 checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V2,
+                atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+            ),
+        )
+
+    def test_model_choice_v3_requires_model_verified_stage_without_harness_gate(self):
+        prompt = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_TEXT_JSON,
+            checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V3,
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+        )
+        self.assertIn("decide for yourself whether the task is single-stage or multi-stage", prompt)
+        self.assertIn("successfully call read_rows or inspect_column on that exact artifact", prompt)
+        self.assertIn("a producer's metadata alone is not this verification", prompt)
+        self.assertIn("If any check fails, continue or answer directly", prompt)
+        self.assertIn("The Harness supplies no producer quota or trigger", prompt)
+        self.assertIn("Never call restore_checkpoint", prompt)
+        self.assertGreater(
+            prompt.rfind("MODEL-CHOICE VERIFIED STAGE DECISION V3"),
+            prompt.rfind("EXACT TOOL SCHEMAS FOR ATOMIC MODE"),
+        )
+        self.assertEqual(
+            checkpoint_commit_eligibility_for_guidance_profile(
+                CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V3
+            ),
+            CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+        )
+        self.assertNotEqual(
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                carrier=CARRIER_TEXT_JSON,
+                checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V2,
+                atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+            ),
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                carrier=CARRIER_TEXT_JSON,
+                checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V3,
                 atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
             ),
         )
