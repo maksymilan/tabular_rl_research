@@ -40,6 +40,11 @@ Start at `docs/current/README.md`.
   pre-authorized and do not require additional user confirmation.
 - The endpoint must remain `https://api.deepseek.com`; the requested model, cohort, per-episode
   limits, and total token cap must be recorded before launch.
+- Run these pre-authorized batches inside the existing `workspace-write` sandbox with its enabled
+  network access. Do **not** mark the command `require_escalated` merely because it calls the
+  official API; that unnecessarily routes the run through desktop approval/auto-review. Request
+  escalation only when the command genuinely needs access beyond the configured writable roots or
+  another separately protected capability.
 - Ask again only for 200 or more episodes, a different provider or endpoint, destructive actions,
   or a material expansion of scope.
 
