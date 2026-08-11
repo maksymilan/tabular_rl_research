@@ -128,6 +128,19 @@ Start at `docs/current/README.md`.
   model choice with only narrow exclusions for unresolved post-error state and useless late
   commits. See
   `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V3_HOLDOUT_GATE8_20260811_ZH.md`.
+- `model-choice-commit-v4` removed that mandatory perception and retained only two model-side
+  vetoes for an unresolved error correction or a useless checkpoint with one relation operator
+  remaining. A fresh candidate-only Gate4 nevertheless produced zero checkpoint attempts across
+  4/4 tasks and 36 model turns; it scored 2/4 `bird-set`, 1/4 strict artifact, and 3/4 legal, using
+  740,755 tokens. All four structures, identities, batch controls, and fresh replays passed. The
+  preregistered exposure gate failed, so no disabled control was launched. Freeze v4 as another
+  underexposed prompt manipulation. `model-choice-commit-v5` restores one concise positive
+  model-selected trigger while keeping Harness eligibility `none`: the model privately selects a
+  reusable semantic relation, then must commit when it exists and at least two distinct relational
+  decisions remain; unresolved correction and one-operator-to-answer remain narrow exceptions.
+  v5 is implementation-complete but has no live result until its independent exposure gate runs.
+  See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V4_EXPOSURE_GATE4_20260811_ZH.md`.
 - The original atomic protocol remains supported for ongoing RL work, frozen controls, and exact
   reproduction. Version54 / `native-tool-bundle` remains a diagnostic control/reproduction line
   and does not gain RL admission. Do not delete either line, mix their

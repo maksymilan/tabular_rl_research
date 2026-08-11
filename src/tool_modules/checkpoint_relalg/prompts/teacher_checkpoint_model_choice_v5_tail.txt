@@ -1,0 +1,2 @@
+MODEL-CHOICE STAGE DECISION V5
+Re-evaluate your own stage plan now. If its chosen reusable relation exists and at least two distinct relational decisions still remain, the next action MUST be commit_checkpoint; a later successful producing or observing action clears an earlier error veto. If only one relational operator remains or the exact answer artifact exists, finish without a checkpoint. The Harness supplies no trigger or producer quota. Never call restore_checkpoint.
