@@ -104,11 +104,15 @@ DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
 ATOMIC_OPERATOR_PROFILE_MICRO = "micro-v1"
 ATOMIC_OPERATOR_PROFILE_SEMANTIC = "semantic-v2"
+ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3 = "semantic-v3-v24"
 ATOMIC_OPERATOR_PROFILES = (
     ATOMIC_OPERATOR_PROFILE_MICRO,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+    ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
 )
 DEFAULT_ATOMIC_OPERATOR_PROFILE = ATOMIC_OPERATOR_PROFILE_MICRO
+PROVIDER_PHASE_HISTORY_FULL = "full-phase-v1"
+PROVIDER_PHASE_HISTORY_RECENT4 = "recent-4-turns-v1"
 
 CANONICAL_TYPES = (
     "NULL",
@@ -1060,6 +1064,40 @@ def normalize_atomic_operator_profile(profile: str | None) -> str:
     return value
 
 
+def is_semantic_atomic_profile(profile: str | None) -> bool:
+    return normalize_atomic_operator_profile(profile) in {
+        ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+        ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+    }
+
+
+def provider_phase_history_policy(profile: str | None) -> str:
+    return (
+        PROVIDER_PHASE_HISTORY_RECENT4
+        if normalize_atomic_operator_profile(profile)
+        == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3
+        else PROVIDER_PHASE_HISTORY_FULL
+    )
+
+
+def trim_provider_phase_history(
+    messages: Sequence[Mapping[str, Any]],
+    profile: str | None,
+) -> list[dict[str, Any]]:
+    """Apply the identity-bound rolling provider-history policy.
+
+    Semantic-v3 is Text-JSON-only, so every completed turn contributes exactly
+    user + assistant + one Harness feedback message.  Keeping twelve messages
+    therefore reproduces version24's recent-four policy without truncating a
+    turn or changing authoritative EnvironmentState.
+    """
+
+    copied = [deepcopy(dict(message)) for message in messages]
+    if provider_phase_history_policy(profile) == PROVIDER_PHASE_HISTORY_RECENT4:
+        return copied[-12:]
+    return copied
+
+
 def tools_for_profile(
     mode: str,
     atomic_operator_profile: str | None = None,
@@ -1069,7 +1107,7 @@ def tools_for_profile(
     if profile == ATOMIC_OPERATOR_PROFILE_MICRO:
         return MODE_TOOLS[active_mode]
     if active_mode != "atomic":
-        raise ValueError("semantic-v2 is currently isolated to atomic mode")
+        raise ValueError("semantic atomic profiles are isolated to atomic mode")
     return (*PERCEPTION_TOOLS, *SEMANTIC_ATOMIC_TOOLS, *CONTROL_TOOLS)
 
 
@@ -1665,7 +1703,12 @@ def get_system_prompt(
     active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
         checkpoint_guidance_profile
     )
-    semantic_profile = active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC
+    semantic_profile = is_semantic_atomic_profile(active_operator_profile)
+    semantic_v3_profile = (
+        active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3
+    )
+    if semantic_v3_profile and active_carrier != CARRIER_TEXT_JSON:
+        raise ValueError("semantic-v3-v24 is isolated to the text-json carrier")
     if (
         active_checkpoint_guidance
         in {
@@ -1690,12 +1733,18 @@ def get_system_prompt(
         and not (active_mode == "atomic" and semantic_profile)
     ):
         raise ValueError(
-            "this checkpoint guidance requires atomic mode with semantic-v2 operators"
+            "this checkpoint guidance requires atomic mode with semantic operators"
         )
     shared_core = _prompt_fragment("shared_core")
     fragments = [
         shared_core,
-        _prompt_fragment("atomic_semantic" if semantic_profile else active_mode),
+        _prompt_fragment(
+            "atomic_semantic_v3"
+            if semantic_v3_profile
+            else "atomic_semantic"
+            if semantic_profile
+            else active_mode
+        ),
     ]
     if teacher:
         checkpoint_fragment = {
@@ -1764,7 +1813,13 @@ def get_system_prompt(
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(checkpoint_fragment))
         if semantic_profile:
-            fragments.append(_prompt_fragment("teacher_atomic_semantic"))
+            fragments.append(
+                _prompt_fragment(
+                    "teacher_atomic_semantic_v3"
+                    if semantic_v3_profile
+                    else "teacher_atomic_semantic"
+                )
+            )
     elif active_checkpoint_guidance != DEFAULT_CHECKPOINT_GUIDANCE_PROFILE:
         raise ValueError("non-default checkpoint guidance is teacher-only")
     if active_carrier == CARRIER_TEXT_JSON:
@@ -1776,22 +1831,33 @@ def get_system_prompt(
             "Make exactly one action per turn using the TEXT-JSON CARRIER below.",
             1,
         )
-        # Text JSON cannot receive provider ``tools``.  Render the exact same
-        # name/description/parameters, without the native ``type=function``
-        # transport wrapper that could be mistaken for the action envelope.
-        compact_schemas = _canonical_json([
-            deepcopy(item["function"])
-            for item in provider_tool_definitions(active_mode, active_operator_profile)
-        ])
-        fragments.append(
+        carrier_clause = (
             "TEXT-JSON CARRIER (diagnostic-only)\n"
             "Keep reasoning only in the provider reasoning_content field. Visible assistant "
             "content must be exactly one raw JSON object with exactly the keys tool and "
             "arguments: {\"tool\":\"tool_name\",\"arguments\":{}}. Do not return prose, "
             "Markdown fences, XML, an array, or multiple actions. A later user message whose "
-            "JSON type is checkpoint_relalg_tool_result is Harness feedback, not a new task.\n"
-            f"EXACT TOOL SCHEMAS FOR {active_mode.upper()} MODE\n{compact_schemas}"
+            "JSON type is checkpoint_relalg_tool_result is Harness feedback, not a new task."
         )
+        if semantic_v3_profile:
+            # Version24's strongest interface result used a concise operational
+            # contract plus a few high-entropy examples.  Keep executable JSON
+            # schemas authoritative in validation/hash, but do not duplicate
+            # their recursively expanded AST grammar into every model turn.
+            fragments.extend(
+                [carrier_clause, _prompt_fragment("text_json_semantic_v3_contract")]
+            )
+        else:
+            # Frozen v1/v2 prompt identity: render the exact same provider
+            # schema without the native ``type=function`` wrapper.
+            compact_schemas = _canonical_json([
+                deepcopy(item["function"])
+                for item in provider_tool_definitions(active_mode, active_operator_profile)
+            ])
+            fragments.append(
+                carrier_clause
+                + f"\nEXACT TOOL SCHEMAS FOR {active_mode.upper()} MODE\n{compact_schemas}"
+            )
     if (
         teacher
         and active_checkpoint_guidance
@@ -1928,10 +1994,10 @@ def carrier_protocol_hash(
     )
     if active_commit_eligibility != CHECKPOINT_COMMIT_ELIGIBILITY_NONE and not (
         active_mode == "atomic"
-        and active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC
+        and is_semantic_atomic_profile(active_operator_profile)
     ):
         raise ValueError(
-            "checkpoint commit eligibility is isolated to atomic semantic-v2"
+            "checkpoint commit eligibility is isolated to atomic semantic profiles"
         )
     payload = {
         "protocol_version": PROTOCOL_VERSION,
@@ -1977,10 +2043,10 @@ def capability_manifest(
     )
     if active_commit_eligibility != CHECKPOINT_COMMIT_ELIGIBILITY_NONE and not (
         active_mode == "atomic"
-        and active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC
+        and is_semantic_atomic_profile(active_operator_profile)
     ):
         raise ValueError(
-            "checkpoint commit eligibility is isolated to atomic semantic-v2"
+            "checkpoint commit eligibility is isolated to atomic semantic profiles"
         )
     active_tools = tools_for_profile(active_mode, active_operator_profile)
     manifest = {
@@ -2032,6 +2098,11 @@ def capability_manifest(
     if active_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE:
         manifest["atomic_operator_profile"] = active_operator_profile
         manifest["checkpoint_tools_model_visible"] = True
+    if active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3:
+        manifest["provider_phase_history_policy"] = provider_phase_history_policy(
+            active_operator_profile
+        )
+        manifest["model_schema_delivery"] = "v24-compact-operational-contract-v1"
     eligibility_manifest = checkpoint_commit_eligibility_manifest(
         active_commit_eligibility
     )
@@ -2063,6 +2134,7 @@ __all__ = [
     "ATOMIC_OPERATOR_PROFILES",
     "ATOMIC_OPERATOR_PROFILE_MICRO",
     "ATOMIC_OPERATOR_PROFILE_SEMANTIC",
+    "ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3",
     "BACKEND",
     "BINARY_EXPRESSION_OPERATORS",
     "CANONICAL_TYPES",
@@ -2140,12 +2212,15 @@ __all__ = [
     "normalize_carrier",
     "normalize_checkpoint_guidance_profile",
     "normalize_atomic_operator_profile",
+    "is_semantic_atomic_profile",
     "parameter_schema",
+    "provider_phase_history_policy",
     "prompt_hash",
     "provider_tool_definitions",
     "tool_schema_hash",
     "tools_for_mode",
     "tools_for_profile",
+    "trim_provider_phase_history",
     "validate_arguments",
     "validate_model_action",
     "validate_tool_call",

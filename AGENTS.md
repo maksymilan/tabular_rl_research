@@ -78,8 +78,13 @@ Start at `docs/current/README.md`.
   `mode=atomic`; it replaces several mechanical chains with `shape_rows`, conditional
   `group_aggregate`, grounded `scalar_compute`, and tie-explicit `rank_select`. It retains
   model-visible `commit_checkpoint` and `restore_checkpoint` plus the same Harness snapshot and
-  audit semantics. The two profiles have distinct prompt/schema/protocol hashes and must not be
-  mixed. `semantic-v2` has no behavior or SFT/RL promotion until a paired causal gate passes.
+  audit semantics. `semantic-v3-v24` is a Text-JSON-only diagnostic repair profile over exactly
+  the same semantic-v2 executable tool/schema surface. It borrows version24's compact operational
+  signatures, validator-checked canonical examples, exact-output constraints, and recent-4 causal
+  provider history, while retaining current typed execution, artifacts, and checkpoint semantics.
+  Its prompt/history/protocol identity is distinct and must not be mixed with v2. Neither semantic
+  profile has behavior or SFT/RL promotion until a paired causal gate passes. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V3_V24_GAP_REPAIR_20260811_ZH.md`.
 - “Forward” identifies the development base; it is not a behavior or training promotion.
   `checkpoint-relalg-v1` remains diagnostic-only until fresh replay, structure, provider-history,
   no-leak, behavior, scheme-aware export, and explicit SFT/RL admission gates pass. Gold SQL and

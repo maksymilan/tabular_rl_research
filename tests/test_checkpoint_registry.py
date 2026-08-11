@@ -50,6 +50,28 @@ def test_semantic_atomic_profile_has_distinct_identity_and_keeps_checkpoints():
     assert "restore_checkpoint" in semantic.top_level_tools
 
 
+def test_semantic_v3_keeps_v2_execution_surface_but_changes_model_interface_identity():
+    v2 = build_checkpoint_relalg_tool_scheme(
+        mode="atomic",
+        carrier="text-json",
+        atomic_operator_profile="semantic-v2",
+    )
+    v3 = build_checkpoint_relalg_tool_scheme(
+        mode="atomic",
+        carrier="text-json",
+        atomic_operator_profile="semantic-v3-v24",
+    )
+
+    assert v3.atomic_operator_profile == "semantic-v3-v24"
+    assert v3.protocol_hash != v2.protocol_hash
+    assert v3.student_prompt_hash != v2.student_prompt_hash
+    assert v3.teacher_prompt_hash != v2.teacher_prompt_hash
+    assert v3.tool_schema_hash == v2.tool_schema_hash
+    assert v3.top_level_tools == v2.top_level_tools
+    assert v3.atomic_tools == v2.atomic_tools
+    assert len(v3.system_prompt) < len(v2.system_prompt) / 2
+
+
 def test_semantic_checkpoint_eligibility_changes_only_registry_protocol_identity():
     baseline = build_checkpoint_relalg_tool_scheme(
         mode="atomic",

@@ -71,6 +71,16 @@ Atomic 另有显式、隔离的算子粒度配置 `--atomic-operator-profile`：
 与 protocol hash；不得与 `micro-v1` 轨迹混合或事后改标签。当前仍为 diagnostic-only，尚无
 行为提升或训练准入结论。
 
+`semantic-v3-v24` 是 2026-08-11 新增的隔离 Text-JSON diagnostic profile。它不增加或删除
+semantic-v2 工具，也不改变 executable schemas、typed validator、执行器、artifact 或
+checkpoint 语义；两者 tool-schema hash 相同。v3 只修补 historical Atomic version24 对模型
+接口更有效的部分：用紧凑 prose signatures 与 validator-checked canonical calls 取代每轮约
+4 万字符的递归 schema 展开，恢复 ID/code、独立输出槽、helper 列、duplicate 与顺序等精确
+输出约束，并把同一 phase 的 provider transcript 限为 recent-4 完整因果 turns。完整状态和
+审计轨迹不裁剪，fresh replay 按 identity-bound history policy 精确重建。v3 与 v2 的 prompt、
+history 和 protocol identity 不同，仍为 diagnostic-only；详见
+`../reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V3_V24_GAP_REPAIR_20260811_ZH.md`。
+
 `semantic-milestone-v1` 是 semantic-v2 Atomic 专用的 teacher-only checkpoint 触发诊断。
 它不改变快照、restore 或算子执行语义，只把抽象“里程碑”落实为可执行规则：稳定且仍会被后续
 聚合、排名、标量或整形阶段消费的 population/join/metric artifact 在下一轮 commit；简单题零

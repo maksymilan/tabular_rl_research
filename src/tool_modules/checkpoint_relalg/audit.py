@@ -39,6 +39,7 @@ from .protocol import (
     normalize_carrier,
     normalize_atomic_operator_profile,
     normalize_checkpoint_guidance_profile,
+    trim_provider_phase_history,
     tool_schema_hash,
 )
 from .provider_tools import (
@@ -1386,6 +1387,10 @@ def audit_record(record: Mapping[str, Any], *, record_index: int = 0) -> dict[st
                 if isinstance(current_user, Mapping):
                     expected_phase_history.extend(
                         [current_user, assistant, *result_messages]
+                    )
+                    expected_phase_history = trim_provider_phase_history(
+                        expected_phase_history,
+                        atomic_operator_profile,
                     )
         elif carrier_declared:
             expected_failed_metrics = {

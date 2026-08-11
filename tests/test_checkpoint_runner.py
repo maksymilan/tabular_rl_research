@@ -109,6 +109,64 @@ class FakeClient:
         )
 
 
+class FakeTextClient:
+    carrier = "text-json"
+    request_audit_options = {
+        "endpoint": "https://api.deepseek.com/chat/completions",
+        "model": "fake",
+        "carrier": "text-json",
+        "assistant_carrier": "provider-thinking-raw-text-json-single-action-v1",
+        "response_format": {"type": "json_object"},
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": "high",
+    }
+
+    def __init__(self, actions):
+        self.actions = list(actions)
+        self.requests = []
+
+    def request_turn_with_retries(self, *, messages, **kwargs):
+        self.requests.append(deepcopy(messages))
+        tool, arguments = self.actions.pop(0)
+        message = {
+            "role": "assistant",
+            "content": json.dumps(
+                {"tool": tool, "arguments": arguments},
+                separators=(",", ":"),
+            ),
+            "reasoning_content": "causal compact-profile test",
+        }
+        usage = {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10}
+        envelope_hash = hashlib.sha256(json.dumps(
+            message,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        return NativeAssistantResponse(
+            message=message,
+            calls=(),
+            finish_reason="stop",
+            usage=usage,
+            response_metadata={"model": "fake"},
+            raw_assistant_message=message,
+            retry_events=[],
+            provider_attempt_count=1,
+            provider_elapsed_seconds=0.01,
+            provider_attempt_events=[{
+                "attempt_index": 1,
+                "max_tokens": kwargs["max_tokens"],
+                "finish_reason": "stop",
+                "usage": usage,
+                "shape_category": "accepted_response",
+                "response_envelope_sha256": envelope_hash,
+                "response_model": "fake",
+                "raw_assistant_message": message,
+                "elapsed_seconds_from_request_start": 0.01,
+            }],
+        )
+
+
 def _task(tmp_path: Path):
     db_path = tmp_path / "task.sqlite"
     connection = sqlite3.connect(db_path)
@@ -164,6 +222,58 @@ def test_semantic_atomic_runner_and_fresh_replay_are_profile_bound(tmp_path):
     assert "sort" not in record["top_level_tools"]
     assert record["atomic_calls"] == 1
     assert record["phase_execution_styles"] == {"phase_000": "atomic_only"}
+    assert audit_record(record)["passed"]
+    assert fresh_replay_record(record, task)["passed"]
+
+
+def test_semantic_v3_uses_recent_four_causal_turns_and_audits(tmp_path):
+    task = _task(tmp_path)
+    client = FakeTextClient([
+        ("describe_table", {"tables": ["items"]}),
+        ("inspect_column", {"table": "items", "column": "category"}),
+        (
+            "filter_rows",
+            {
+                "table": "items",
+                "conditions": {
+                    "op": "=",
+                    "left": {"column": "category"},
+                    "right": {"value": "x"},
+                },
+            },
+        ),
+        (
+            "shape_rows",
+            {"table": "filter_001", "outputs": [{"column": "category"}]},
+        ),
+        (
+            "group_aggregate",
+            {
+                "table": "items",
+                "group_by": [],
+                "metrics": [{"op": "count", "column": "*", "as": "n"}],
+            },
+        ),
+        ("answer", {"table": "group_aggregate_003"}),
+    ])
+    record = run_episode(
+        task,
+        task_position=0,
+        mode="atomic",
+        carrier="text-json",
+        atomic_operator_profile="semantic-v3-v24",
+        client=client,
+        runtime_config=RuntimeConfig(),
+        max_model_turns=8,
+        max_tokens=128,
+        max_completion_tokens=256,
+        api_retries=2,
+    )
+    assert record["correct"] and record["legal"]
+    assert record["capability_manifest"]["provider_phase_history_policy"] == (
+        "recent-4-turns-v1"
+    )
+    assert [len(request) for request in client.requests] == [2, 5, 8, 11, 14, 14]
     assert audit_record(record)["passed"]
     assert fresh_replay_record(record, task)["passed"]
 

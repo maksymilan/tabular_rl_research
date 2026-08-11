@@ -13,6 +13,8 @@ from src.tool_modules.checkpoint_relalg.executors import (
 from src.tool_modules.checkpoint_relalg.expression import RelAlgValidationError
 from src.tool_modules.checkpoint_relalg.protocol import (
     ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+    ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+    CARRIER_TEXT_JSON,
     MODE_TOOLS,
     ProtocolValidationError,
     SEMANTIC_ATOMIC_TOOLS,
@@ -20,7 +22,10 @@ from src.tool_modules.checkpoint_relalg.protocol import (
     get_system_prompt,
     provider_tool_definitions,
     tool_schema_hash,
+    provider_phase_history_policy,
+    trim_provider_phase_history,
     validate_tool_call,
+    validate_model_action,
 )
 from src.tool_modules.checkpoint_relalg.relation_artifact import Column, SourceRelation
 from src.tool_modules.checkpoint_relalg.runtime import CheckpointRelalgRuntime
@@ -90,6 +95,78 @@ def test_semantic_profile_is_isolated_and_keeps_checkpoint_control() -> None:
             separators=(",", ":"),
         )
     ) < len(json.dumps(provider_tool_definitions("atomic"), separators=(",", ":")))
+
+
+def test_semantic_v3_reuses_execution_surface_with_v24_compact_prompt() -> None:
+    v2_tools = provider_tool_definitions("atomic", ATOMIC_OPERATOR_PROFILE_SEMANTIC)
+    v3_tools = provider_tool_definitions("atomic", ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3)
+    assert v3_tools == v2_tools
+    assert tool_schema_hash("atomic", ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3) == tool_schema_hash(
+        "atomic", ATOMIC_OPERATOR_PROFILE_SEMANTIC
+    )
+
+    v2_prompt = get_system_prompt(
+        "atomic",
+        teacher=True,
+        carrier=CARRIER_TEXT_JSON,
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+    )
+    v3_prompt = get_system_prompt(
+        "atomic",
+        teacher=True,
+        carrier=CARRIER_TEXT_JSON,
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+    )
+    assert "MODE: ATOMIC / SEMANTIC-V3-V24" in v3_prompt
+    assert "COMPACT EXECUTABLE CONTRACT" in v3_prompt
+    assert "EXACT OUTPUT CONTRACT" in v3_prompt
+    assert "EXACT TOOL SCHEMAS FOR ATOMIC MODE" not in v3_prompt
+    assert len(v3_prompt) < len(v2_prompt) / 2
+
+    manifest = capability_manifest(
+        "atomic",
+        carrier=CARRIER_TEXT_JSON,
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+    )
+    assert manifest["provider_phase_history_policy"] == "recent-4-turns-v1"
+    assert manifest["model_schema_delivery"] == "v24-compact-operational-contract-v1"
+    assert provider_phase_history_policy(ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3) == (
+        "recent-4-turns-v1"
+    )
+
+
+def test_semantic_v3_recent_four_history_keeps_complete_text_turns() -> None:
+    messages = [
+        {"role": role, "content": f"turn{turn}-{role}"}
+        for turn in range(5)
+        for role in ("user", "assistant", "user-result")
+    ]
+    trimmed = trim_provider_phase_history(
+        messages,
+        ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+    )
+    assert len(trimmed) == 12
+    assert trimmed[0]["content"] == "turn1-user"
+    assert trim_provider_phase_history(
+        messages,
+        ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+    ) == messages
+
+
+def test_semantic_v3_canonical_calls_are_executable_schema_valid() -> None:
+    contract = (
+        __import__("pathlib").Path(__file__).resolve().parents[1]
+        / "prompts"
+        / "text_json_semantic_v3_contract.txt"
+    ).read_text(encoding="utf-8")
+    examples = [json.loads(line) for line in contract.splitlines() if line.startswith("{\"tool\"")]
+    assert len(examples) >= 8
+    for example in examples:
+        validate_model_action(
+            example,
+            mode="atomic",
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+        )
 
 
 def test_semantic_validator_accepts_metric_where_and_rejects_micro_leak() -> None:

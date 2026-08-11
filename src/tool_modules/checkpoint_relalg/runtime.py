@@ -22,11 +22,11 @@ from .executors import SQLiteRelationalExecutor
 from .expression import RelAlgValidationError, column_type_map, quote_identifier
 from .predicate import PredicateCompiler
 from .protocol import (
-    ATOMIC_OPERATOR_PROFILE_SEMANTIC,
     ATOMIC_TOOLS,
     DEFAULT_ATOMIC_OPERATOR_PROFILE,
     SEMANTIC_ATOMIC_TOOLS,
     ProtocolValidationError,
+    is_semantic_atomic_profile,
     normalize_atomic_operator_profile,
     normalize_mode,
     validate_tool_call,
@@ -244,18 +244,18 @@ class CheckpointRelalgRuntime:
             atomic_operator_profile
         )
         if self.atomic_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE and self.mode != "atomic":
-            raise ValueError("semantic-v2 is currently isolated to atomic mode")
+            raise ValueError("semantic atomic profiles are isolated to atomic mode")
         self.config = config or RuntimeConfig()
         if (
             self.config.checkpoint_commit_eligibility_policy
             != CHECKPOINT_COMMIT_ELIGIBILITY_NONE
             and (
                 self.mode != "atomic"
-                or self.atomic_operator_profile != ATOMIC_OPERATOR_PROFILE_SEMANTIC
+                or not is_semantic_atomic_profile(self.atomic_operator_profile)
             )
         ):
             raise ValueError(
-                "checkpoint progress policies are isolated to atomic semantic-v2"
+                "checkpoint progress policies are isolated to atomic semantic-v2/semantic-v3 profiles"
             )
         self.state = EnvironmentState(
             load_source_catalog(connection),

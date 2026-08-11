@@ -63,6 +63,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     normalize_atomic_operator_profile,
     normalize_carrier,
     prompt_hash,
+    trim_provider_phase_history,
     provider_tool_definitions,
     tool_schema_hash,
 )
@@ -1521,6 +1522,10 @@ def run_episode(
                         *deepcopy(result_messages),
                     ]
                 )
+                phase_history = trim_provider_phase_history(
+                    phase_history,
+                    active_operator_profile,
+                )
 
             if runtime.done:
                 if runtime.terminal_table is not None:
@@ -1890,7 +1895,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dataset_manifest is None:
         raise SystemExit("--dataset-manifest is required for v2 diagnostic runs")
     if args.atomic_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE and args.mode != "atomic":
-        raise SystemExit("semantic-v2 is currently isolated to --mode atomic")
+        raise SystemExit("semantic atomic profiles are isolated to --mode atomic")
     expected_arm = carrier_experiment_arm(args.carrier)
     if args.experiment_arm is not None and args.experiment_arm != expected_arm:
         raise SystemExit(
