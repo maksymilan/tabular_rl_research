@@ -134,6 +134,16 @@ disabled position 54 的冻结单题 token cap。当前结论是“模型自主�
 继续增加机械前置条件。完整报告见
 `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V3_HOLDOUT_GATE8_20260811_ZH.md`。
 
+在后续 v4-v6 迭代中，v6 最终保留完全由模型选择首次阶段边界、最多 8 次 checkpoint、禁用
+restore，并对后续 checkpoint 加入模型侧成本约束。用户授权的冻结 historical fixed-200 扩展中，
+v6 Atomic `semantic-v2` 得到 142/200，历史 Atomic version24 为 145/200；逐题 13 gain、16
+regression，`p=0.7111`。v6 在 107/200 题提交 130 次 accepted checkpoint，没有连续 commit；
+但这些同题上为 70/107，对照为 71/107。v6 legal 188/200、tool errors 96、tokens 28.61M，
+均明显差于历史对照的 197/200、29、8.42M。该对照不是同时期单变量实验，不能单独归因于
+checkpoint；它证明 exposure 已经充分，但未证明净正确率收益。v6 继续保持 diagnostic-only，
+完整报告见
+`docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V6_HISTORICAL_ATOMIC_FIXED200_20260811_ZH.md`。
+
 三种 mode 共享：
 
 - `commit_checkpoint`：提交已经形成的语义里程碑；

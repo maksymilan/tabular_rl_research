@@ -162,6 +162,18 @@ Start at `docs/current/README.md`.
   phase since the previous accepted checkpoint. It must not count producers, select a turn, or
   otherwise transfer semantic boundary ownership from the model to the Harness. See
   `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V6_VS_V5_GATE4_20260811_ZH.md`.
+- The user-authorized historical fixed-200 expansion then ran `model-choice-commit-v6` with
+  Atomic `semantic-v2` on all 200 frozen version24 task identities. V6 scored 142/200 `bird-set`
+  versus historical Atomic version24 at 145/200; paired outcomes were 13 v6-only and 16
+  version24-only (`p=0.7111`). V6 used checkpoint on 107 tasks with 130 accepted commits and no
+  consecutive commits, but scored 70/107 versus version24's 71/107 on those same IDs. Legal
+  termination was 188 versus 197, tool errors 96 versus 29, and provider tokens 28.61M versus
+  8.42M. All 200 records passed structure and fresh replay; one 44-record shard correctly failed
+  only its batch-level audit after an in-flight response crossed the local token cap, and the
+  never-requested final position was completed in a separate audited top-up. This historical
+  comparison is not a fresh single-variable checkpoint ablation and does not establish checkpoint
+  benefit. Keep v6 diagnostic-only. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V6_HISTORICAL_ATOMIC_FIXED200_20260811_ZH.md`.
 - The original atomic protocol remains supported for ongoing RL work, frozen controls, and exact
   reproduction. Version54 / `native-tool-bundle` remains a diagnostic control/reproduction line
   and does not gain RL admission. Do not delete either line, mix their
