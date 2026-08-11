@@ -34,6 +34,15 @@ Start at `docs/current/README.md`.
   `BASE_URL=https://api.deepseek.com`. Never copy keys into documentation, tracked configuration,
   commands, logs, or chat. See `docs/current/provider_api.md`.
 
+### Pre-authorized external evaluation
+
+- Official DeepSeek API evaluation or teacher batches with fewer than 200 episodes are
+  pre-authorized and do not require additional user confirmation.
+- The endpoint must remain `https://api.deepseek.com`; the requested model, cohort, per-episode
+  limits, and total token cap must be recorded before launch.
+- Ask again only for 200 or more episodes, a different provider or endpoint, destructive actions,
+  or a material expansion of scope.
+
 ### Causal data generation only
 
 - New SFT data comes from a real model↔harness loop.
