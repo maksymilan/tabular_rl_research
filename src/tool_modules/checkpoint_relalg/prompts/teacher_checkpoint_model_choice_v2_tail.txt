@@ -1,0 +1,2 @@
+MODEL-CHOICE STAGE DECISION V2
+Re-evaluate your own single-stage versus multi-stage decision now. If this is multi-stage and a verified reusable semantic stage is complete while distinct answer-relevant work remains, the next action MUST be commit_checkpoint. If the stage is not stable, continue building it; if the exact answer artifact is ready, answer. The Harness supplies no producer quota or trigger. Never call restore_checkpoint.

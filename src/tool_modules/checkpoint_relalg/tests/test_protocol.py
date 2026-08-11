@@ -22,6 +22,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3,
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4,
     CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE,
+    CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V2,
     CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
@@ -461,6 +462,45 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 teacher=True,
                 checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE,
             )
+
+    def test_model_choice_v2_requires_model_selected_stage_commit_without_harness_gate(self):
+        prompt = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_TEXT_JSON,
+            checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V2,
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+        )
+        self.assertIn("decide for yourself whether the task is single-stage or multi-stage", prompt)
+        self.assertIn("your next action must be commit_checkpoint", prompt)
+        self.assertIn("The Harness supplies no producer quota or trigger", prompt)
+        self.assertIn("Never call restore_checkpoint", prompt)
+        self.assertGreater(
+            prompt.rfind("MODEL-CHOICE STAGE DECISION V2"),
+            prompt.rfind("EXACT TOOL SCHEMAS FOR ATOMIC MODE"),
+        )
+        self.assertEqual(
+            checkpoint_commit_eligibility_for_guidance_profile(
+                CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V2
+            ),
+            CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+        )
+        self.assertNotEqual(
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                carrier=CARRIER_TEXT_JSON,
+                checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE,
+                atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+            ),
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                carrier=CARRIER_TEXT_JSON,
+                checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V2,
+                atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+            ),
+        )
 
     def test_commit_eligibility_changes_protocol_identity_not_tool_schema(self):
         for carrier in (CARRIER_NATIVE_TOOL_CALLS, CARRIER_TEXT_JSON):
