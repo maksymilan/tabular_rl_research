@@ -22,6 +22,7 @@ from .checkpoint_store import (
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
     CHECKPOINT_BOOTSTRAP_PERCEPTION_TOOLS,
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
@@ -67,6 +68,7 @@ CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6 = "semantic-milestone-v6"
 CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET = "initial-target-v1"
 CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2 = "initial-target-v2"
 CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3 = "initial-target-v3"
+CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4 = "initial-target-v4"
 CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_STANDARD,
     CHECKPOINT_GUIDANCE_PROFILE_STRESS,
@@ -82,6 +84,7 @@ CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2,
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3,
+    CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4,
 )
 DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
@@ -1535,6 +1538,8 @@ def checkpoint_commit_eligibility_for_guidance_profile(profile: str | None) -> s
         return CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2
     if active_profile == CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3:
         return CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3
+    if active_profile == CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4:
+        return CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4
     return CHECKPOINT_COMMIT_ELIGIBILITY_NONE
 
 
@@ -1559,12 +1564,17 @@ def checkpoint_commit_eligibility_manifest(policy: str | None) -> dict[str, Any]
         CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
         CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
         CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+        CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
     }:
         manifest.update(
             {
                 "allows_initial_target_checkpoint": True,
                 "initial_target_checkpoint_must_be_first_action": (
-                    active_policy != CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3
+                    active_policy
+                    not in {
+                        CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+                        CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
+                    }
                 ),
                 "initial_target_min_targets": BOOTSTRAP_TARGET_MIN_TARGETS,
                 "initial_target_checkpoint_counts_toward_max_checkpoints": True,
@@ -1574,6 +1584,7 @@ def checkpoint_commit_eligibility_manifest(policy: str | None) -> dict[str, Any]
     if active_policy in {
         CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
         CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+        CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
     }:
         manifest.update(
             {
@@ -1587,7 +1598,10 @@ def checkpoint_commit_eligibility_manifest(policy: str | None) -> dict[str, Any]
                 "next_targets_must_retain_exact_remaining_target": True,
             }
         )
-    if active_policy == CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3:
+    if active_policy in {
+        CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+        CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
+    }:
         manifest.update(
             {
                 "allows_perception_before_initial_target_checkpoint": True,
@@ -1597,6 +1611,8 @@ def checkpoint_commit_eligibility_manifest(policy: str | None) -> dict[str, Any]
                 "initial_target_checkpoint_must_precede_relation_artifacts": True,
             }
         )
+    if active_policy == CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4:
+        manifest["state_preserving_failures_keep_bootstrap_window_open"] = True
     return manifest
 
 
@@ -1648,6 +1664,7 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2,
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3,
+            CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4,
         }
         and not (active_mode == "atomic" and semantic_profile)
     ):
@@ -1699,6 +1716,9 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3: (
                 "teacher_checkpoint_initial_target_v3"
             ),
+            CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4: (
+                "teacher_checkpoint_initial_target_v4"
+            ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(checkpoint_fragment))
         if semantic_profile:
@@ -1742,6 +1762,7 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2,
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3,
+            CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4,
         }
     ):
         # Keep the actionable turn check after the large Text-JSON schema block.
@@ -1770,6 +1791,9 @@ def get_system_prompt(
             ),
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3: (
                 "teacher_checkpoint_initial_target_v3_tail"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4: (
+                "teacher_checkpoint_initial_target_v4_tail"
             ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(tail_name))
@@ -1982,6 +2006,7 @@ __all__ = [
     "CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET",
     "CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2",
     "CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3",
+    "CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4",
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TARGET",
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_PROBE",
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER",

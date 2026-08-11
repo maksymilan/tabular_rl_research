@@ -25,12 +25,16 @@ CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2 = (
 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3 = (
     "checkpoint-relalg-perception-bootstrap-ordered-target-v3"
 )
+CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4 = (
+    "checkpoint-relalg-error-tolerant-perception-bootstrap-v4"
+)
 CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES = (
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
 )
 CHECKPOINT_BOOTSTRAP_PERCEPTION_TOOLS = frozenset(
     {"describe_table", "inspect_column", "read_rows"}
@@ -412,6 +416,7 @@ class CheckpointStore:
                 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
                 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
                 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
             }
             and self._is_bootstrap_eligible_phase()
         ):
@@ -433,6 +438,7 @@ class CheckpointStore:
             CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
             CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
             CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+            CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
         }:
             raise AssertionError(
                 "unhandled checkpoint commit eligibility policy "
@@ -509,6 +515,7 @@ class CheckpointStore:
             not in {
                 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
                 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
             }
             or not self._has_active_bootstrap_checkpoint()
             or not self.state.current_targets
@@ -563,6 +570,7 @@ class CheckpointStore:
             not in {
                 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
                 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
             }
             or not self._has_active_bootstrap_checkpoint()
             or len(self.state.current_targets) <= 1
@@ -606,17 +614,29 @@ class CheckpointStore:
         )
         if not base_eligible:
             return False
-        if (
-            self.checkpoint_commit_eligibility_policy
-            != CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3
-        ):
+        if self.checkpoint_commit_eligibility_policy not in {
+            CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+            CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
+        }:
             return (
                 not self.state.steps
                 and not self.state.discovered_schema_ids
                 and not self.state.active_observation_ids
             )
+        if (
+            self.checkpoint_commit_eligibility_policy
+            == CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3
+        ):
+            return all(
+                step.tool in CHECKPOINT_BOOTSTRAP_PERCEPTION_TOOLS
+                for step in self.state.steps.values()
+            )
         return all(
-            step.tool in CHECKPOINT_BOOTSTRAP_PERCEPTION_TOOLS
+            (not step.succeeded)
+            or (
+                step.tool in CHECKPOINT_BOOTSTRAP_PERCEPTION_TOOLS
+                and not step.produced_artifact_ids
+            )
             for step in self.state.steps.values()
         )
 
@@ -763,6 +783,7 @@ __all__ = [
     "CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1",
     "CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2",
     "CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3",
+    "CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4",
     "CHECKPOINT_COMMIT_ELIGIBILITY_NONE",
     "CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1",
     "CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES",

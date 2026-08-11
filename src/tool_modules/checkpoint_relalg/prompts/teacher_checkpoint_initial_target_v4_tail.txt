@@ -1,0 +1,2 @@
+ERROR-TOLERANT BOOTSTRAP V4 TURN CHECK
+Before the first successful relation producer: simple task => no bootstrap; hard task => commit_checkpoint with two or three ordered targets. Read-only perception and rejected state-preserving calls may precede this decision. After bootstrap obey [ACTIVE], [REMAINING], and MILESTONE PROGRESS. If TARGET TRANSITION REQUIRED is shown, commit next, removing the completed active target and retaining at least one exact remaining target. On the final target, answer without an unnecessary transition checkpoint.

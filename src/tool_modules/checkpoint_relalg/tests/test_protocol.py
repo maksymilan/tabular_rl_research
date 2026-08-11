@@ -20,6 +20,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2,
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3,
+    CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
     MAX_EXPRESSION_DEPTH,
@@ -43,6 +44,7 @@ from tool_modules.checkpoint_relalg.checkpoint_store import (  # noqa: E402
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
 )
@@ -198,6 +200,7 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
                 CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2,
                 CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3,
+                CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4,
                 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
                 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
             }:
@@ -352,6 +355,46 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 CARRIER_TEXT_JSON,
                 ATOMIC_OPERATOR_PROFILE_SEMANTIC,
                 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
+            ),
+        )
+
+    def test_initial_target_v4_keeps_bootstrap_open_after_rejected_calls(self):
+        prompt = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_TEXT_JSON,
+            checkpoint_guidance_profile=(
+                CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4
+            ),
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+        )
+        self.assertIn("ERROR-TOLERANT PERCEPTION-BOOTSTRAP V4", prompt)
+        self.assertIn("rejected state-preserving call", prompt)
+        self.assertGreater(
+            prompt.rfind("ERROR-TOLERANT BOOTSTRAP V4 TURN CHECK"),
+            prompt.rfind("EXACT TOOL SCHEMAS FOR ATOMIC MODE"),
+        )
+        policy = checkpoint_commit_eligibility_for_guidance_profile(
+            CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4
+        )
+        self.assertEqual(policy, CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4)
+        manifest = checkpoint_commit_eligibility_manifest(policy)
+        self.assertIs(
+            manifest["state_preserving_failures_keep_bootstrap_window_open"],
+            True,
+        )
+        self.assertNotEqual(
+            carrier_protocol_hash(
+                "atomic",
+                CARRIER_TEXT_JSON,
+                ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+                policy,
+            ),
+            carrier_protocol_hash(
+                "atomic",
+                CARRIER_TEXT_JSON,
+                ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
             ),
         )
 

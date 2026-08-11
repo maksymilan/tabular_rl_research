@@ -7,6 +7,7 @@ import pytest
 from tool_modules.checkpoint_relalg.checkpoint_store import (
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
 )
 from tool_modules.checkpoint_relalg.runtime import (
@@ -319,6 +320,35 @@ def test_initial_target_v3_bootstraps_after_perception_but_not_after_production(
     assert rejected["status"] == "error"
     assert rejected["error"]["code"] == "checkpoint_phase_progress_insufficient"
     assert late.checkpoints.checkpoint_count == 0
+
+
+def test_initial_target_v4_bootstrap_survives_state_preserving_rejection():
+    runtime = CheckpointRelalgRuntime(
+        _connection(),
+        mode="atomic",
+        atomic_operator_profile="semantic-v2",
+        config=RuntimeConfig(
+            checkpoint_commit_eligibility_policy=(
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V4
+            )
+        ),
+    )
+    rejected = runtime.apply("not_a_tool", {})
+    assert rejected["status"] == "error"
+    assert runtime.apply("describe_table", {"tables": ["customers"]})["status"] == "success"
+    bootstrap = runtime.apply(
+        "commit_checkpoint",
+        {
+            "progress_summary": ["The customer schema is observed."],
+            "remaining_uncertainties": ["The requested population is unresolved."],
+            "next_targets": [
+                "Ground the requested population.",
+                "Construct and verify the exact answer relation.",
+            ],
+        },
+    )
+    assert bootstrap["status"] == "success"
+    assert runtime.checkpoints.get("checkpoint_001").created_by == "bootstrap_checkpoint"
 
 
 def test_checkpoint_restore_deactivates_later_artifact_and_keeps_monotonic_ids():
