@@ -26,6 +26,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V3,
     CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V4,
     CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V5,
+    CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V6,
     CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
@@ -624,6 +625,47 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 teacher=True,
                 carrier=CARRIER_TEXT_JSON,
                 checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V5,
+                atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+            ),
+        )
+
+    def test_model_choice_v6_keeps_first_trigger_and_amortizes_later_commits(self):
+        prompt = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_TEXT_JSON,
+            checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V6,
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+        )
+        self.assertIn("For the first checkpoint", prompt)
+        self.assertIn("at least two distinct answer-relevant relational decisions", prompt)
+        self.assertIn("Never commit twice consecutively", prompt)
+        self.assertIn("at least one new relation-producing action must have succeeded", prompt)
+        self.assertIn("at least four more tool actions before answer", prompt)
+        self.assertIn("The Harness supplies no trigger or producer quota", prompt)
+        self.assertGreater(
+            prompt.rfind("MODEL-CHOICE STAGE DECISION V6"),
+            prompt.rfind("EXACT TOOL SCHEMAS FOR ATOMIC MODE"),
+        )
+        self.assertEqual(
+            checkpoint_commit_eligibility_for_guidance_profile(
+                CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V6
+            ),
+            CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+        )
+        self.assertNotEqual(
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                carrier=CARRIER_TEXT_JSON,
+                checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V5,
+                atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+            ),
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                carrier=CARRIER_TEXT_JSON,
+                checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE_V6,
                 atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
             ),
         )

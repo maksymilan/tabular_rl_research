@@ -141,6 +141,17 @@ Start at `docs/current/README.md`.
   v5 is implementation-complete but has no live result until its independent exposure gate runs.
   See
   `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V4_EXPOSURE_GATE4_20260811_ZH.md`.
+- `model-choice-commit-v5` restored checkpoint exposure on a fresh paired Gate4: 2/4 tasks made
+  five accepted commits with Harness eligibility still `none`. It scored 1/4 `bird-set` versus
+  disabled 2/4 (one paired regression, no gain), with both arms 3/4 legal and 0/4 strict. On the
+  two checkpoint-used tasks v5 was 0/2 versus 1/2, used two extra turns, and 2.2% more tokens.
+  One trajectory committed twice consecutively with no intervening relation production; another
+  made a late second commit that had only three tool actions left to amortize the reset. Keep v5
+  diagnostic-only. `model-choice-commit-v6` preserves the first model-selected trigger but makes
+  later commits model-side cost-aware: never consecutive, at least one new successful relation
+  producer since the prior checkpoint, and at least four expected tool actions remaining. Harness
+  eligibility remains `none`, max checkpoints remains eight, and restore remains disabled. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V5_VS_DISABLED_GATE4_20260811_ZH.md`.
 - The original atomic protocol remains supported for ongoing RL work, frozen controls, and exact
   reproduction. Version54 / `native-tool-bundle` remains a diagnostic control/reproduction line
   and does not gain RL admission. Do not delete either line, mix their
