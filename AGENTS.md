@@ -119,6 +119,15 @@ Start at `docs/current/README.md`.
   producer-count Harness gate, but it does not show accuracy benefit. Keep it diagnostic-only; do
   not promote, remove checkpoint, or increase commit pressure from this sample. See
   `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V2_VS_DISABLED_GATE8_20260811_ZH.md`.
+- `model-choice-commit-v3` then required a successful `read_rows`/`inspect_column` verification
+  before every candidate commit. On a disjoint fresh Gate8 it again produced zero checkpoint
+  attempts across 8/8 tasks and 90 turns, scored 2/8 versus 3/8 disabled, used 2.133M versus 1.624M
+  tokens, and had 11 versus six errors. All 16 structures and fresh replays passed; two v3 records
+  stopped at the per-episode token cap. Freeze v3 as an over-suppressed manipulation failure. Do
+  not add more mechanical preconditions; the next diagnostic must return to v2-style semantic
+  model choice with only narrow exclusions for unresolved post-error state and useless late
+  commits. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V3_HOLDOUT_GATE8_20260811_ZH.md`.
 - The original atomic protocol remains supported for ongoing RL work, frozen controls, and exact
   reproduction. Version54 / `native-tool-bundle` remains a diagnostic control/reproduction line
   and does not gain RL admission. Do not delete either line, mix their

@@ -126,6 +126,14 @@ disabled position 54 的冻结单题 token cap。当前结论是“模型自主�
 收益”，不得据此 promotion，也不应继续单纯增强 commit 频率。完整报告见
 `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V2_VS_DISABLED_GATE8_20260811_ZH.md`。
 
+随后 `model-choice-commit-v3` 试图把“稳定阶段”操作化为 commit 前必须对候选 artifact 做
+`read_rows`/`inspect_column` 验证。disjoint holdout Gate8 中 v3 在 8/8 题、90 turns 再次为
+0 commit，得 2/8，对照为 3/8；tokens 为 2.133M 对 1.624M，errors 为 11 对 6，且 v3 有
+两个 token-cap stop。该规则把自主阶段判断变成额外 perception 链并过度抑制 commit，冻结为
+失败诊断。下一步必须返回 v2 的自主语义选择，只允许窄的错误后未验证/过晚提交排除规则，不能
+继续增加机械前置条件。完整报告见
+`docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V3_HOLDOUT_GATE8_20260811_ZH.md`。
+
 三种 mode 共享：
 
 - `commit_checkpoint`：提交已经形成的语义里程碑；
