@@ -22,11 +22,18 @@ CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1 = (
 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2 = (
     "checkpoint-relalg-ordered-target-transition-v2"
 )
+CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3 = (
+    "checkpoint-relalg-perception-bootstrap-ordered-target-v3"
+)
 CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES = (
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+)
+CHECKPOINT_BOOTSTRAP_PERCEPTION_TOOLS = frozenset(
+    {"describe_table", "inspect_column", "read_rows"}
 )
 CHECKPOINT_MILESTONE_PRODUCER_TOOLS = frozenset(
     {"filter_rows", "join", "group_aggregate", "set_operation"}
@@ -404,8 +411,9 @@ class CheckpointStore:
             in {
                 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
                 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
             }
-            and self._is_pristine_bootstrap_phase()
+            and self._is_bootstrap_eligible_phase()
         ):
             if len(targets) < BOOTSTRAP_TARGET_MIN_TARGETS:
                 raise StateError(
@@ -424,6 +432,7 @@ class CheckpointStore:
             CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
             CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
             CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
+            CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
         }:
             raise AssertionError(
                 "unhandled checkpoint commit eligibility policy "
@@ -497,7 +506,10 @@ class CheckpointStore:
 
         if (
             self.checkpoint_commit_eligibility_policy
-            != CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2
+            not in {
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+            }
             or not self._has_active_bootstrap_checkpoint()
             or not self.state.current_targets
         ):
@@ -548,7 +560,10 @@ class CheckpointStore:
     def _ensure_ordered_target_progression(self, targets: tuple[str, ...]) -> None:
         if (
             self.checkpoint_commit_eligibility_policy
-            != CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2
+            not in {
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
+            }
             or not self._has_active_bootstrap_checkpoint()
             or len(self.state.current_targets) <= 1
         ):
@@ -580,17 +595,29 @@ class CheckpointStore:
             for checkpoint_id in self.active_checkpoint_path
         )
 
-    def _is_pristine_bootstrap_phase(self) -> bool:
-        return (
+    def _is_bootstrap_eligible_phase(self) -> bool:
+        base_eligible = (
             self.checkpoint_count == 0
             and self.active_checkpoint_id == "root"
             and self.state.phase_id == "phase_000"
             and not self.state.current_targets
-            and not self.state.steps
-            and not self.state.discovered_schema_ids
             and not self.state.active_artifact_ids
-            and not self.state.active_observation_ids
             and not self.state.usable_step_ids
+        )
+        if not base_eligible:
+            return False
+        if (
+            self.checkpoint_commit_eligibility_policy
+            != CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3
+        ):
+            return (
+                not self.state.steps
+                and not self.state.discovered_schema_ids
+                and not self.state.active_observation_ids
+            )
+        return all(
+            step.tool in CHECKPOINT_BOOTSTRAP_PERCEPTION_TOOLS
+            for step in self.state.steps.values()
         )
 
     def restore(
@@ -732,8 +759,10 @@ class CheckpointStore:
 
 __all__ = [
     "BOOTSTRAP_TARGET_MIN_TARGETS",
+    "CHECKPOINT_BOOTSTRAP_PERCEPTION_TOOLS",
     "CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1",
     "CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2",
+    "CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3",
     "CHECKPOINT_COMMIT_ELIGIBILITY_NONE",
     "CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1",
     "CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES",
