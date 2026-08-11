@@ -109,6 +109,16 @@ Start at `docs/current/README.md`.
   not evidence that checkpoint helps or hurts. Do not restore producer-count gating or remove
   checkpoint based on this result. See
   `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_VS_DISABLED_GATE20_20260811_ZH.md`.
+- A follow-up Atomic `semantic-v2` fresh paired Gate8 tested `model-choice-commit-v2` against
+  checkpoint-disabled with Harness eligibility still `none`, restore disabled, and max checkpoints
+  eight. The v2 arm now achieved checkpoint exposure on 5/8 tasks with seven accepted commits, but
+  scored 4/8 `bird-set` versus 6/8 disabled (paired v2-only 0, disabled-only 2). Legal termination
+  was 8/8 versus 7/8 and tokens were 1.928M versus 1.863M. All 16 records passed structure,
+  cohort/manifest binding, and fresh replay; the only overall audit failure was one disabled
+  per-episode token-cap stop. This proves model-selected staging can trigger checkpoint without a
+  producer-count Harness gate, but it does not show accuracy benefit. Keep it diagnostic-only; do
+  not promote, remove checkpoint, or increase commit pressure from this sample. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V2_VS_DISABLED_GATE8_20260811_ZH.md`.
 - The original atomic protocol remains supported for ongoing RL work, frozen controls, and exact
   reproduction. Version54 / `native-tool-bundle` remains a diagnostic control/reproduction line
   and does not gain RL admission. Do not delete either line, mix their

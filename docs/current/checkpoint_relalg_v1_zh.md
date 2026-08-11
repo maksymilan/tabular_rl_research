@@ -116,6 +116,16 @@ model turns 中仍为 0 次 commit 尝试，得到 9/20；禁用臂为 11/20。�
 commit”不足，但也不授权恢复 producer quota 或废弃 checkpoint。完整报告见
 `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_VS_DISABLED_GATE20_20260811_ZH.md`。
 
+`model-choice-commit-v2` 随后仍保持 Harness eligibility=`none`、restore 禁用和最多 8 次
+checkpoint，只把 teacher 规则改为：开局由模型自行判断 single-stage 或 multi-stage；若它判断
+一个经过观察验证、可复用的语义阶段已经稳定且仍有不同后续阶段，则下一动作必须 commit。
+fresh paired Gate8 中，v2 在 5/8 题提交 7 次 checkpoint，全部成功，说明零 exposure 已解决；
+但只得 4/8，对照为 6/8，配对为 v2-only 0、disabled-only 2。v2 legal 为 8/8、对照 7/8，
+tokens 为 1.928M 对 1.863M。16/16 structure 与 fresh replay 通过，唯一 overall audit 失败是
+disabled position 54 的冻结单题 token cap。当前结论是“模型自主阶段边界可以触发，但尚无准确率
+收益”，不得据此 promotion，也不应继续单纯增强 commit 频率。完整报告见
+`docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V2_VS_DISABLED_GATE8_20260811_ZH.md`。
+
 三种 mode 共享：
 
 - `commit_checkpoint`：提交已经形成的语义里程碑；
