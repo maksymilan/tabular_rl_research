@@ -152,6 +152,16 @@ Start at `docs/current/README.md`.
   producer since the prior checkpoint, and at least four expected tool actions remaining. Harness
   eligibility remains `none`, max checkpoints remains eight, and restore remains disabled. See
   `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V5_VS_DISABLED_GATE4_20260811_ZH.md`.
+- A fresh `model-choice-commit-v6` versus v5 Gate4 preserved identical outcomes (2/4 correct,
+  1/4 strict, 4/4 legal) while reducing accepted commits from 8 to 4, turns from 53 to 44, and
+  provider tokens from 860,854 to 717,127 (-16.7%). Checkpoint coverage remained 3/4. However,
+  v6 still produced one consecutive accepted commit with no intervening non-control action,
+  despite an explicit prompt prohibition; v5 produced this defect on two tasks. All eight records
+  and audits passed. Freeze v6 without expansion: prompt-only guidance cannot guarantee the
+  no-progress invariant. The next isolated change should reject only a commit made in an empty
+  phase since the previous accepted checkpoint. It must not count producers, select a turn, or
+  otherwise transfer semantic boundary ownership from the model to the Harness. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_V6_VS_V5_GATE4_20260811_ZH.md`.
 - The original atomic protocol remains supported for ongoing RL work, frozen controls, and exact
   reproduction. Version54 / `native-tool-bundle` remains a diagnostic control/reproduction line
   and does not gain RL admission. Do not delete either line, mix their
