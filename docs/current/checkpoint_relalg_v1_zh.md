@@ -108,6 +108,14 @@ goal rejection；但 v4 只得 3/8，低于当前 Harness 下 adaptive 的 4/8�
 “distinct-goal 正确、触发过密”的诊断，不应扩大。下一步保留 8 次上限和 goal 差异规则，但在
 commit 前增加 Harness 可验证的最小 phase 进展门槛。
 
+随后又隔离测试了完全由模型决定阶段边界、Harness eligibility=`none`、restore 禁用的
+`model-choice-commit-v1`，并与 checkpoint 完全禁用臂做 20 题配对。自主臂在 20/20 题、223 个
+model turns 中仍为 0 次 commit 尝试，得到 9/20；禁用臂为 11/20。两臂 strict artifact 均为
+6/20，40/40 record structure 与 fresh replay 通过。因为自主臂没有形成 checkpoint exposure，
+该结果是 prompt manipulation failure，不是 checkpoint 效果比较。它再次确认纯可选“may
+commit”不足，但也不授权恢复 producer quota 或废弃 checkpoint。完整报告见
+`docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_VS_DISABLED_GATE20_20260811_ZH.md`。
+
 三种 mode 共享：
 
 - `commit_checkpoint`：提交已经形成的语义里程碑；

@@ -95,6 +95,15 @@ Start at `docs/current/README.md`.
   scheme-local training candidates: checkpoint-relalg still has no approved exporter or SFT/RL
   admission, and none may be mixed into the atomic pipeline. See
   `docs/reports/evaluation/CHECKPOINT_RELALG_V1_FLASH_TEXT_JSON_HYBRID_PREFIX100_20260809_ZH.md`.
+- A later Atomic `semantic-v2` paired Gate20 compared model-chosen checkpointing with checkpoint
+  disabled while leaving Harness checkpoint eligibility at `none` and restore disabled. The
+  model-choice arm attempted zero checkpoints across 20/20 tasks and 223 model turns; it scored
+  9/20 `bird-set` versus 11/20 disabled, while both arms scored 6/20 strict artifact. All 40
+  records passed structure, cohort/manifest binding, and fresh replay; seven overall audits failed
+  only at the frozen per-episode token gate. This is an underexposed prompt-manipulation failure,
+  not evidence that checkpoint helps or hurts. Do not restore producer-count gating or remove
+  checkpoint based on this result. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_MODEL_CHOICE_VS_DISABLED_GATE20_20260811_ZH.md`.
 - The original atomic protocol remains supported for ongoing RL work, frozen controls, and exact
   reproduction. Version54 / `native-tool-bundle` remains a diagnostic control/reproduction line
   and does not gain RL admission. Do not delete either line, mix their
