@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from tool_modules.checkpoint_relalg.checkpoint_store import (
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
 )
 from tool_modules.checkpoint_relalg.runtime import (
@@ -180,6 +181,73 @@ def test_runtime_enforces_first_semantic_milestone_commit_quota_without_mutation
     assert runtime.audit_state()["checkpoint_commit_eligibility_policy"] == (
         CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1
     )
+
+
+def test_runtime_requires_ordered_target_transition_before_next_producer():
+    runtime = CheckpointRelalgRuntime(
+        _connection(),
+        mode="atomic",
+        atomic_operator_profile="semantic-v2",
+        config=RuntimeConfig(
+            checkpoint_commit_eligibility_policy=(
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2
+            )
+        ),
+    )
+    active_target = "Ground the requested population."
+    remaining_target = "Construct and verify the exact answer relation."
+    bootstrap = runtime.apply(
+        "commit_checkpoint",
+        {
+            "progress_summary": [
+                "Initial decomposition only; no database evidence exists yet."
+            ],
+            "remaining_uncertainties": ["The requested population is unresolved."],
+            "next_targets": [active_target, remaining_target],
+        },
+    )
+    assert bootstrap["status"] == "success"
+    for country in ("UK", "US"):
+        produced = runtime.apply(
+            "filter_rows",
+            {
+                "table": "customers",
+                "conditions": {
+                    "op": "=",
+                    "left": {"column": "country"},
+                    "right": {"value": country},
+                },
+            },
+        )
+        assert produced["status"] == "success"
+
+    before = runtime.state.logical_hash()
+    blocked = runtime.apply(
+        "group_aggregate",
+        {
+            "table": "customers",
+            "group_by": [],
+            "metrics": [{"op": "count", "column": "*", "as": "n"}],
+        },
+    )
+    assert blocked["status"] == "error"
+    assert blocked["error"]["type"] == "state_validation_error"
+    assert blocked["error"]["code"] == "checkpoint_target_transition_required"
+    assert runtime.state.logical_hash() == before
+
+    advanced = runtime.apply(
+        "commit_checkpoint",
+        {
+            "progress_summary": ["The active population target is grounded."],
+            "remaining_uncertainties": ["The exact answer relation remains."],
+            "next_targets": [remaining_target],
+        },
+    )
+    assert advanced["status"] == "success"
+    assert runtime.state.current_targets == (remaining_target,)
+    final_status = runtime.checkpoints.ordered_target_status()
+    assert final_status["remaining_targets"] == []
+    assert final_status["target_transition_required"] is False
 
 
 def test_checkpoint_restore_deactivates_later_artifact_and_keeps_monotonic_ids():

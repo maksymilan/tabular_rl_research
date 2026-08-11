@@ -323,6 +323,7 @@ class CheckpointRelalgRuntime:
                 arguments,
                 atomic_operator_profile=self.atomic_operator_profile,
             )
+            self.checkpoints.ensure_ordered_target_action_allowed(str(tool))
             output, terminal = self._dispatch(str(tool), validated)
             artifact_payload = output.get("artifact") if isinstance(output, Mapping) else None
             artifact_table = (

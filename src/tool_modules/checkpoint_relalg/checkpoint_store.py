@@ -19,10 +19,14 @@ CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1 = (
 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1 = (
     "checkpoint-relalg-initial-target-ordinal-milestone-v1"
 )
+CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2 = (
+    "checkpoint-relalg-ordered-target-transition-v2"
+)
 CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES = (
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
 )
 CHECKPOINT_MILESTONE_PRODUCER_TOOLS = frozenset(
     {"filter_rows", "join", "group_aggregate", "set_operation"}
@@ -397,7 +401,10 @@ class CheckpointStore:
 
         if (
             self.checkpoint_commit_eligibility_policy
-            == CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1
+            in {
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
+            }
             and self._is_pristine_bootstrap_phase()
         ):
             if len(targets) < BOOTSTRAP_TARGET_MIN_TARGETS:
@@ -416,11 +423,37 @@ class CheckpointStore:
         if self.checkpoint_commit_eligibility_policy not in {
             CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
             CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
+            CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
         }:
             raise AssertionError(
                 "unhandled checkpoint commit eligibility policy "
                 f"{self.checkpoint_commit_eligibility_policy!r}"
             )
+
+        progress = self.phase_progress()
+        quota = progress["quota"]
+        producer_count = progress["successful_milestone_producer_count"]
+        new_artifact_count = progress["new_active_artifact_count"]
+        if producer_count >= quota and new_artifact_count >= quota:
+            self._ensure_ordered_target_progression(targets)
+            return "commit_checkpoint"
+        raise StateError(
+            "checkpoint_phase_progress_insufficient",
+            "the current phase has not reached the checkpoint progress quota",
+            {
+                "policy": self.checkpoint_commit_eligibility_policy,
+                "quota": quota,
+                "successful_commit_ordinal": progress["successful_commit_ordinal"],
+                "successful_milestone_producer_count": producer_count,
+                "new_active_artifact_count": new_artifact_count,
+                "milestone_tools": sorted(CHECKPOINT_MILESTONE_PRODUCER_TOOLS),
+                "observed_milestone_tools": progress["observed_milestone_tools"],
+            },
+            error_type="state_validation_error",
+        )
+
+    def phase_progress(self) -> dict[str, Any]:
+        """Return deterministic, content-free progress for the active phase."""
 
         successful_commit_count = sum(
             node.created_by == "commit_checkpoint" for node in self.nodes.values()
@@ -446,26 +479,105 @@ class CheckpointStore:
             ):
                 continue
             qualifying_steps.append(step)
-
         producer_count = len(qualifying_steps)
         new_artifact_count = len(new_active_artifacts)
-        if producer_count >= quota and new_artifact_count >= quota:
-            return "commit_checkpoint"
+        return {
+            "quota": quota,
+            "successful_commit_ordinal": successful_commit_count + 1,
+            "successful_milestone_producer_count": producer_count,
+            "new_active_artifact_count": new_artifact_count,
+            "observed_milestone_tools": sorted(
+                {step.tool for step in qualifying_steps}
+            ),
+            "eligible": producer_count >= quota and new_artifact_count >= quota,
+        }
+
+    def ordered_target_status(self) -> dict[str, Any] | None:
+        """Expose model-authored target control state for initial-target-v2."""
+
+        if (
+            self.checkpoint_commit_eligibility_policy
+            != CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2
+            or not self._has_active_bootstrap_checkpoint()
+            or not self.state.current_targets
+        ):
+            return None
+        progress = self.phase_progress()
+        targets = tuple(self.state.current_targets)
+        remaining = targets[1:]
+        transition_required = bool(remaining) and bool(progress["eligible"])
+        return {
+            "active_target": targets[0],
+            "remaining_targets": list(remaining),
+            "milestone_quota": progress["quota"],
+            "successful_milestone_producer_count": progress[
+                "successful_milestone_producer_count"
+            ],
+            "new_active_artifact_count": progress["new_active_artifact_count"],
+            "checkpoint_eligible": bool(progress["eligible"]),
+            "target_transition_required": transition_required,
+        }
+
+    def ensure_ordered_target_action_allowed(self, tool: str) -> None:
+        """Require a checkpoint before crossing an eligible target boundary."""
+
+        status = self.ordered_target_status()
+        if not status or not status["target_transition_required"]:
+            return
+        if tool not in {*CHECKPOINT_MILESTONE_PRODUCER_TOOLS, "answer"}:
+            return
         raise StateError(
-            "checkpoint_phase_progress_insufficient",
-            "the current phase has not reached the checkpoint progress quota",
+            "checkpoint_target_transition_required",
+            (
+                "the active target reached its milestone quota; commit a checkpoint "
+                "that advances to remaining targets before another milestone producer "
+                "or answer"
+            ),
             {
                 "policy": self.checkpoint_commit_eligibility_policy,
-                "quota": quota,
-                "successful_commit_ordinal": successful_commit_count + 1,
-                "successful_milestone_producer_count": producer_count,
-                "new_active_artifact_count": new_artifact_count,
-                "milestone_tools": sorted(CHECKPOINT_MILESTONE_PRODUCER_TOOLS),
-                "observed_milestone_tools": sorted(
-                    {step.tool for step in qualifying_steps}
-                ),
+                "blocked_tool": tool,
+                "milestone_quota": status["milestone_quota"],
+                "successful_milestone_producer_count": status[
+                    "successful_milestone_producer_count"
+                ],
+                "remaining_target_count": len(status["remaining_targets"]),
             },
             error_type="state_validation_error",
+        )
+
+    def _ensure_ordered_target_progression(self, targets: tuple[str, ...]) -> None:
+        if (
+            self.checkpoint_commit_eligibility_policy
+            != CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2
+            or not self._has_active_bootstrap_checkpoint()
+            or len(self.state.current_targets) <= 1
+        ):
+            return
+        active = next(iter(_canonical_goal_set((self.state.current_targets[0],))))
+        remaining = _canonical_goal_set(self.state.current_targets[1:])
+        proposed = _canonical_goal_set(targets)
+        if active in proposed:
+            raise StateError(
+                "checkpoint_active_target_not_completed",
+                "next_targets must remove the completed active target",
+                {"field": "next_targets"},
+                error_type="argument_validation_error",
+            )
+        if proposed.isdisjoint(remaining):
+            raise StateError(
+                "checkpoint_remaining_target_lost",
+                (
+                    "next_targets must retain at least one exact remaining target "
+                    "from the ordered target plan"
+                ),
+                {"field": "next_targets"},
+                error_type="argument_validation_error",
+            )
+
+    def _has_active_bootstrap_checkpoint(self) -> bool:
+        return any(
+            self.nodes[checkpoint_id].created_by == "bootstrap_checkpoint"
+            for checkpoint_id in self.active_checkpoint_path
         )
 
     def _is_pristine_bootstrap_phase(self) -> bool:
@@ -621,6 +733,7 @@ class CheckpointStore:
 __all__ = [
     "BOOTSTRAP_TARGET_MIN_TARGETS",
     "CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1",
+    "CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2",
     "CHECKPOINT_COMMIT_ELIGIBILITY_NONE",
     "CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1",
     "CHECKPOINT_COMMIT_ELIGIBILITY_POLICIES",

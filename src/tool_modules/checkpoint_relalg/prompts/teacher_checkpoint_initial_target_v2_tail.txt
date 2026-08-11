@@ -1,0 +1,2 @@
+ORDERED-TARGET V2 TURN CHECK
+Before action 1: simple one-stage task => no bootstrap; hard multi-stage task => commit_checkpoint first with two or three ordered targets and no claimed evidence. After bootstrap, obey [ACTIVE], [REMAINING], and MILESTONE PROGRESS. If TARGET TRANSITION REQUIRED is shown, commit next: remove the completed active target and retain at least one exact remaining target. Do not issue another counted producer or answer first. On the final target, finish and answer without an unnecessary transition checkpoint.

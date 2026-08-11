@@ -202,11 +202,40 @@ class EnvironmentRenderer:
         if store is None and state.checkpoint_id != "root":
             raise ValueError("a checkpoint store is required after the bootstrap phase")
 
-        targets = (
-            "\n".join(f"- {target}" for target in state.current_targets)
-            if state.current_targets
-            else "bootstrap exploration (no local target)"
-        )
+        target_status = store.ordered_target_status() if store is not None else None
+        if target_status is not None:
+            target_lines = [f"[ACTIVE] {target_status['active_target']}"]
+            target_lines.extend(
+                f"[REMAINING] {target}"
+                for target in target_status["remaining_targets"]
+            )
+            target_lines.append(
+                "MILESTONE PROGRESS "
+                f"{target_status['successful_milestone_producer_count']}/"
+                f"{target_status['milestone_quota']} producers; "
+                f"new_artifacts={target_status['new_active_artifact_count']}"
+            )
+            if target_status["target_transition_required"]:
+                target_lines.append(
+                    "TARGET TRANSITION REQUIRED: commit_checkpoint must advance "
+                    "to remaining targets before another milestone producer or answer."
+                )
+            elif target_status["remaining_targets"]:
+                target_lines.append(
+                    "TARGET TRANSITION NOT YET ELIGIBLE: continue the active target."
+                )
+            else:
+                target_lines.append(
+                    "FINAL TARGET: finish and verify the exact answer relation; no "
+                    "target-transition checkpoint is required."
+                )
+            targets = "\n".join(target_lines)
+        else:
+            targets = (
+                "\n".join(f"- {target}" for target in state.current_targets)
+                if state.current_targets
+                else "bootstrap exploration (no local target)"
+            )
         environment = self.render_environment(state)
         sections = [
             ("QUESTION", _contract(question)),

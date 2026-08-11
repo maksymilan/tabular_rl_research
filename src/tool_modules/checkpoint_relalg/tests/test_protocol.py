@@ -18,6 +18,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     CARRIER_TEXT_JSON,
     CHECKPOINT_GUIDANCE_PROFILES,
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
+    CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
     MAX_EXPRESSION_DEPTH,
@@ -39,6 +40,7 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
 )
 from tool_modules.checkpoint_relalg.checkpoint_store import (  # noqa: E402
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
 )
@@ -192,6 +194,7 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
         for old_profile in CHECKPOINT_GUIDANCE_PROFILES:
             if old_profile in {
                 CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET,
+                CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2,
                 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
                 CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
             }:
@@ -247,6 +250,57 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 CARRIER_TEXT_JSON,
                 ATOMIC_OPERATOR_PROFILE_SEMANTIC,
                 CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
+            ),
+        )
+
+    def test_initial_target_v2_binds_ordered_transition_state_machine(self):
+        prompt = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_TEXT_JSON,
+            checkpoint_guidance_profile=(
+                CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2
+            ),
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+        )
+        self.assertIn("TEACHER ORDERED-TARGET V2 CHECKPOINT GUIDANCE", prompt)
+        self.assertIn("the first item is the active target", prompt)
+        self.assertIn("TARGET TRANSITION REQUIRED", prompt)
+        self.assertGreater(
+            prompt.rfind("ORDERED-TARGET V2 TURN CHECK"),
+            prompt.rfind("EXACT TOOL SCHEMAS FOR ATOMIC MODE"),
+        )
+        policy = checkpoint_commit_eligibility_for_guidance_profile(
+            CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2
+        )
+        self.assertEqual(policy, CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2)
+        manifest = checkpoint_commit_eligibility_manifest(policy)
+        self.assertIs(manifest["ordered_target_lifecycle"], True)
+        self.assertEqual(manifest["active_target_position"], 0)
+        self.assertIs(
+            manifest["transition_required_when_quota_met_and_targets_remain"],
+            True,
+        )
+        self.assertEqual(
+            manifest["blocked_while_transition_required"],
+            ["answer", "filter_rows", "group_aggregate", "join", "set_operation"],
+        )
+        self.assertIs(manifest["next_targets_must_remove_active_target"], True)
+        self.assertIs(
+            manifest["next_targets_must_retain_exact_remaining_target"], True
+        )
+        self.assertNotEqual(
+            carrier_protocol_hash(
+                "atomic",
+                CARRIER_TEXT_JSON,
+                ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+                policy,
+            ),
+            carrier_protocol_hash(
+                "atomic",
+                CARRIER_TEXT_JSON,
+                ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+                CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
             ),
         )
 

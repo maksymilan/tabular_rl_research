@@ -17,6 +17,7 @@ from tool_modules.checkpoint_relalg.provider import (
 from tool_modules.checkpoint_relalg.audit import audit_record, fresh_replay_record
 from tool_modules.checkpoint_relalg.checkpoint_store import (
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
 )
@@ -465,6 +466,112 @@ def test_initial_target_checkpoint_is_first_action_and_replays(tmp_path):
     assert history[1]["created_by"] == "bootstrap_checkpoint"
     assert history[2]["created_by"] == "commit_checkpoint"
     assert "initial-targets" in client.requests[1][-1]["content"]
+    assert record["checkpoint_commit_eligibility_policy"] == policy
+    assert audit_record(record)["passed"]
+    assert fresh_replay_record(record, task)["passed"]
+
+
+def test_ordered_target_v2_advances_active_target_and_replays(tmp_path):
+    task = _task(tmp_path)
+    policy = CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2
+    population_target = "Ground the requested population and grain."
+    answer_target = "Construct and verify the exact answer relation."
+    client = FakeClient(
+        [
+            [
+                (
+                    "commit_checkpoint",
+                    {
+                        "progress_summary": [
+                            "Initial decomposition only; no database evidence exists yet."
+                        ],
+                        "remaining_uncertainties": [
+                            "The exact population grain remains unresolved."
+                        ],
+                        "next_targets": [population_target, answer_target],
+                    },
+                )
+            ],
+            [
+                (
+                    "filter_rows",
+                    {
+                        "table": "items",
+                        "conditions": {
+                            "op": "=",
+                            "left": {"column": "category"},
+                            "right": {"value": "x"},
+                        },
+                    },
+                )
+            ],
+            [
+                (
+                    "filter_rows",
+                    {
+                        "table": "items",
+                        "conditions": {
+                            "op": "=",
+                            "left": {"column": "category"},
+                            "right": {"value": "y"},
+                        },
+                    },
+                )
+            ],
+            [
+                (
+                    "commit_checkpoint",
+                    {
+                        "progress_summary": [
+                            "The active population target is grounded."
+                        ],
+                        "remaining_uncertainties": [
+                            "The exact final aggregate remains."
+                        ],
+                        "next_targets": [answer_target],
+                    },
+                )
+            ],
+            [
+                (
+                    "group_aggregate",
+                    {
+                        "table": "items",
+                        "group_by": [],
+                        "metrics": [{"op": "count", "column": "*", "as": "n"}],
+                    },
+                )
+            ],
+            [("answer", {"table": "group_aggregate_003"})],
+        ]
+    )
+    record = run_episode(
+        task,
+        task_position=0,
+        mode="atomic",
+        atomic_operator_profile="semantic-v2",
+        checkpoint_guidance_profile="initial-target-v2",
+        client=client,
+        runtime_config=RuntimeConfig(
+            checkpoint_commit_eligibility_policy=policy,
+        ),
+        max_model_turns=8,
+        max_tokens=128,
+        max_completion_tokens=256,
+        api_retries=2,
+    )
+
+    assert record["correct"] and record["legal"]
+    assert record["checkpoint_count"] == 2
+    history = record["final_runtime"]["checkpoint_history"]
+    assert history[1]["created_by"] == "bootstrap_checkpoint"
+    assert history[1]["next_targets"] == [population_target, answer_target]
+    assert history[2]["created_by"] == "commit_checkpoint"
+    assert history[2]["next_targets"] == [answer_target]
+    assert f"[ACTIVE] {population_target}" in client.requests[1][-1]["content"]
+    assert f"[REMAINING] {answer_target}" in client.requests[1][-1]["content"]
+    assert "TARGET TRANSITION REQUIRED" in client.requests[3][-1]["content"]
+    assert "FINAL TARGET" in client.requests[4][-1]["content"]
     assert record["checkpoint_commit_eligibility_policy"] == policy
     assert audit_record(record)["passed"]
     assert fresh_replay_record(record, task)["passed"]

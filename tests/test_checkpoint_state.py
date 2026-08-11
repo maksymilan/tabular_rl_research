@@ -5,6 +5,7 @@ import pytest
 from src.tool_modules.checkpoint_relalg.checkpoint_store import (
     BOOTSTRAP_TARGET_MIN_TARGETS,
     CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V1,
+    CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2,
     CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
     CHECKPOINT_COMMIT_ELIGIBILITY_ORDINAL_MILESTONE_V1,
     CHECKPOINT_MILESTONE_PRODUCER_TOOLS,
@@ -527,6 +528,110 @@ def test_initial_target_policy_keeps_zero_bootstrap_path_for_simple_tasks() -> N
     )
     assert milestone.created_by == "commit_checkpoint"
     assert store.checkpoint_count == 1
+
+
+def test_ordered_target_v2_renders_progress_and_enforces_transition() -> None:
+    state = EnvironmentState(catalog())
+    store = CheckpointStore(
+        state,
+        checkpoint_commit_eligibility_policy=(
+            CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2
+        ),
+    )
+    bootstrap_targets = (
+        "Ground the requested population.",
+        "Construct the requested aggregate.",
+        "Verify the exact final relation.",
+    )
+    bootstrap = store.commit(
+        ["Initial decomposition only; no database evidence exists yet."],
+        ["The source schema remains unresolved."],
+        bootstrap_targets,
+    )
+    assert bootstrap.created_by == "bootstrap_checkpoint"
+    status = store.ordered_target_status()
+    assert status == {
+        "active_target": bootstrap_targets[0],
+        "remaining_targets": list(bootstrap_targets[1:]),
+        "milestone_quota": 2,
+        "successful_milestone_producer_count": 0,
+        "new_active_artifact_count": 0,
+        "checkpoint_eligible": False,
+        "target_transition_required": False,
+    }
+    rendered = EnvironmentRenderer().render("Who?", "none", state, store)
+    assert f"[ACTIVE] {bootstrap_targets[0]}" in rendered
+    assert f"[REMAINING] {bootstrap_targets[1]}" in rendered
+    assert "MILESTONE PROGRESS 0/2 producers" in rendered
+    assert "TARGET TRANSITION NOT YET ELIGIBLE" in rendered
+
+    add_fact_bundle(state, state.allocate_artifact_handle("filter"), tool="filter_rows")
+    add_fact_bundle(state, state.allocate_artifact_handle("join"), tool="join")
+    status = store.ordered_target_status()
+    assert status["target_transition_required"] is True
+    rendered = EnvironmentRenderer().render("Who?", "none", state, store)
+    assert "TARGET TRANSITION REQUIRED" in rendered
+
+    before = state.logical_hash()
+    with pytest.raises(StateError) as blocked:
+        store.ensure_ordered_target_action_allowed("group_aggregate")
+    assert blocked.value.code == "checkpoint_target_transition_required"
+    assert state.logical_hash() == before
+    store.ensure_ordered_target_action_allowed("inspect_column")
+
+    with pytest.raises(StateError) as active_retained:
+        store.commit(
+            ["The first target is complete."],
+            [],
+            bootstrap_targets[:2],
+        )
+    assert active_retained.value.code == "checkpoint_active_target_not_completed"
+
+    with pytest.raises(StateError) as remaining_lost:
+        store.commit(
+            ["The first target is complete."],
+            [],
+            ["Investigate a newly phrased unrelated target."],
+        )
+    assert remaining_lost.value.code == "checkpoint_remaining_target_lost"
+
+    transition = store.commit(
+        ["The first target is complete."],
+        [],
+        bootstrap_targets[1:],
+    )
+    assert transition.created_by == "commit_checkpoint"
+    assert state.current_targets == bootstrap_targets[1:]
+    status = store.ordered_target_status()
+    assert status["active_target"] == bootstrap_targets[1]
+    assert status["remaining_targets"] == [bootstrap_targets[2]]
+    assert status["milestone_quota"] == 3
+    assert status["successful_milestone_producer_count"] == 0
+
+
+def test_ordered_target_v2_keeps_simple_zero_bootstrap_path_unchanged() -> None:
+    state = EnvironmentState(catalog())
+    store = CheckpointStore(
+        state,
+        checkpoint_commit_eligibility_policy=(
+            CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V2
+        ),
+    )
+    assert store.ordered_target_status() is None
+    store.ensure_ordered_target_action_allowed("answer")
+    add_fact_bundle(state, state.allocate_artifact_handle("filter"), tool="filter_rows")
+    add_fact_bundle(
+        state,
+        state.allocate_artifact_handle("aggregate"),
+        tool="group_aggregate",
+    )
+    milestone = store.commit(
+        ["The simple task now has two grounded producers."],
+        [],
+        ["Verify the exact answer relation."],
+    )
+    assert milestone.created_by == "commit_checkpoint"
+    assert store.ordered_target_status() is None
 
 
 def test_renderer_keeps_all_history_as_working_memory_not_evidence() -> None:
