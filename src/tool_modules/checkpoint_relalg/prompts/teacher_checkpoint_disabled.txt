@@ -1,0 +1,2 @@
+TEACHER NO-CHECKPOINT CONTROL
+This is the continuous Atomic control. Both commit_checkpoint and restore_checkpoint are disabled for this experiment. Solve the task in one uninterrupted phase using perception, semantic relational operators, and answer. Do not call either checkpoint tool.

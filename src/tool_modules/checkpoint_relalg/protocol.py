@@ -69,6 +69,8 @@ CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET = "initial-target-v1"
 CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2 = "initial-target-v2"
 CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3 = "initial-target-v3"
 CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4 = "initial-target-v4"
+CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE = "model-choice-commit-v1"
+CHECKPOINT_GUIDANCE_PROFILE_DISABLED = "checkpoint-disabled-v1"
 CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_STANDARD,
     CHECKPOINT_GUIDANCE_PROFILE_STRESS,
@@ -85,6 +87,8 @@ CHECKPOINT_GUIDANCE_PROFILES = (
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2,
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3,
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4,
+    CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE,
+    CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
 )
 DEFAULT_CHECKPOINT_GUIDANCE_PROFILE = CHECKPOINT_GUIDANCE_PROFILE_STANDARD
 EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
@@ -1665,11 +1669,13 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2,
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3,
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4,
+            CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE,
+            CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
         }
         and not (active_mode == "atomic" and semantic_profile)
     ):
         raise ValueError(
-            "semantic-milestone-v1 requires atomic mode with semantic-v2 operators"
+            "this checkpoint guidance requires atomic mode with semantic-v2 operators"
         )
     shared_core = _prompt_fragment("shared_core")
     fragments = [
@@ -1719,6 +1725,12 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4: (
                 "teacher_checkpoint_initial_target_v4"
             ),
+            CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE: (
+                "teacher_checkpoint_model_choice"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_DISABLED: (
+                "teacher_checkpoint_disabled"
+            ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(checkpoint_fragment))
         if semantic_profile:
@@ -1763,6 +1775,8 @@ def get_system_prompt(
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2,
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3,
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4,
+            CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE,
+            CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
         }
     ):
         # Keep the actionable turn check after the large Text-JSON schema block.
@@ -1794,6 +1808,12 @@ def get_system_prompt(
             ),
             CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4: (
                 "teacher_checkpoint_initial_target_v4_tail"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE: (
+                "teacher_checkpoint_model_choice_tail"
+            ),
+            CHECKPOINT_GUIDANCE_PROFILE_DISABLED: (
+                "teacher_checkpoint_disabled_tail"
             ),
         }[active_checkpoint_guidance]
         fragments.append(_prompt_fragment(tail_name))
@@ -2007,6 +2027,8 @@ __all__ = [
     "CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2",
     "CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3",
     "CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4",
+    "CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE",
+    "CHECKPOINT_GUIDANCE_PROFILE_DISABLED",
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TARGET",
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_PROBE",
     "CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER",

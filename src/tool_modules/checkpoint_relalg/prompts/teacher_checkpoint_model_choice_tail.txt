@@ -1,0 +1,2 @@
+MODEL-CHOICE TURN CHECK
+Choose freely: commit only if a verified reusable semantic milestone now exists and substantial answer-relevant work remains; otherwise continue or answer. There is no producer quota and no mandatory checkpoint. Never call restore_checkpoint in this experiment.

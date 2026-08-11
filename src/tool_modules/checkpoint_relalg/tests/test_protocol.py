@@ -21,6 +21,8 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V2,
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V3,
     CHECKPOINT_GUIDANCE_PROFILE_INITIAL_TARGET_V4,
+    CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE,
+    CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V5,
     CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V6,
     MAX_EXPRESSION_DEPTH,
@@ -397,6 +399,68 @@ class CheckpointRelalgProtocolTests(unittest.TestCase):
                 CHECKPOINT_COMMIT_ELIGIBILITY_INITIAL_TARGET_V3,
             ),
         )
+
+    def test_model_choice_and_disabled_profiles_leave_timing_to_the_model(self):
+        model_choice = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_TEXT_JSON,
+            checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE,
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+        )
+        disabled = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_TEXT_JSON,
+            checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+        )
+        self.assertIn("You decide whether and when commit_checkpoint is useful", model_choice)
+        self.assertIn("There is no producer quota", model_choice)
+        self.assertIn("restore_checkpoint is deprecated and disabled", model_choice)
+        self.assertIn("Both commit_checkpoint and restore_checkpoint are disabled", disabled)
+        self.assertGreater(
+            model_choice.rfind("MODEL-CHOICE TURN CHECK"),
+            model_choice.rfind("EXACT TOOL SCHEMAS FOR ATOMIC MODE"),
+        )
+        self.assertGreater(
+            disabled.rfind("NO-CHECKPOINT TURN CHECK"),
+            disabled.rfind("EXACT TOOL SCHEMAS FOR ATOMIC MODE"),
+        )
+        self.assertEqual(
+            checkpoint_commit_eligibility_for_guidance_profile(
+                CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE
+            ),
+            CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+        )
+        self.assertEqual(
+            checkpoint_commit_eligibility_for_guidance_profile(
+                CHECKPOINT_GUIDANCE_PROFILE_DISABLED
+            ),
+            CHECKPOINT_COMMIT_ELIGIBILITY_NONE,
+        )
+        self.assertNotEqual(
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                carrier=CARRIER_TEXT_JSON,
+                checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE,
+                atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+            ),
+            prompt_hash(
+                "atomic",
+                teacher=True,
+                carrier=CARRIER_TEXT_JSON,
+                checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
+                atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC,
+            ),
+        )
+        with self.assertRaises(ValueError):
+            get_system_prompt(
+                "direct",
+                teacher=True,
+                checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_MODEL_CHOICE,
+            )
 
     def test_commit_eligibility_changes_protocol_identity_not_tool_schema(self):
         for carrier in (CARRIER_NATIVE_TOOL_CALLS, CARRIER_TEXT_JSON):

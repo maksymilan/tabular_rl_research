@@ -1,0 +1,2 @@
+NO-CHECKPOINT TURN CHECK
+Do not call commit_checkpoint or restore_checkpoint. Continue the current Atomic program or answer when the exact artifact is ready.
