@@ -193,6 +193,7 @@ class EnvironmentRenderer:
         checkpoints: CheckpointStore | None = None,
         *,
         checkpoint_store: CheckpointStore | None = None,
+        include_checkpoint_control: bool = True,
     ) -> str:
         if checkpoints is not None and checkpoint_store is not None:
             raise ValueError("provide checkpoints or checkpoint_store, not both")
@@ -240,13 +241,20 @@ class EnvironmentRenderer:
         sections = [
             ("QUESTION", _contract(question)),
             ("EXTERNAL KNOWLEDGE", _contract(external_knowledge)),
-            ("CURRENT PHASE TARGETS", targets),
-            (
-                "CHECKPOINT HISTORY",
-                "\n".join(_render_history(store) if store is not None else _render_root_history(state)),
-            ),
-            ("CURRENT ENVIRONMENT STATE", environment),
         ]
+        if include_checkpoint_control:
+            sections.extend([
+                ("CURRENT PHASE TARGETS", targets),
+                (
+                    "CHECKPOINT HISTORY",
+                    "\n".join(
+                        _render_history(store)
+                        if store is not None
+                        else _render_root_history(state)
+                    ),
+                ),
+            ])
+        sections.append(("CURRENT ENVIRONMENT STATE", environment))
         if state.last_error is not None:
             sections.append(("LAST ERROR", _compact(state.last_error)))
         return "\n\n".join(f"{heading}\n\n{body}" for heading, body in sections)

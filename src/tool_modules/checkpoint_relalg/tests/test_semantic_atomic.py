@@ -12,6 +12,7 @@ from src.tool_modules.checkpoint_relalg.executors import (
 )
 from src.tool_modules.checkpoint_relalg.expression import RelAlgValidationError
 from src.tool_modules.checkpoint_relalg.protocol import (
+    ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
@@ -30,7 +31,7 @@ from src.tool_modules.checkpoint_relalg.protocol import (
     validate_model_action,
 )
 from src.tool_modules.checkpoint_relalg.relation_artifact import Column, SourceRelation
-from src.tool_modules.checkpoint_relalg.runtime import CheckpointRelalgRuntime
+from src.tool_modules.checkpoint_relalg.runtime import CheckpointRelalgRuntime, RuntimeConfig
 
 
 def _fixture() -> tuple[sqlite3.Connection, EnvironmentState, SQLiteRelationalExecutor]:
@@ -287,6 +288,99 @@ def test_semantic_v5_changes_only_compact_output_guidance_identity() -> None:
     )
     assert "mechanical role prefix" in prompt
     assert "space-containing source column name" in prompt
+
+
+def test_frozen_v24_profile_removes_checkpoint_surface_and_keeps_proven_repairs() -> None:
+    names = [
+        item["function"]["name"]
+        for item in provider_tool_definitions(
+            "atomic", ATOMIC_OPERATOR_PROFILE_FROZEN_V24
+        )
+    ]
+    assert names == [
+        "describe_table",
+        "inspect_column",
+        "read_rows",
+        *SEMANTIC_ATOMIC_TOOLS,
+        "answer",
+    ]
+    assert "commit_checkpoint" not in names
+    assert "restore_checkpoint" not in names
+    with pytest.raises(ProtocolValidationError, match="unavailable"):
+        validate_tool_call(
+            "atomic",
+            "commit_checkpoint",
+            {
+                "progress_summary": ["x"],
+                "remaining_uncertainties": [],
+                "next_targets": ["y"],
+            },
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
+        )
+
+    manifest = capability_manifest(
+        "atomic",
+        carrier=CARRIER_TEXT_JSON,
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
+    )
+    assert manifest["max_checkpoints"] == 0
+    assert manifest["max_restores"] == 0
+    assert manifest["checkpoint_tools_model_visible"] is False
+    assert manifest["provider_phase_history_policy"] == "recent-4-turns-v1"
+    assert manifest["semantic_output_name_policy"] == (
+        "preserve-exact-logical-column-when-as-omitted-v1"
+    )
+    assert manifest["model_schema_delivery"] == (
+        "v24-frozen-no-checkpoint-contract-v1"
+    )
+    prompt = get_system_prompt(
+        "atomic",
+        teacher=True,
+        carrier=CARRIER_TEXT_JSON,
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
+    )
+    assert "MODE: ATOMIC / V24-FROZEN-V1" in prompt
+    assert "commit_checkpoint" not in prompt
+    assert "restore_checkpoint" not in prompt
+    assert "CHECKPOINT HISTORY" not in prompt
+
+
+def test_frozen_v24_runtime_preserves_exact_output_names_and_hides_control_context() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute('CREATE TABLE left_rows(id INTEGER, "Product Name" TEXT)')
+    connection.execute('CREATE TABLE right_rows(id INTEGER, value INTEGER)')
+    connection.execute('INSERT INTO left_rows VALUES (1, "widget")')
+    connection.execute('INSERT INTO right_rows VALUES (1, 9)')
+    runtime = CheckpointRelalgRuntime(
+        connection,
+        mode="atomic",
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
+        config=RuntimeConfig(max_checkpoints=0, max_restores=0),
+    )
+    context = runtime.render_context("q")
+    assert "CURRENT PHASE TARGETS" not in context
+    assert "CHECKPOINT HISTORY" not in context
+    runtime.apply("describe_table", {"tables": ["left_rows", "right_rows"]})
+    joined = runtime.apply(
+        "join",
+        {
+            "left": "left_rows",
+            "right": "right_rows",
+            "left_role": "l",
+            "right_role": "r",
+            "type": "inner",
+            "on": [{"left_column": "id", "op": "=", "right_column": "id"}],
+        },
+    )
+    shaped = runtime.apply(
+        "shape_rows",
+        {
+            "table": joined["artifact"]["table"],
+            "outputs": [{"column": "l.Product Name"}],
+        },
+    )
+    assert shaped["status"] == "success"
+    assert shaped["artifact"]["columns"][0]["name"] == "l.Product Name"
 
 
 def test_semantic_validator_accepts_metric_where_and_rejects_micro_leak() -> None:

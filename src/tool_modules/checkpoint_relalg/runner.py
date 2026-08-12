@@ -36,6 +36,7 @@ from tool_modules.checkpoint_relalg.checkpoint_store import (  # noqa: E402
 )
 from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     ADMISSION_STATUS,
+    ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
     ATOMIC_OPERATOR_PROFILES,
     ATOMIC_TOOLS,
     SEMANTIC_ATOMIC_TOOLS,
@@ -43,8 +44,10 @@ from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
     CARRIERS,
     CARRIER_ABLATION_PROTOCOL_VERSION,
     CARRIER_NATIVE_TOOL_CALLS,
+    CARRIER_TEXT_JSON,
     CARRIER_POLICY_VERSION,
     CHECKPOINT_GUIDANCE_PROFILES,
+    CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
     CHECKPOINT_POLICY_VERSION,
     DEFAULT_CHECKPOINT_GUIDANCE_PROFILE,
     DEFAULT_ATOMIC_OPERATOR_PROFILE,
@@ -1896,6 +1899,17 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--dataset-manifest is required for v2 diagnostic runs")
     if args.atomic_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE and args.mode != "atomic":
         raise SystemExit("semantic atomic profiles are isolated to --mode atomic")
+    if args.atomic_operator_profile == ATOMIC_OPERATOR_PROFILE_FROZEN_V24:
+        if args.carrier != CARRIER_TEXT_JSON:
+            raise SystemExit("atomic-v24-frozen-v1 requires --carrier text-json")
+        if args.checkpoint_guidance_profile != CHECKPOINT_GUIDANCE_PROFILE_DISABLED:
+            raise SystemExit(
+                "atomic-v24-frozen-v1 requires --checkpoint-guidance-profile checkpoint-disabled-v1"
+            )
+        if args.max_checkpoints != 0 or args.max_restores != 0:
+            raise SystemExit(
+                "atomic-v24-frozen-v1 requires --max-checkpoints 0 --max-restores 0"
+            )
     expected_arm = carrier_experiment_arm(args.carrier)
     if args.experiment_arm is not None and args.experiment_arm != expected_arm:
         raise SystemExit(

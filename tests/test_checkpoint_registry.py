@@ -103,6 +103,22 @@ def test_semantic_v5_is_prompt_only_over_v4_execution_surface():
     assert v5.top_level_tools == v4.top_level_tools
 
 
+def test_frozen_v24_registry_identity_has_no_checkpoint_tools():
+    frozen = build_checkpoint_relalg_tool_scheme(
+        mode="atomic", carrier="text-json",
+        atomic_operator_profile="atomic-v24-frozen-v1",
+    )
+    v4 = build_checkpoint_relalg_tool_scheme(
+        mode="atomic", carrier="text-json",
+        atomic_operator_profile="semantic-v4-v24-interface",
+    )
+    assert frozen.protocol_hash != v4.protocol_hash
+    assert frozen.tool_schema_hash != v4.tool_schema_hash
+    assert "commit_checkpoint" not in frozen.top_level_tools
+    assert "restore_checkpoint" not in frozen.top_level_tools
+    assert frozen.atomic_tools == v4.atomic_tools
+
+
 def test_semantic_checkpoint_eligibility_changes_only_registry_protocol_identity():
     baseline = build_checkpoint_relalg_tool_scheme(
         mode="atomic",

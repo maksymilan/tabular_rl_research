@@ -24,6 +24,7 @@ from .predicate import PredicateCompiler
 from .protocol import (
     ATOMIC_TOOLS,
     DEFAULT_ATOMIC_OPERATOR_PROFILE,
+    ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
     SEMANTIC_ATOMIC_TOOLS,
@@ -248,6 +249,12 @@ class CheckpointRelalgRuntime:
         if self.atomic_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE and self.mode != "atomic":
             raise ValueError("semantic atomic profiles are isolated to atomic mode")
         self.config = config or RuntimeConfig()
+        if self.atomic_operator_profile == ATOMIC_OPERATOR_PROFILE_FROZEN_V24 and (
+            self.config.max_checkpoints != 0 or self.config.max_restores != 0
+        ):
+            raise ValueError(
+                "atomic-v24-frozen-v1 requires max_checkpoints=0 and max_restores=0"
+            )
         if (
             self.config.checkpoint_commit_eligibility_policy
             != CHECKPOINT_COMMIT_ELIGIBILITY_NONE
@@ -282,6 +289,7 @@ class CheckpointRelalgRuntime:
                 self.atomic_operator_profile in {
                     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
                     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
+                    ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
                 }
             ),
         )
@@ -298,6 +306,9 @@ class CheckpointRelalgRuntime:
             external_knowledge,
             self.state,
             self.checkpoints,
+            include_checkpoint_control=(
+                self.atomic_operator_profile != ATOMIC_OPERATOR_PROFILE_FROZEN_V24
+            ),
         )
 
     def apply(self, tool: Any, arguments: Any) -> dict[str, Any]:

@@ -107,12 +107,14 @@ ATOMIC_OPERATOR_PROFILE_SEMANTIC = "semantic-v2"
 ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3 = "semantic-v3-v24"
 ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4 = "semantic-v4-v24-interface"
 ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5 = "semantic-v5-v24-output"
+ATOMIC_OPERATOR_PROFILE_FROZEN_V24 = "atomic-v24-frozen-v1"
 ATOMIC_OPERATOR_PROFILES = (
     ATOMIC_OPERATOR_PROFILE_MICRO,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
+    ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
 )
 DEFAULT_ATOMIC_OPERATOR_PROFILE = ATOMIC_OPERATOR_PROFILE_MICRO
 PROVIDER_PHASE_HISTORY_FULL = "full-phase-v1"
@@ -1074,6 +1076,7 @@ def is_semantic_atomic_profile(profile: str | None) -> bool:
         ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
         ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
         ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
+        ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
     }
 
 
@@ -1085,6 +1088,7 @@ def provider_phase_history_policy(profile: str | None) -> str:
             ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
             ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
             ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
+            ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
         }
         else PROVIDER_PHASE_HISTORY_FULL
     )
@@ -1118,6 +1122,8 @@ def tools_for_profile(
         return MODE_TOOLS[active_mode]
     if active_mode != "atomic":
         raise ValueError("semantic atomic profiles are isolated to atomic mode")
+    if profile == ATOMIC_OPERATOR_PROFILE_FROZEN_V24:
+        return (*PERCEPTION_TOOLS, *SEMANTIC_ATOMIC_TOOLS, "answer")
     return (*PERCEPTION_TOOLS, *SEMANTIC_ATOMIC_TOOLS, *CONTROL_TOOLS)
 
 
@@ -1713,6 +1719,11 @@ def get_system_prompt(
     active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
         checkpoint_guidance_profile
     )
+    if (
+        active_operator_profile == ATOMIC_OPERATOR_PROFILE_FROZEN_V24
+        and active_checkpoint_guidance == DEFAULT_CHECKPOINT_GUIDANCE_PROFILE
+    ):
+        active_checkpoint_guidance = CHECKPOINT_GUIDANCE_PROFILE_DISABLED
     semantic_profile = is_semantic_atomic_profile(active_operator_profile)
     semantic_v3_profile = (
         active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3
@@ -1723,10 +1734,20 @@ def get_system_prompt(
     semantic_v5_profile = (
         active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5
     )
+    frozen_v24_profile = (
+        active_operator_profile == ATOMIC_OPERATOR_PROFILE_FROZEN_V24
+    )
     if (
-        semantic_v3_profile or semantic_v4_profile or semantic_v5_profile
+        semantic_v3_profile
+        or semantic_v4_profile
+        or semantic_v5_profile
+        or frozen_v24_profile
     ) and active_carrier != CARRIER_TEXT_JSON:
-        raise ValueError("semantic-v3/v4/v5-v24 profiles are isolated to the text-json carrier")
+        raise ValueError("v24-derived atomic profiles are isolated to the text-json carrier")
+    if frozen_v24_profile and active_checkpoint_guidance != CHECKPOINT_GUIDANCE_PROFILE_DISABLED:
+        raise ValueError(
+            "atomic-v24-frozen-v1 requires checkpoint-disabled-v1 guidance"
+        )
     if (
         active_checkpoint_guidance
         in {
@@ -1753,11 +1774,15 @@ def get_system_prompt(
         raise ValueError(
             "this checkpoint guidance requires atomic mode with semantic operators"
         )
-    shared_core = _prompt_fragment("shared_core")
+    shared_core = _prompt_fragment(
+        "shared_core_atomic_v24_frozen" if frozen_v24_profile else "shared_core"
+    )
     fragments = [
         shared_core,
         _prompt_fragment(
-            "atomic_semantic_v5"
+            "atomic_v24_frozen"
+            if frozen_v24_profile
+            else "atomic_semantic_v5"
             if semantic_v5_profile
             else "atomic_semantic_v4"
             if semantic_v4_profile
@@ -1769,7 +1794,7 @@ def get_system_prompt(
         ),
     ]
     if teacher:
-        checkpoint_fragment = {
+        checkpoint_fragment = None if frozen_v24_profile else {
             CHECKPOINT_GUIDANCE_PROFILE_STANDARD: "teacher_checkpoint",
             CHECKPOINT_GUIDANCE_PROFILE_STRESS: "teacher_checkpoint_stress",
             CHECKPOINT_GUIDANCE_PROFILE_RESTORE_TRIGGER: (
@@ -1833,11 +1858,14 @@ def get_system_prompt(
                 "teacher_checkpoint_disabled"
             ),
         }[active_checkpoint_guidance]
-        fragments.append(_prompt_fragment(checkpoint_fragment))
+        if checkpoint_fragment is not None:
+            fragments.append(_prompt_fragment(checkpoint_fragment))
         if semantic_profile:
             fragments.append(
                 _prompt_fragment(
-                    "teacher_atomic_semantic_v5"
+                    "teacher_atomic_v24_frozen"
+                    if frozen_v24_profile
+                    else "teacher_atomic_semantic_v5"
                     if semantic_v5_profile
                     else "teacher_atomic_semantic_v4"
                     if semantic_v4_profile
@@ -1846,7 +1874,10 @@ def get_system_prompt(
                     else "teacher_atomic_semantic"
                 )
             )
-    elif active_checkpoint_guidance != DEFAULT_CHECKPOINT_GUIDANCE_PROFILE:
+    elif (
+        active_checkpoint_guidance != DEFAULT_CHECKPOINT_GUIDANCE_PROFILE
+        and not frozen_v24_profile
+    ):
         raise ValueError("non-default checkpoint guidance is teacher-only")
     if active_carrier == CARRIER_TEXT_JSON:
         native_clause = "Make exactly one native tool call per turn."
@@ -1865,13 +1896,20 @@ def get_system_prompt(
             "Markdown fences, XML, an array, or multiple actions. A later user message whose "
             "JSON type is checkpoint_relalg_tool_result is Harness feedback, not a new task."
         )
-        if semantic_v3_profile or semantic_v4_profile or semantic_v5_profile:
+        if (
+            semantic_v3_profile
+            or semantic_v4_profile
+            or semantic_v5_profile
+            or frozen_v24_profile
+        ):
             # Version24's strongest interface result used a concise operational
             # contract plus a few high-entropy examples.  Keep executable JSON
             # schemas authoritative in validation/hash, but do not duplicate
             # their recursively expanded AST grammar into every model turn.
             contract_name = (
-                "text_json_semantic_v5_contract"
+                "text_json_atomic_v24_frozen_contract"
+                if frozen_v24_profile
+                else "text_json_semantic_v5_contract"
                 if semantic_v5_profile
                 else "text_json_semantic_v4_contract"
                 if semantic_v4_profile
@@ -1891,6 +1929,7 @@ def get_system_prompt(
             )
     if (
         teacher
+        and not frozen_v24_profile
         and active_checkpoint_guidance
         in {
             CHECKPOINT_GUIDANCE_PROFILE_SEMANTIC_MILESTONE_V2,
@@ -1984,6 +2023,11 @@ def prompt_hash(
     active_checkpoint_guidance = normalize_checkpoint_guidance_profile(
         checkpoint_guidance_profile
     )
+    if (
+        active_operator_profile == ATOMIC_OPERATOR_PROFILE_FROZEN_V24
+        and active_checkpoint_guidance == DEFAULT_CHECKPOINT_GUIDANCE_PROFILE
+    ):
+        active_checkpoint_guidance = CHECKPOINT_GUIDANCE_PROFILE_DISABLED
     payload = {
         "protocol_version": PROTOCOL_VERSION,
         "scheme": SCHEME,
@@ -2091,7 +2135,11 @@ def capability_manifest(
         "environment_renderer_version": ENVIRONMENT_RENDERER_VERSION,
         "checkpoint_policy_version": CHECKPOINT_POLICY_VERSION,
         "checkpoint_goal_policy_version": CHECKPOINT_GOAL_POLICY_VERSION,
-        "max_checkpoints": MAX_CHECKPOINTS,
+        "max_checkpoints": (
+            0
+            if active_operator_profile == ATOMIC_OPERATOR_PROFILE_FROZEN_V24
+            else MAX_CHECKPOINTS
+        ),
         "executor_version": EXECUTOR_VERSION,
         "assistant_carrier": assistant_carrier_protocol(active_carrier),
         "single_tool_call_per_turn": True,
@@ -2128,17 +2176,24 @@ def capability_manifest(
     }
     if active_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE:
         manifest["atomic_operator_profile"] = active_operator_profile
-        manifest["checkpoint_tools_model_visible"] = True
+        manifest["checkpoint_tools_model_visible"] = not (
+            active_operator_profile == ATOMIC_OPERATOR_PROFILE_FROZEN_V24
+        )
+    if active_operator_profile == ATOMIC_OPERATOR_PROFILE_FROZEN_V24:
+        manifest["max_restores"] = 0
     if active_operator_profile in {
         ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
         ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
         ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
+        ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
     }:
         manifest["provider_phase_history_policy"] = provider_phase_history_policy(
             active_operator_profile
         )
         manifest["model_schema_delivery"] = (
-            "v24-compact-operational-contract-v3"
+            "v24-frozen-no-checkpoint-contract-v1"
+            if active_operator_profile == ATOMIC_OPERATOR_PROFILE_FROZEN_V24
+            else "v24-compact-operational-contract-v3"
             if active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5
             else "v24-compact-operational-contract-v2"
             if active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4
@@ -2147,6 +2202,7 @@ def capability_manifest(
     if active_operator_profile in {
         ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
         ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
+        ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
     }:
         manifest["semantic_output_name_policy"] = (
             "preserve-exact-logical-column-when-as-omitted-v1"
@@ -2181,6 +2237,7 @@ __all__ = [
     "ATOMIC_TOOLS",
     "ATOMIC_OPERATOR_PROFILES",
     "ATOMIC_OPERATOR_PROFILE_MICRO",
+    "ATOMIC_OPERATOR_PROFILE_FROZEN_V24",
     "ATOMIC_OPERATOR_PROFILE_SEMANTIC",
     "ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3",
     "ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4",
