@@ -1,7 +1,8 @@
 # Semantic-v3 Checkpoint-on vs Disabled fresh Gate20 plan
 
 日期：2026-08-12
-状态：预注册；尚未产生 live 结果
+状态：已完成；结果为诊断性 NO-GO，不扩大。详见
+`CHECKPOINT_RELALG_SEMANTIC_V3_CHECKPOINT_ABLATION_GATE20_RESULT_20260812_ZH.md`。
 
 ## 核心问题
 
