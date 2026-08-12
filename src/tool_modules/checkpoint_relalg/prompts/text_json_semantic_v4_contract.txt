@@ -1,0 +1,40 @@
+COMPACT EXECUTABLE CONTRACT — SEMANTIC-V4-V24-INTERFACE
+The Harness validator remains the authority. Use only the fields and shapes below. Omit unused optional fields; never invent output_name, handle, name, as, outputs, limit, or order_by on a tool that does not list them.
+
+COMMON TYPED FORMS
+Column expression: {"column":"col"}. Literal expression: {"value":7} or {"value":"text"}.
+Comparison predicate: {"op":"=|!=|>|>=|<|<=","left":{"column":"col"},"right":{"value":7}}.
+Logic: {"op":"and|or","args":[predicate,predicate]}; negation: {"op":"not","arg":predicate}.
+Membership: {"op":"in|not_in","value":{"column":"col"},"values":[{"value":"A"},{"value":"B"}]}.
+Range: {"op":"between","value":{"column":"col"},"lower":{"value":1},"upper":{"value":5}}.
+Text: {"op":"like|contains","value":{"column":"col"},"pattern":{"value":"pattern"}}.
+NULL: {"op":"is_null|is_not_null","value":{"column":"col"}}.
+Order key: {"column":"col","direction":"asc|desc"}; add "nulls":"first|last" only when relevant.
+
+TOOLS
+describe_table: {"tables":["table",...]}
+inspect_column: {"table":"table","column":"col","top_k":1..50?}
+read_rows: {"table":"table","columns":["col",...]?,"conditions":predicate?,"order_by":[order_key,...]?,"limit":1..20?,"offset":integer?}. offset>0 requires order_by.
+filter_rows: {"table":"table","conditions":predicate}. It preserves all columns; it has no naming, output, limit, or ordering field.
+shape_rows: {"table":"table","outputs":[{"column":"exact logical col","as":"simple_alias"?},...],"distinct":boolean?}. Omitting as preserves the exact existing logical name, including dots or spaces; explicit as must match [A-Za-z_][A-Za-z0-9_]*.
+join: {"left":"relation","right":"relation","left_role":"l"?,"right_role":"r"?,"type":"inner|left|semi|anti|cross"?,"on":[{"left_column":"col","op":"=|!=|>|>=|<|<=","right_column":"col"},...]}. cross requires on=[].
+group_aggregate: {"table":"table","group_by":["col",...],"metrics":[metric,...]}. metric is {"op":"count","column":"*|col","as":"name"} or {"op":"sum|avg|min|max","column":"col","as":"name"}; optional distinct is boolean. Optional metric-local where is only {"column":"col","op":"=|!=|>|>=|<|<=","value":literal} or {"column":"col","op":"is_null|is_not_null"}.
+scalar_compute: {"table":"one_row_relation","outputs":[{"op":"add|subtract|multiply|divide","left":{"column":"metric"}|{"value":number},"right":{"column":"metric"}|{"value":number},"multiplier":number?,"round_digits":integer?,"as":"name"},...]}
+rank_select: {"table":"table","order_by":[order_key,...],"top_k":integer,"with_ties":boolean?,"outputs":[{"column":"exact logical col","as":"simple_alias"?},...]}. Omitting as preserves the exact existing logical name, including dots or spaces.
+set_operation: {"left":"relation","right":"relation","op":"union|union_all|intersect|except"}
+commit_checkpoint: {"progress_summary":["grounded progress",...1..5],"remaining_uncertainties":[...0..5],"next_targets":["next semantic target",...1..3]}
+restore_checkpoint: call only when the selected checkpoint guidance explicitly permits recovery; otherwise never call it.
+answer: {"table":"exact_answer_artifact"}
+
+CANONICAL CALLS
+{"tool":"filter_rows","arguments":{"table":"people","conditions":{"op":"and","args":[{"op":"=","left":{"column":"city"},"right":{"value":"Paris"}},{"op":">=","left":{"column":"age"},"right":{"value":18}}]}}}
+{"tool":"join","arguments":{"left":"filter_001","right":"departments","left_role":"p","right_role":"d","type":"inner","on":[{"left_column":"department_id","op":"=","right_column":"id"}]}}
+{"tool":"group_aggregate","arguments":{"table":"join_002","group_by":["d.name"],"metrics":[{"op":"sum","column":"p.salary","as":"total_salary"}]}}
+{"tool":"group_aggregate","arguments":{"table":"patients","group_by":[],"metrics":[{"op":"count","column":"*","as":"female_count","where":{"column":"gender","op":"=","value":"F"}},{"op":"count","column":"*","as":"all_count"}]}}
+{"tool":"scalar_compute","arguments":{"table":"group_003","outputs":[{"op":"divide","left":{"column":"female_count"},"right":{"column":"all_count"},"multiplier":100,"round_digits":2,"as":"percentage"}]}}
+{"tool":"rank_select","arguments":{"table":"employees","order_by":[{"column":"hours","direction":"desc"}],"top_k":3,"with_ties":false,"outputs":[{"column":"job_title"}]}}
+{"tool":"shape_rows","arguments":{"table":"join_002","outputs":[{"column":"d.code"},{"column":"p.value","as":"value"}],"distinct":false}}
+{"tool":"answer","arguments":{"table":"shape_004"}}
+
+EXACT OUTPUT CONTRACT
+List the requested output slots and their order before the terminal call. Do not replace an ID/code with a label, concatenate separate source fields unless requested, or retain join/filter/ranking helper columns. Preserve duplicates unless the task asks for distinct rows. Use shape_rows or rank_select outputs to create the exact answer artifact, then cite that artifact with answer.

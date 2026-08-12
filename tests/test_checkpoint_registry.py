@@ -72,6 +72,22 @@ def test_semantic_v3_keeps_v2_execution_surface_but_changes_model_interface_iden
     assert len(v3.system_prompt) < len(v2.system_prompt) / 2
 
 
+def test_semantic_v4_binds_output_name_compatibility_without_schema_drift():
+    v3 = build_checkpoint_relalg_tool_scheme(
+        mode="atomic", carrier="text-json", atomic_operator_profile="semantic-v3-v24"
+    )
+    v4 = build_checkpoint_relalg_tool_scheme(
+        mode="atomic",
+        carrier="text-json",
+        atomic_operator_profile="semantic-v4-v24-interface",
+    )
+    assert v4.atomic_operator_profile == "semantic-v4-v24-interface"
+    assert v4.protocol_hash != v3.protocol_hash
+    assert v4.student_prompt_hash != v3.student_prompt_hash
+    assert v4.tool_schema_hash == v3.tool_schema_hash
+    assert v4.top_level_tools == v3.top_level_tools
+
+
 def test_semantic_checkpoint_eligibility_changes_only_registry_protocol_identity():
     baseline = build_checkpoint_relalg_tool_scheme(
         mode="atomic",

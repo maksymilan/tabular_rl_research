@@ -105,10 +105,12 @@ EXECUTOR_VERSION = "checkpoint-relalg-sqlite-executor-v1"
 ATOMIC_OPERATOR_PROFILE_MICRO = "micro-v1"
 ATOMIC_OPERATOR_PROFILE_SEMANTIC = "semantic-v2"
 ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3 = "semantic-v3-v24"
+ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4 = "semantic-v4-v24-interface"
 ATOMIC_OPERATOR_PROFILES = (
     ATOMIC_OPERATOR_PROFILE_MICRO,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+    ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
 )
 DEFAULT_ATOMIC_OPERATOR_PROFILE = ATOMIC_OPERATOR_PROFILE_MICRO
 PROVIDER_PHASE_HISTORY_FULL = "full-phase-v1"
@@ -1068,6 +1070,7 @@ def is_semantic_atomic_profile(profile: str | None) -> bool:
     return normalize_atomic_operator_profile(profile) in {
         ATOMIC_OPERATOR_PROFILE_SEMANTIC,
         ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+        ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
     }
 
 
@@ -1075,7 +1078,10 @@ def provider_phase_history_policy(profile: str | None) -> str:
     return (
         PROVIDER_PHASE_HISTORY_RECENT4
         if normalize_atomic_operator_profile(profile)
-        == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3
+        in {
+            ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+            ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
+        }
         else PROVIDER_PHASE_HISTORY_FULL
     )
 
@@ -1707,8 +1713,11 @@ def get_system_prompt(
     semantic_v3_profile = (
         active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3
     )
-    if semantic_v3_profile and active_carrier != CARRIER_TEXT_JSON:
-        raise ValueError("semantic-v3-v24 is isolated to the text-json carrier")
+    semantic_v4_profile = (
+        active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4
+    )
+    if (semantic_v3_profile or semantic_v4_profile) and active_carrier != CARRIER_TEXT_JSON:
+        raise ValueError("semantic-v3/v4-v24 profiles are isolated to the text-json carrier")
     if (
         active_checkpoint_guidance
         in {
@@ -1739,7 +1748,9 @@ def get_system_prompt(
     fragments = [
         shared_core,
         _prompt_fragment(
-            "atomic_semantic_v3"
+            "atomic_semantic_v4"
+            if semantic_v4_profile
+            else "atomic_semantic_v3"
             if semantic_v3_profile
             else "atomic_semantic"
             if semantic_profile
@@ -1815,7 +1826,9 @@ def get_system_prompt(
         if semantic_profile:
             fragments.append(
                 _prompt_fragment(
-                    "teacher_atomic_semantic_v3"
+                    "teacher_atomic_semantic_v4"
+                    if semantic_v4_profile
+                    else "teacher_atomic_semantic_v3"
                     if semantic_v3_profile
                     else "teacher_atomic_semantic"
                 )
@@ -1839,14 +1852,17 @@ def get_system_prompt(
             "Markdown fences, XML, an array, or multiple actions. A later user message whose "
             "JSON type is checkpoint_relalg_tool_result is Harness feedback, not a new task."
         )
-        if semantic_v3_profile:
+        if semantic_v3_profile or semantic_v4_profile:
             # Version24's strongest interface result used a concise operational
             # contract plus a few high-entropy examples.  Keep executable JSON
             # schemas authoritative in validation/hash, but do not duplicate
             # their recursively expanded AST grammar into every model turn.
-            fragments.extend(
-                [carrier_clause, _prompt_fragment("text_json_semantic_v3_contract")]
+            contract_name = (
+                "text_json_semantic_v4_contract"
+                if semantic_v4_profile
+                else "text_json_semantic_v3_contract"
             )
+            fragments.extend([carrier_clause, _prompt_fragment(contract_name)])
         else:
             # Frozen v1/v2 prompt identity: render the exact same provider
             # schema without the native ``type=function`` wrapper.
@@ -2098,11 +2114,22 @@ def capability_manifest(
     if active_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE:
         manifest["atomic_operator_profile"] = active_operator_profile
         manifest["checkpoint_tools_model_visible"] = True
-    if active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3:
+    if active_operator_profile in {
+        ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+        ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
+    }:
         manifest["provider_phase_history_policy"] = provider_phase_history_policy(
             active_operator_profile
         )
-        manifest["model_schema_delivery"] = "v24-compact-operational-contract-v1"
+        manifest["model_schema_delivery"] = (
+            "v24-compact-operational-contract-v2"
+            if active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4
+            else "v24-compact-operational-contract-v1"
+        )
+    if active_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4:
+        manifest["semantic_output_name_policy"] = (
+            "preserve-exact-logical-column-when-as-omitted-v1"
+        )
     eligibility_manifest = checkpoint_commit_eligibility_manifest(
         active_commit_eligibility
     )
@@ -2135,6 +2162,7 @@ __all__ = [
     "ATOMIC_OPERATOR_PROFILE_MICRO",
     "ATOMIC_OPERATOR_PROFILE_SEMANTIC",
     "ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3",
+    "ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4",
     "BACKEND",
     "BINARY_EXPRESSION_OPERATORS",
     "CANONICAL_TYPES",

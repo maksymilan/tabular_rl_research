@@ -24,6 +24,7 @@ from .predicate import PredicateCompiler
 from .protocol import (
     ATOMIC_TOOLS,
     DEFAULT_ATOMIC_OPERATOR_PROFILE,
+    ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
     SEMANTIC_ATOMIC_TOOLS,
     ProtocolValidationError,
     is_semantic_atomic_profile,
@@ -276,6 +277,9 @@ class CheckpointRelalgRuntime:
             max_artifact_bytes=self.config.max_artifact_bytes,
             max_cell_bytes=self.config.max_cell_bytes,
             timeout_seconds=self.config.sql_timeout_seconds,
+            preserve_exact_column_name_when_alias_omitted=(
+                self.atomic_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4
+            ),
         )
         self.renderer = EnvironmentRenderer()
         self.primitive_calls = 0

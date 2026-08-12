@@ -295,6 +295,7 @@ class SQLiteRelationalExecutor:
         max_artifact_bytes: int = 64 * 1024 * 1024,
         max_cell_bytes: int = 4 * 1024 * 1024,
         timeout_seconds: float = 30.0,
+        preserve_exact_column_name_when_alias_omitted: bool = False,
     ) -> None:
         self.connection = connection
         self.state = state
@@ -312,6 +313,15 @@ class SQLiteRelationalExecutor:
                 path="max_cell_bytes",
             )
         self.timeout_seconds = _positive_timeout(timeout_seconds)
+        if not isinstance(preserve_exact_column_name_when_alias_omitted, bool):
+            raise RelAlgValidationError(
+                "invalid_arguments",
+                "preserve_exact_column_name_when_alias_omitted must be boolean",
+                path="preserve_exact_column_name_when_alias_omitted",
+            )
+        self.preserve_exact_column_name_when_alias_omitted = (
+            preserve_exact_column_name_when_alias_omitted
+        )
         self._handle_counters: dict[str, int] = {}
         self._savepoint_counter = 0
         self._scalar_error: CheckpointRelalgError | None = None
@@ -1092,7 +1102,15 @@ class SQLiteRelationalExecutor:
                 raise RelAlgStateValidationError(
                     "unknown_column", f"unknown exact output column {column!r}", path=f"{path}.column"
                 )
-            alias = require_simple_identifier(output.get("as", column), path=f"{path}.as")
+            if "as" in output:
+                alias = require_simple_identifier(output["as"], path=f"{path}.as")
+            elif self.preserve_exact_column_name_when_alias_omitted:
+                # A logical column may legitimately be dotted or contain spaces.
+                # Omitting ``as`` means preserve that exact existing name; only
+                # model-authored aliases remain restricted to simple identifiers.
+                alias = column
+            else:
+                alias = require_simple_identifier(column, path=f"{path}.as")
             key = sqlite_identifier_key(alias)
             if key in names:
                 raise RelAlgValidationError(

@@ -14,6 +14,7 @@ from src.tool_modules.checkpoint_relalg.expression import RelAlgValidationError
 from src.tool_modules.checkpoint_relalg.protocol import (
     ATOMIC_OPERATOR_PROFILE_SEMANTIC,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+    ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
     CARRIER_TEXT_JSON,
     MODE_TOOLS,
     ProtocolValidationError,
@@ -167,6 +168,103 @@ def test_semantic_v3_canonical_calls_are_executable_schema_valid() -> None:
             mode="atomic",
             atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
         )
+
+
+def test_semantic_v4_preserves_exact_logical_output_names_without_alias() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute('CREATE TABLE left_rows(id INTEGER, "Product Name" TEXT)')
+    connection.execute('CREATE TABLE right_rows(id INTEGER, value INTEGER)')
+    connection.execute('INSERT INTO left_rows VALUES (1, "widget")')
+    connection.execute('INSERT INTO right_rows VALUES (1, 9)')
+    runtime = CheckpointRelalgRuntime(
+        connection,
+        mode="atomic",
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
+    )
+    runtime.apply("describe_table", {"tables": ["left_rows", "right_rows"]})
+    joined = runtime.apply(
+        "join",
+        {
+            "left": "left_rows",
+            "right": "right_rows",
+            "left_role": "l",
+            "right_role": "r",
+            "type": "inner",
+            "on": [{"left_column": "id", "op": "=", "right_column": "id"}],
+        },
+    )
+    table = joined["artifact"]["table"]
+    shaped = runtime.apply(
+        "shape_rows",
+        {"table": table, "outputs": [{"column": "l.Product Name"}]},
+    )
+    assert shaped["status"] == "success"
+    assert shaped["artifact"]["columns"] == [
+        {"name": "l.Product Name", "canonical_type": "TEXT"}
+    ]
+
+
+def test_semantic_v3_replay_still_rejects_dotted_implicit_alias() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE left_rows(id INTEGER, value TEXT)")
+    connection.execute("CREATE TABLE right_rows(id INTEGER)")
+    runtime = CheckpointRelalgRuntime(
+        connection,
+        mode="atomic",
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+    )
+    runtime.apply("describe_table", {"tables": ["left_rows", "right_rows"]})
+    joined = runtime.apply(
+        "join",
+        {
+            "left": "left_rows",
+            "right": "right_rows",
+            "left_role": "l",
+            "right_role": "r",
+            "type": "inner",
+            "on": [{"left_column": "id", "op": "=", "right_column": "id"}],
+        },
+    )
+    result = runtime.apply(
+        "shape_rows",
+        {
+            "table": joined["artifact"]["table"],
+            "outputs": [{"column": "l.value"}],
+        },
+    )
+    assert result["status"] == "error"
+    assert result["error"]["code"] == "invalid_identifier"
+
+
+def test_semantic_v4_contract_examples_and_identity_are_bound() -> None:
+    contract = (
+        __import__("pathlib").Path(__file__).resolve().parents[1]
+        / "prompts"
+        / "text_json_semantic_v4_contract.txt"
+    ).read_text(encoding="utf-8")
+    examples = [json.loads(line) for line in contract.splitlines() if line.startswith('{"tool"')]
+    for example in examples:
+        validate_model_action(
+            example,
+            mode="atomic",
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
+        )
+    v3_manifest = capability_manifest(
+        "atomic", carrier=CARRIER_TEXT_JSON,
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
+    )
+    v4_manifest = capability_manifest(
+        "atomic", carrier=CARRIER_TEXT_JSON,
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
+    )
+    assert v4_manifest["tool_schema_sha256"] == v3_manifest["tool_schema_sha256"]
+    assert v4_manifest["student_prompt_sha256"] != v3_manifest["student_prompt_sha256"]
+    assert v4_manifest["model_schema_delivery"] == (
+        "v24-compact-operational-contract-v2"
+    )
+    assert v4_manifest["semantic_output_name_policy"] == (
+        "preserve-exact-logical-column-when-as-omitted-v1"
+    )
 
 
 def test_semantic_validator_accepts_metric_where_and_rejects_micro_leak() -> None:
