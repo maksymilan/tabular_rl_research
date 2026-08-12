@@ -88,6 +88,21 @@ def test_semantic_v4_binds_output_name_compatibility_without_schema_drift():
     assert v4.top_level_tools == v3.top_level_tools
 
 
+def test_semantic_v5_is_prompt_only_over_v4_execution_surface():
+    v4 = build_checkpoint_relalg_tool_scheme(
+        mode="atomic", carrier="text-json",
+        atomic_operator_profile="semantic-v4-v24-interface",
+    )
+    v5 = build_checkpoint_relalg_tool_scheme(
+        mode="atomic", carrier="text-json",
+        atomic_operator_profile="semantic-v5-v24-output",
+    )
+    assert v5.protocol_hash != v4.protocol_hash
+    assert v5.student_prompt_hash != v4.student_prompt_hash
+    assert v5.tool_schema_hash == v4.tool_schema_hash
+    assert v5.top_level_tools == v4.top_level_tools
+
+
 def test_semantic_checkpoint_eligibility_changes_only_registry_protocol_identity():
     baseline = build_checkpoint_relalg_tool_scheme(
         mode="atomic",

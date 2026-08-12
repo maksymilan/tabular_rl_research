@@ -25,6 +25,7 @@ from .protocol import (
     ATOMIC_TOOLS,
     DEFAULT_ATOMIC_OPERATOR_PROFILE,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
+    ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
     SEMANTIC_ATOMIC_TOOLS,
     ProtocolValidationError,
     is_semantic_atomic_profile,
@@ -278,7 +279,10 @@ class CheckpointRelalgRuntime:
             max_cell_bytes=self.config.max_cell_bytes,
             timeout_seconds=self.config.sql_timeout_seconds,
             preserve_exact_column_name_when_alias_omitted=(
-                self.atomic_operator_profile == ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4
+                self.atomic_operator_profile in {
+                    ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
+                    ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
+                }
             ),
         )
         self.renderer = EnvironmentRenderer()

@@ -15,6 +15,7 @@ from src.tool_modules.checkpoint_relalg.protocol import (
     ATOMIC_OPERATOR_PROFILE_SEMANTIC,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V3,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
+    ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
     CARRIER_TEXT_JSON,
     MODE_TOOLS,
     ProtocolValidationError,
@@ -265,6 +266,27 @@ def test_semantic_v4_contract_examples_and_identity_are_bound() -> None:
     assert v4_manifest["semantic_output_name_policy"] == (
         "preserve-exact-logical-column-when-as-omitted-v1"
     )
+
+
+def test_semantic_v5_changes_only_compact_output_guidance_identity() -> None:
+    v4 = capability_manifest(
+        "atomic", carrier=CARRIER_TEXT_JSON,
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V4,
+    )
+    v5 = capability_manifest(
+        "atomic", carrier=CARRIER_TEXT_JSON,
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
+    )
+    assert v5["tool_schema_sha256"] == v4["tool_schema_sha256"]
+    assert v5["student_prompt_sha256"] != v4["student_prompt_sha256"]
+    assert v5["semantic_output_name_policy"] == v4["semantic_output_name_policy"]
+    assert v5["model_schema_delivery"] == "v24-compact-operational-contract-v3"
+    prompt = get_system_prompt(
+        "atomic", teacher=True, carrier=CARRIER_TEXT_JSON,
+        atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_SEMANTIC_V5,
+    )
+    assert "mechanical role prefix" in prompt
+    assert "space-containing source column name" in prompt
 
 
 def test_semantic_validator_accepts_metric_where_and_rejects_micro_leak() -> None:

@@ -1,0 +1,36 @@
+COMPACT EXECUTABLE CONTRACT — SEMANTIC-V5-V24-OUTPUT
+The Harness validator remains the authority. Use only these fields. Omit unused optional fields; never write optional fields as null.
+
+COMMON FORMS
+Column: {"column":"col"}; literal: {"value":7}. Comparison: {"op":"=|!=|>|>=|<|<=","left":{"column":"col"},"right":{"value":7}}. Logic: {"op":"and|or","args":[predicate,predicate]}; negation: {"op":"not","arg":predicate}. Membership: {"op":"in|not_in","value":{"column":"col"},"values":[{"value":"A"}]}. Range: {"op":"between","value":{"column":"col"},"lower":{"value":1},"upper":{"value":5}}. Text: {"op":"like|contains","value":{"column":"col"},"pattern":{"value":"pattern"}}. NULL: {"op":"is_null|is_not_null","value":{"column":"col"}}. Order key: {"column":"col","direction":"asc|desc","nulls":"first|last"?}.
+
+TOOLS
+describe_table: {"tables":["table",...1..]}
+inspect_column: {"table":"table","column":"col","top_k":1..50?}
+read_rows: {"table":"table","columns":["col",...]?,"conditions":predicate?,"order_by":[order_key,...]?,"limit":1..20?,"offset":integer?}; offset>0 requires order_by.
+filter_rows: {"table":"table","conditions":predicate}; preserves all columns and duplicates.
+shape_rows: {"table":"table","outputs":[{"column":"exact logical col","as":"simple_alias"?},...],"distinct":boolean?}.
+join: {"left":"relation","right":"relation","left_role":"l"?,"right_role":"r"?,"type":"inner|left|semi|anti|cross"?,"on":[{"left_column":"col","op":"=|!=|>|>=|<|<=","right_column":"col"},...]}; cross requires on=[].
+group_aggregate: {"table":"table","group_by":["col",...],"metrics":[metric,...]}; metric is {"op":"count","column":"*|col","as":"name"} or {"op":"sum|avg|min|max","column":"col","as":"name"}, with optional boolean distinct and optional metric-local where {"column":"col","op":"=|!=|>|>=|<|<=","value":literal} or {"column":"col","op":"is_null|is_not_null"}.
+scalar_compute: {"table":"one_row_relation","outputs":[{"op":"add|subtract|multiply|divide","left":{"column":"metric"}|{"value":number},"right":{"column":"metric"}|{"value":number},"multiplier":number?,"round_digits":0..10?,"as":"name"},...]}
+rank_select: {"table":"table","order_by":[order_key,...],"top_k":integer,"with_ties":boolean?,"outputs":[{"column":"exact logical col","as":"simple_alias"?},...]}
+set_operation: {"left":"relation","right":"relation","op":"union|union_all|intersect|except"}
+commit_checkpoint: {"progress_summary":[...1..5],"remaining_uncertainties":[...0..5],"next_targets":[...1..3]}
+restore_checkpoint: only when selected checkpoint guidance permits recovery.
+answer: {"table":"exact_answer_artifact"}
+
+OUTPUT-NAME RULE
+For shape_rows and rank_select, omitting as preserves the exact existing logical name. If a joined column has a mechanical role prefix such as p.name or d.code and the requested field is the underlying name or code, explicitly set a simple alias such as {"column":"p.name","as":"name"}. If the source column itself contains spaces, such as Submitted via, omit as to preserve that exact source label. Never guess an unseen reference alias.
+
+CANONICAL CALLS
+{"tool":"filter_rows","arguments":{"table":"people","conditions":{"op":"=","left":{"column":"city"},"right":{"value":"Paris"}}}}
+{"tool":"join","arguments":{"left":"filter_001","right":"departments","left_role":"p","right_role":"d","type":"inner","on":[{"left_column":"department_id","op":"=","right_column":"id"}]}}
+{"tool":"group_aggregate","arguments":{"table":"join_002","group_by":["d.name"],"metrics":[{"op":"sum","column":"p.salary","as":"total_salary"}]}}
+{"tool":"scalar_compute","arguments":{"table":"group_003","outputs":[{"op":"divide","left":{"column":"female_count"},"right":{"column":"all_count"},"multiplier":100,"round_digits":2,"as":"percentage"}]}}
+{"tool":"rank_select","arguments":{"table":"employees","order_by":[{"column":"hours","direction":"desc"}],"top_k":3,"with_ties":false,"outputs":[{"column":"job_title"}]}}
+{"tool":"shape_rows","arguments":{"table":"join_002","outputs":[{"column":"d.code","as":"code"},{"column":"p.value","as":"value"}],"distinct":false}}
+{"tool":"shape_rows","arguments":{"table":"complaints","outputs":[{"column":"Submitted via"},{"column":"Complaint ID"}]}}
+{"tool":"answer","arguments":{"table":"shape_004"}}
+
+EXACT OUTPUT CONTRACT
+List requested output slots and order before answer. Do not replace IDs/codes with labels, combine separate fields, retain helper columns, or alter duplicates/order. Use shape_rows or rank_select outputs to create the exact terminal artifact.
