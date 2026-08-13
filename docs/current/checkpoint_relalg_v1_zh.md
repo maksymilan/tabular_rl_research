@@ -81,6 +81,15 @@ checkpoint 语义；两者 tool-schema hash 相同。v3 只修补 historical Ato
 history 和 protocol identity 不同，仍为 diagnostic-only；详见
 `../reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V3_V24_GAP_REPAIR_20260811_ZH.md`。
 
+随后在 teacher1500 v2 nonempty 的 disjoint positions 200–219 完成了 fresh paired Gate20。
+semantic-v2 与 semantic-v3-v24 的 `bird-set` 均为 14/20、strict artifact 均为 9/20、schema
+match 均为 11/20、legal 均为 20/20，四个 task-level outcome vectors 逐题完全相同。v3 把
+provider tokens 从 2,481,912 降至 881,327（-64.49%），20/20 题都更低；model turns 从 160
+降至 151，tool errors 从 11 降至 9，并保留相同 12/20 checkpoint coverage。40/40 records 的
+identity、structure、batch/cohort binding 与 fresh replay 全部通过。该结果支持 v3 作为下一
+diagnostic Atomic 候选，不证明准确率提升或训练准入；完整报告见
+`../reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V3_V24_PAIRED_GATE20_RESULT_20260811_ZH.md`。
+
 `semantic-milestone-v1` 是 semantic-v2 Atomic 专用的 teacher-only checkpoint 触发诊断。
 它不改变快照、restore 或算子执行语义，只把抽象“里程碑”落实为可执行规则：稳定且仍会被后续
 聚合、排名、标量或整形阶段消费的 population/join/metric artifact 在下一轮 commit；简单题零

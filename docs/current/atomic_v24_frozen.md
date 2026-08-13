@@ -1,7 +1,7 @@
 # Atomic v24 frozen baseline
 
 日期：2026-08-12  
-状态：实现与行为基线冻结；diagnostic-only，尚未获得 SFT/RL 准入
+状态：实现与行为基线冻结；允许 scheme-local SFT candidate 导出，RL 仍未准入
 
 ## 冻结版本
 
@@ -46,7 +46,9 @@ CheckpointStore、历史 prompt/profile 和 replay 代码继续存在，以保�
 - required guidance identity：`checkpoint-disabled-v1`（只作为运行配置身份，不向模型插入 checkpoint 文案）
 - provider history：`recent-4-turns-v1`
 - schema delivery：`v24-frozen-no-checkpoint-contract-v1`
-- admission：`diagnostic-only`
+- rollout admission：`diagnostic-only`（runner 原始记录保持不变）
+- SFT candidate admission：
+  `checkpoint-relalg-atomic-v24-frozen-bird-set-sft-candidates-v1`
 
 当前实现生成：
 
@@ -71,8 +73,16 @@ CheckpointStore、历史 prompt/profile 和 replay 代码继续存在，以保�
 --max-restores 0
 ```
 
-当前只是实现冻结，不等于行为或训练 promotion。新轨迹仍需 official DeepSeek identity、隐藏 gold、
-structure/no-leak、fresh replay、strict artifact 与独立行为门；在通过之前不能进入 SFT/RL。
+当前 profile 仍不是 RL promotion。按照 2026-08-13 的数据构造决定，训练集 episode 在同时满足
+official DeepSeek identity、隐藏 gold、`bird-set` terminal correct、legal termination、structure/no-leak
+和逐 record fresh replay 后，可以通过专用 exporter 进入 **scheme-local SFT candidate**。Strict artifact
+和 schema match 作为诊断标签保留，不再淘汰 terminal denotation 已正确的 episode。错误 action 只保留在
+因果 prefix，不作为监督 target；产生零行 intermediate artifact 的 action 同样不作为 target。不得使用
+旧 Atomic exporter，也不得把这些候选直接混入其他 tool scheme 或 RL。
+
+专用 exporter 为 `src/tool_modules/checkpoint_relalg/sft_export.py`。它保留原生
+`reasoning_content + content` 双通道消息，不静默改写为 inline `<think>`；具体学生模型的模板投影必须
+另行显式实现和审计。
 
 ## 独立 Train200 行为基线
 
@@ -82,7 +92,9 @@ schema match 80/200，legal 192/200；使用 9,344,374 tokens。四个分片的 
 history、cohort、预算与 batch 审计全部通过；fresh replay 199/200，唯一失败来自错误轨迹中 live
 SQL timeout 与 replay 成功的 wall-time 边界差异，147 条正确轨迹全部通过 fresh replay。
 
-该结果建立冻结 profile 的绝对行为基线，但不是与历史 fixed-200 version24 的同题 paired comparison，
-也未关闭 strict/schema gap。因此 profile 保持 diagnostic-only，不得把结果轨迹直接并入 SFT/RL。
+该结果建立冻结 profile 的绝对行为基线，但不是与历史 fixed-200 version24 的同题 paired comparison。
+在 147 条 `bird-set` 正确记录中，63 条 strict；额外差异主要来自 reference SQL cursor column label 和
+duplicate multiplicity。依据上述 SFT candidate admission，147 条正确且通过逐 record replay 的 episode
+均可进入本 scheme 的候选池；strict/schema 不再是候选淘汰门。RL 仍保持不准入。
 完整结果见
 `../reports/evaluation/CHECKPOINT_RELALG_ATOMIC_V24_FROZEN_TRAIN200_RESULT_20260812_ZH.md`。

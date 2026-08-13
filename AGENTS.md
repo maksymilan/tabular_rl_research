@@ -85,6 +85,15 @@ Start at `docs/current/README.md`.
   Its prompt/history/protocol identity is distinct and must not be mixed with v2. Neither semantic
   profile has behavior or SFT/RL promotion until a paired causal gate passes. See
   `docs/reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V3_V24_GAP_REPAIR_20260811_ZH.md`.
+- The fresh semantic-v2 versus semantic-v3-v24 paired Gate20 used teacher1500 positions 200–219,
+  official Flash, Atomic, Text-JSON, and identical model-choice-v6 checkpoint guidance. Both arms
+  scored 14/20 `bird-set`, 9/20 strict artifact, 11/20 schema match, and 20/20 legal with identical
+  per-task outcome vectors. V3 reduced provider tokens from 2,481,912 to 881,327 (-64.49%), turns
+  from 160 to 151, and tool errors from 11 to 9; every one of the 20 v3 episodes used fewer tokens.
+  All 40 records passed current identity, structure, cohort/budget, no-leak, and fresh-replay audit.
+  Retain v3 as the next diagnostic Atomic candidate, but do not claim an accuracy gain or admit it
+  to SFT/RL. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V3_V24_PAIRED_GATE20_RESULT_20260811_ZH.md`.
 - “Forward” identifies the development base; it is not a behavior or training promotion.
   `checkpoint-relalg-v1` remains diagnostic-only until fresh replay, structure, provider-history,
   no-leak, behavior, scheme-aware export, and explicit SFT/RL admission gates pass. Gold SQL and

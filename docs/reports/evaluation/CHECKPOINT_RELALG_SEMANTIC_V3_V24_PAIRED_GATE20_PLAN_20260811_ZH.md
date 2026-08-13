@@ -1,6 +1,7 @@
 # Semantic-v2 vs Semantic-v3-v24 fresh paired Gate20
 
-状态：2026-08-11 预注册，尚未产生结果。
+状态：2026-08-11 已按预注册完成。结果见
+`CHECKPOINT_RELALG_SEMANTIC_V3_V24_PAIRED_GATE20_RESULT_20260811_ZH.md`。
 
 ## 冻结身份
 
