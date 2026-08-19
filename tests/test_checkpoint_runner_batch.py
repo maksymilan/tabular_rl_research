@@ -62,6 +62,16 @@ def _batch_record(
     }
 
 
+def _typed_provider_failure(error_type: str):
+    record = _batch_record(correct=False, failure_type="provider_error")
+    record["turns"][0]["provider_error"] = {
+        "type": error_type,
+        "http_status": None,
+        "retryable": True,
+    }
+    return record
+
+
 def test_certified_dataset_and_selection_identity_are_hash_bound_without_text_leak(
     tmp_path: Path,
 ):
@@ -149,6 +159,24 @@ def test_batch_counters_distinguish_semantic_and_infrastructure_failures():
         "non_retryable_provider_http",
         {"http_status": 402, "retryable": False},
     )
+
+
+def test_batch_circuit_breaker_ignores_task_local_model_output_failures():
+    records = [
+        _typed_provider_failure("ProviderCompletionTruncated"),
+        _typed_provider_failure("ProviderEmptyText"),
+        _typed_provider_failure("ProviderShapeError"),
+        _typed_provider_failure("ProviderContentFiltered"),
+    ]
+    counters = runner._batch_counters_from_records(records)
+    assert counters["total_provider_failures"] == 0
+    assert counters["consecutive_provider_failures"] == 0
+
+    transport = _typed_provider_failure("ProviderError")
+    model_mismatch = _typed_provider_failure("ProviderModelMismatch")
+    counters = runner._batch_counters_from_records([*records, transport, model_mismatch])
+    assert counters["total_provider_failures"] == 2
+    assert counters["consecutive_provider_failures"] == 2
 
 
 def test_batch_guard_caps_retries_and_accounts_provider_response():

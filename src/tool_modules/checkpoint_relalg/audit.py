@@ -54,6 +54,7 @@ from .provider import (
     ProviderShapeError,
     _normalize_assistant_message,
     _validated_provider_usage,
+    provider_error_counts_as_batch_failure,
     provider_response_envelope_version,
     tool_result_message,
 )
@@ -85,7 +86,8 @@ FORBIDDEN_MODEL_KEYS = frozenset(
 PREFIX_BATCH_RUNNER_VERSION = (
     "checkpoint-relalg-causal-official-deepseek-carrier-ab-v2"
 )
-BATCH_CONTROL_VERSION = "checkpoint-relalg-batch-control-v1"
+LEGACY_BATCH_CONTROL_VERSION = "checkpoint-relalg-batch-control-v1"
+BATCH_CONTROL_VERSION = "checkpoint-relalg-batch-control-v2-task-local-output-failures"
 SELECTION_IDENTITY_VERSION = "checkpoint-relalg-selection-identity-v1"
 PUBLIC_IDENTITY_FIELDS = [
     "position",
@@ -2454,7 +2456,11 @@ def _batch_control_report(
         status = {}
     elif set(status) != expected_fields:
         issues.append("batch_status.json fields differ from batch-control policy")
-    if status.get("batch_control_version") != BATCH_CONTROL_VERSION:
+    batch_control_version = status.get("batch_control_version")
+    if batch_control_version not in {
+        LEGACY_BATCH_CONTROL_VERSION,
+        BATCH_CONTROL_VERSION,
+    }:
         issues.append("batch status control version is invalid")
     if status.get("batch_control_version") != manifest.get("batch_control_version"):
         issues.append("batch status control version differs from manifest")
@@ -2503,6 +2509,21 @@ def _batch_control_report(
             "provider_error",
             "context_length_exceeded",
         }
+        if (
+            provider_failure
+            and batch_control_version == BATCH_CONTROL_VERSION
+        ):
+            turns = record.get("turns") or []
+            provider_error = None
+            for turn in reversed(turns):
+                if isinstance(turn, Mapping) and isinstance(
+                    turn.get("provider_error"), Mapping
+                ):
+                    provider_error = turn["provider_error"]
+                    break
+            provider_failure = provider_error_counts_as_batch_failure(
+                provider_error
+            )
         semantic_failure = (
             record.get("correct") is not True
             and failure_type not in INFRASTRUCTURE_FAILURE_TYPES

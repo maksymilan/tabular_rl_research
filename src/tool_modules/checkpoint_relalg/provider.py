@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 from .protocol import (
     CARRIER_NATIVE_TOOL_CALLS,
@@ -29,6 +29,36 @@ OFFICIAL_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 NATIVE_PROVIDER_RESPONSE_ENVELOPE_VERSION = (
     "deepseek-native-tool-call-response-envelope-index-aware-v2"
 )
+
+# These failures describe one model response/task, not an outage of the
+# provider transport.  They remain fully recorded and make that episode
+# ineligible, but must not trip the run-wide infrastructure circuit breaker.
+TASK_LOCAL_PROVIDER_ERROR_TYPES = frozenset(
+    {
+        "context_length_exceeded",
+        "ProviderCompletionTruncated",
+        "ProviderContentFiltered",
+        "ProviderEmptyText",
+        "ProviderShapeError",
+    }
+)
+
+
+def provider_error_counts_as_batch_failure(error: Any) -> bool:
+    """Return whether a recorded provider error indicates infrastructure failure.
+
+    Legacy records without a typed provider error retain the conservative v1
+    behavior.  Typed model-output failures are isolated to their episode.
+    Authentication/billing/transport/capacity/model-identity failures continue
+    to count toward the batch circuit breaker.
+    """
+
+    if not isinstance(error, Mapping):
+        return True
+    error_type = error.get("type")
+    if not isinstance(error_type, str) or not error_type:
+        return True
+    return error_type not in TASK_LOCAL_PROVIDER_ERROR_TYPES
 
 
 def provider_response_envelope_version(carrier: str = DEFAULT_CARRIER) -> str | None:

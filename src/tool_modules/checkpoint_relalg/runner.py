@@ -79,6 +79,7 @@ from tool_modules.checkpoint_relalg.provider import (  # noqa: E402
     OFFICIAL_DEEPSEEK_BASE_URL,
     ProviderContextOverflow,
     ProviderError,
+    provider_error_counts_as_batch_failure,
     provider_request_audit_options,
     tool_result_message,
 )
@@ -116,7 +117,8 @@ DEFAULT_TASKS = PROJECT_ROOT / "data/eval_inputs/bird_train_sft1_protocol_termin
 DEFAULT_MODEL = "deepseek-v4-flash"
 RUNNER_VERSION = "checkpoint-relalg-causal-official-deepseek-carrier-ab-v2"
 LEGACY_RUNNER_VERSION = "checkpoint-relalg-causal-official-deepseek-carrier-ab-v1"
-BATCH_CONTROL_VERSION = "checkpoint-relalg-batch-control-v1"
+LEGACY_BATCH_CONTROL_VERSION = "checkpoint-relalg-batch-control-v1"
+BATCH_CONTROL_VERSION = "checkpoint-relalg-batch-control-v2-task-local-output-failures"
 SELECTION_IDENTITY_VERSION = "checkpoint-relalg-selection-identity-v1"
 DEFAULT_MAX_BATCH_PROVIDER_ATTEMPTS = 1_200
 DEFAULT_MAX_BATCH_PROVIDER_TOKENS = 15_000_000
@@ -469,10 +471,12 @@ def _record_wall_seconds(record: Mapping[str, Any]) -> float:
 
 
 def _is_provider_failure(record: Mapping[str, Any]) -> bool:
-    return record.get("failure_type") in {
+    if record.get("failure_type") not in {
         "provider_error",
         "context_length_exceeded",
-    }
+    }:
+        return False
+    return provider_error_counts_as_batch_failure(_last_provider_error(record))
 
 
 def _is_semantic_failure(record: Mapping[str, Any]) -> bool:
@@ -1837,8 +1841,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--api-config", type=Path, default=PROJECT_ROOT / "api.md")
     parser.add_argument("--api-timeout-seconds", type=int, default=300)
     parser.add_argument("--api-retries", type=int, default=4)
-    parser.add_argument("--max-tokens", type=int, default=4096)
-    parser.add_argument("--max-completion-tokens", type=int, default=8192)
+    parser.add_argument("--max-tokens", type=int, default=32768)
+    parser.add_argument("--max-completion-tokens", type=int, default=131072)
     parser.add_argument("--max-model-turns", type=int, default=20)
     parser.add_argument("--max-primitive-calls", type=int, default=30)
     parser.add_argument("--max-checkpoints", type=int, default=8)
