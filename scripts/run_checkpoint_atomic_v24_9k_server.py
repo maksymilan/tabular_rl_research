@@ -23,7 +23,7 @@ SHARD_SIZE = 50
 SHARD_TOKEN_CAP = 3_600_000
 TOTAL_TOKEN_CAP = 650_000_000
 MAX_CONCURRENCY = 16
-DEPLOYED_COMMIT = "e4fd09e26746394f7dd4b199b64926e285e9130d"
+DEPLOYED_COMMIT = "84e1e341e37eea9f465b6ba6565a67c71770426b"
 
 
 def _sha256(path: Path) -> str:
@@ -132,6 +132,76 @@ def _preflight(root: Path, tasks_path: Path, manifest_path: Path, api_path: Path
     }
 
 
+def _completed_positions(
+    roots: list[Path], tasks_path: Path
+) -> tuple[set[int], dict[str, Any]]:
+    task_ids: list[str] = []
+    with tasks_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            task_ids.append(str(json.loads(line).get("example_id")))
+    completed: set[int] = set()
+    journals: list[dict[str, Any]] = []
+    for root in roots:
+        if not root.exists():
+            raise RuntimeError(f"completed-result root does not exist: {root}")
+        for journal in sorted(root.rglob("all.jsonl")):
+            count = 0
+            with journal.open(encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    if not line.strip():
+                        continue
+                    record = json.loads(line)
+                    position = record.get("task_position")
+                    if (
+                        isinstance(position, bool)
+                        or not isinstance(position, int)
+                        or not 0 <= position < len(task_ids)
+                    ):
+                        raise RuntimeError(
+                            f"invalid task_position in {journal}:{line_number}"
+                        )
+                    if record.get("example_id") != task_ids[position]:
+                        raise RuntimeError(
+                            f"example identity mismatch in {journal}:{line_number}"
+                        )
+                    if position in completed:
+                        raise RuntimeError(f"duplicate completed task position {position}")
+                    completed.add(position)
+                    count += 1
+            journals.append(
+                {
+                    "path": str(journal),
+                    "sha256": _sha256(journal),
+                    "records": count,
+                }
+            )
+    encoded_positions = json.dumps(sorted(completed), separators=(",", ":")).encode()
+    return completed, {
+        "roots": [str(root) for root in roots],
+        "journals": journals,
+        "completed_records": len(completed),
+        "completed_positions_sha256": hashlib.sha256(encoded_positions).hexdigest(),
+    }
+
+
+def _pending_ranges(completed: set[int]) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    start: int | None = None
+    previous: int | None = None
+    for position in (value for value in range(9000) if value not in completed):
+        if start is None:
+            start = previous = position
+            continue
+        assert previous is not None
+        if position != previous + 1 or position - start >= SHARD_SIZE:
+            ranges.append((start, previous - start + 1))
+            start = position
+        previous = position
+    if start is not None and previous is not None:
+        ranges.append((start, previous - start + 1))
+    return ranges
+
+
 def _command(
     root: Path,
     tasks_path: Path,
@@ -178,9 +248,9 @@ def _command(
         "--max-completion-tokens",
         "131072",
         "--max-model-turns",
-        "20",
-        "--max-primitive-calls",
         "30",
+        "--max-primitive-calls",
+        "50",
         "--max-checkpoints",
         "0",
         "--max-restores",
@@ -204,7 +274,7 @@ def _command(
         "--max-total-provider-failures",
         "3",
         "--max-consecutive-semantic-failures",
-        "50",
+        "1000000",
         "--workers",
         "1",
     ]
@@ -214,6 +284,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--api-config", type=Path)
+    parser.add_argument("--result-root", type=Path)
+    parser.add_argument(
+        "--exclude-completed-root",
+        type=Path,
+        action="append",
+        default=[],
+    )
     parser.add_argument("--launch", action="store_true")
     args = parser.parse_args()
     root = args.root.expanduser().resolve()
@@ -224,9 +301,31 @@ def main() -> int:
         if args.api_config is not None
         else root / "secrets/api.md"
     )
-    result_root = root / "data/results/checkpoint_atomic_v24_frozen_sft9k_20260820"
+    result_root = (
+        args.result_root.expanduser().resolve()
+        if args.result_root is not None
+        else root / "data/results/checkpoint_atomic_v24_frozen_sft9k_20260820"
+    )
     result_root.mkdir(parents=True, exist_ok=True)
     launch_manifest = _preflight(root, tasks_path, manifest_path, api_path)
+    completed_positions, exclusion_identity = _completed_positions(
+        [path.expanduser().resolve() for path in args.exclude_completed_root],
+        tasks_path,
+    )
+    pending_ranges = _pending_ranges(completed_positions)
+    if len(pending_ranges) * SHARD_TOKEN_CAP + 1 > TOTAL_TOKEN_CAP:
+        raise RuntimeError("reserved continuation tokens exceed the global token cap")
+    launch_manifest["excluded_completed"] = exclusion_identity
+    launch_manifest["pending_records"] = 9000 - len(completed_positions)
+    launch_manifest["pending_ranges"] = [
+        {"start": start, "size": size} for start, size in pending_ranges
+    ]
+    launch_manifest["result_root"] = str(result_root)
+    launch_manifest["max_model_turns"] = 30
+    launch_manifest["max_primitive_calls"] = 50
+    launch_manifest["max_tokens"] = 32768
+    launch_manifest["max_completion_tokens"] = 131072
+    launch_manifest["task_local_provider_failures_do_not_stop_batch"] = True
     _atomic_json(result_root / "server_launch_manifest.json", launch_manifest)
     if not args.launch:
         print(json.dumps(launch_manifest, ensure_ascii=False, sort_keys=True))
@@ -235,7 +334,7 @@ def main() -> int:
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONPATH"] = f"{root / 'src/eval'}:{root / 'src'}"
-    pending = list(range(0, 9000, SHARD_SIZE))
+    pending = list(pending_ranges)
     active: dict[int, tuple[subprocess.Popen[bytes], Any]] = {}
     completed: dict[str, int] = {}
     consecutive_failed_shards = 0
@@ -243,8 +342,7 @@ def main() -> int:
 
     while pending or active:
         while pending and len(active) < MAX_CONCURRENCY and consecutive_failed_shards < 3:
-            start = pending.pop(0)
-            size = min(SHARD_SIZE, 9000 - start)
+            start, size = pending.pop(0)
             shard = result_root / f"shard_{start:04d}_{start + size - 1:04d}"
             if shard.exists():
                 raise RuntimeError(f"refusing to overwrite existing shard: {shard}")
