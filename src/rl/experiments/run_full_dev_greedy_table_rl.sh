@@ -9,9 +9,12 @@ BASE_MODEL=${BASE_MODEL:-/home/dengyan/models/Qwen2.5-Coder-7B-Instruct}
 EVAL_GPU_ID=${EVAL_GPU_ID:-0}
 PORT=${PORT:-18071}
 EXPECTED=${EXPECTED:-1534}
+EXPECTED_PROTOCOL_VERSION=${EXPECTED_PROTOCOL_VERSION:-version36}
+EXPECTED_PROTOCOL_HASH=${EXPECTED_PROTOCOL_HASH:-20a8d3b4356d883c}
 GPU_FREE_THRESHOLD_MIB=${GPU_FREE_THRESHOLD_MIB:-512}
 GPU_WAIT_MAX_CHECKS=${GPU_WAIT_MAX_CHECKS:-1440}
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+IDENTITY_TOOL=$SCRIPT_DIR/../diagnostics/evaluation_identity.py
 HARDWARE_PROFILE=${HARDWARE_PROFILE:-$SCRIPT_DIR/../configs/hardware/rtx3090_24gb.sh}
 test -f "$HARDWARE_PROFILE"
 # shellcheck source=../configs/hardware/rtx3090_24gb.sh
@@ -51,7 +54,9 @@ wait_for_gpu() {
   return 1
 }
 validate_complete() {
-  "$EVAL_PYTHON" - "$RESULT_DIR" "$RUNTIME/data/eval_inputs/bird_dev_20240627.jsonl" "$EXPECTED" <<'PY'
+  "$EVAL_PYTHON" - "$RESULT_DIR" "$RUNTIME/data/eval_inputs/bird_dev_20240627.jsonl" \
+    "$EXPECTED" "$EXPECTED_PROTOCOL_VERSION" "$EXPECTED_PROTOCOL_HASH" "$ADAPTER" <<'PY'
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -59,6 +64,9 @@ from pathlib import Path
 result_dir = Path(sys.argv[1])
 examples_path = Path(sys.argv[2])
 expected = int(sys.argv[3])
+expected_protocol_version = sys.argv[4]
+expected_protocol_hash = sys.argv[5]
+expected_adapter = Path(sys.argv[6]).resolve()
 rows = [json.loads(line) for line in (result_dir / "all.jsonl").open() if line.strip()]
 examples = [json.loads(line) for line in examples_path.open() if line.strip()]
 expected_indices = {int(row["example_index"]) for row in examples}
@@ -67,13 +75,23 @@ assert {int(row["example_index"]) for row in rows} == expected_indices
 assert all(len(row.get("samples") or []) == 1 for row in rows)
 assert all(float(row.get("temperature")) == 0.0 for row in rows)
 assert all(float(row.get("top_p")) == 1.0 for row in rows)
-assert all(row.get("protocol_version") == "version36" for row in rows)
+assert all(row.get("protocol_version") == expected_protocol_version for row in rows)
+assert all(row.get("protocol_hash") == expected_protocol_hash for row in rows)
 assert all(row.get("denotation_comparison") == "bird-set" for row in rows)
 assert all(sample.get("generation_stats") for row in rows for sample in row["samples"])
 protocol = json.loads((result_dir / "evaluation_protocol.json").read_text())
 greedy = json.loads((result_dir / "greedy_at_1.json").read_text())
 assert protocol["mode"] == "greedy"
 assert greedy["available"] is True
+identity = json.loads((result_dir / "evaluation_identity.json").read_text())
+assert Path(identity["adapter_path"]).resolve() == expected_adapter
+digest = hashlib.sha256()
+with (expected_adapter / "adapter_model.safetensors").open("rb") as source:
+    for block in iter(lambda: source.read(1024 * 1024), b""):
+        digest.update(block)
+assert identity["adapter_sha256"] == digest.hexdigest()
+assert identity["protocol_version"] == expected_protocol_version
+assert identity["protocol_hash"] == expected_protocol_hash
 for name in (
     "sample0_at_1", "trajectory_accuracy", "correct_count_distribution",
     "failure_types", "valid_rate", "avg_steps", "per_question_result",
@@ -94,11 +112,16 @@ cd "$RUNTIME"
 test -f "$ADAPTER/adapter_config.json"
 test -f "$ADAPTER/adapter_model.safetensors"
 test -d "$BASE_MODEL"
+test -f "$IDENTITY_TOOL"
 test -f data/eval_inputs/bird_dev_20240627.jsonl
 test "$(grep -cve '^[[:space:]]*$' data/eval_inputs/bird_dev_20240627.jsonl)" -eq "$EXPECTED"
 if [[ -n "${ADAPTER_SHA256:-}" ]]; then
   test "$(sha256sum "$ADAPTER/adapter_model.safetensors" | awk '{print $1}')" = "$ADAPTER_SHA256"
 fi
+"$EVAL_PYTHON" "$IDENTITY_TOOL" \
+  --result-dir "$RESULT_DIR" --adapter "$ADAPTER" --base-model "$BASE_MODEL" \
+  --served-model "$SERVED_MODEL" --protocol-version "$EXPECTED_PROTOCOL_VERSION" \
+  --protocol-hash "$EXPECTED_PROTOCOL_HASH" >/dev/null
 
 if [[ "$(completed_rows)" -eq "$EXPECTED" ]]; then
   "$EVAL_PYTHON" src/eval/build_experiment_eval_metrics.py "$RESULT_DIR"
@@ -125,7 +148,7 @@ for attempt in 1 2 3; do
   MAX_STEPS=30 MAX_TOKENS=1024 TEMPERATURE=0 TOP_P=1 \
   RECORD_LOGPROBS=1 TOP_LOGPROBS=20 HISTORY_TURNS=4 EVAL_ENABLE_THINKING=0 \
   SERVER_CONFIG_ID="${SERVER_CONFIG_ID:-vllm-version36-full-dev-greedy-c24-logprobs20}" \
-  ALLOW_OPERATIONAL_CONCURRENCY_RESUME=1 TOOL_EXECUTION_TIMEOUT_SECONDS=20 \
+  ALLOW_OPERATIONAL_CONCURRENCY_RESUME=1 TOOL_EXECUTION_TIMEOUT_SECONDS=10 \
   ALLOW_OPERATIONAL_TOOL_TIMEOUT_RESUME=1 VLLM_LOG="$VLLM_LOG" \
   VLLM_PID_FILE="$VLLM_PID_FILE" EVAL_LOG="$EVAL_LOG" \
     bash src/eval/run_bird_lora_tool_passk_local_gpu.sh

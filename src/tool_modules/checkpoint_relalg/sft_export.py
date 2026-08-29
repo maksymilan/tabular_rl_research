@@ -45,6 +45,19 @@ ADMISSION_POLICY_VERSION = (
 )
 TRAINING_RECORD_VERSION = "checkpoint-relalg-native-reasoning-sft-candidate-v1"
 LOSS_POLICY = "last-assistant-message-only"
+DIRECTORY_GATE_POLICY_STRICT = "strict-completed-batch-v1"
+DIRECTORY_GATE_POLICY_RECORD_LEVEL = "terminated-shard-record-level-v2"
+DIRECTORY_GATES = {
+    DIRECTORY_GATE_POLICY_STRICT: (
+        "manifest_binding",
+        "cohort_identity",
+        "provider_budget",
+        "batch_control",
+    ),
+    DIRECTORY_GATE_POLICY_RECORD_LEVEL: (
+        "manifest_binding",
+    ),
+}
 PROFILE = ATOMIC_OPERATOR_PROFILE_FROZEN_V24
 MODE = "atomic"
 CARRIER = CARRIER_TEXT_JSON
@@ -293,7 +306,14 @@ def export_result_dirs(
     out_path: Path,
     index_path: Path,
     refresh_audit: bool = False,
+    directory_gate_policy: str = DIRECTORY_GATE_POLICY_STRICT,
 ) -> dict[str, Any]:
+    try:
+        required_directory_gates = DIRECTORY_GATES[directory_gate_policy]
+    except KeyError as exc:
+        raise ValueError(
+            f"unknown directory gate policy: {directory_gate_policy}"
+        ) from exc
     candidates: list[dict[str, Any]] = []
     index_rows: list[dict[str, Any]] = []
     source_artifacts: list[dict[str, Any]] = []
@@ -307,12 +327,7 @@ def export_result_dirs(
     for raw_dir in result_dirs:
         result_dir = raw_dir.resolve()
         report = _load_bound_audit(result_dir, refresh=refresh_audit)
-        for gate in (
-            "manifest_binding",
-            "cohort_identity",
-            "provider_budget",
-            "batch_control",
-        ):
+        for gate in required_directory_gates:
             if not report.get(gate, {}).get("passed"):
                 raise ValueError(f"{result_dir}: required audit gate {gate} failed")
         records = load_jsonl(result_dir / "all.jsonl")
@@ -372,6 +387,8 @@ def export_result_dirs(
         "admission_policy_version": ADMISSION_POLICY_VERSION,
         "training_record_version": TRAINING_RECORD_VERSION,
         "audit_mode": "fresh-replay-now" if refresh_audit else "bound-existing-fresh-replay",
+        "directory_gate_policy": directory_gate_policy,
+        "required_directory_gates": list(required_directory_gates),
         "source_artifacts": source_artifacts,
         "output": str(out_path.resolve()),
         "output_sha256": _file_sha256(out_path),
@@ -415,6 +432,14 @@ def main() -> int:
         action="store_true",
         help="rerun structure and fresh replay instead of reusing a hash-bound audit report",
     )
+    parser.add_argument(
+        "--record-level-admission",
+        action="store_true",
+        help=(
+            "admit individually structure- and fresh-replay-passed records from "
+            "terminated shards without requiring shard-wide cohort or budget completion"
+        ),
+    )
     args = parser.parse_args()
     out_path = args.out.resolve()
     index_path = (
@@ -430,6 +455,11 @@ def main() -> int:
         out_path=out_path,
         index_path=index_path,
         refresh_audit=args.refresh_audit,
+        directory_gate_policy=(
+            DIRECTORY_GATE_POLICY_RECORD_LEVEL
+            if args.record_level_admission
+            else DIRECTORY_GATE_POLICY_STRICT
+        ),
     )
     print(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

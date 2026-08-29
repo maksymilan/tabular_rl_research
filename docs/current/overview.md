@@ -15,6 +15,16 @@ Gold SQL is hidden harness metadata. On training tasks it may be used for databa
 terminal-denotation scoring; it is not an actor action, prompt field, trajectory template, or process
 credit target.
 
+The current production-training path is not the union of every tool experiment. It is the frozen
+Qwen3-8B Atomic version26 SFT1 contract whose checkpoint-560 reached 54.63% on matched BIRD-dev
+greedy evaluation. SFT expansion, local evaluation, and RL must keep this protocol, prompt,
+`think-json-v1` carrier, history renderer, Harness, and scorer fixed. Official DeepSeek requests are
+an external-teacher/data-generation transport; their provider envelope is not the local Qwen
+inference contract. The later checkpoint-relalg/Atomic-v24-frozen trajectory union, projections,
+reasoning repairs, checkpoint/restore, Direct/Hybrid, action-block, SQL, and prompt-trigger
+experiments are retained diagnostic branches with zero current SFT/RL admission. Exact identities,
+entry points, and the expansion boundary are in `training_mainline.md`.
+
 ## Research focus
 
 The central comparison is between coarse terminal result learning and tool-local process credit.

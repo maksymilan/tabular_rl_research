@@ -6,6 +6,9 @@ from tool_modules.checkpoint_relalg.protocol import get_system_prompt
 from tool_modules.checkpoint_relalg.sft_export import (
     ADMISSION_POLICY_VERSION,
     CARRIER,
+    DIRECTORY_GATES,
+    DIRECTORY_GATE_POLICY_RECORD_LEVEL,
+    DIRECTORY_GATE_POLICY_STRICT,
     GUIDANCE,
     MODE,
     PROFILE,
@@ -79,6 +82,18 @@ def test_bird_set_correct_episode_ignores_strict_schema_and_legacy_marker() -> N
     assert record["schema_match"] is False
     assert record["sft_export_eligible"] is False
     assert episode_rejection_reasons(record) == []
+
+
+def test_record_level_policy_does_not_reject_valid_records_for_batch_stop() -> None:
+    assert DIRECTORY_GATES[DIRECTORY_GATE_POLICY_RECORD_LEVEL] == (
+        "manifest_binding",
+    )
+    assert DIRECTORY_GATES[DIRECTORY_GATE_POLICY_STRICT] == (
+        "manifest_binding",
+        "cohort_identity",
+        "provider_budget",
+        "batch_control",
+    )
 
 
 def test_identity_and_correctness_remain_hard_gates() -> None:

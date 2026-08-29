@@ -85,6 +85,16 @@ from .provider_tools import (
     validate_native_assistant_message,
     validate_native_tool_calls,
 )
+from .qwen3_carrier import (
+    QWEN3_INLINE_CARRIER_VERSION,
+    Qwen3ActionError,
+    parse_qwen3_action,
+    provider_student_system_prompt,
+    qwen3_history_assistant_text,
+    qwen3_student_prompt_sha256,
+    qwen3_student_system_prompt,
+    render_qwen3_action,
+)
 
 __all__ = [
     "ADMISSION_STATUS",
@@ -143,6 +153,8 @@ __all__ = [
     "NativeToolCallError",
     "PROTOCOL_VERSION",
     "ProtocolValidationError",
+    "QWEN3_INLINE_CARRIER_VERSION",
+    "Qwen3ActionError",
     "SCHEME",
     "TOOL_SCHEME",
     "build_system_prompt",
@@ -159,10 +171,16 @@ __all__ = [
     "normalize_atomic_operator_profile",
     "provider_phase_history_policy",
     "prompt_hash",
+    "parse_qwen3_action",
+    "provider_student_system_prompt",
+    "qwen3_history_assistant_text",
     "provider_tool_definitions",
     "tool_schema_hash",
     "tools_for_profile",
     "trim_provider_phase_history",
+    "qwen3_student_prompt_sha256",
+    "qwen3_student_system_prompt",
+    "render_qwen3_action",
     "validate_arguments",
     "validate_model_action",
     "validate_native_assistant_message",

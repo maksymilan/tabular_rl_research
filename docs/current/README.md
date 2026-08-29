@@ -4,11 +4,18 @@ These files describe the active implementation. Historical plans, compiler exper
 experiment reports, and superseded interfaces live under `docs/archive/` or `archive/` and are not
 sources of truth.
 
+- `training_mainline.md`: **当前训练工作的唯一入口**。恢复已完成全量配对评测的
+  `Qwen3-8B + Atomic version26 SFT1 checkpoint-560` 主线（54.63% BIRD-dev greedy），
+  固定同协议 SFT → matched eval → result-only RL → grounded process credit 顺序。
+  2026-08-21--26 的 checkpoint-relalg/Atomic-v24-frozen 长轨迹、投影与 reasoning 压缩/重写
+  统一冻结为 diagnostic-only，不进入当前 SFT/RL。
 - `overview.md`: research objective and non-negotiable method boundary.
 - `architecture.md`: active code layout and ownership.
 - `checkpoint_relalg_v1_zh.md`: `checkpoint-relalg-v1` 的前向协议、三种 mode、短提示词、
   关系工件/检查点状态，以及诊断准入边界。完整设计规格属于 Harness 与实现侧输入，
   不是逐轮发送给模型的 prompt。
+- `atomic_v24_frozen.md`: 新的冻结 Atomic 工具基线 `atomic-v24-frozen-v1`；保留 v24 紧凑
+  语义接口与确定性列名修复，移除模型可见 checkpoint/restore，并规定历史 profile 只用于 replay。
 - `provider_api.md`: official DeepSeek endpoint and credential contract, AimixHub/AIHubMix
   deprecation, Chat Completions versus FIM boundary, and migration verification.
 - `deepseek_native_tool_calls_zh.md`: official DeepSeek native function-call adapter,
@@ -109,24 +116,34 @@ sources of truth.
 - `../reports/sft/BIRD_ATOMIC_TEACHER1500_NONEMPTY_TASK_GATE_20260806_ZH.md`: full 6,601-task
   read-only result audit, 6,599/5,915 filtered pools, privacy boundary, and identity-preserving
   teacher1500 v2 certification.
+- `../reports/sft/BIRD_SPIDER_SYNSQL_SFT9K_TASK_SELECTION_20260811_ZH.md`: frozen 9,000-question
+  BIRD/Spider/SynSQL rollout queue, exact 20/60/20 difficulty, SQL-composition coverage, and
+  nonempty/privacy gates; question count, not action count, is the size target.
 - `sft_pipeline.md`: accepted data and export path.
 - `rl_pipeline.md`: result-only control and process-credit mainline.
 - `evaluation.md`: evaluation contracts and baseline comparability.
+- `evaluation_analysis.md`: the single canonical evaluator-result analysis CLI, unified JSON
+  schema, contract checks, and historical compatibility wrappers.
 - `baseline_datasets.md`: active BIRD-train baseline300, deprecated fixed-200 cohort, distribution
   audit, immutable versioning rules, and the mandatory baseline-data change log.
 
-When documentation conflicts, the scheme registry in `src/tool_modules/registry.py`, the selected
-scheme's executable protocol, harness behavior, and explicit evaluation manifests take precedence;
-update the affected current document in the same change.
+When documentation conflicts, `training_mainline.md` determines the current training stage; the
+scheme registry, selected executable protocol, harness behavior, and explicit run manifests then
+determine executable identity. Update the affected current document in the same change.
 
-The forward implementation line is now `checkpoint-relalg-v1` under scheme
+The forward tool-development implementation line is `checkpoint-relalg-v1` under scheme
 `checkpoint-relalg`, with an explicit `mode=direct|atomic|hybrid`. Every provider assistant turn
-authors exactly one official DeepSeek native tool call. All modes share the same relation-artifact,
+uses its selected external-provider carrier. All modes share the same relation-artifact,
 environment-state, checkpoint/restore, and exact-artifact terminal contract. This is the required
 starting point for new tool and experiment development, but it remains `diagnostic-only` until
 fresh replay, structure, provider-history, no-leak, behavior, and explicit SFT/RL admission gates
 pass. “Forward mainline” identifies where new development starts; it does not imply a training or
 accuracy promotion.
+
+The current **training** mainline is the frozen Atomic version26 SFT1 contract and its matched
+Qwen3 local evaluator. The trusted anchor is checkpoint-560 at 838/1534 = 54.63% BIRD-dev greedy.
+Do not mix checkpoint-relalg/Atomic-v24-frozen data, prompts, parsers, adapters, or result roots into
+that line. See `training_mainline.md` before starting data generation, SFT, evaluation, or RL.
 
 The original `atomic` line remains available for already-running RL work, frozen controls, and
 exact reproduction; version54 / `native-tool-bundle` remains a diagnostic control/reproduction

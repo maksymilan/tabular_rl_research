@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from reproductions.trust_sql.qwen3_8b_sql_controls.remote_supervisor import (
+    build_parser,
     validate_result,
 )
 
@@ -19,6 +20,23 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
 
 
 class ResultValidationTests(unittest.TestCase):
+    def test_concurrency_arguments_are_explicit(self):
+        args = build_parser().parse_args([
+            "--mode", "direct",
+            "--run-dir", "/home/dengyan/tabular_rl_outputs/evaluations/qwen3_sql_controls/test_run",
+            "--gpu", "5",
+            "--port", "8042",
+            "--runtime-sha256", "0" * 64,
+            "--model-size", "8b",
+            "--model-root", "/home/dengyan/models/Qwen3-8B-TrustSQL-baseline",
+            "--max-num-batched-tokens", "16384",
+            "--max-num-seqs", "8",
+            "--workers", "8",
+        ])
+        self.assertEqual(args.max_num_batched_tokens, 16384)
+        self.assertEqual(args.max_num_seqs, 8)
+        self.assertEqual(args.workers, 8)
+
     def test_direct_result_contract_and_counts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

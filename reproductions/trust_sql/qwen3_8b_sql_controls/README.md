@@ -9,7 +9,9 @@ template, architecture, and every weight shard for both model sizes.
 
 Both arms use the same 1,534 BIRD-dev tasks and databases, `bird-set` denotation, greedy `n=1`,
 `temperature=0`, `top_p=1`, `max_tokens=2048`, explicit Qwen3 thinking, the same model shards,
-four evaluator workers, and a detached localhost vLLM service on the selected GPU host.
+and a detached localhost vLLM service on the selected GPU host. Evaluator workers and vLLM
+sequence concurrency default to four and are recorded in the launch manifest; they can be raised
+together for a dedicated GPU.
 
 - `direct`: one model request with the complete canonical JSON schema and no execution feedback;
   the model emits one SQL query inside `<answer>...</answer>`.
@@ -61,6 +63,16 @@ MODEL_SIZE=4b MODE=direct N=1534 RUN_ID=qwen3_4b_direct_sql_bird_dev1534_2026080
   bash reproductions/trust_sql/qwen3_8b_sql_controls/launch_detached_newgnn.sh
 
 MODEL_SIZE=4b MODE=iterative N=1534 RUN_ID=qwen3_4b_iterative_sql_v6_bird_dev1534_20260808 \
+  bash reproductions/trust_sql/qwen3_8b_sql_controls/launch_detached_newgnn.sh
+```
+
+For the Qwen3-8B Direct full run on a dedicated RTX 3090, the verified higher-concurrency launch
+uses `WORKERS=8 MAX_NUM_SEQS=8` while retaining the 16,384-token scheduler budget:
+
+```bash
+GPU=5 PORT=8042 GPU_MEMORY_UTILIZATION=0.92 WORKERS=8 MAX_NUM_SEQS=8 \
+  MAX_NUM_BATCHED_TOKENS=16384 MODEL_SIZE=8b MODE=direct N=1534 \
+  RUN_ID=qwen3_8b_direct_sql_bird_dev1534_newgnn_c8_20260810 \
   bash reproductions/trust_sql/qwen3_8b_sql_controls/launch_detached_newgnn.sh
 ```
 

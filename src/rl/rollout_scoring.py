@@ -3,16 +3,51 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from counterfactual_suite import CounterfactualTaskSuite
-from external_failure_adapter import normalize_failure_record
-from process_credit import ProcessRewardConfig, score_rollout_trajectory
 from terminal_reward import terminal_result_reward
-from trajectory_replay import evaluate_counterfactual_suite
+
+if TYPE_CHECKING:
+    from counterfactual_suite import CounterfactualTaskSuite
+    from process_credit import ProcessRewardConfig
 
 
 TurnTokens = tuple[list[int], list[int]]
+NONSEMANTIC_GENERATION_FAILURES = frozenset(
+    {"generation_oom", "generation_length", "context_overflow"}
+)
+_TIMEOUT_FAILURE_TYPES = frozenset({"timeout_error"})
+_TIMEOUT_ERROR_CODES = frozenset({"tool_execution_timeout"})
+
+
+def _timeout_event(event: Any) -> bool:
+    """Recognize only canonical structured timeout markers, never free text."""
+
+    if not isinstance(event, dict):
+        return False
+    return (
+        event.get("failure_type") in _TIMEOUT_FAILURE_TYPES
+        or event.get("error_type") in _TIMEOUT_FAILURE_TYPES
+        or event.get("execution_error_type") in _TIMEOUT_FAILURE_TYPES
+        or event.get("recovered_from_error_type") in _TIMEOUT_FAILURE_TYPES
+        or event.get("error_code") in _TIMEOUT_ERROR_CODES
+        or event.get("code") in _TIMEOUT_ERROR_CODES
+    )
+
+
+def _has_timeout_evidence(record: dict[str, Any]) -> bool:
+    """Detect terminal or recovered tool timeouts in a canonical rollout record."""
+
+    if record.get("failure_type") in _TIMEOUT_FAILURE_TYPES:
+        return True
+    if any(_timeout_event(event) for event in (record.get("error_events") or [])):
+        return True
+    for turn in record.get("turns") or []:
+        if not isinstance(turn, dict):
+            continue
+        if _timeout_event(turn) or _timeout_event(turn.get("error_event")):
+            return True
+    return False
 
 
 @dataclass
@@ -51,78 +86,113 @@ def score_completed_rollout(
     process_admission_policy: str,
     denotation_comparison: str,
     counterfactual_suite: CounterfactualTaskSuite | None,
+    result_reward_profile: str = "binary",
+    generation_truncation: dict[str, Any] | None = None,
 ) -> RolloutSample:
     """Attach terminal/process credit without depending on a trainer implementation."""
     record = env.record()
     record["trajectory_id"] = f"rl_{metadata['example_index']}_sample_{sample_index}"
+    if generation_truncation is not None:
+        record["generation_truncation"] = dict(generation_truncation)
     step_rewards = None
-    process_update = record["failure_type"] != "generation_oom"
-    scalar_reward = terminal_result_reward(record["correct"])
+    process_update = (
+        record["failure_type"] not in NONSEMANTIC_GENERATION_FAILURES
+        and not _has_timeout_evidence(record)
+    )
+    scalar_reward = terminal_result_reward(
+        record["correct"],
+        executable=record.get("legal", False),
+        profile=result_reward_profile,
+    )
+    if not process_update:
+        scalar_reward = 0.0
+    if reward_mode == "result-only":
+        record["result_reward"] = {
+            "profile": result_reward_profile,
+            "correct": bool(record["correct"]),
+            "executable_terminal": bool(record.get("legal", False)),
+            "value": scalar_reward,
+        }
     if not process_update:
         record["optimization_exclusion"] = "nonsemantic_runtime_failure"
 
     if reward_mode == "process":
+        from external_failure_adapter import normalize_failure_record
+        from process_credit import score_rollout_trajectory
+        from trajectory_replay import evaluate_counterfactual_suite
+
         if process_config is None:
             raise ValueError("process reward mode requires a ProcessRewardConfig")
-        normalized, exclusion = normalize_failure_record(
-            record,
-            {
-                "example_id": record["trajectory_id"],
-                "dataset": "bird-sql",
-                "split": "train",
-                "db_id": metadata["db_id"],
-                "db_path": metadata.get("db_path"),
-                "question": metadata["question"],
-                "gold_sql": metadata["gold_sql"],
-                "external_knowledge": metadata.get("external_knowledge"),
-                "denotation_comparison": denotation_comparison,
-            },
-        )
-        if normalized is None:
+        if not process_update:
             step_rewards = []
-            process_update = False
             scalar_reward = 0.0
-            record["process_reward_exclusion"] = exclusion
+            record["process_reward_exclusion"] = "nonsemantic_runtime_failure"
         else:
-            reward = score_rollout_trajectory(
-                normalized,
-                process_config,
-                denotation_comparison=denotation_comparison,
+            normalized, exclusion = normalize_failure_record(
+                record,
+                {
+                    "example_id": record["trajectory_id"],
+                    "dataset": "bird-sql",
+                    "split": "train",
+                    "db_id": metadata["db_id"],
+                    "db_path": metadata.get("db_path"),
+                    "question": metadata["question"],
+                    "gold_sql": metadata["gold_sql"],
+                    "external_knowledge": metadata.get("external_knowledge"),
+                    "denotation_comparison": denotation_comparison,
+                },
             )
-            step_rewards = [step.reward for step in reward.steps]
-            if len(step_rewards) != len(turns):
-                raise RuntimeError(
-                    "generated turns and replayed process steps do not align: "
-                    f"{len(turns)} != {len(step_rewards)}"
-                )
-            process_update = reward.process_update
-            scalar_reward = reward.total_reward
-            record["process_reward"] = reward.to_dict()
-            record["process_admission_policy"] = process_admission_policy
-            if (
-                reward.correct
-                and process_update
-                and process_admission_policy == "counterfactual-completeness"
-            ):
-                if counterfactual_suite is None:
-                    raise RuntimeError(
-                        "correct process trajectory has no counterfactual task suite"
-                    )
-                completeness = evaluate_counterfactual_suite(
+            if normalized is None:
+                step_rewards = []
+                process_update = False
+                scalar_reward = 0.0
+                record["process_reward_exclusion"] = exclusion
+            else:
+                reward = score_rollout_trajectory(
                     normalized,
-                    counterfactual_suite.database_paths,
-                    min_informative_databases=(
-                        counterfactual_suite.min_informative_databases
-                    ),
+                    process_config,
                     denotation_comparison=denotation_comparison,
                 )
-                record["counterfactual_completeness"] = completeness.to_dict()
-                if not completeness.passed:
-                    process_update = False
-                    scalar_reward = 0.0
-                    record["process_reward_exclusion"] = (
-                        f"counterfactual_completeness:{completeness.reason}"
+                step_rewards = [step.reward for step in reward.steps]
+                if len(step_rewards) != len(turns):
+                    raise RuntimeError(
+                        "generated turns and replayed process steps do not align: "
+                        f"{len(turns)} != {len(step_rewards)}"
                     )
+                process_update = reward.process_update
+                scalar_reward = reward.total_reward
+                record["process_reward"] = reward.to_dict()
+                record["process_admission_policy"] = process_admission_policy
+                if (
+                    reward.correct
+                    and process_update
+                    and process_admission_policy == "counterfactual-completeness"
+                ):
+                    if counterfactual_suite is None:
+                        raise RuntimeError(
+                            "correct process trajectory has no counterfactual task suite"
+                        )
+                    completeness = evaluate_counterfactual_suite(
+                        normalized,
+                        counterfactual_suite.database_paths,
+                        min_informative_databases=(
+                            counterfactual_suite.min_informative_databases
+                        ),
+                        denotation_comparison=denotation_comparison,
+                    )
+                    record["counterfactual_completeness"] = completeness.to_dict()
+                    if not completeness.passed:
+                        process_update = False
+                        scalar_reward = 0.0
+                        record["process_reward_exclusion"] = (
+                            f"counterfactual_completeness:{completeness.reason}"
+                        )
+
+    # Persist the exact optimizer-admission decision beside the rollout
+    # evidence.  RolloutSample already carries this boolean to transition
+    # construction; recording the same final value makes the append-only
+    # rollout log independently auditable without changing gradient semantics.
+    record["process_update"] = bool(process_update)
 
     return RolloutSample(
         reward=scalar_reward,

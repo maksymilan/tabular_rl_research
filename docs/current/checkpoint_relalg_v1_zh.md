@@ -56,6 +56,13 @@ artifact。
 
 Atomic 另有显式、隔离的算子粒度配置 `--atomic-operator-profile`：
 
+2026-08-12 起，后续 Atomic 工具工作的冻结基线是 `atomic-v24-frozen-v1`。它以 version24 的
+任务级语义工具方法、`semantic-v3-v24` 的 compact/recent-4 接口和 v4 的确定性省略-`as` 列名
+修复为边界；public tools 不含 `commit_checkpoint` / `restore_checkpoint`，runtime 强制两个预算
+均为 0，动态 context 不显示 phase targets/checkpoint history。`semantic-v5-v24-output` 和所有
+checkpoint/restore guidance 不进入冻结版本。旧 profile 继续保留以精确 replay，不得产生新的前向
+变更或与冻结版本重标混合。详见 `atomic_v24_frozen.md`。
+
 - `micro-v1` 是冻结默认面，保留上表九个机械原子算子、历史 prompt/schema/hash 与精确重放；
 - `semantic-v2` 是 2026-08-10 开始的 diagnostic 优化面，不改变 `mode=atomic`，把一个任务级
   决策所需的确定性机械步骤合并为 `shape_rows`、`group_aggregate`、`scalar_compute` 与
@@ -89,6 +96,25 @@ provider tokens 从 2,481,912 降至 881,327（-64.49%），20/20 题都更低�
 identity、structure、batch/cohort binding 与 fresh replay 全部通过。该结果支持 v3 作为下一
 diagnostic Atomic 候选，不证明准确率提升或训练准入；完整报告见
 `../reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V3_V24_PAIRED_GATE20_RESULT_20260811_ZH.md`。
+
+同日使用 disjoint positions 220–299 扩展 80 pairs，并与 Gate20 合并成 Gate100。最终
+semantic-v2 / semantic-v3-v24 分别为 69/100 与 70/100 `bird-set`、41/100 与 41/100 strict、
+49/100 与 51/100 schema、97/100 与 97/100 legal；paired correctness 为 v2-only 1、v3-only 2，
+exact McNemar `p=1.0`，不构成准确率提升。v3 把总 tokens 从 13,695,894 降至 5,159,776
+（-62.33%），98/100 tasks 更低；turns 798 -> 780、errors 57 -> 52。Checkpoint coverage
+55/100 -> 52/100，accepted commits 60 -> 61，说明 checkpoint 路径被保留，但两臂 restore 都为
+0，尚未隔离 checkpoint 的因果收益。Expansion 160/160 records 的 identity、structure、budget
+与 fresh replay 全部通过。v3 保留为 diagnostic candidate，SFT/RL admission 仍为 0；完整报告见
+`../reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V3_V24_PAIRED_GATE100_RESULT_20260811_ZH.md`。
+
+2026-08-12 的 `semantic-v4-v24-interface` Target Gate22 修复了 v3 的一个确定接口矛盾：
+`shape_rows`/`rank_select` 省略 `as` 时现在可以保留已有 dotted 或含空格的精确逻辑列名，而
+显式 `as` 仍必须是 simple identifier。Fresh paired target 中 `invalid_identifier` 7 -> 0、
+`invalid_arguments` 5 -> 1、总 errors 34 -> 19，`bird-set` 12/22 持平，tokens -13.09%。但是
+legal 21 -> 19、strict 10 -> 8、schema 12 -> 9；两个 strict 回退来自不再被错误反馈迫使模型
+显式重命名、从而保留了 dotted label。结论是 Harness 修复方向正确，但模型仍缺“何时保留源
+标签、何时生成终端 simple alias”的可观测契约。冻结 v4 package、不扩大、不替代 v3；详见
+`../reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V4_INTERFACE_TARGET_GATE22_RESULT_20260812_ZH.md`。
 
 `semantic-milestone-v1` 是 semantic-v2 Atomic 专用的 teacher-only checkpoint 触发诊断。
 它不改变快照、restore 或算子执行语义，只把抽象“里程碑”落实为可执行规则：稳定且仍会被后续

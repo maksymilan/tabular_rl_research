@@ -11,6 +11,28 @@ loads the external teacher's generation guidance or worked examples. Checkpoint 
 protocol version/hash, student prompt SHA-256, and public tool-schema SHA-256 so resume cannot
 silently cross a prompt contract.
 
+### Current SFT-to-RL handoff
+
+The current handoff is the exact Qwen3-8B Atomic version26 SFT1 `checkpoint-560`; see
+`training_mainline.md`. It is the matched 54.63% BIRD-dev behavior anchor and must retain the same
+version26 prompt, `think-json-v1` carrier, recent-four legal history, tool contract, runtime, and
+terminal `bird-set` scorer throughout RL. The Qwen2.5 SFT2 line and later
+`checkpoint-relalg/atomic-v24-frozen-v1` projections are identity-separated diagnostics and are not
+initialization sources for this mainline.
+
+The next sequence is:
+
+1. verify the frozen version26 SFT1 adapter and reproduction identities;
+2. run the isolated version26 local evaluator and RL environment without protocol drift;
+3. establish a matched binary terminal `bird-set` result-only baseline;
+4. only after that baseline passes engineering and behavior gates, compare grounded process credit.
+
+`src/rl/tool_environment_v26.py` is the current SFT-to-RL environment. The version26 evaluator,
+configs, reports, and checkpoint identities remain frozen, but they are now the executable mainline
+rather than merely historical controls. `src/rl/tool_environment.py`, the Qwen2.5 line, and later
+checkpoint-relalg environments remain separate controls and may contribute engineering patterns
+only when those patterns do not alter version26 semantics.
+
 ## Active modules
 
 - `src/rl/tool_environment.py`: one causal model↔harness episode, selected exclusively as
@@ -37,8 +59,16 @@ silently cross a prompt contract.
   one exact rolling-state prefix per assistant turn, performs batched multi-episode rollout through
   a dedicated TRL vLLM server, and delegates temperature-aware old/reference log probabilities,
   tokenwise clipping, KL, optimizer scheduling, gradient clipping, and checkpointing to TRL.
+- `src/rl/tool_environment_v26.py`: isolated current Qwen3/version26 SFT-to-RL environment.
 - `src/rl/frameworks/accelerate/`: the frozen single-GPU QLoRA REINFORCE baseline. It remains an
   audit/equivalence reference and must not receive new optimizer features.
+- `src/rl/diagnostics/analyze_grpo_training.py`: the canonical read-only online-GRPO training
+  audit. It binds manifest identity, rollout groups, reconstructed population-standardized
+  advantages, checkpoint Trainer metrics, partial next-update progress, failures, timeouts,
+  explicit rollout-policy global/micro/synchronization steps, sampled action-signature changes,
+  and final precision into one JSON schema. LoRA parameter/effective-matrix movement remains in
+  the complementary `compare_lora_updates.py`; experiment-specific replacement analyzers should
+  not be added.
 
 Algorithm names in experiment reports follow the active loss, not the trainer class name. The
 TRL class is named `TransitionGRPOTrainer`, but only result-only experiments use K-way
@@ -68,6 +98,209 @@ policy advantage; when the controlled experiment uses a nonzero KL coefficient, 
 receive the same frozen-SFT-reference KL update as the process condition. Because the episode-level
 advantage is applied to all generated turns, recovered successful trajectories can positively train
 earlier erroneous turns; this behavior is retained only as the control condition.
+
+The retained binary baseline remains unchanged. A separate TRUST-SQL-style engineering baseline
+may select `result_reward_profile=execution-ladder`:
+
+```text
+reward = 1.0  verified correct terminal denotation
+         0.2  legal terminal answer with an executable cited relation but wrong denotation
+         0.0  no legal terminal answer (protocol/execution abort, max steps, or runtime exclusion)
+```
+
+This is an environment-faithful translation, not a claim that an atomic relational program is the
+same action space as direct SQL. It uses `policy_reduction=trajectory_token_mean`: exact rolling
+prefixes remain separate, but a turn is weighted by its authored response-token count divided by
+the trajectory's total authored response-token count. Summing the separately rebuilt causal turns
+therefore matches TRUST-SQL's default per-sample token mean. The historical `trajectory_mean` mode
+instead gives every turn equal mass and is not paper-equivalent when turn lengths differ.
+The frozen 60-task hardware-equivalent configuration uses K=8, full-response tokens, temperature
+0.8, constant LR 8e-7, AdamW betas (0.9, 0.98), weight decay 0.1, asymmetric clipping (0.2, 0.28),
+no KL, and one policy iteration. On two 24GB RTX 3090s it accumulates 30 one-question K8 rollout
+microbatches per optimizer step, giving 240 trajectories per update; six updates expose all 60
+tasks for three passes. This substitutes gradient accumulation for TRUST-SQL's approximately
+32-question/256-trajectory physical global batch while keeping the student unchanged inside each
+effective batch.
+
+The author-code comparison is pinned to TRUST-SQL commit
+`89df0661ad6b8e29ed8e61f7c950fbc2c1678b08`. Its sentence-level GRPO path reshapes rewards by
+prompt group, computes a masked population standard deviation (`unbiased=False`) and divides by
+`std + 1e-6`; it does not apply the separate global advantage whitening used by its PPO branch.
+Its policy-loss reducer first takes the authored-token mean within each complete response and then
+aggregates samples. Identical-reward groups therefore have exactly zero group-relative advantage.
+The local `trajectory_token_mean`, population-std normalization, and exact homogeneous-group zero
+handling match these mathematical choices while retaining the atomic Harness's exact rolling
+prefixes. The two-GPU QLoRA run remains an engineering translation of the training mechanics, not
+a reproduction claim for the paper's model, direct-SQL action space, distributed async system, or
+schema-reward condition.
+
+Every new TRL run manifest records the SHA-256 of its initial adapter and the executable RL
+sources that define rollout, reward, exact-prefix batching, reduction, precision, protocol, and
+tool execution. Long-running artifacts also retain an `implementation_lock.json` plus a complete
+source snapshot; the snapshot hashes must match the lock before a result is treated as
+reproducible. This is necessary because the shared worktree may continue evolving while a
+multi-hour GPU process is still using already-imported code.
+The lock is written atomically before rollout and contains only identity-bearing deterministic
+fields: executable source hashes, initial adapter hash, protocol version/hash, and experiment
+configuration hash. A same-directory resume must match it byte-for-byte; it may not silently
+rewrite the run identity.
+
+For the policy-only, zero-KL baseline, transitions whose standardized advantage is exactly zero
+are mathematically absent from the policy gradient. The trainer therefore drops them before the
+old-policy forward and backward passes. A fully homogeneous K group retains one zero-gradient
+placeholder so it still occupies its declared gradient-accumulation slot. This optimization is
+used for online and fixed-pool runs only when Rank and KL losses are both disabled; rollout,
+reward accounting, update boundaries, and the resulting optimizer state are unchanged.
+The canonical GRPO analyzer reports positive, negative, and zero advantage counts plus raw and
+turn-weighted mean advantage separately for every reward tier. This makes the relative-credit
+direction auditable: reward `0` must never receive positive advantage and reward `1` must never
+receive negative advantage, while reward `0.2` may legitimately take either sign depending on the
+other seven outcomes for that prompt. It also retains a compact summary for every K group with the
+exact task id, trajectory ids, reward/eligibility/advantage vectors, turn counts, timeout recovery,
+and rollout-policy global/micro/synchronization steps, so aggregate checks remain traceable to the
+actual sampled group.
+
+The QLoRA numerical-precision contract is explicit: the frozen 4-bit base continues to compute in
+BF16, but every trainable adapter parameter is promoted to FP32 before optimizer construction and
+must remain FP32 after Trainer wrapping. With `adamw_torch`, Adam first/second moments must also be
+FP32. The launcher records both audits in the run manifest and writes `training_precision.json`
+before the final adapter is saved; a mismatch fails the run instead of silently accepting rounded
+updates. A result-only artifact whose trainable adapter or Adam moments were BF16 is an engineering
+smoke only and must not be resumed as the corrected baseline; the corrected run starts from the
+frozen SFT2 adapter in a new output directory.
+The canonical training analyzer additionally reads every persisted `checkpoint-N` adapter and
+`optimizer.pt` with safe tensor / weights-only loading. It records adapter, optimizer-state, and
+Adam-moment dtype counts per update; final readiness requires every saved LoRA tensor and every
+`exp_avg`/`exp_avg_sq` tensor to be FP32, in addition to the live callback and final precision
+audit. Thus an in-memory assertion alone cannot hide a lower-precision checkpoint.
+
+The trainer streams dequantized-base-plus-LoRA BF16 weights to vLLM at every optimizer boundary.
+Because the training forward still uses a 4-bit base, it applies TRL's capped vLLM importance
+correction to the sampled policy loss. New runs record the supported-token absolute sampling/train
+log-ratio, applied ratio min/mean/max, and cap-exceeded fraction. This distinguishes genuine reward
+optimization from a hidden QLoRA-versus-vLLM policy mismatch. The currently running source-locked
+formal artifact predates these descriptive metrics; its correction remains executable-source
+locked, and its online step/sync binding is audited separately without changing that run in place.
+
+Every model-authored SQLite tool call now has a mandatory 10-second execution deadline in the
+shared atomic executor. SQLite's progress handler interrupts an overrun, the Harness relation
+registry/counters are restored, newly created temporary tables are removed, and the model receives
+a recoverable `timeout_error` with code `tool_execution_timeout`. The same bound is recorded in RL
+rollout settings and used by full-dev tool evaluation. On 2026-08-11 this replaced an unbounded
+scale-60 control attempt that stopped before its first optimizer update after 128 rollouts while a
+`language_corpus` operation retained very large deleted SQLite temporary files. That partial
+artifact is audit-only and must not be resumed. The corrected timeout10 run starts independently
+from the exact SFT2 checkpoint in a new output directory.
+The canonical training audit distinguishes timeout events from terminal outcomes: it reports
+timeout-bearing trajectories, event count, correct/legal recovery, unrecovered trajectories,
+missing structured events, and state-preservation violations. A timeout is not automatically a
+zero-reward episode; if the model uses the recoverable error and later reaches the verified result,
+the ordinary result-only reward still applies. Every structured timeout must preserve the exact
+Harness state hash and assert `state_preserved=true`; the final GRPO readiness audit requires this
+timeout contract to pass on every optimizer update.
+
+The first FP32 timeout-corrected scale-60 launch on 2026-08-11 exposed a separate provenance
+failure before its second update: online rollout used the repository's then-current atomic
+`version39` (`protocol_hash=be4953f2c78db88f`), while its queued full-dev evaluator was the frozen
+`version36` (`protocol_hash=20a8d3b4356d883c`). Its first update did contain valid learning signal
+(23/30 heterogeneous K=8 groups, 76.7% nonzero-advantage trajectories, gradient norm 0.0751, and a
+0.1678% raw adapter update relative to SFT2), but it is retained only as a protocol-mismatch
+engineering diagnostic and is not a GRPO accuracy baseline. The queued learning-rate sweep was
+stopped with it.
+
+The strict replacement is identity-bound to atomic `version36` for both training and evaluation.
+Its predeclared K=8 smoke must fail closed unless the run manifest and every rollout carry the
+exact version/hash, the group has at least two distinct rewards, normalized advantages and gradient
+norm are nonzero, and both raw adapter parameters and effective LoRA matrices move. The frozen
+example-1188 smoke passed these checks with 3/8 correct, mean reward 0.50, 100% nonzero advantages,
+gradient norm 0.7194, and raw/effective relative update norms 0.1678%/0.1595%. A baseline is not considered established
+until the complete matched-protocol BIRD-dev1534 greedy evaluation also reports accuracy, legal
+termination, mean steps, failure types, paired gains/regressions, and exact McNemar p versus the
+same SFT2 protocol.
+
+Final baseline disposition is produced by
+`src/rl/diagnostics/audit_grpo_baseline_readiness.py`, which combines rather than replaces the
+canonical training, LoRA-movement, and evaluation analyses. It reports separate statuses for:
+an engineering-valid fully evaluated pipeline, proven parameter plus deterministic-policy change,
+an observed positive accuracy baseline, and a statistically supported positive baseline requiring
+exact paired McNemar `p<0.05`. Parallel strict fields additionally require no net legal regression.
+A finite loss or nonzero adapter norm alone cannot satisfy the first status; a valid but
+accuracy-regressing run cannot satisfy the positive statuses, and a small nonsignificant gain is
+reported as exploratory rather than statistically supported. The active formal queue has an
+independent read-only watcher that will create this readiness artifact after the final adapter and
+all 1,534 dev records exist. The evaluation contract is exact-version-and-hash bound: the
+candidate and every comparator must report `version36` and `20a8d3b4356d883c`, in addition to
+greedy temperature/top-p and `bird-set`; a same-version result with another executable protocol
+hash cannot satisfy readiness. The candidate evaluation must also carry an immutable
+`evaluation_identity.json` whose adapter path and SHA-256 exactly match the final adapter used by
+the LoRA-movement audit; a renamed, stale, or unbound partial result cannot satisfy readiness.
+
+The first strict-version36 formal attempt was stopped before checkpoint 1 after an author-code
+comparison found that its `trajectory_mean` reduction averaged turn means rather than all authored
+tokens in the trajectory. Its K=8 smoke proved protocol, gradient, and FP32 update plumbing, but the
+formal partial artifact is objective-mismatch audit data only. The corrected run starts again from
+the frozen SFT2 adapter with `trajectory_token_mean`; no partial optimizer state is reused. Its
+independent example-1188 K=8 smoke also passed: 3/8 correct, mean reward 0.50, 100% nonzero
+advantages, gradient norm 0.7372, all 392 trainable tensors and all 784 Adam moments FP32, and
+raw/effective relative update norms 0.1678%/0.1602%.
+
+The corrected token-mean formal run then exposed a floating-point edge case before its first
+optimizer update. Eight identical `0.2` rewards produced residual advantages of about
+`2.78e-11` because summing decimal floats made the computed variance nonzero. The 24-row partial
+artifact is audit-only: it contains zero optimizer steps and shows that 55/176 causal transitions
+belonged to the theoretically homogeneous group. Group normalization now detects identical
+eligible rewards before mean/std arithmetic and returns strict zeros; the policy-only, zero-KL
+path reduces that group to one zero-gradient placeholder. Local and remote tests pass, and a fresh
+same-seed hardware run reproduced the first three K8 action/reward sequences exactly while moving
+from the homogeneous third group to the fourth rollout in under five seconds. The replacement
+formal run again starts from frozen SFT2 in a new output directory.
+
+That replacement subsequently exposed the mixed-group form of the same issue before checkpoint 1:
+for rewards `[0,0,0.2,0.2,0,1,0,0.2]`, the three `0.2` outcomes equal the mathematical group mean,
+but built-in Python summation reconstructed advantages near `8.8e-17`. TRUST-SQL's float32 tensor
+mean gives exact zeros for those entries. The 160-row/20-group partial artifact has zero optimizer
+steps and is audit-only. Result-only normalization now uses `math.fsum` for the discrete reward
+mean and variance in dependency-light diagnostics, while the actual training and production audit
+paths now execute the author's float32 Torch `mean` and population `std(unbiased=False)` operations
+directly. It matches the author-code coefficient rounding exactly for all 42 heterogeneous K=8
+reward-count compositions. The three homogeneous compositions are deliberately returned as strict
+zero, preserving GRPO's mathematical relative signal instead of reproducing Torch's own decimal
+`0.2` reduction residual. The formal baseline must restart from frozen SFT2 in a new output
+directory and may not resume this partial artifact.
+
+The canonical analyzer also counts any nonzero reconstructed advantage with magnitude below
+`1e-12`. No K=8 composition of the `{0, 0.2, 1}` execution ladder has a legitimate signal at that
+scale, so `exact_zero_contract_passes` must hold for every optimizer update. The readiness audit
+fails closed if even one such numerical pseudo-signal appears.
+
+Each persisted K group must contain one and only one `example_index`, and every complete
+30-prompt/240-trajectory optimizer update must contain 30 distinct question groups. The analyzer
+reports duplicate task ids explicitly, and final readiness rejects an update that silently repeats
+a question inside its effective batch even if its row count is otherwise correct.
+
+Credit-direction auditing separately checks that every heterogeneous group's normalized
+advantages remain ordered by reward, that its lowest/highest tiers have the expected signs, and
+that its group sum is numerically centered. Exhaustive production-Torch FP32 enumeration of all 42
+heterogeneous K=8 count compositions gives a worst absolute sum residual of
+`1.0728836059570312e-6`; the analyzer therefore uses a documented `2e-6` bound. This is not the
+exact-zero rule above: homogeneous groups and mathematically mean-tier coefficients must still be
+strict zero, and any ordering/sign violation still fails independently.
+
+The corrected max-30 example-4129 K=8 hardware smoke then completed one real optimizer update. Its
+reward counts were `0:3, 0.2:2, 1:3`; the eight advantages were approximately
+`[-0.9401, +1.2719, -0.9401, +1.2719, -0.4977, -0.4977, -0.9401, +1.2719]`, with zero direction
+violations and zero tiny pseudo-signals. It produced gradient norm `0.2570`; all 392 trainable
+tensors and 784 Adam moments were FP32. The raw adapter moved by `0.1678%` of its reference norm
+and the effective LoRA update moved by `0.1607%`. Requiring a stochastic live group to contain an
+exactly zero advantage was rejected: this group mean was `0.425`, so none of the three reward tiers
+mathematically had zero advantage. Exact-zero behavior remains covered deterministically by the
+complete 45-composition K=8 unit test, while live smoke requires heterogeneous rewards, correct
+credit direction, no tiny pseudo-signal, positive finite gradient, and positive LoRA movement.
+
+TRL's `completion_mask` is always the generated-token attention mask. A separate `tool_mask`
+controls loss support. This distinction is mandatory even for experiments that currently train the
+full response: reusing the loss mask as attention would score the updated policy under a different
+reasoning context than rollout and old-policy log probabilities.
 
 ## Process credit
 

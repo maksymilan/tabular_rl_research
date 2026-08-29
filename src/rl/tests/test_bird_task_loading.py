@@ -10,6 +10,7 @@ from tool_environment import ToolUseEnv
 from build_sft_task_set import numeric_example_index
 from task_loader import load_rl_task_records
 from protocol import student_runtime_system_prompt
+from rollout import ToolExecutionTimeoutError
 
 
 class FakeState:
@@ -27,6 +28,39 @@ class FakeHarness:
 
 
 class BirdTaskAdapterTests(unittest.TestCase):
+    def test_tool_timeout_returns_recoverable_timeout_error(self):
+        task = {
+            "example_index": 7,
+            "db_id": "bird_db",
+            "db_path": "/tmp/bird.sqlite",
+            "question": "Inspect the relevant table.",
+            "gold_sql": "SELECT 1",
+        }
+        output = (
+            "<think>Inspect the schema.</think>"
+            '{"tool":"describe_table","arguments":{"tables":["items"]}}'
+        )
+        with patch("tool_environment.Harness", FakeHarness), patch(
+            "tool_environment.overview", return_value={"tables": []}
+        ), patch(
+            "tool_environment.new_ctx", return_value={"environment": FakeState()}
+        ), patch(
+            "tool_environment.execute_tool",
+            side_effect=ToolExecutionTimeoutError(10),
+        ):
+            environment = ToolUseEnv(task)
+            transition = environment.apply_model_output(output)
+
+        self.assertFalse(transition.done)
+        self.assertEqual(transition.failure_type, "timeout_error")
+        self.assertEqual(
+            transition.turn["execution_error_type"],
+            "timeout_error",
+        )
+        feedback = json.loads(transition.observation)
+        self.assertEqual(feedback["error"]["code"], "tool_execution_timeout")
+        self.assertEqual(feedback["error"]["details"]["timeout_seconds"], 10.0)
+
     def test_sft_task_set_uses_stable_bird_numeric_suffix(self):
         self.assertEqual(
             numeric_example_index(
@@ -174,6 +208,31 @@ class BirdTaskAdapterTests(unittest.TestCase):
         )
         self.assertEqual(records[0]["prompt"][0]["content"], expected_system)
         self.assertNotIn("CANONICAL CALLS", expected_system)
+
+    def test_task_data_accepts_an_explicit_frozen_runtime_prompt(self):
+        task = {
+            "example_index": 9,
+            "db_id": "bird_db",
+            "db_path": "/tmp/bird.sqlite",
+            "question": "Compute the eligible rate.",
+            "gold_sql": "SELECT secret_gold",
+        }
+        frozen_prompt = "frozen atomic version26 student prompt"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "tasks.json")
+            path.write_text(json.dumps({"examples": [task]}), encoding="utf-8")
+            with patch("task_loader.Harness", FakeHarness), patch(
+                "task_loader.build_catalog", return_value={"tables": []}
+            ):
+                records = load_rl_task_records(
+                    Path(directory),
+                    split="train",
+                    examples_json=path,
+                    system_prompt=frozen_prompt,
+                )
+
+        self.assertEqual(records[0]["prompt"][0]["content"], frozen_prompt)
+        self.assertNotIn(task["gold_sql"], json.dumps(records[0]["prompt"]))
 
     def test_tool_env_default_matches_sft_eval_rl_student_runtime_prompt(self):
         task = {

@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
 
 from tool_modules.checkpoint_relalg.protocol import (  # noqa: E402
+    ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
     ATOMIC_OPERATOR_PROFILE_SEMANTIC,
     ATOMIC_TOOLS,
     CARRIER_NATIVE_TOOL_CALLS,
@@ -85,6 +86,58 @@ def _nested_not(count: int) -> dict:
 
 
 class CheckpointRelalgProtocolTests(unittest.TestCase):
+    def test_frozen_v24_tool_surface_has_isolated_native_carrier_identity(self):
+        native = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_NATIVE_TOOL_CALLS,
+            checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
+        )
+        text = get_system_prompt(
+            "atomic",
+            teacher=True,
+            carrier=CARRIER_TEXT_JSON,
+            checkpoint_guidance_profile=CHECKPOINT_GUIDANCE_PROFILE_DISABLED,
+            atomic_operator_profile=ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
+        )
+        self.assertIn("Make exactly one native tool call per turn.", native)
+        self.assertNotIn("TEXT-JSON CARRIER", native)
+        self.assertIn("TEXT-JSON CARRIER", text)
+        self.assertNotEqual(
+            carrier_protocol_hash(
+                "atomic",
+                CARRIER_NATIVE_TOOL_CALLS,
+                ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
+            ),
+            carrier_protocol_hash(
+                "atomic",
+                CARRIER_TEXT_JSON,
+                ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
+            ),
+        )
+        expected_tools = [
+            "describe_table",
+            "inspect_column",
+            "read_rows",
+            "filter_rows",
+            "shape_rows",
+            "join",
+            "group_aggregate",
+            "scalar_compute",
+            "rank_select",
+            "set_operation",
+            "answer",
+        ]
+        self.assertEqual(
+            capability_manifest(
+                "atomic",
+                CARRIER_NATIVE_TOOL_CALLS,
+                ATOMIC_OPERATOR_PROFILE_FROZEN_V24,
+            )["tools"],
+            expected_tools,
+        )
+
     def test_version_scheme_and_strict_mode_surfaces(self):
         self.assertEqual(PROTOCOL_VERSION, "checkpoint-relalg-v1")
         self.assertEqual(SCHEME, "checkpoint-relalg")

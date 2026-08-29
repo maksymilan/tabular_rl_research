@@ -61,6 +61,42 @@ Start at `docs/current/README.md`.
   harness for compatibility and terminal-denotation checks.
 - No trajectory enters SFT without fresh replay, execution verification, and quality/no-leak gates.
 
+### Current production training mainline
+
+- The single current training sequence is documented in `docs/current/training_mainline.md` and is
+  now the frozen Qwen3-8B **Atomic version26 SFT1** line: same version26 local evaluator,
+  then same-environment result-only RL, then grounded process-credit RL. Do not change protocol,
+  prompt, carrier, history, Harness, scorer, or checkpoint identity between these stages.
+- The trusted behavior anchor is version26 SFT1 `checkpoint-560`: 838/1534 = **54.63%** BIRD-dev
+  greedy `bird-set`, versus 270/1534 = 17.60% for the matched base. The runtime is exported from
+  commit `4cd47c957fc6ae791e76a10594c8cd22f4d3b6de`, carrier `think-json-v1`, rolling-full prompt SHA
+  `848598074e653648d52b58dfa1a54dd777beabae16cb91d83c4ba1a54b5d7316`, recent-four legal
+  history, max 30 steps, and local Qwen3 thinking enabled.
+- Its SFT data came from a real external-teacher↔Harness loop over the fixed-1000 cohort. The
+  original provider generation used the compatible atomic action surface, hid gold SQL, and
+  admitted only correct trajectories after fresh replay, execution, and no-leak checks. The exact
+  Qwen3 SFT1 source contains 678 complete causal episodes and 4,471 next-action targets. The Qwen3
+  projection changes history exactly as the official chat template does, preserves every final
+  target, and fits all records under cutoff 6,400. Source/preparation identities are locked in
+  `src/sft/prepare_qwen3_atomic_sft1_newgnn.sh`.
+- The trusted training recipe is the existing two-RTX-3090 QLoRA run: Qwen3-8B base revision
+  `b968826d9c46dd6066d109eabc6255188de91218`, 4-bit all-linear LoRA rank 16/alpha 32/dropout
+  0.05, global batch 16, two epochs, 560 optimizer steps, seed/data_seed 42. The frozen adapter is
+  `/home/dengyan/tabular_rl_outputs/checkpoints/qwen3-8b-bird-atomic-v26-sft1-6400-qlora/checkpoint-560`.
+- Data scaling must reproduce this same causal generation and admission contract. New episodes may
+  add task coverage, but may not rewrite reasoning, compile gold SQL into actions, mix later tool
+  schemas, or change the student prompt/history projection. External DeepSeek generation is paused
+  until the user explicitly resumes it.
+- The 2026-08-21--26 `checkpoint-relalg/atomic-v24-frozen-v1` trajectory union, projection-v1/v2/v3,
+  projection-v4 suffix compression, local Qwen3 rewrite/delete pilots, and their checkpoints are
+  frozen failed diagnostics with **zero SFT/RL admission**. The running projection-v3 training was
+  stopped on 2026-08-26 and must not resume. Preserve artifacts for audit; never merge, relabel, or
+  initialize the version26 mainline from them.
+- RL resumes from the exact version26 SFT1 checkpoint and `src/rl/tool_environment_v26.py`. First
+  establish a matched binary terminal `bird-set` result-only baseline; only after that passes may
+  replay-grounded process credit be compared. Model-authored reasoning and gold paths are never
+  reward authority.
+
 ### Model-visible protocol
 
 - The forward implementation is `checkpoint-relalg-v1` under scheme `checkpoint-relalg`, with a
@@ -85,6 +121,15 @@ Start at `docs/current/README.md`.
   Its prompt/history/protocol identity is distinct and must not be mixed with v2. Neither semantic
   profile has behavior or SFT/RL promotion until a paired causal gate passes. See
   `docs/reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V3_V24_GAP_REPAIR_20260811_ZH.md`.
+- The frozen forward Atomic tool baseline is now `atomic-v24-frozen-v1`. It retains the task-level
+  semantic operator surface, Text-JSON single-action carrier, recent-4 causal history, v24 compact
+  contract, typed artifact execution, and the deterministic omitted-`as` logical-column fix. It
+  removes `commit_checkpoint` and `restore_checkpoint` from the public tool surface, requires both
+  runtime limits to be zero, and omits phase/checkpoint sections from model-visible context. All
+  later semantic-v4/v5 prompt packages and checkpoint-trigger experiments are frozen historical
+  diagnostics only; preserve their code and artifacts for exact replay, but do not extend or
+  relabel them. The new frozen profile remains diagnostic-only pending its own behavior gate. See
+  `docs/current/atomic_v24_frozen.md`.
 - The fresh semantic-v2 versus semantic-v3-v24 paired Gate20 used teacher1500 positions 200–219,
   official Flash, Atomic, Text-JSON, and identical model-choice-v6 checkpoint guidance. Both arms
   scored 14/20 `bird-set`, 9/20 strict artifact, 11/20 schema match, and 20/20 legal with identical
@@ -94,6 +139,28 @@ Start at `docs/current/README.md`.
   Retain v3 as the next diagnostic Atomic candidate, but do not claim an accuracy gain or admit it
   to SFT/RL. See
   `docs/reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V3_V24_PAIRED_GATE20_RESULT_20260811_ZH.md`.
+- The disjoint positions 220–299 expansion completed the same comparison at Gate100. Semantic-v2
+  versus semantic-v3-v24 scored 69/100 versus 70/100 `bird-set`, 41/100 versus 41/100 strict
+  artifact, 49/100 versus 51/100 schema match, and 97/100 versus 97/100 legal. Paired correctness
+  had one v2-only and two v3-only outcomes (exact McNemar `p=1.0`), so this is behavior preservation,
+  not an accuracy promotion. V3 reduced total provider tokens from 13,695,894 to 5,159,776
+  (-62.33%); 98/100 paired tasks were cheaper, while turns fell 798 to 780 and public errors 57
+  to 52. Checkpoint coverage remained comparable (55 versus 52 tasks; 60 versus 61 accepted
+  commits), but neither arm restored. All 160 expansion records passed current identity, structure,
+  budget, and fresh-replay audit. Retain v3 only as the next diagnostic Atomic interface candidate;
+  SFT/RL admission remains zero. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V3_V24_PAIRED_GATE100_RESULT_20260811_ZH.md`.
+- A public-error-selected `semantic-v4-v24-interface` Target Gate22 isolated v3's schema/runtime
+  contradiction for omitted output aliases. V4 preserves an exact existing dotted or space-
+  containing logical column name when `shape_rows`/`rank_select` omits `as`, while explicit aliases
+  remain simple identifiers. Fresh v3 versus v4 reduced `invalid_identifier` 7 to 0,
+  `invalid_arguments` 5 to 1, total errors 34 to 19, turns 231 to 204, and tokens 1,910,450 to
+  1,660,318; `bird-set` stayed 12/22 with identical outcomes. However legal fell 21 to 19, strict
+  artifact 10 to 8, and schema match 12 to 9. Two strict regressions preserved dotted labels where
+  v3's erroneous rejection had induced a later simple alias. Keep the Harness compatibility
+  insight, but freeze the v4 package without expansion or promotion; v3 remains the current
+  diagnostic Atomic candidate. See
+  `docs/reports/evaluation/CHECKPOINT_RELALG_SEMANTIC_V4_INTERFACE_TARGET_GATE22_RESULT_20260812_ZH.md`.
 - “Forward” identifies the development base; it is not a behavior or training promotion.
   `checkpoint-relalg-v1` remains diagnostic-only until fresh replay, structure, provider-history,
   no-leak, behavior, scheme-aware export, and explicit SFT/RL admission gates pass. Gold SQL and
@@ -198,9 +265,10 @@ Start at `docs/current/README.md`.
 - In the frozen predecessor lineage, `version51` is the provider-tool-call baseline,
   `version52` is the frozen compact-prompt predecessor, and `version53` is the frozen reviewed-
   prompt control for the version54 no-plan ablation; version54 is the frozen no-plan diagnostic.
-  `version26` is now historical checkpoint-560 control only: do not
-  start new feature work from it or describe it as the current destination. The original atomic
-  local diagnostic baseline remains `version39`; `version40`-`version50` are frozen
+  `version26` is now the frozen current SFT/evaluation/RL contract and checkpoint-560 behavior
+  anchor. It is not reopened as a tool-design development branch: new interface research may still
+  start from `checkpoint-relalg`, but it has zero training admission unless separately promoted.
+  The original atomic local diagnostic baseline remains `version39`; `version40`-`version50` are frozen
   prompt/interface/provider diagnostics. None may be mixed into version26 result directories.
   Version26 retains version25's prompt-role and
   public-contract refactor, but replaces the model-visible tagged action carrier with one
@@ -860,6 +928,10 @@ Start at `docs/current/README.md`.
   hardware test proves a safer or faster replacement; do not replace it with fixed question
   batches or static worker partitions. This evaluation policy is separate from training batch
   sizes and repair-generation microbatches.
+- That `version36` configuration is a retained systems reference, not the executable evaluator
+  identity for the current version26 SFT1 checkpoint. The current matched evaluator is the isolated
+  version26 reproduction package. Dynamic scheduling and vLLM continuous batching may be ported
+  only without changing version26's prompt, carrier, history, tools, runtime, or audit identity.
 - Do not mix result directories across task selections, model/checkpoint, protocol, decoding,
   timeout, external knowledge, or denotation comparison.
 - Report API/transport failures separately from semantic policy failures.
@@ -1004,17 +1076,23 @@ Detailed experiment chronology, artifact paths, and scorer audits are in
 
 ## Active entry points
 
+- Current training-stage source of truth: `docs/current/training_mainline.md`.
 - Forward checkpoint-relalg diagnostic rollout:
   `src/tool_modules/checkpoint_relalg/runner.py --mode direct|atomic|hybrid`.
-- Tool rollout: `src/eval/rollout.py`, `src/eval/rollout_passk.py`.
+- Retained-atomic tool rollout: `src/eval/rollout.py`, `src/eval/rollout_passk.py`.
 - Direct SQL: `src/eval/text2sql.py`, `src/eval/text2sql_passk.py`.
 - Teacher data: `src/sft/generate_teacher_rollouts.py`.
 - BIRD SFT-2 assembly: `src/sft/build_bird_sft2_dataset.py`,
   `src/sft/assemble_bird_sft2_mixture.py`.
 - SFT export: `src/sft/export_sft_dataset.py`.
-- Current SFT-2 training: `src/sft/train_bird_sft2_qwen25_7b.sh` with
-  `src/sft/configs/bird_sft2_qwen25_7b_qlora_6400.yaml`.
-- RL backend: `src/rl/frameworks/accelerate/group_reinforce.py`.
+- Frozen failed Atomic-v24 export/projection diagnostics:
+  `src/tool_modules/checkpoint_relalg/sft_export.py` and
+  `src/sft/project_checkpoint_relalg_qwen3_sft.py`; zero current training admission.
+- Current Qwen3 SFT preparation/training: `src/sft/prepare_qwen3_atomic_sft1_newgnn.sh` and
+  `src/sft/train_qwen3_8b_atomic_sft1_newgnn.sh`.
+- Retained historical SFT-2 training: `src/sft/train_bird_sft2_qwen25_7b.sh`.
+- RL backend engineering base: `src/rl/frameworks/trl/`; the current handoff is the isolated
+  version26 environment and checkpoint-560 identity. Qwen2.5 and Atomic-v24 launchers are controls.
 
 ## Naming rules
 

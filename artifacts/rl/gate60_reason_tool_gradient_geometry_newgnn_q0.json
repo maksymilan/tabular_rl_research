@@ -1,0 +1,22 @@
+{
+  "schema_version": "gate60-reason-tool-gradient-geometry-v1",
+  "gold_sql_read": false,
+  "measurement": "ordinary binary group GRPO advantage; saved causal prompts/responses; no optimizer update",
+  "step": 0,
+  "example_index": 0,
+  "rows": 34,
+  "positive_rows": 30,
+  "negative_rows": 4,
+  "reason_tool": {
+    "positive": {"left_norm": 0.2162356100772769, "right_norm": 0.0650880790320108, "cosine": 0.1039615018238095, "sum_over_norm_sum": 0.8254131395361105},
+    "negative": {"left_norm": 0.5369697555745234, "right_norm": 0.17179644011387726, "cosine": 0.02089682848268171, "sum_over_norm_sum": 0.8002516352747077}
+  },
+  "full_reason": {
+    "positive": {"left_norm": 0.146421046449336, "right_norm": 0.2162356100772769, "cosine": 0.9623519360853654, "sum_over_norm_sum": 0.9908953421891038},
+    "negative": {"left_norm": 0.3394645627325387, "right_norm": 0.5369697555745234, "cosine": 0.9726095473466053, "sum_over_norm_sum": 0.993478866532692}
+  },
+  "full_tool": {
+    "positive": {"left_norm": 0.146421046449336, "right_norm": 0.0650880790320108, "cosine": 0.28121605773872593, "sum_over_norm_sum": 0.8329169831902743},
+    "negative": {"left_norm": 0.3394645627325387, "right_norm": 0.17179644011387726, "cosine": 0.20032130562201772, "sum_over_norm_sum": 0.8019749963495209}
+  }
+}

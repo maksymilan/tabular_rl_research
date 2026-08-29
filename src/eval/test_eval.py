@@ -39,8 +39,10 @@ from protocol import ProtocolError  # noqa: E402
 from rollout import (  # noqa: E402
     ChatAPIError,
     DEFAULT_FEWSHOT_IDS,
+    ToolExecutionTimeoutError,
     _normalize_table_refs,
     answer_row_candidates,
+    bounded_harness_execution,
     chat,
     error_limit_reached,
     execute_tool,
@@ -54,9 +56,7 @@ from rollout import (  # noqa: E402
 from executor import Harness  # noqa: E402
 from relation_derivation import SUPPORTED_TABLE_OPERATORS  # noqa: E402
 from rollout_passk import (  # noqa: E402
-    ToolExecutionTimeoutError,
     append_runner_error,
-    bounded_harness_execution,
     error_limit_reached as passk_error_limit_reached,
 )
 from text2sql import extract_sql  # noqa: E402
@@ -77,6 +77,30 @@ class FakeHarness:
 
 
 class EvalTests(unittest.TestCase):
+    def test_sqlite_tool_timeout_is_structured_and_restores_harness_state(self):
+        harness = Harness(":memory:")
+        self.addCleanup(harness.conn.close)
+        harness.conn.execute("CREATE TABLE numbers(value INTEGER)")
+        harness.conn.executemany(
+            "INSERT INTO numbers VALUES (?)",
+            ((value,) for value in range(2_000)),
+        )
+        harness.register_sources()
+        views_before = dict(harness.views)
+        sequence_before = harness._n
+        with self.assertRaises(ToolExecutionTimeoutError) as raised:
+            with bounded_harness_execution(harness, 1e-12):
+                harness.views["partial"] = "SELECT * FROM numbers"
+                harness._n += 1
+                harness.conn.execute(
+                    "SELECT COUNT(*) FROM numbers a, numbers b, numbers c"
+                ).fetchone()
+        self.assertEqual(raised.exception.failure_type, "timeout_error")
+        self.assertEqual(raised.exception.code, "tool_execution_timeout")
+        self.assertEqual(harness.views, views_before)
+        self.assertEqual(harness._n, sequence_before)
+        self.assertEqual(harness.conn.execute("SELECT 1").fetchone(), (1,))
+
     def test_no_progress_error_uses_action_budget_instead_of_per_type_abort(self):
         self.assertIs(passk_error_limit_reached, error_limit_reached)
         self.assertFalse(error_limit_reached("no_progress_error", 3, 3))

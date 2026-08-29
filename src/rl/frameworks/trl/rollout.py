@@ -2,17 +2,34 @@
 """Batched vLLM rollouts that preserve one exact prefix per assistant transition."""
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from process_credit import ProcessRewardConfig
+from protocol import PROTOCOL_VERSION
+import rollout as evaluator_runtime
+
+if PROTOCOL_VERSION == "version26":
+    from tool_environment_v26 import (
+        TOOL_EXECUTION_TIMEOUT_SECONDS,
+        create_tool_use_env,
+    )
+else:
+    TOOL_EXECUTION_TIMEOUT_SECONDS = (
+        evaluator_runtime.TOOL_EXECUTION_TIMEOUT_SECONDS
+    )
+    from tool_environment import create_tool_use_env
+
+TOOL_ENVIRONMENT_FACTORY_MODULE = create_tool_use_env.__module__
+
 from rollout_scoring import episode_example, score_completed_rollout
-from tool_environment import create_tool_use_env
-
 from frameworks.trl.transition_batch import PolicyEpisode, PolicyTurn
+
+if TYPE_CHECKING:
+    from process_credit import ProcessRewardConfig
 
 
 GenerateBatch = Callable[[list[str]], dict[str, Any]]
@@ -22,9 +39,15 @@ GenerateBatchWithKeys = Callable[
 ]
 
 
+_LENGTH_FINISH_REASONS = frozenset(
+    {"length", "max_length", "max_tokens", "max_new_tokens"}
+)
+
+
 @dataclass(frozen=True)
 class RolloutSettings:
     reward_mode: str = "result-only"
+    result_reward_profile: str = "binary"
     process_admission_policy: str = "counterfactual-completeness"
     tool_scheme: str = "atomic"
     max_steps: int = 30
@@ -39,10 +62,16 @@ class RolloutSettings:
     top_k: int = 0
     min_p: float = 0.0
     repetition_penalty: float = 1.0
+    enable_thinking: bool | None = None
+    tool_execution_timeout_seconds: float = TOOL_EXECUTION_TIMEOUT_SECONDS
 
     def validate(self) -> None:
         if self.reward_mode not in {"result-only", "process"}:
             raise ValueError(f"unsupported reward mode: {self.reward_mode}")
+        if self.result_reward_profile not in {"binary", "execution-ladder"}:
+            raise ValueError(
+                f"unsupported result reward profile: {self.result_reward_profile}"
+            )
         if self.denotation_comparison != "bird-set":
             raise ValueError("active RL requires denotation_comparison='bird-set'")
         if self.max_steps < 1 or self.max_new_tokens < 1:
@@ -51,6 +80,8 @@ class RolloutSettings:
             raise ValueError("temperature must be positive")
         if not 0 < self.top_p <= 1:
             raise ValueError("top_p must be in (0, 1]")
+        if self.tool_execution_timeout_seconds <= 0:
+            raise ValueError("tool_execution_timeout_seconds must be positive")
 
 
 class TableAgentRolloutCollector:
@@ -79,13 +110,142 @@ class TableAgentRolloutCollector:
         self.rollout_log_path = rollout_log_path
 
     def _render(self, messages: list[dict[str, str]]) -> tuple[str, list[int]]:
-        text = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+        template_kwargs: dict[str, Any] = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+        }
+        if self.settings.enable_thinking is not None:
+            # Hugging Face forwards extra top-level kwargs into the Jinja chat
+            # template.  Nesting this under ``chat_template_kwargs`` is the TRL
+            # client API shape, not the tokenizer API shape, and silently leaves
+            # Qwen3 on its default thinking mode.
+            template_kwargs["enable_thinking"] = self.settings.enable_thinking
+        text = self.tokenizer.apply_chat_template(messages, **template_kwargs)
         ids = self.tokenizer(text, add_special_tokens=False).input_ids
         return text, list(ids)
+
+    @staticmethod
+    def _optional_generation_value(
+        output: dict[str, Any],
+        keys: Sequence[str],
+        *,
+        row_index: int,
+        row_count: int,
+    ) -> tuple[Any, str | None]:
+        """Read an optional row field without requiring a patched TRL server.
+
+        TRL 0.29's vLLM client exposes token ids and logprobs but drops vLLM's
+        finish metadata.  Test/offline generators and future clients may expose
+        either singular or plural field names, so accept both while validating
+        their batch alignment when present.
+        """
+        for key in keys:
+            if key not in output or output[key] is None:
+                continue
+            rows = output[key]
+            if isinstance(rows, (str, int, float, bool)):
+                if row_count != 1:
+                    raise RuntimeError(
+                        f"vLLM scalar {key} cannot describe a {row_count}-row batch"
+                    )
+                return rows, key
+            if not isinstance(rows, Sequence) or len(rows) != row_count:
+                raise RuntimeError(
+                    f"vLLM {key} does not align with active environments"
+                )
+            value = rows[row_index]
+            # Some adapters preserve vLLM's n-completion dimension.  This
+            # collector always requests n=1, so unwrap exactly that shape.
+            if isinstance(value, Sequence) and not isinstance(value, str):
+                if len(value) != 1:
+                    raise RuntimeError(
+                        f"vLLM {key} row must contain exactly one completion"
+                    )
+                value = value[0]
+            return value, key
+        return None, None
+
+    @classmethod
+    def _generation_truncation(
+        cls,
+        output: dict[str, Any],
+        *,
+        row_index: int,
+        row_count: int,
+        completion_tokens: int,
+        max_new_tokens: int,
+        turn_index: int,
+        prompt_tokens: int | None = None,
+        response_token_ids: Sequence[int] | None = None,
+    ) -> dict[str, Any] | None:
+        """Return fail-closed length metadata for one generated completion."""
+        finish_reason, finish_reason_field = cls._optional_generation_value(
+            output,
+            ("finish_reasons", "finish_reason"),
+            row_index=row_index,
+            row_count=row_count,
+        )
+        stop_reason, stop_reason_field = cls._optional_generation_value(
+            output,
+            ("stop_reasons", "stop_reason"),
+            row_index=row_index,
+            row_count=row_count,
+        )
+        normalized_finish_reason = (
+            finish_reason.strip().lower() if isinstance(finish_reason, str) else None
+        )
+        normalized_stop_reason = (
+            stop_reason.strip().lower() if isinstance(stop_reason, str) else None
+        )
+
+        if normalized_finish_reason in _LENGTH_FINISH_REASONS:
+            detection = "explicit_finish_reason"
+        elif finish_reason is not None:
+            # An explicit non-length finish reason is stronger evidence than the
+            # token-count fallback, including the rare case where EOS lands on
+            # the final allowed token.
+            return None
+        elif normalized_stop_reason in _LENGTH_FINISH_REASONS:
+            detection = "explicit_stop_reason"
+        elif stop_reason is not None:
+            return None
+        elif completion_tokens >= max_new_tokens:
+            # This is the compatibility path for the pinned TRL 0.29 schema,
+            # which does not return CompletionOutput.finish_reason.
+            detection = "max_new_tokens_reached"
+        else:
+            return None
+
+        evidence = {
+            "schema_version": "vllm-generation-truncation-v1",
+            "kind": "length",
+            "detection": detection,
+            "turn_index": turn_index,
+            "completion_tokens": completion_tokens,
+            "max_new_tokens": max_new_tokens,
+            "finish_reason": finish_reason,
+            "finish_reason_field": finish_reason_field,
+            "stop_reason": stop_reason,
+            "stop_reason_field": stop_reason_field,
+        }
+        if (prompt_tokens is None) != (response_token_ids is None):
+            raise RuntimeError(
+                "generation truncation requires prompt tokens and response ids together"
+            )
+        if prompt_tokens is not None and response_token_ids is not None:
+            evidence.update(
+                {
+                    "schema_version": "vllm-generation-truncation-v2",
+                    "prompt_tokens": int(prompt_tokens),
+                    "response_token_ids_sha256": hashlib.sha256(
+                        json.dumps(
+                            [int(token_id) for token_id in response_token_ids],
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                }
+            )
+        return evidence
 
     def _generate_with_trainer(self, prompts: list[str], trainer) -> dict[str, Any]:
         generation = trainer.vllm_generation
@@ -155,9 +315,19 @@ class TableAgentRolloutCollector:
         policy_turns: list[list[PolicyTurn]] = []
         scored_turns: list[list[tuple[list[int], list[int]]]] = []
         tokenization_warnings: list[bool] = []
+        generation_truncations: list[dict[str, Any] | None] = []
+        context_overflows: list[dict[str, Any] | None] = []
 
         for item in inputs:
             metadata = dict(item["environment"])
+            prompt_messages = item.get("prompt") or []
+            if (
+                not prompt_messages
+                or prompt_messages[0].get("role") != "system"
+                or not isinstance(prompt_messages[0].get("content"), str)
+            ):
+                raise ValueError("RL task record is missing its pinned system prompt")
+            system_prompt = prompt_messages[0]["content"]
             example_index = int(metadata["example_index"])
             sample_index = sample_counts[example_index]
             sample_counts[example_index] += 1
@@ -166,12 +336,16 @@ class TableAgentRolloutCollector:
                     episode_example(metadata),
                     tool_scheme=settings.tool_scheme,
                     example_index=example_index,
+                    system_prompt=system_prompt,
                     max_steps=settings.max_steps,
                     max_batch_calls=settings.max_batch_calls,
                     context_mode=settings.context_mode,
                     history_turns=settings.history_turns,
                     compact_observations=True,
                     denotation_comparison=settings.denotation_comparison,
+                    tool_execution_timeout_seconds=(
+                        settings.tool_execution_timeout_seconds
+                    ),
                 )
             )
             metadata_rows.append(metadata)
@@ -179,6 +353,8 @@ class TableAgentRolloutCollector:
             policy_turns.append([])
             scored_turns.append([])
             tokenization_warnings.append(False)
+            generation_truncations.append(None)
+            context_overflows.append(None)
 
         try:
             while any(not env.done for env in envs):
@@ -190,6 +366,20 @@ class TableAgentRolloutCollector:
                         continue
                     prompt_text, prompt_ids = self._render(env.model_messages())
                     if len(prompt_ids) + settings.max_new_tokens > settings.max_context_tokens:
+                        context_overflows[env_index] = {
+                            "schema_version": "vllm-context-overflow-v1",
+                            "kind": "context_overflow",
+                            "detection": (
+                                "prompt_plus_max_new_tokens_exceeds_context"
+                            ),
+                            "turn_index": len(policy_turns[env_index]),
+                            "prompt_tokens": len(prompt_ids),
+                            "max_new_tokens": settings.max_new_tokens,
+                            "max_context_tokens": settings.max_context_tokens,
+                            "required_tokens": (
+                                len(prompt_ids) + settings.max_new_tokens
+                            ),
+                        }
                         env.done = True
                         env.failure_type = "context_overflow"
                         continue
@@ -259,6 +449,25 @@ class TableAgentRolloutCollector:
                     scored_turns[env_index].append(
                         (server_prompt_ids, response_ids)
                     )
+                    truncation = self._generation_truncation(
+                        output,
+                        row_index=row_index,
+                        row_count=len(active_indices),
+                        prompt_tokens=len(server_prompt_ids),
+                        response_token_ids=response_ids,
+                        completion_tokens=len(response_ids),
+                        max_new_tokens=settings.max_new_tokens,
+                        turn_index=len(policy_turns[env_index]) - 1,
+                    )
+                    if truncation is not None:
+                        # A length-limited carrier is not a complete authored
+                        # action.  Retain its exact policy evidence for audit, but
+                        # neither execute it nor let any part of the episode enter
+                        # policy optimization.
+                        generation_truncations[env_index] = truncation
+                        env.done = True
+                        env.failure_type = "generation_length"
+                        continue
                     env.apply_model_output(text)
 
             episodes = []
@@ -275,6 +484,26 @@ class TableAgentRolloutCollector:
                     process_admission_policy=settings.process_admission_policy,
                     denotation_comparison=settings.denotation_comparison,
                     counterfactual_suite=suite,
+                    result_reward_profile=settings.result_reward_profile,
+                    generation_truncation=generation_truncations[env_index],
+                )
+                if context_overflows[env_index] is not None:
+                    sample.audit_record["context_overflow"] = dict(
+                        context_overflows[env_index]
+                    )
+                # Persist the exact online-policy generation that authored this
+                # trajectory. Chronological row counts can reconstruct it, but the
+                # explicit binding makes weight-refresh audits fail closed instead of
+                # relying on an implicit Trainer batching convention.
+                trainer_state = getattr(trainer, "state", None)
+                sample.audit_record["policy_global_step"] = int(
+                    getattr(trainer_state, "global_step", 0)
+                )
+                sample.audit_record["policy_micro_step"] = int(
+                    getattr(trainer, "_step", 0)
+                )
+                sample.audit_record["policy_synced_global_step"] = int(
+                    getattr(trainer, "_last_loaded_step", -1)
                 )
                 if tokenization_warnings[env_index]:
                     sample.audit_record["rollout_tokenization_warning"] = True

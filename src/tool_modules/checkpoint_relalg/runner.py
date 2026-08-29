@@ -1904,8 +1904,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.atomic_operator_profile != DEFAULT_ATOMIC_OPERATOR_PROFILE and args.mode != "atomic":
         raise SystemExit("semantic atomic profiles are isolated to --mode atomic")
     if args.atomic_operator_profile == ATOMIC_OPERATOR_PROFILE_FROZEN_V24:
-        if args.carrier != CARRIER_TEXT_JSON:
-            raise SystemExit("atomic-v24-frozen-v1 requires --carrier text-json")
         if args.checkpoint_guidance_profile != CHECKPOINT_GUIDANCE_PROFILE_DISABLED:
             raise SystemExit(
                 "atomic-v24-frozen-v1 requires --checkpoint-guidance-profile checkpoint-disabled-v1"

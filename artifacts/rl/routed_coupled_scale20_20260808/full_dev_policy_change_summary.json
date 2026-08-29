@@ -1,0 +1,34 @@
+{
+  "schema_version": "routed-coupled-full-dev-policy-change-summary-v1",
+  "total": 1534,
+  "scale5_vs_sft2": {
+    "legal_gains": 126,
+    "legal_regressions": 119,
+    "legal_net": 7,
+    "legal_exact_p": 0.7015611407885329,
+    "action_sequence_changed": 1183,
+    "first_action_changed": 260,
+    "tool_sequence_changed": 906,
+    "arguments_only_changed": 277
+  },
+  "scale20_vs_sft2": {
+    "legal_gains": 129,
+    "legal_regressions": 105,
+    "legal_net": 24,
+    "legal_exact_p": 0.13252169649103462,
+    "action_sequence_changed": 1245,
+    "first_action_changed": 260,
+    "tool_sequence_changed": 932,
+    "arguments_only_changed": 313
+  },
+  "scale20_vs_scale5": {
+    "legal_gains": 132,
+    "legal_regressions": 115,
+    "legal_net": 17,
+    "legal_exact_p": 0.3086464263143993,
+    "action_sequence_changed": 1150,
+    "first_action_changed": 236,
+    "tool_sequence_changed": 884,
+    "arguments_only_changed": 266
+  }
+}

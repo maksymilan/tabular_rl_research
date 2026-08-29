@@ -10,8 +10,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from experiment_config import RLExperimentConfig
+from experiment_config import (
+    QWEN3_8B_BASE_MODEL_FILES,
+    RLExperimentConfig,
+    base_model_aggregate_sha256,
+    validate_base_model_identity_contract,
+)
 from process_credit import ProcessRewardConfig
+
+
+QWEN3_8B_BASE_MODEL_AGGREGATE_SHA256 = (
+    "85bd3b7d908acb3a9b9c7ec57b98d6b9e3b2fb427685ae808d1c43173279cecc"
+)
 
 
 def test_result_only_matrix_config_maps_to_exact_control_defaults() -> None:
@@ -31,6 +41,82 @@ def test_result_only_matrix_config_maps_to_exact_control_defaults() -> None:
     assert defaults["group_size"] == 4
     assert defaults["temperature"] == 0.7
     assert defaults["top_p"] == 0.95
+
+
+def test_trustsql_style_result_baseline_has_hardware_equivalent_batch() -> None:
+    config = RLExperimentConfig.load(
+        ROOT
+        / "src"
+        / "rl"
+        / "configs"
+        / "experiments"
+        / "trustsql_result_only_grpo_scale60.yaml"
+    )
+    defaults = config.argparse_defaults(ROOT)
+    assert defaults["result_reward_profile"] == "execution-ladder"
+    assert defaults["policy_reduction"] == "trajectory_token_mean"
+    assert defaults["group_size"] == 8
+    assert defaults["prompts_per_update"] == 1
+    assert defaults["gradient_accumulation_steps"] == 30
+    assert defaults["optimizer_steps"] == 6
+    assert defaults["learning_rate"] == 8e-7
+    assert defaults["lr_scheduler_type"] == "constant"
+    assert defaults["clip_epsilon"] == 0.2
+    assert defaults["clip_epsilon_high"] == 0.28
+    assert defaults["adam_beta2"] == 0.98
+
+
+def test_qwen_thinking_mode_is_an_explicit_optional_rollout_identity(tmp_path: Path) -> None:
+    source = ROOT / "src" / "rl" / "configs" / "experiments" / "trustsql_result_only_grpo_scale60.yaml"
+    payload = source.read_text(encoding="utf-8")
+    payload += "  enable_thinking: true\n"
+    path = tmp_path / "qwen.yaml"
+    path.write_text(payload, encoding="utf-8")
+    defaults = RLExperimentConfig.load(path).argparse_defaults(ROOT)
+    assert defaults["enable_thinking"] is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "qwen3_8b_atomic_v26_vanilla_grpo.yaml",
+        "qwen3_8b_atomic_v26_vanilla_grpo_boundary300.yaml",
+        "qwen3_8b_atomic_v26_vanilla_grpo_arm_b_train320_k16.yaml",
+    ],
+)
+def test_qwen3_v26_vanilla_configs_pin_the_same_complete_base_model(
+    name: str,
+) -> None:
+    config = RLExperimentConfig.load(
+        ROOT / "src" / "rl" / "configs" / "experiments" / name
+    )
+    identity = config.argparse_defaults(ROOT)["expected_base_model_identity"]
+    assert identity["schema_version"] == "trl-base-model-identity-v1"
+    assert identity["aggregate_sha256"] == QWEN3_8B_BASE_MODEL_AGGREGATE_SHA256
+    assert tuple(identity["files_sha256"]) == QWEN3_8B_BASE_MODEL_FILES
+    assert len(identity["files_sha256"]) == 12
+    assert (
+        base_model_aggregate_sha256(identity["files_sha256"])
+        == QWEN3_8B_BASE_MODEL_AGGREGATE_SHA256
+    )
+
+
+def test_base_model_identity_rejects_partial_or_self_inconsistent_contracts() -> None:
+    config = RLExperimentConfig.load(
+        ROOT
+        / "src/rl/configs/experiments/qwen3_8b_atomic_v26_vanilla_grpo.yaml"
+    )
+    identity = config.argparse_defaults(ROOT)["expected_base_model_identity"]
+
+    partial = json.loads(json.dumps(identity))
+    partial["files_sha256"].pop("vocab.json")
+    with pytest.raises(ValueError, match="exactly the 12 frozen files"):
+        validate_base_model_identity_contract(partial)
+
+    inconsistent = json.loads(json.dumps(identity))
+    inconsistent["aggregate_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="canonical file records"):
+        validate_base_model_identity_contract(inconsistent)
 
 
 @pytest.mark.parametrize(

@@ -38,6 +38,8 @@ from protocol import (  # noqa: E402
 )
 from rollout import (  # noqa: E402
     MAX_ERRORS_PER_TYPE,
+    TOOL_EXECUTION_TIMEOUT_SECONDS,
+    bounded_harness_execution,
     execute_tool,
     new_ctx,
     overview,
@@ -102,6 +104,7 @@ class ToolUseEnv:
         history_turns: int = 4,
         compact_observations: bool = True,
         denotation_comparison: str = "bird-set",
+        tool_execution_timeout_seconds: float = TOOL_EXECUTION_TIMEOUT_SECONDS,
     ):
         self.example = example
         self.example_index = example_index
@@ -119,6 +122,9 @@ class ToolUseEnv:
         if denotation_comparison != "bird-set":
             raise ValueError("active RL environments require denotation_comparison='bird-set'")
         self.denotation_comparison = denotation_comparison
+        if tool_execution_timeout_seconds <= 0:
+            raise ValueError("tool_execution_timeout_seconds must be positive")
+        self.tool_execution_timeout_seconds = tool_execution_timeout_seconds
         self.reset()
 
     def reset(self) -> list[dict]:
@@ -196,6 +202,7 @@ class ToolUseEnv:
             "errors": self.errors,
             "failure_type": self.failure_type,
             "denotation_comparison": self.denotation_comparison,
+            "tool_execution_timeout_seconds": self.tool_execution_timeout_seconds,
             "context_mode": self.context_mode,
             "history_turns": self.history_turns,
             "rolling_observation_style": (
@@ -238,13 +245,17 @@ class ToolUseEnv:
             turn["parsed"] = {"think": think, "tool": tool, "arguments": args}
             if tool == "answer_from_context":
                 validate_tool_arguments_against_state(self.harness, tool, args)
-                self.correct, turn["pred_sample"], turn["gold_sample"] = score(
+                with bounded_harness_execution(
                     self.harness,
-                    task_gold_sql(self.example),
-                    args,
-                    self.created,
-                    denotation_comparison=self.denotation_comparison,
-                )
+                    self.tool_execution_timeout_seconds,
+                ):
+                    self.correct, turn["pred_sample"], turn["gold_sample"] = score(
+                        self.harness,
+                        task_gold_sql(self.example),
+                        args,
+                        self.created,
+                        denotation_comparison=self.denotation_comparison,
+                    )
                 self.legal = True
                 if not self.correct:
                     self.failure_type = "wrong_answer"
@@ -259,7 +270,14 @@ class ToolUseEnv:
                     failure_type=self.failure_type,
                 )
 
-            output, table_name = execute_tool(self.harness, tool, args, self.ctx, step_id)
+            output, table_name = execute_tool(
+                self.harness,
+                tool,
+                args,
+                self.ctx,
+                step_id,
+                tool_execution_timeout_seconds=self.tool_execution_timeout_seconds,
+            )
             turn["tool_output"] = output
             self.adjacent_action_guard.mark_last("success")
             self.turns.append(turn)
@@ -374,6 +392,7 @@ class ActionBlockToolUseEnv:
         history_turns: int = 4,
         compact_observations: bool = True,
         denotation_comparison: str = "bird-set",
+        tool_execution_timeout_seconds: float = TOOL_EXECUTION_TIMEOUT_SECONDS,
     ):
         if context_mode != "rolling-legal-history":
             raise ValueError(
@@ -400,6 +419,9 @@ class ActionBlockToolUseEnv:
         self.history_turns = history_turns
         self.compact_observations = compact_observations
         self.denotation_comparison = denotation_comparison
+        if tool_execution_timeout_seconds <= 0:
+            raise ValueError("tool_execution_timeout_seconds must be positive")
+        self.tool_execution_timeout_seconds = tool_execution_timeout_seconds
         self.reset()
 
     def reset(self) -> list[dict]:
@@ -483,6 +505,7 @@ class ActionBlockToolUseEnv:
             "errors": self.errors,
             "failure_type": self.failure_type,
             "denotation_comparison": self.denotation_comparison,
+            "tool_execution_timeout_seconds": self.tool_execution_timeout_seconds,
             "context_mode": self.context_mode,
             "history_turns": self.history_turns,
             "rolling_observation_style": "full-atomic-results-plus-resident-state",
@@ -530,13 +553,17 @@ class ActionBlockToolUseEnv:
                 self.atomic_actions += 1
                 self.submitted_calls += 1
                 step_id = f"step_{self.atomic_actions}"
-                self.correct, turn["pred_sample"], turn["gold_sample"] = score(
+                with bounded_harness_execution(
                     self.harness,
-                    task_gold_sql(self.example),
-                    arguments,
-                    self.created,
-                    denotation_comparison=self.denotation_comparison,
-                )
+                    self.tool_execution_timeout_seconds,
+                ):
+                    self.correct, turn["pred_sample"], turn["gold_sample"] = score(
+                        self.harness,
+                        task_gold_sql(self.example),
+                        arguments,
+                        self.created,
+                        denotation_comparison=self.denotation_comparison,
+                    )
                 self.legal = True
                 self.done = True
                 self.failure_type = None if self.correct else "wrong_answer"
@@ -612,13 +639,17 @@ class ActionBlockToolUseEnv:
                 and terminal_result.get("status") == "success"
             ):
                 score_arguments = terminal_result["terminal_score_arguments"]
-                self.correct, turn["pred_sample"], turn["gold_sample"] = score(
+                with bounded_harness_execution(
                     self.harness,
-                    task_gold_sql(self.example),
-                    score_arguments,
-                    self.created,
-                    denotation_comparison=self.denotation_comparison,
-                )
+                    self.tool_execution_timeout_seconds,
+                ):
+                    self.correct, turn["pred_sample"], turn["gold_sample"] = score(
+                        self.harness,
+                        task_gold_sql(self.example),
+                        score_arguments,
+                        self.created,
+                        denotation_comparison=self.denotation_comparison,
+                    )
                 self.legal = True
                 self.done = True
                 self.failure_type = None if self.correct else "wrong_answer"

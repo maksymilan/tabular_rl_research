@@ -123,3 +123,38 @@
 - Scale20 的清晰增益是合法终止：71/90，相对 SFT2 净增 15，`p=0.00408`。
 - 本轮只说明“扩大数据能进一步改变策略，但当前奖励与规模组合主要改善协议完成度，尚未稳定转化为更高任务准确率”；不能据此单独判定奖励设计最终无效，也不能把 Scale5 的 37/90 当作已稳定复现的总体增益。
 
+## 后续完整 BIRD-dev1534 验证
+
+在 Holdout90 之后，只对 Scale5 与预注册选出的 Scale20 `lr=6e-6` 运行完整 BIRD-dev；SFT2 直接复用既有完整结果。两组均在第一次评测尝试完成 1534/1534，version36、greedy@1、temperature 0、top-p 1、max steps 30、bird-set、logprobs 20、并发 24、动态 vLLM batching。
+
+| 模型 | correct | accuracy | valid | valid rate | avg steps | simple | moderate | challenging |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| SFT2 | 762/1534 | 49.67% | 1194/1534 | 77.84% | 8.371 | 540/925 | 176/464 | 46/145 |
+| Scale5 | 767/1534 | 50.00% | 1201/1534 | 78.29% | 8.468 | 540/925 | 181/464 | 46/145 |
+| Scale20 | 770/1534 | 50.20% | 1218/1534 | 79.40% | 8.437 | 543/925 | 184/464 | 43/145 |
+
+准确率配对统计：
+
+| 比较 | gains | regressions | net | exact McNemar p |
+|---|---:|---:|---:|---:|
+| Scale5 vs SFT2 | 96 | 91 | +5 | 0.7700 |
+| Scale20 vs SFT2 | 103 | 95 | +8 | 0.6190 |
+| Scale20 vs Scale5 | 92 | 89 | +3 | 0.8819 |
+
+合法终止配对统计：
+
+| 比较 | legal gains | legal regressions | net | exact p |
+|---|---:|---:|---:|---:|
+| Scale5 vs SFT2 | 126 | 119 | +7 | 0.7016 |
+| Scale20 vs SFT2 | 129 | 105 | +24 | 0.1325 |
+| Scale20 vs Scale5 | 132 | 115 | +17 | 0.3086 |
+
+全量策略变化显示更新并非没有改变模型行为：Scale5 相对 SFT2 有 1183/1534 条完整 action 序列变化，Scale20 相对 SFT2 有 1245/1534 条变化；二者分别有 906 与 932 条 tool 序列变化。Scale20 相对 Scale5 也有 1150/1534 条 action 序列变化。
+
+完整 dev 将 Holdout90 的大幅点估计收缩为小幅净增：Scale20 是三者最高的 770/1534，但相对 SFT2 只有净增 8 题且不显著；Scale5 净增 5 题且不显著。Scale20 的 challenging 从 SFT2/Scale5 的 46 降到 43，同时 simple/moderate 分别增加 3/8，说明能力仍在难度层之间重新分配。现有证据因此支持“策略变化幅度问题已解决”，但不支持“奖励方向已经能稳定提高最终任务准确率”。
+
+最终产物：
+
+- [Scale5 全量汇总](../../../artifacts/rl/routed_coupled_scale20_20260808/scale5_full_dev_summary.json)
+- [Scale20 全量汇总](../../../artifacts/rl/routed_coupled_scale20_20260808/scale20_full_dev_summary.json)
+- [全量策略变化与合法终止配对](../../../artifacts/rl/routed_coupled_scale20_20260808/full_dev_policy_change_summary.json)

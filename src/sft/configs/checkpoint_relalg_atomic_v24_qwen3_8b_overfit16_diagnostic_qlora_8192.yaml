@@ -1,0 +1,60 @@
+# Isolated overfit diagnostic: fixed 16-record subset, no shuffle, and no
+# scheduler decay. This must never be used as a production training recipe.
+
+### model
+model_name_or_path: /home/dengyan/models/Qwen3-8B-TrustSQL-baseline
+adapter_name_or_path: /home/dengyan/tabular_rl_outputs/checkpoints/qwen3-8b-checkpoint-relalg-atomic-v24-from-base-8192-qlora
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+enable_liger_kernel: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+disable_shuffling: true
+
+### dataset
+dataset: checkpoint_relalg_atomic_v24_overfit16
+dataset_dir: /home/dengyan/tabular_rl_outputs/diagnostics/qwen3_atomic_v24_overfit16_20260823
+template: qwen3
+enable_thinking: true
+preserve_thinking: false
+cutoff_len: 8192
+mask_history: true
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 1
+dataloader_num_workers: 0
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/diagnostics/qwen3_atomic_v24_overfit16_20260823/output
+logging_steps: 1
+save_strategy: steps
+save_steps: 300
+save_total_limit: 1
+eval_strategy: "no"
+report_to: none
+plot_loss: true
+overwrite_output_dir: false
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-4
+weight_decay: 0.0
+lr_scheduler_type: constant
+warmup_steps: 0
+num_train_epochs: 200.0
+max_steps: 300
+optim: paged_adamw_8bit
+bf16: true
+gradient_checkpointing: true
+ddp_find_unused_parameters: false
+seed: 20260823
+data_seed: 20260823

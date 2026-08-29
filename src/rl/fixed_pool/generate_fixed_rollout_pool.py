@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Generate one immutable SFT2 K=4 rollout pool with exact policy token evidence."""
+"""Generate an immutable grouped rollout pool with exact policy token evidence."""
 from __future__ import annotations
 
 import asyncio
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,23 +19,44 @@ from vllm.v1.engine.async_llm import AsyncLLM
 
 
 ROOT = Path(__file__).resolve().parents[3]
+PROTOCOL_RUNTIME_ENV = "TABLE_AGENT_PROTOCOL_RUNTIME_ROOT"
+protocol_runtime_value = os.environ.get(PROTOCOL_RUNTIME_ENV)
+PROTOCOL_RUNTIME_ROOT = (
+    Path(protocol_runtime_value).resolve()
+    if protocol_runtime_value
+    else ROOT
+)
+for relative in ("src/eval", "src/harness", "src/sft"):
+    if not (PROTOCOL_RUNTIME_ROOT / relative).is_dir():
+        raise RuntimeError(
+            f"{PROTOCOL_RUNTIME_ENV} is missing {relative}: "
+            f"{PROTOCOL_RUNTIME_ROOT}"
+        )
 sys.path[:0] = [
     str(ROOT / "src" / "rl"),
-    str(ROOT / "src" / "eval"),
-    str(ROOT / "src" / "harness"),
-    str(ROOT / "src" / "sft"),
+    str(PROTOCOL_RUNTIME_ROOT / "src" / "eval"),
+    str(PROTOCOL_RUNTIME_ROOT / "src" / "harness"),
+    str(PROTOCOL_RUNTIME_ROOT / "src" / "sft"),
 ]
 
 from frameworks.trl.fixed_rollout_pool import (  # noqa: E402
     serialize_episode,
     write_rows_atomic,
 )
-from frameworks.trl.rollout import RolloutSettings, TableAgentRolloutCollector  # noqa: E402
+from frameworks.trl.rollout import (  # noqa: E402
+    RolloutSettings,
+    TableAgentRolloutCollector,
+    create_tool_use_env,
+)
 from frameworks.trl.transition_batch import PolicyEpisode, PolicyTurn  # noqa: E402
-from protocol import PROTOCOL_VERSION, student_runtime_system_prompt, tool_schema_hash  # noqa: E402
+from protocol import (  # noqa: E402
+    PROTOCOL_VERSION,
+    protocol_hash,
+    student_runtime_system_prompt,
+    tool_schema_hash,
+)
 from rollout_scoring import episode_example, score_completed_rollout  # noqa: E402
 from task_loader import load_rl_task_records  # noqa: E402
-from tool_environment import create_tool_use_env  # noqa: E402
 
 
 def sha256_file(path: Path) -> str:
@@ -42,6 +64,31 @@ def sha256_file(path: Path) -> str:
     with path.open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def protocol_runtime_tree_sha256(runtime_root: Path) -> str:
+    """Hash the immutable model-visible runtime, ignoring interpreter caches."""
+
+    digest = hashlib.sha256()
+    files: list[Path] = []
+    for relative in ("src/eval", "src/sft", "src/harness"):
+        files.extend(
+            path
+            for path in (runtime_root / relative).rglob("*")
+            if path.is_file()
+            and "__pycache__" not in path.parts
+            and path.suffix != ".pyc"
+        )
+    for path in sorted(
+        files,
+        key=lambda item: item.relative_to(runtime_root).as_posix(),
+    ):
+        relative = path.relative_to(runtime_root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -82,7 +129,7 @@ class VLLMLoRAGenerator:
             enforce_eager=True,
             trust_remote_code=True,
         )
-        self.lora_request = LoRARequest("sft2-fixed-pool", 1, str(adapter_path))
+        self.lora_request = LoRARequest("fixed-pool-policy", 1, str(adapter_path))
         self.settings = {
             "temperature": temperature,
             "top_p": top_p,
@@ -124,6 +171,8 @@ class VLLMLoRAGenerator:
             "completion_ids": [],
             "logprobs": [],
             "logprob_token_ids": [],
+            "finish_reasons": [],
+            "stop_reasons": [],
         }
         for output in outputs:
             completion = output.outputs[0]
@@ -142,6 +191,8 @@ class VLLMLoRAGenerator:
             result["completion_ids"].append(token_ids)
             result["logprobs"].append(sampled_logprobs)
             result["logprob_token_ids"].append(sampled_token_ids)
+            result["finish_reasons"].append(completion.finish_reason)
+            result["stop_reasons"].append(completion.stop_reason)
         return result
 
 
@@ -166,7 +217,7 @@ class AsyncVLLMRolloutPool:
         self.gpu_memory_utilization = gpu_memory_utilization
         self.renderer = TableAgentRolloutCollector(tokenizer, settings)
         self.engine: AsyncLLM | None = None
-        self.lora_request = LoRARequest("sft2-fixed-pool-dynamic", 1, str(adapter_path))
+        self.lora_request = LoRARequest("fixed-pool-policy-dynamic", 1, str(adapter_path))
 
     async def start(self) -> None:
         if self.engine is not None:
@@ -244,10 +295,12 @@ class AsyncVLLMRolloutPool:
             history_turns=settings.history_turns,
             compact_observations=True,
             denotation_comparison=settings.denotation_comparison,
+            tool_execution_timeout_seconds=settings.tool_execution_timeout_seconds,
         )
         policy_turns: list[PolicyTurn] = []
         scored_turns: list[tuple[list[int], list[int]]] = []
         tokenization_warning = False
+        generation_truncation = None
         try:
             while not env.done:
                 prompt_text, local_prompt_ids = self.renderer._render(env.model_messages())
@@ -298,6 +351,21 @@ class AsyncVLLMRolloutPool:
                 policy_turn.validate()
                 policy_turns.append(policy_turn)
                 scored_turns.append((server_prompt_ids, response_ids))
+                generation_truncation = self.renderer._generation_truncation(
+                    {
+                        "finish_reasons": [completion.finish_reason],
+                        "stop_reasons": [completion.stop_reason],
+                    },
+                    row_index=0,
+                    row_count=1,
+                    completion_tokens=len(response_ids),
+                    max_new_tokens=settings.max_new_tokens,
+                    turn_index=len(policy_turns) - 1,
+                )
+                if generation_truncation is not None:
+                    env.done = True
+                    env.failure_type = "generation_length"
+                    break
                 text = self.tokenizer.decode(response_ids, skip_special_tokens=True)
                 env.apply_model_output(text)
 
@@ -311,6 +379,8 @@ class AsyncVLLMRolloutPool:
                 process_admission_policy=settings.process_admission_policy,
                 denotation_comparison=settings.denotation_comparison,
                 counterfactual_suite=None,
+                result_reward_profile=settings.result_reward_profile,
+                generation_truncation=generation_truncation,
             )
             sample.audit_record["example_index"] = int(metadata["example_index"])
             sample.audit_record["sample_index"] = sample_index
@@ -402,6 +472,15 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=1024)
     parser.add_argument("--max-context-tokens", type=int, default=8192)
     parser.add_argument("--history-turns", type=int, default=4)
+    parser.add_argument(
+        "--enable-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "explicitly bind the tokenizer chat template's thinking mode; "
+            "Qwen3 probes must pass --enable-thinking"
+        ),
+    )
     parser.add_argument("--seed", type=int, default=101)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument(
@@ -543,6 +622,7 @@ def main() -> None:
         tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
         settings = RolloutSettings(
             reward_mode="result-only",
+            result_reward_profile="binary",
             max_steps=args.max_steps,
             max_new_tokens=args.max_new_tokens,
             max_context_tokens=args.max_context_tokens,
@@ -550,6 +630,7 @@ def main() -> None:
             temperature=args.temperature,
             top_p=args.top_p,
             denotation_comparison="bird-set",
+            enable_thinking=args.enable_thinking,
         )
         if args.scheduler == "static":
             generator = VLLMLoRAGenerator(
@@ -712,10 +793,18 @@ def main() -> None:
     all_rows.sort(key=lambda row: int(row["sequence"]))
     trajectories = args.output_dir / "trajectories.jsonl"
     write_rows_atomic(trajectories, all_rows)
+    runtime_prompt = student_runtime_system_prompt(
+        context_mode="rolling-legal-history", compact=False
+    )
     manifest = {
         "schema_version": "table-agent-fixed-rollout-pool-pending-v1",
         "status": "generated_pending_counterfactual_validation",
         "protocol_version": PROTOCOL_VERSION,
+        "protocol_hash": protocol_hash(runtime_prompt),
+        "protocol_runtime_root": str(PROTOCOL_RUNTIME_ROOT),
+        "protocol_runtime_content_tree_sha256": protocol_runtime_tree_sha256(
+            PROTOCOL_RUNTIME_ROOT
+        ),
         "model_path": str(args.model_path),
         "adapter_path": str(args.adapter_path),
         "adapter_sha256": sha256_file(args.adapter_path / "adapter_model.safetensors"),
@@ -724,12 +813,15 @@ def main() -> None:
         "tasks": len(records),
         "group_size": args.group_size,
         "trajectories": len(all_rows),
+        "reward_mode": "result-only",
+        "result_reward_profile": "binary",
         "temperature": args.temperature,
         "top_p": args.top_p,
         "max_steps": args.max_steps,
         "max_new_tokens": args.max_new_tokens,
         "max_context_tokens": args.max_context_tokens,
         "history_turns": args.history_turns,
+        "enable_thinking": args.enable_thinking,
         "seed": args.seed,
         "generation_task_batch_size": args.task_batch_size,
         "generation_scheduler": args.scheduler,
@@ -738,11 +830,7 @@ def main() -> None:
         ),
         "generation_seed_scheme": "sha256-task-sample-turn-v1",
         "denotation_comparison": "bird-set",
-        "student_prompt_sha256": hashlib.sha256(
-            student_runtime_system_prompt(
-                context_mode="rolling-legal-history", compact=False
-            ).encode()
-        ).hexdigest(),
+        "student_prompt_sha256": hashlib.sha256(runtime_prompt.encode()).hexdigest(),
         "tool_schema_sha256": tool_schema_hash(),
         "trajectories_sha256": sha256_file(trajectories),
         "correct_trajectories": sum(row["sample"]["correct"] for row in all_rows),

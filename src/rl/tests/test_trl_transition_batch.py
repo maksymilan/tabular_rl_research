@@ -6,6 +6,11 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+try:
+    import torch
+except ImportError:  # The lightweight local audit environment has no Torch.
+    torch = None
+
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
@@ -14,6 +19,8 @@ from frameworks.trl.transition_batch import (  # noqa: E402
     PolicyEpisode,
     PolicyTurn,
     build_transition_updates,
+    policy_reduction_advantages,
+    retain_policy_contributing_updates,
     standardized_group_advantages,
 )
 
@@ -23,6 +30,15 @@ def _turn(seed: int) -> PolicyTurn:
         prompt_ids=(seed, seed + 1),
         response_ids=(seed + 2, seed + 3),
         sampling_logprobs=(-0.1, -0.2),
+    )
+
+
+def _sized_turn(seed: int, response_length: int) -> PolicyTurn:
+    response_ids = tuple(range(seed + 2, seed + 2 + response_length))
+    return PolicyTurn(
+        prompt_ids=(seed, seed + 1),
+        response_ids=response_ids,
+        sampling_logprobs=tuple(-0.1 for _ in response_ids),
     )
 
 
@@ -62,6 +78,60 @@ def _episode(
 
 
 class TransitionBatchTest(unittest.TestCase):
+    def test_decimal_homogeneous_group_has_strict_zero_advantage(self):
+        self.assertEqual(
+            standardized_group_advantages([0.2] * 8, [True] * 8),
+            [0.0] * 8,
+        )
+
+    def test_ladder_value_equal_to_group_mean_has_strict_zero_advantage(self):
+        rewards = [0.0, 0.0, 0.2, 0.2, 0.0, 1.0, 0.0, 0.2]
+        advantages = standardized_group_advantages(rewards, [True] * 8)
+        self.assertEqual([advantages[index] for index in (2, 3, 7)], [0.0] * 3)
+        self.assertLess(advantages[0], 0.0)
+        self.assertGreater(advantages[5], 0.0)
+
+    @unittest.skipIf(torch is None, "Torch is available in the remote TRL runtime")
+    def test_all_k8_execution_ladder_compositions_match_torch_float32(self):
+        # Exhaust all 45 count compositions of eight rewards drawn from the
+        # TRUST-SQL execution ladder.  The trainer constructs coefficients in
+        # Python and then materializes them as float32 tensors, so compare at
+        # that exact boundary against the author-style Torch computation.
+        for zero_count in range(9):
+            for legal_wrong_count in range(9 - zero_count):
+                correct_count = 8 - zero_count - legal_wrong_count
+                rewards = (
+                    [0.0] * zero_count
+                    + [0.2] * legal_wrong_count
+                    + [1.0] * correct_count
+                )
+                actual = torch.tensor(
+                    standardized_group_advantages(rewards, [True] * 8),
+                    dtype=torch.float32,
+                )
+                if len(set(rewards)) == 1:
+                    # GRPO's mathematical relative signal is exactly zero.  Raw
+                    # Torch reduction of eight 0.2 values has a known numerical
+                    # residual, which the trainer deliberately removes.
+                    torch.testing.assert_close(
+                        actual, torch.zeros_like(actual), rtol=0.0, atol=0.0
+                    )
+                    continue
+                reference_rewards = torch.tensor(rewards, dtype=torch.float32)
+                reference = (
+                    reference_rewards - reference_rewards.mean()
+                ) / (reference_rewards.std(unbiased=False) + 1e-6)
+                torch.testing.assert_close(
+                    actual,
+                    reference,
+                    rtol=0.0,
+                    atol=0.0,
+                    msg=(
+                        f"counts=(0:{zero_count},0.2:{legal_wrong_count},"
+                        f"1:{correct_count})"
+                    ),
+                )
+
     def test_result_only_uses_population_group_advantage_for_every_turn(self):
         episodes = [
             _episode("a", 0.0, [0.0, 0.0]),
@@ -69,10 +139,127 @@ class TransitionBatchTest(unittest.TestCase):
         ]
         updates = build_transition_updates(episodes, reward_mode="result-only")
         self.assertEqual(len(updates), 3)
-        expected = 1.0 / (1.0 + 2e-6)
+        expected = abs(
+            standardized_group_advantages([0.0, 1.0], [True, True])[0]
+        )
         self.assertTrue(math.isclose(updates[0].advantage, -expected))
         self.assertTrue(math.isclose(updates[1].advantage, -expected))
         self.assertTrue(math.isclose(updates[2].advantage, expected))
+        self.assertEqual(
+            [update.trajectory_turn_weight for update in updates],
+            [0.5, 0.5, 1.0],
+        )
+
+    def test_trajectory_mean_gives_long_and_short_trajectories_equal_mass(self):
+        updates = build_transition_updates(
+            [
+                _episode("long", 0.0, [0.0, 0.0]),
+                _episode("short", 1.0, [0.0]),
+            ],
+            reward_mode="result-only",
+        )
+        values = policy_reduction_advantages(
+            updates,
+            reduction="trajectory_mean",
+        )
+        by_trajectory = {}
+        for update, value in zip(updates, values, strict=True):
+            by_trajectory.setdefault(update.trajectory_id, 0.0)
+            by_trajectory[update.trajectory_id] += value
+        self.assertTrue(
+            math.isclose(
+                abs(by_trajectory["long"]),
+                abs(by_trajectory["short"]),
+            )
+        )
+
+    def test_trajectory_token_mean_matches_whole_response_token_weights(self):
+        episodes = [
+            _episode("a", 0.0, [0.0, 0.0]),
+            _episode("b", 1.0, [0.0]),
+        ]
+        episodes[0].policy_turns = [_sized_turn(1, 2), _sized_turn(11, 6)]
+        episodes[1].policy_turns = [_sized_turn(21, 5)]
+        for episode in episodes:
+            episode.sample.turns = [
+                (list(turn.prompt_ids), list(turn.response_ids))
+                for turn in episode.policy_turns
+            ]
+        updates = build_transition_updates(episodes, reward_mode="result-only")
+        self.assertEqual(
+            [update.trajectory_token_weight for update in updates],
+            [0.25, 0.75, 1.0],
+        )
+        values = policy_reduction_advantages(
+            updates,
+            reduction="trajectory_token_mean",
+        )
+        scale = len(updates) / 2
+        self.assertTrue(math.isclose(values[0], updates[0].advantage * 0.25 * scale))
+        self.assertTrue(math.isclose(values[1], updates[1].advantage * 0.75 * scale))
+        self.assertTrue(math.isclose(values[2], updates[2].advantage * scale))
+        # ``training_step`` multiplies every one-transition micro-loss by 1/T.
+        # The resulting sum must equal one trajectory's whole-response token
+        # mean divided by the number of trajectories, as in TRUST-SQL.
+        turn_token_means = [1.0, 3.0]
+        implemented = sum(
+            values[index] * turn_token_means[index] / len(updates)
+            for index in (0, 1)
+        )
+        whole_response_mean = (2 * 1.0 + 6 * 3.0) / 8
+        expected = updates[0].advantage * whole_response_mean / 2
+        self.assertTrue(math.isclose(implemented, expected))
+
+    def test_policy_only_homogeneous_group_keeps_one_zero_gradient_update(self):
+        updates = build_transition_updates(
+            [
+                _episode("a", 0.2, [0.0, 0.0]),
+                _episode("b", 0.2, [0.0]),
+            ],
+            reward_mode="result-only",
+        )
+        retained, dropped = retain_policy_contributing_updates(
+            updates,
+            policy_loss_coefficient=1.0,
+            rank_loss_coefficient=0.0,
+            kl_beta=0.0,
+        )
+        self.assertEqual(len(retained), 1)
+        self.assertEqual(retained[0].advantage, 0.0)
+        self.assertEqual(dropped, len(updates) - 1)
+
+    def test_null_transition_drop_is_disabled_for_other_loss_consumers(self):
+        updates = build_transition_updates(
+            [
+                _episode("a", 0.2, [0.0, 0.0]),
+                _episode("b", 0.2, [0.0]),
+            ],
+            reward_mode="result-only",
+        )
+        for kwargs in (
+            {
+                "policy_loss_coefficient": 0.0,
+                "rank_loss_coefficient": 0.0,
+                "kl_beta": 0.0,
+            },
+            {
+                "policy_loss_coefficient": 1.0,
+                "rank_loss_coefficient": 0.5,
+                "kl_beta": 0.0,
+            },
+            {
+                "policy_loss_coefficient": 1.0,
+                "rank_loss_coefficient": 0.0,
+                "kl_beta": 0.1,
+            },
+        ):
+            with self.subTest(kwargs=kwargs):
+                retained, dropped = retain_policy_contributing_updates(
+                    updates,
+                    **kwargs,
+                )
+                self.assertEqual(retained, updates)
+                self.assertEqual(dropped, 0)
 
     def test_process_rewards_stay_turn_local(self):
         updates = build_transition_updates(

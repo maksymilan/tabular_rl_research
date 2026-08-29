@@ -1,0 +1,57 @@
+# Continue the clean projection-v2 epoch-1 adapter for three additional epochs.
+
+### model
+model_name_or_path: /home/dengyan/models/Qwen3-8B-TrustSQL-baseline
+adapter_name_or_path: /home/dengyan/tabular_rl_outputs/checkpoints/qwen3-8b-checkpoint-relalg-atomic-v24-projection-v2-from-base-8192-qlora
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+enable_liger_kernel: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: checkpoint_relalg_atomic_v24_union_qwen3_8192_training_view_v2
+dataset_dir: /home/dengyan/tabular_rl_outputs/data/qwen3_8b_checkpoint_relalg_atomic_v24_sft2_20260825_projection_v2
+template: qwen3
+enable_thinking: true
+preserve_thinking: false
+cutoff_len: 8192
+mask_history: true
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/checkpoints/qwen3-8b-checkpoint-relalg-atomic-v24-projection-v2-epoch1-plus3-8192-qlora
+logging_steps: 2
+save_strategy: steps
+save_steps: 709
+save_total_limit: 3
+eval_strategy: "no"
+report_to: none
+plot_loss: true
+overwrite_output_dir: false
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 2.0e-5
+num_train_epochs: 3.0
+optim: paged_adamw_8bit
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+ddp_find_unused_parameters: false
+ddp_timeout: 180000000
+seed: 43
+data_seed: 43

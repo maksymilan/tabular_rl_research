@@ -1,0 +1,34 @@
+{
+  "schema_version": "gate60-carrier-one-step-audit-v1",
+  "gold_sql_read": false,
+  "measurement": "ordinary binary group GRPO advantage; fresh adapter per carrier; one SGD-style step; no rollout",
+  "step": 0,
+  "example_index": 0,
+  "rows": 34,
+  "positive_rows": 30,
+  "negative_rows": 4,
+  "learning_rate": 4e-06,
+  "modes": {
+    "full": {
+      "learning_rate": 4e-06,
+      "update_carrier": "full",
+      "full_score_change": {"rows": 34, "mean_delta": -8.319909958278432e-05, "mean_abs_delta": 0.0006011871292310603, "positive_rows": 30, "positive_aligned": 0.5, "positive_mean_delta": -8.806909124056498e-05, "negative_rows": 4, "negative_aligned": 0.5, "negative_mean_delta": -4.667416214942932e-05},
+      "tool_score_change": {"rows": 34, "mean_delta": -7.825884751903632e-05, "mean_abs_delta": 0.00021393140484767225, "positive_rows": 30, "positive_aligned": 0.3, "positive_mean_delta": -0.00010908343914100745, "negative_rows": 4, "negative_aligned": 0.5, "negative_mean_delta": 0.0001529255896457471},
+      "span_score_change": {"rows": 34, "mean_delta": -0.00010866693714085748, "mean_abs_delta": 0.0005534350433770348, "positive_rows": 30, "positive_aligned": 0.5, "positive_mean_delta": -0.00012909496823946634, "negative_rows": 4, "negative_aligned": 0.25, "negative_mean_delta": 4.4543296098709106e-05}
+    },
+    "tool": {
+      "learning_rate": 4e-06,
+      "update_carrier": "tool",
+      "full_score_change": {"rows": 34, "mean_delta": -0.00030990010675262003, "mean_abs_delta": 0.0008391832165858325, "positive_rows": 30, "positive_aligned": 0.36666666666666664, "positive_mean_delta": -0.00028039043148358664, "negative_rows": 4, "negative_aligned": 0.75, "negative_mean_delta": -0.0005312226712703705},
+      "tool_score_change": {"rows": 34, "mean_delta": -0.00012227005733139403, "mean_abs_delta": 0.00029109597969235275, "positive_rows": 30, "positive_aligned": 0.43333333333333335, "positive_mean_delta": -9.725099383407117e-05, "negative_rows": 4, "negative_aligned": 0.5, "negative_mean_delta": -0.0003099130335613154},
+      "span_score_change": {"rows": 34, "mean_delta": -0.00033778916386996996, "mean_abs_delta": 0.0007324464180890252, "positive_rows": 30, "positive_aligned": 0.4, "positive_mean_delta": -0.00027975688378016156, "negative_rows": 4, "negative_aligned": 0.75, "negative_mean_delta": -0.0007730312645435333}
+    },
+    "span": {
+      "learning_rate": 4e-06,
+      "update_carrier": "span",
+      "full_score_change": {"rows": 34, "mean_delta": -1.944623449269463e-05, "mean_abs_delta": 0.0006287893389954287, "positive_rows": 30, "positive_aligned": 0.5333333333333333, "positive_mean_delta": -6.50063157081604e-06, "negative_rows": 4, "negative_aligned": 0.5, "negative_mean_delta": -0.00011653825640678406},
+      "tool_score_change": {"rows": 34, "mean_delta": 2.1759569041451495e-05, "mean_abs_delta": 0.0002702399458083913, "positive_rows": 30, "positive_aligned": 0.5333333333333333, "positive_mean_delta": 3.3002798227244055e-05, "negative_rows": 4, "negative_aligned": 0.25, "negative_mean_delta": -6.256464985199273e-05},
+      "span_score_change": {"rows": 34, "mean_delta": 4.821402185103473e-06, "mean_abs_delta": 0.0005807951092720032, "positive_rows": 30, "positive_aligned": 0.5, "positive_mean_delta": 3.32300861676534e-05, "negative_rows": 4, "negative_aligned": 0.5, "negative_mean_delta": -0.000208243727684021}
+    }
+  }
+}

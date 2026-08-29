@@ -1,6 +1,12 @@
-# BIRD SFT-2 On-policy Data Construction Protocol
+# BIRD causal data construction protocol
 
-## Goal
+Status: the current training mainline has returned to the frozen Qwen3-8B Atomic version26 SFT1
+method. New scale data must reproduce its real teacher↔Harness causal loop, hidden-gold boundary,
+rolling-prefix projection, and replay/quality gates. External DeepSeek generation is paused until
+the user explicitly resumes it. The SFT-2 and checkpoint-relalg material below is retained as
+future on-policy/control design; it has no automatic admission into the version26 mainline.
+
+## Retained SFT-2 design
 
 SFT-2 refines the frozen SFT-1 student on states that the student actually visits.  Data generation
 therefore follows a fixed order:
@@ -168,9 +174,11 @@ exported.
 
 ## Training shape
 
-The current SFT checkpoint, evaluation, and RL use one bounded-rolling **student runtime prompt**.
-SFT export re-renders the teacher's canonical executed trajectory with that prompt; it does not
-copy teacher-only examples or edge-case guidance into training records. SFT-2 must keep the same
+The current version26 SFT checkpoint, evaluation, and RL use its frozen bounded-rolling **student
+runtime prompt**. Expanded version26 data must retain that exact prompt/carrier/history identity.
+Any future SFT-2 export must likewise re-render the teacher's canonical executed trajectory with
+its declared student prompt; it does not copy teacher-only examples or edge-case guidance into
+training records. SFT-2 must keep the same
 `rolling-legal-history`, `history_turns=4`, student prompt, and resident-observation contract. Each
 ShareGPT record uses `mask_history: true`; only the final assistant action receives loss. Rejected
 actions are absent from legal history, while their structured error is present in the current user

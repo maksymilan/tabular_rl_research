@@ -7,6 +7,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+try:
+    import torch
+except ImportError:  # Lightweight analysis/test environments may omit Torch.
+    torch = None
+
 
 @dataclass(frozen=True)
 class PolicyTurn:
@@ -64,6 +69,8 @@ class TransitionUpdate:
     turn_index: int
     example_index: int
     trajectory_correct: bool
+    trajectory_turn_weight: float = 1.0
+    trajectory_token_weight: float = 1.0
     legal_success: bool = False
     local_penalty: float = 0.0
 
@@ -82,14 +89,106 @@ def standardized_group_advantages(
     if not indices:
         return advantages
     values = [float(rewards[index]) for index in indices]
-    mean = sum(values) / len(values)
-    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    # Identical decimal rewards such as eight copies of 0.2 can acquire a tiny
+    # nonzero variance from floating-point summation. GRPO defines this group as
+    # exactly homogeneous, so fail closed to a strict zero advantage before the
+    # mean/std computation. Besides avoiding numerical policy noise, this lets the
+    # trainer skip the otherwise null causal-prefix forwards and backwards.
+    if all(value == values[0] for value in values[1:]):
+        return advantages
+    # The author implementation normalizes a float32 Torch reward tensor.  Do the
+    # same operation here rather than computing in Python float64 and rounding
+    # only the final coefficient: the latter differs by one or more float32 ULPs
+    # for some K=8 compositions and can also turn an exact categorical zero into
+    # a pseudo-signal.  Every training runtime has Torch; fsum below is only the
+    # dependency-light diagnostic fallback.
+    if torch is not None:
+        reward_tensor = torch.tensor(values, dtype=torch.float32)
+        std_tensor = reward_tensor.std(unbiased=False)
+        if float(std_tensor) == 0.0:
+            return advantages
+        normalized = (
+            reward_tensor - reward_tensor.mean()
+        ) / (std_tensor + epsilon)
+        for source_index, value in zip(indices, normalized.tolist(), strict=True):
+            advantages[source_index] = float(value)
+        return advantages
+
+    mean = math.fsum(values) / len(values)
+    variance = math.fsum((value - mean) ** 2 for value in values) / len(values)
     std = math.sqrt(variance)
     if std == 0.0:
         return advantages
     for index in indices:
         advantages[index] = (float(rewards[index]) - mean) / (std + epsilon)
     return advantages
+
+
+def policy_reduction_advantages(
+    updates: Sequence[TransitionUpdate],
+    *,
+    reduction: str,
+    normalization_transition_count: int | None = None,
+    normalization_trajectory_count: int | None = None,
+) -> list[float]:
+    """Return transition coefficients for transition- or trajectory-equal GRPO.
+
+    The trainer still consumes exact causal turns. ``trajectory_mean`` makes turns
+    equally weighted inside each trajectory. ``trajectory_token_mean`` instead
+    weights a turn by its authored-token count, exactly matching the per-sample token
+    mean used by TRUST-SQL without concatenating rebuilt rolling-state prefixes.
+    """
+    if reduction not in {
+        "transition_mean",
+        "trajectory_mean",
+        "trajectory_token_mean",
+    }:
+        raise ValueError(f"unsupported policy reduction: {reduction}")
+    if reduction == "transition_mean" or not updates:
+        return [float(update.advantage) for update in updates]
+    transition_count = normalization_transition_count or len(updates)
+    trajectory_count = normalization_trajectory_count or len(
+        {update.trajectory_id for update in updates}
+    )
+    if transition_count < 1 or trajectory_count < 1:
+        raise ValueError("policy reduction normalization counts must be positive")
+    mean_turns = transition_count / trajectory_count
+    weight_field = (
+        "trajectory_turn_weight"
+        if reduction == "trajectory_mean"
+        else "trajectory_token_weight"
+    )
+    return [
+        float(update.advantage) * float(getattr(update, weight_field)) * mean_turns
+        for update in updates
+    ]
+
+
+def retain_policy_contributing_updates(
+    updates: Sequence[TransitionUpdate],
+    *,
+    policy_loss_coefficient: float,
+    rank_loss_coefficient: float,
+    kl_beta: float,
+) -> tuple[list[TransitionUpdate], int]:
+    """Drop mathematically null transitions from a policy-only GRPO batch.
+
+    A homogeneous reward group has zero standardized advantage. When neither a
+    ranking loss nor a KL term consumes the transitions, evaluating every causal
+    prefix cannot affect gradients or optimizer state. One zero-advantage update is
+    retained so the batch still occupies its required gradient-accumulation slot.
+    """
+    retained = list(updates)
+    if (
+        policy_loss_coefficient == 0.0
+        or rank_loss_coefficient != 0.0
+        or kl_beta != 0.0
+    ):
+        return retained, 0
+    contributing = [update for update in retained if update.advantage != 0.0]
+    if not contributing and retained:
+        contributing = retained[:1]
+    return contributing, len(retained) - len(contributing)
 
 
 def build_transition_updates(
@@ -129,6 +228,11 @@ def build_transition_updates(
         indexed_turns = list(enumerate(episode.policy_turns))
         if train_turns == "last" and indexed_turns:
             indexed_turns = indexed_turns[-1:]
+        trajectory_token_count = sum(
+            len(turn.response_ids) for _, turn in indexed_turns
+        )
+        if indexed_turns and trajectory_token_count < 1:
+            raise ValueError("a trainable trajectory must contain response tokens")
 
         if reward_mode == "process":
             if sample.step_rewards is None:
@@ -165,6 +269,10 @@ def build_transition_updates(
                     turn_index=turn_index,
                     example_index=example_index,
                     trajectory_correct=bool(sample.correct),
+                    trajectory_turn_weight=1.0 / len(indexed_turns),
+                    trajectory_token_weight=(
+                        len(turn.response_ids) / trajectory_token_count
+                    ),
                     legal_success=bool(
                         ((process_steps[turn_index].get("features") or {}).get(
                             "legal_success",

@@ -1741,9 +1741,8 @@ def get_system_prompt(
         semantic_v3_profile
         or semantic_v4_profile
         or semantic_v5_profile
-        or frozen_v24_profile
     ) and active_carrier != CARRIER_TEXT_JSON:
-        raise ValueError("v24-derived atomic profiles are isolated to the text-json carrier")
+        raise ValueError("experimental v24-derived atomic profiles are isolated to text-json")
     if frozen_v24_profile and active_checkpoint_guidance != CHECKPOINT_GUIDANCE_PROFILE_DISABLED:
         raise ValueError(
             "atomic-v24-frozen-v1 requires checkpoint-disabled-v1 guidance"

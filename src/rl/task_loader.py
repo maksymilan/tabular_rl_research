@@ -61,6 +61,7 @@ def load_rl_task_records(
     seed: int = 20260710,
     context_mode: str = "rolling-legal-history",
     include_task_ids: set[str] | None = None,
+    system_prompt: str | None = None,
 ) -> list[dict[str, Any]]:
     """Create generic hidden-label task records shared by both RL reward conditions."""
     if selection is not None and examples_json is not None:
@@ -99,7 +100,7 @@ def load_rl_task_records(
         ]
 
     records: list[dict[str, Any]] = []
-    system_prompt = student_runtime_system_prompt(
+    runtime_prompt = system_prompt or student_runtime_system_prompt(
         context_mode=context_mode,
         compact=False,
     )
@@ -121,7 +122,7 @@ def load_rl_task_records(
             {
                 "data_source": f"{example.get('dataset', 'spider')}_table_rl",
                 "prompt": [
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": runtime_prompt},
                     {"role": "user", "content": first_user_message(
                         catalog, example["question"], example.get("external_knowledge"),
                     )},

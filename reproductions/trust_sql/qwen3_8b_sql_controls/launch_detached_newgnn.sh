@@ -15,6 +15,9 @@ REMOTE_ROOT="${REMOTE_ROOT:-/home/dengyan/tabular_rl_outputs/evaluations/qwen3_s
 REMOTE_PYTHON="${REMOTE_PYTHON:-/home/dengyan/miniconda3/envs/vllm-qwen35/bin/python}"
 REMOTE_SOURCE_INPUT="${REMOTE_SOURCE_INPUT:-/home/dengyan/tabular_rl_outputs/eval_inputs/qwen3_atomic_v26/bird_dev_20240627.jsonl}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-16384}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-4}"
+WORKERS="${WORKERS:-4}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 N="${N:-1534}"
 DRY_RUN=0
@@ -32,6 +35,16 @@ fi
 [[ "$RUN_ID" =~ ^[a-z0-9][a-z0-9_]{5,95}$ ]] ||
   die "RUN_ID must contain only lowercase letters, digits, and underscores"
 [[ "$MAX_MODEL_LEN" =~ ^[0-9]+$ ]] || die "MAX_MODEL_LEN must be an integer"
+[[ "$MAX_NUM_BATCHED_TOKENS" =~ ^[0-9]+$ ]] ||
+  die "MAX_NUM_BATCHED_TOKENS must be an integer"
+[[ "$MAX_NUM_SEQS" =~ ^[0-9]+$ ]] || die "MAX_NUM_SEQS must be an integer"
+[[ "$WORKERS" =~ ^[0-9]+$ ]] || die "WORKERS must be an integer"
+(( MAX_NUM_BATCHED_TOKENS >= 1024 )) ||
+  die "MAX_NUM_BATCHED_TOKENS must be at least 1024"
+(( MAX_NUM_SEQS >= 1 && MAX_NUM_SEQS <= 32 )) ||
+  die "MAX_NUM_SEQS must be in [1,32]"
+(( WORKERS >= 1 && WORKERS <= 32 )) || die "WORKERS must be in [1,32]"
+(( WORKERS <= MAX_NUM_SEQS )) || die "WORKERS cannot exceed MAX_NUM_SEQS"
 [[ "$GPU_MEMORY_UTILIZATION" =~ ^0\.[0-9]+$ ]] ||
   die "GPU_MEMORY_UTILIZATION must be a decimal in [0.50,0.95]"
 [[ "$N" =~ ^[0-9]+$ ]] || die "N must be an integer"
@@ -68,9 +81,11 @@ done
 
 REMOTE_RUN="$REMOTE_ROOT/$RUN_ID"
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  printf 'host=%s\nmode=%s\nmodel_size=%s\nmodel_root=%s\nsource_input=%s\nrun_dir=%s\ngpu=%s\nport=%s\nn=%s\nmax_model_len=%s\ngpu_memory_utilization=%s\n' \
+  printf 'host=%s\nmode=%s\nmodel_size=%s\nmodel_root=%s\nsource_input=%s\nrun_dir=%s\ngpu=%s\nport=%s\nn=%s\nmax_model_len=%s\nmax_num_batched_tokens=%s\nmax_num_seqs=%s\nworkers=%s\ngpu_memory_utilization=%s\n' \
     "$REMOTE" "$MODE" "$MODEL_SIZE" "$MODEL_ROOT" "$REMOTE_SOURCE_INPUT" \
-    "$REMOTE_RUN" "$GPU" "$PORT" "$N" "$MAX_MODEL_LEN" "$GPU_MEMORY_UTILIZATION"
+    "$REMOTE_RUN" "$GPU" "$PORT" "$N" "$MAX_MODEL_LEN" \
+    "$MAX_NUM_BATCHED_TOKENS" "$MAX_NUM_SEQS" "$WORKERS" \
+    "$GPU_MEMORY_UTILIZATION"
   exit 0
 fi
 
@@ -97,7 +112,7 @@ scp "$MODEL_SPECS" "$REMOTE:$REMOTE_RUN/controller/qwen3_model_specs.json"
 scp "$LOCK" "$REMOTE:$REMOTE_RUN/controller/remote_eval_lock.json"
 
 ssh "$REMOTE" \
-  "set -e; tar -xzf '$REMOTE_RUN/runtime.tar.gz' -C '$REMOTE_RUN/runtime'; nohup setsid '$REMOTE_PYTHON' -u '$REMOTE_RUN/controller/remote_supervisor.py' --mode '$MODE' --model-size '$MODEL_SIZE' --model-root '$MODEL_ROOT' --run-dir '$REMOTE_RUN' --gpu '$GPU' --port '$PORT' --runtime-sha256 '$RUNTIME_SHA' --n '$N' --max-model-len '$MAX_MODEL_LEN' --gpu-memory-utilization '$GPU_MEMORY_UTILIZATION' >'$REMOTE_RUN/supervisor.log' 2>&1 </dev/null & echo \$! >'$REMOTE_RUN/supervisor.pid'"
+  "set -e; tar -xzf '$REMOTE_RUN/runtime.tar.gz' -C '$REMOTE_RUN/runtime'; nohup setsid '$REMOTE_PYTHON' -u '$REMOTE_RUN/controller/remote_supervisor.py' --mode '$MODE' --model-size '$MODEL_SIZE' --model-root '$MODEL_ROOT' --run-dir '$REMOTE_RUN' --gpu '$GPU' --port '$PORT' --runtime-sha256 '$RUNTIME_SHA' --n '$N' --max-model-len '$MAX_MODEL_LEN' --max-num-batched-tokens '$MAX_NUM_BATCHED_TOKENS' --max-num-seqs '$MAX_NUM_SEQS' --workers '$WORKERS' --gpu-memory-utilization '$GPU_MEMORY_UTILIZATION' >'$REMOTE_RUN/supervisor.log' 2>&1 </dev/null & echo \$! >'$REMOTE_RUN/supervisor.pid'"
 
 printf 'submitted model=%s mode=%s run=%s runtime_sha256=%s\n' \
   "$MODEL_SIZE" "$MODE" "$REMOTE_RUN" "$RUNTIME_SHA"

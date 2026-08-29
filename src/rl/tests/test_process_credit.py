@@ -197,6 +197,32 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertEqual(terminal_result_reward(True), 1.0)
         self.assertEqual(terminal_result_reward(False), 0.0)
 
+    def test_execution_ladder_distinguishes_wrong_terminal_from_invalid(self):
+        self.assertEqual(
+            terminal_result_reward(
+                True,
+                executable=True,
+                profile="execution-ladder",
+            ),
+            1.0,
+        )
+        self.assertEqual(
+            terminal_result_reward(
+                False,
+                executable=True,
+                profile="execution-ladder",
+            ),
+            0.2,
+        )
+        self.assertEqual(
+            terminal_result_reward(
+                False,
+                executable=False,
+                profile="execution-ladder",
+            ),
+            0.0,
+        )
+
     def test_target_row_units_use_bird_raw_cell_equality(self):
         self.assertNotEqual(normalized_row_unit(["1"]), normalized_row_unit([1]))
         self.assertEqual(normalized_row_unit([1]), normalized_row_unit([1.0]))

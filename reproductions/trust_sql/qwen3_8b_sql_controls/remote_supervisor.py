@@ -269,6 +269,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-root", type=Path, required=True)
     parser.add_argument("--n", type=int, default=FULL_TASKS)
     parser.add_argument("--max-model-len", type=int, default=32768)
+    parser.add_argument("--max-num-batched-tokens", type=int, default=16384)
+    parser.add_argument("--max-num-seqs", type=int, default=4)
+    parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     parser.add_argument("--model-ready-timeout", type=int, default=900)
     return parser
@@ -284,6 +287,14 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError(f"--n must be in [1,{FULL_TASKS}]")
     if not 0.5 <= args.gpu_memory_utilization <= 0.95:
         raise ValueError("--gpu-memory-utilization must be in [0.5,0.95]")
+    if args.max_num_batched_tokens < 1024:
+        raise ValueError("--max-num-batched-tokens must be at least 1024")
+    if not 1 <= args.max_num_seqs <= 32:
+        raise ValueError("--max-num-seqs must be in [1,32]")
+    if not 1 <= args.workers <= 32:
+        raise ValueError("--workers must be in [1,32]")
+    if args.workers > args.max_num_seqs:
+        raise ValueError("--workers cannot exceed --max-num-seqs")
     paths = {
         "status": run_dir / "status.json",
         "launch": run_dir / "launch_manifest.json",
@@ -399,8 +410,8 @@ def run(args: argparse.Namespace) -> int:
             "served_model": served_model,
             "vllm": {
                 "max_model_len": args.max_model_len,
-                "max_num_batched_tokens": 16384,
-                "max_num_seqs": 4,
+                "max_num_batched_tokens": args.max_num_batched_tokens,
+                "max_num_seqs": args.max_num_seqs,
                 "gpu_memory_utilization": args.gpu_memory_utilization,
                 "generation_config": "vllm",
                 "reasoning_parser": None,
@@ -411,7 +422,7 @@ def run(args: argparse.Namespace) -> int:
                 "top_p": 1,
                 "max_tokens": 2048,
                 "enable_thinking": True,
-                "workers": 4,
+                "workers": args.workers,
                 "denotation_comparison": "bird-set",
                 "direct_prompt_profile": (
                     "canonical-json-v1" if args.mode == "direct" else None
@@ -459,9 +470,9 @@ def run(args: argparse.Namespace) -> int:
             "--max-model-len",
             str(args.max_model_len),
             "--max-num-batched-tokens",
-            "16384",
+            str(args.max_num_batched_tokens),
             "--max-num-seqs",
-            "4",
+            str(args.max_num_seqs),
             "--gpu-memory-utilization",
             str(args.gpu_memory_utilization),
             "--generation-config",
@@ -507,7 +518,7 @@ def run(args: argparse.Namespace) -> int:
                 "--pass-k",
                 "1",
                 "--workers",
-                "4",
+                str(args.workers),
                 "--max-tokens",
                 "2048",
                 "--temperature",
@@ -545,7 +556,7 @@ def run(args: argparse.Namespace) -> int:
                 "--n",
                 str(args.n),
                 "--workers",
-                "4",
+                str(args.workers),
                 "--max-steps",
                 "30",
                 "--max-tokens",

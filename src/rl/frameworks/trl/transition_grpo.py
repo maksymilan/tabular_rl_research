@@ -2,8 +2,11 @@
 """TRL GRPO adapter for exact transition-level table-agent rollouts."""
 from __future__ import annotations
 
+import json
+import math
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 try:
@@ -11,7 +14,7 @@ try:
     import torch.nn.functional as F
     from accelerate.utils import is_peft_model
     from trl import GRPOTrainer
-    from trl.trainer.utils import pad, use_adapter
+    from trl.trainer.utils import pad
 except ImportError as exc:  # pragma: no cover - exercised in the GPU environment
     torch = None
     GRPOTrainer = object
@@ -19,7 +22,17 @@ except ImportError as exc:  # pragma: no cover - exercised in the GPU environmen
 else:
     _TRL_IMPORT_ERROR = None
 
-from frameworks.trl.transition_batch import build_transition_updates
+from frameworks.trl.transition_batch import (
+    build_transition_updates,
+    policy_reduction_advantages,
+    retain_policy_contributing_updates,
+)
+from frameworks.trl.state_action_ambiguity import (
+    CREDIT_ASSIGNMENTS,
+    apply_asymmetric_error_credit,
+    apply_state_action_ambiguity_mask,
+)
+from frameworks.trl.gradient_conflict import GradientConflictRecorder
 from frameworks.trl.tool_loss_mask import (
     ToolMaskUnavailable,
     tool_token_loss_mask,
@@ -40,6 +53,44 @@ def _dummy_reward(completions, **kwargs):
     return [0.0] * len(completions)
 
 
+def _adapter_trainable_parameters(model, adapter_name: str) -> list[str]:
+    marker = f".{adapter_name}."
+    return [
+        name
+        for name, parameter in model.named_parameters()
+        if marker in name and parameter.requires_grad
+    ]
+
+
+@contextmanager
+def use_frozen_reference_adapter(model, adapter_name: str):
+    """Select a reference without PEFT's default trainability side effect."""
+
+    previous = model.active_adapter
+    if not isinstance(previous, str):
+        raise RuntimeError(
+            f"the trainable policy must have one named active adapter, got {previous!r}"
+        )
+    model.set_adapter(adapter_name, inference_mode=True)
+    trainable = _adapter_trainable_parameters(model, adapter_name)
+    if trainable:
+        model.set_adapter(previous, inference_mode=False)
+        raise RuntimeError(
+            "the KL reference became trainable while being selected: "
+            f"{trainable[:5]}"
+        )
+    try:
+        yield
+    finally:
+        model.set_adapter(previous, inference_mode=False)
+        trainable = _adapter_trainable_parameters(model, adapter_name)
+        if trainable:
+            raise RuntimeError(
+                "the KL reference remained trainable after restoring the policy: "
+                f"{trainable[:5]}"
+            )
+
+
 class TransitionGRPOTrainer(GRPOTrainer):
     """Use TRL's clipped tokenwise policy loss over exact causal assistant turns."""
 
@@ -57,6 +108,13 @@ class TransitionGRPOTrainer(GRPOTrainer):
         rank_score_reduction: str = "sum_tokens",
         rank_update_scope: str = "full_trajectory",
         policy_loss_coefficient: float = 1.0,
+        policy_reduction: str = "transition_mean",
+        credit_assignment: str = "trajectory",
+        error_penalty: float = 1.0,
+        record_gradient_conflicts: bool = False,
+        gradient_conflict_dir: Path | None = None,
+        gradient_conflict_save_vectors: bool = False,
+        reference_adapter_name: str | None = None,
         transition_micro_batch_size: int = 2,
         **kwargs,
     ):
@@ -74,6 +132,32 @@ class TransitionGRPOTrainer(GRPOTrainer):
             raise ValueError("policy_loss_coefficient must be non-negative")
         if policy_loss_coefficient == 0.0 and rank_loss_coefficient == 0.0:
             raise ValueError("at least one policy or rank loss must be enabled")
+        if policy_reduction not in {
+            "transition_mean",
+            "trajectory_mean",
+            "trajectory_token_mean",
+        }:
+            raise ValueError(f"unsupported policy_reduction: {policy_reduction}")
+        if credit_assignment not in CREDIT_ASSIGNMENTS:
+            raise ValueError(f"unsupported credit_assignment: {credit_assignment}")
+        if credit_assignment == "saam-strict" and reward_mode != "result-only":
+            raise ValueError("saam-strict requires result-only terminal rewards")
+        if credit_assignment == "saam-strict" and train_turns != "all":
+            raise ValueError("saam-strict requires all causal turns")
+        if credit_assignment == "saam-strict" and rank_loss_coefficient != 0.0:
+            raise ValueError("saam-strict pilot does not mix a trajectory ranking loss")
+        if credit_assignment == "saam-asymmetric-error" and reward_mode != "result-only":
+            raise ValueError("saam-asymmetric-error requires result-only terminal rewards")
+        if credit_assignment == "saam-asymmetric-error" and train_turns != "all":
+            raise ValueError("saam-asymmetric-error requires all causal turns")
+        if credit_assignment == "saam-asymmetric-error" and rank_loss_coefficient != 0.0:
+            raise ValueError(
+                "saam-asymmetric-error does not mix a trajectory ranking loss"
+            )
+        if not math.isfinite(error_penalty) or error_penalty <= 0.0:
+            raise ValueError("error_penalty must be finite and positive")
+        if record_gradient_conflicts and rank_loss_coefficient != 0.0:
+            raise ValueError("gradient conflict recording currently requires rank loss=0")
         if rank_beta <= 0:
             raise ValueError("rank_beta must be positive")
         if rank_score_tokens not in RANK_SCORE_TOKENS:
@@ -120,9 +204,26 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self.rank_score_reduction = rank_score_reduction
         self.rank_update_scope = rank_update_scope
         self.policy_loss_coefficient = policy_loss_coefficient
+        self.policy_reduction = policy_reduction
+        self.credit_assignment = credit_assignment
+        self.error_penalty = float(error_penalty)
+        self.record_gradient_conflicts = bool(record_gradient_conflicts)
+        self.gradient_conflict_dir = gradient_conflict_dir
+        self.gradient_conflict_save_vectors = bool(gradient_conflict_save_vectors)
+        self.gradient_conflict_recorder = None
+        self.reference_adapter_name = reference_adapter_name
         self.transition_micro_batch_size = transition_micro_batch_size
         kwargs.setdefault("reward_funcs", _dummy_reward)
         super().__init__(*args, **kwargs)
+        # TRL creates a policy-copy adapter named ``ref`` for any PEFT model with
+        # beta > 0. This trainer uses the separately loaded immutable SFT adapter,
+        # so discard the unused copy after upstream initialization.
+        if (
+            self.reference_adapter_name
+            and self.reference_adapter_name != "ref"
+            and "ref" in getattr(self.model, "peft_config", {})
+        ):
+            self.model.delete_adapter("ref")
         self.offline_rollout_pool = bool(
             getattr(self.rollout_collector, "is_offline", False)
         )
@@ -136,6 +237,158 @@ class TransitionGRPOTrainer(GRPOTrainer):
             raise ValueError(
                 "variable transition batches currently require steps_per_generation=1"
             )
+        if self.beta != 0.0:
+            if not is_peft_model(self.model):
+                raise ValueError(
+                    "nonzero KL requires a named frozen PEFT reference adapter"
+                )
+            if not self.reference_adapter_name:
+                raise ValueError(
+                    "nonzero KL requires reference_adapter_name; refusing base-model fallback"
+                )
+            if self.reference_adapter_name not in self.model.peft_config:
+                raise ValueError(
+                    "configured frozen KL reference adapter is not loaded: "
+                    f"{self.reference_adapter_name}"
+                )
+        if self.credit_assignment == "saam-strict" and self.beta != 0.0:
+            raise ValueError("saam-strict pilot requires KL beta=0")
+        if self.credit_assignment == "saam-asymmetric-error" and self.beta != 0.0:
+            raise ValueError("saam-asymmetric-error requires KL beta=0")
+        if self.record_gradient_conflicts:
+            if self.beta != 0.0:
+                raise ValueError("gradient conflict recording requires KL beta=0")
+            if self.policy_loss_coefficient == 0.0:
+                raise ValueError("gradient conflict recording requires an enabled policy loss")
+            if int(self.args.gradient_accumulation_steps) != 1:
+                raise ValueError(
+                    "gradient conflict recording requires gradient_accumulation_steps=1"
+                )
+            if self.accelerator.is_main_process:
+                self.gradient_conflict_recorder = GradientConflictRecorder(
+                    self.model,
+                    self.gradient_conflict_dir
+                    or (Path(self.args.output_dir) / "gradient_conflicts"),
+                    save_vectors=self.gradient_conflict_save_vectors,
+                )
+
+    def _counterfactual_policy_gradient(
+        self,
+        model,
+        inputs: dict[str, Any],
+        *,
+        policy_normalization_transitions: int,
+        positive: bool,
+    ):
+        """Backpropagate one sign partition using the exact mixed-batch objective."""
+
+        total = int(inputs["completion_ids"].shape[0])
+        for start in range(0, total, self.transition_micro_batch_size):
+            end = min(total, start + self.transition_micro_batch_size)
+            micro_inputs = self._slice_batch(inputs, start, end)
+            advantages = micro_inputs["advantages"]
+            if positive:
+                selected = advantages > 0.0
+            else:
+                selected = advantages < 0.0
+            micro_inputs["advantages"] = torch.where(
+                selected,
+                advantages,
+                torch.zeros_like(advantages),
+            )
+            with self.compute_loss_context_manager():
+                micro_loss = super()._compute_loss(model, micro_inputs)
+            weight = (end - start) / policy_normalization_transitions
+            scaled_loss = micro_loss * weight * self.policy_loss_coefficient
+            self.accelerator.backward(scaled_loss)
+
+    def _record_current_gradient_conflicts(
+        self,
+        model,
+        inputs: dict[str, Any],
+        *,
+        policy_normalization_transitions: int,
+        total: int,
+    ) -> None:
+        """Record mixed, positive-only, and negative-only gradients before clipping."""
+
+        recorder = self.gradient_conflict_recorder
+        if not self.record_gradient_conflicts:
+            return
+        saved_gradients = [
+            (
+                parameter,
+                parameter.grad.detach().clone()
+                if parameter.grad is not None
+                else None,
+            )
+            for parameter in model.parameters()
+            if parameter.requires_grad
+        ]
+        if recorder is not None:
+            combined, combined_layers = recorder.capture(model)
+        else:
+            combined = combined_layers = None
+        started = time.perf_counter()
+        model.zero_grad(set_to_none=True)
+        self._counterfactual_policy_gradient(
+            model,
+            inputs,
+            policy_normalization_transitions=policy_normalization_transitions,
+            positive=True,
+        )
+        if recorder is not None:
+            positive, positive_layers = recorder.capture(model)
+        else:
+            positive = positive_layers = None
+        model.zero_grad(set_to_none=True)
+        self._counterfactual_policy_gradient(
+            model,
+            inputs,
+            policy_normalization_transitions=policy_normalization_transitions,
+            positive=False,
+        )
+        if recorder is not None:
+            negative, negative_layers = recorder.capture(model)
+        else:
+            negative = negative_layers = None
+        model.zero_grad(set_to_none=True)
+        for parameter, gradient in saved_gradients:
+            parameter.grad = gradient
+        if recorder is None:
+            return
+        summary = recorder.record(
+            step=self._step + 1,
+            combined=combined,
+            positive=positive,
+            negative=negative,
+            layers={
+                "combined": combined_layers,
+                "positive": positive_layers,
+                "negative": negative_layers,
+            },
+            metadata={
+                "stage": "pre_clip",
+                "credit_assignment": self.credit_assignment,
+                "error_penalty": self.error_penalty,
+                "transition_count": total,
+                "policy_normalization_transitions": policy_normalization_transitions,
+            },
+        )
+        elapsed = time.perf_counter() - started
+        self._metrics["train"]["gradient_conflict/positive_negative_cosine"].append(
+            float(summary["positive_negative_cosine"])
+        )
+        self._metrics["train"]["gradient_conflict/positive_negative_conflict_mass"].append(
+            float(summary["positive_negative_conflict_mass"])
+        )
+        self._metrics["train"]["gradient_conflict/positive_combined_cosine"].append(
+            float(summary["positive_combined_cosine"])
+        )
+        self._metrics["train"]["gradient_conflict/negative_combined_cosine"].append(
+            float(summary["negative_combined_cosine"])
+        )
+        self._metrics["train"]["gradient_conflict/record_seconds"].append(elapsed)
 
     @staticmethod
     def _slice_batch(inputs: dict[str, Any], start: int, end: int) -> dict[str, Any]:
@@ -174,6 +427,7 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 "completion_ids",
                 "completion_attention_mask",
                 "completion_mask",
+                "tool_mask",
                 "rank_completion_mask",
                 "old_per_token_logps",
                 "sampling_per_token_logps",
@@ -220,6 +474,55 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 f"{self.vllm_importance_sampling_mode}"
             )
         return ratio
+
+    def _importance_sampling_diagnostics(
+        self,
+        old_per_token_logps,
+        sampling_per_token_logps,
+        completion_mask,
+        applied_ratio,
+    ) -> dict[str, float]:
+        """Summarize the vLLM/trainer policy mismatch on supported tokens.
+
+        QLoRA training and BF16 vLLM rollout do not share identical numerical base
+        weights. The importance correction is therefore part of the baseline's
+        objective, not merely an implementation detail. Persist both the raw log-ratio
+        mismatch and the applied capped ratio so an apparent policy update cannot be
+        attributed to an unaudited inference/training mismatch.
+        """
+        support = completion_mask.bool()
+        token_log_ratio = old_per_token_logps - sampling_per_token_logps
+        sequence_level = self.vllm_importance_sampling_mode in {
+            "sequence_mask",
+            "sequence_truncate",
+        }
+        if sequence_level:
+            active = support.any(dim=-1)
+            raw_log_ratio = (token_log_ratio * support).sum(dim=-1)[active]
+            applied = applied_ratio.squeeze(-1)[active]
+        else:
+            raw_log_ratio = token_log_ratio[support]
+            applied = applied_ratio[support]
+        if raw_log_ratio.numel() == 0:
+            return {
+                "log_ratio_abs_mean": 0.0,
+                "log_ratio_abs_max": 0.0,
+                "applied_ratio_min": 0.0,
+                "applied_ratio_mean": 0.0,
+                "applied_ratio_max": 0.0,
+                "cap_exceeded_fraction": 0.0,
+            }
+        cap_exceeded = raw_log_ratio > math.log(
+            self.vllm_importance_sampling_cap
+        )
+        return {
+            "log_ratio_abs_mean": float(raw_log_ratio.abs().mean()),
+            "log_ratio_abs_max": float(raw_log_ratio.abs().max()),
+            "applied_ratio_min": float(applied.min()),
+            "applied_ratio_mean": float(applied.mean()),
+            "applied_ratio_max": float(applied.max()),
+            "cap_exceeded_fraction": float(cap_exceeded.float().mean()),
+        }
 
     def _transition_token_logps_compact(self, model, inputs):
         """Evaluate transition logprobs in length-bucketed, padding-trimmed microbatches."""
@@ -363,28 +666,113 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 )
             )
         original_transition_count = len(updates)
+        original_trajectory_count = len(
+            {update.trajectory_id for update in updates}
+        )
+        tiny_nonzero_advantages = [
+            update
+            for update in updates
+            if update.advantage != 0.0 and abs(update.advantage) < 1e-12
+        ]
+        if self.transition_reward_mode == "result-only" and tiny_nonzero_advantages:
+            examples = sorted(
+                {
+                    int(update.example_index)
+                    for update in tiny_nonzero_advantages
+                }
+            )
+            raise RuntimeError(
+                "result-only advantage normalization produced numerical "
+                f"pseudo-signal for {len(tiny_nonzero_advantages)} transitions "
+                f"on examples {examples}; refusing policy forward/backward"
+            )
         original_nonzero_advantage_count = sum(
             update.advantage != 0.0 for update in updates
         )
-        zero_advantage_transitions_dropped = 0
-        if (
-            self.offline_rollout_pool
-            and self.policy_loss_coefficient != 0.0
-            and self.rank_loss_coefficient == 0.0
-            and self.beta == 0.0
-        ):
-            retained_updates = [
-                update for update in updates if update.advantage != 0.0
-            ]
-            # An all-zero question still owns one of the mandated 60 optimizer steps.  Keep one
-            # transition so the framework performs a well-defined zero-gradient step without
-            # evaluating the rest of the mathematically null batch.
-            if not retained_updates and updates:
-                retained_updates = updates[:1]
-            zero_advantage_transitions_dropped = len(updates) - len(
-                retained_updates
+        saam_audit = None
+        removed_absolute_policy_coefficient_fraction = 0.0
+        absolute_policy_coefficient_delta_fraction = 0.0
+        if self.credit_assignment == "saam-strict":
+            vanilla_effective_advantages = policy_reduction_advantages(
+                updates,
+                reduction=self.policy_reduction,
+                normalization_transition_count=original_transition_count,
+                normalization_trajectory_count=original_trajectory_count,
             )
-            updates = retained_updates
+            updates, saam_audit = apply_state_action_ambiguity_mask(
+                episodes,
+                updates,
+                credit_assignment=self.credit_assignment,
+            )
+            masked_effective_advantages = policy_reduction_advantages(
+                updates,
+                reduction=self.policy_reduction,
+                normalization_transition_count=original_transition_count,
+                normalization_trajectory_count=original_trajectory_count,
+            )
+            for update, vanilla_value, masked_value in zip(
+                updates,
+                vanilla_effective_advantages,
+                masked_effective_advantages,
+                strict=True,
+            ):
+                if update.advantage != 0.0 and masked_value != vanilla_value:
+                    raise RuntimeError(
+                        "SAAM changed an unmasked policy coefficient; refusing "
+                        "a renormalized credit update"
+                    )
+            vanilla_mass = sum(abs(value) for value in vanilla_effective_advantages)
+            masked_mass = sum(abs(value) for value in masked_effective_advantages)
+            if vanilla_mass > 0.0:
+                removed_absolute_policy_coefficient_fraction = (
+                    vanilla_mass - masked_mass
+                ) / vanilla_mass
+        elif self.credit_assignment == "saam-asymmetric-error":
+            vanilla_effective_advantages = policy_reduction_advantages(
+                updates,
+                reduction=self.policy_reduction,
+                normalization_transition_count=original_transition_count,
+                normalization_trajectory_count=original_trajectory_count,
+            )
+            updates, saam_audit = apply_asymmetric_error_credit(
+                episodes,
+                updates,
+                error_penalty=self.error_penalty,
+            )
+            masked_effective_advantages = policy_reduction_advantages(
+                updates,
+                reduction=self.policy_reduction,
+                normalization_transition_count=original_transition_count,
+                normalization_trajectory_count=original_trajectory_count,
+            )
+            vanilla_mass = sum(abs(value) for value in vanilla_effective_advantages)
+            masked_mass = sum(abs(value) for value in masked_effective_advantages)
+            coefficient_delta = sum(
+                abs(masked - vanilla)
+                for vanilla, masked in zip(
+                    vanilla_effective_advantages,
+                    masked_effective_advantages,
+                    strict=True,
+                )
+            )
+            if vanilla_mass > 0.0:
+                removed_absolute_policy_coefficient_fraction = max(
+                    0.0, vanilla_mass - masked_mass
+                ) / vanilla_mass
+                absolute_policy_coefficient_delta_fraction = (
+                    coefficient_delta / vanilla_mass
+                )
+        post_credit_nonzero_advantage_count = sum(
+            update.advantage != 0.0 for update in updates
+        )
+        updates, zero_advantage_transitions_dropped = (
+            retain_policy_contributing_updates(
+                updates,
+                policy_loss_coefficient=self.policy_loss_coefficient,
+                rank_loss_coefficient=self.rank_loss_coefficient,
+                kl_beta=self.beta,
+            )
+        )
         tool_loss_masks = None
         skipped_tool_mask_transitions = 0
         if self.transition_trainable_part == "tool_only":
@@ -495,7 +883,7 @@ class TransitionGRPOTrainer(GRPOTrainer):
             padding_value=0,
             padding_side="right",
         )
-        completion_mask = pad(
+        completion_loss_mask = pad(
             completion_loss_mask_list,
             padding_value=0,
             padding_side="right",
@@ -513,12 +901,6 @@ class TransitionGRPOTrainer(GRPOTrainer):
             padding_value=0.0,
             padding_side="right",
         )
-        advantages = torch.tensor(
-            [update.advantage for update in updates],
-            device=device,
-            dtype=torch.float32,
-        )
-
         forward_inputs = {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
@@ -533,13 +915,18 @@ class TransitionGRPOTrainer(GRPOTrainer):
             )
             if self.beta != 0.0:
                 unwrapped = self.accelerator.unwrap_model(self.model)
-                adapter_context = (
-                    use_adapter(
-                        unwrapped,
-                        adapter_name="ref" if "ref" in unwrapped.peft_config else None,
+                if not is_peft_model(unwrapped):
+                    raise RuntimeError(
+                        "the configured frozen KL reference is not a PEFT model"
                     )
-                    if is_peft_model(unwrapped)
-                    else nullcontext()
+                if self.reference_adapter_name not in unwrapped.peft_config:
+                    raise RuntimeError(
+                        "the configured frozen KL reference disappeared before scoring: "
+                        f"{self.reference_adapter_name}"
+                    )
+                adapter_context = use_frozen_reference_adapter(
+                    unwrapped,
+                    self.reference_adapter_name,
                 )
                 with adapter_context:
                     ref_per_token_logps = self._transition_token_logps_compact(
@@ -553,7 +940,25 @@ class TransitionGRPOTrainer(GRPOTrainer):
         importance_sampling_ratio = self._importance_sampling_ratio(
             old_per_token_logps,
             sampling_per_token_logps,
-            completion_mask,
+            completion_loss_mask,
+        )
+        importance_diagnostics = self._importance_sampling_diagnostics(
+            old_per_token_logps,
+            sampling_per_token_logps,
+            completion_loss_mask,
+            importance_sampling_ratio,
+        )
+
+        effective_advantages = policy_reduction_advantages(
+            updates,
+            reduction=self.policy_reduction,
+            normalization_transition_count=original_transition_count,
+            normalization_trajectory_count=original_trajectory_count,
+        )
+        advantages = torch.tensor(
+            effective_advantages,
+            device=device,
+            dtype=torch.float32,
         )
 
         rewards = [float(episode.sample.reward) for episode in episodes]
@@ -579,9 +984,62 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self._metrics[mode]["rollout/nonzero_advantage_fraction"].append(
             original_nonzero_advantage_count / original_transition_count
         )
+        self._metrics[mode]["saam/enabled"].append(
+            float(self.credit_assignment != "trajectory")
+        )
+        self._metrics[mode]["saam/post_mask_nonzero_advantage_fraction"].append(
+            post_credit_nonzero_advantage_count / original_transition_count
+        )
+        self._metrics[mode]["saam/ambiguous_state_action_groups"].append(
+            float(saam_audit.ambiguous_state_action_groups if saam_audit else 0)
+        )
+        self._metrics[mode]["saam/newly_zeroed_transitions"].append(
+            float(saam_audit.newly_zeroed_transitions if saam_audit else 0)
+        )
+        self._metrics[mode]["saam/newly_zeroed_response_tokens"].append(
+            float(saam_audit.newly_zeroed_response_tokens if saam_audit else 0)
+        )
+        self._metrics[mode]["saam/newly_zeroed_initial_transitions"].append(
+            float(saam_audit.newly_zeroed_initial_transitions if saam_audit else 0)
+        )
+        self._metrics[mode]["saam/newly_zeroed_noninitial_transitions"].append(
+            float(saam_audit.newly_zeroed_noninitial_transitions if saam_audit else 0)
+        )
+        self._metrics[mode]["saam/removed_absolute_advantage_fraction"].append(
+            float(
+                saam_audit.removed_absolute_advantage_mass
+                / saam_audit.original_absolute_advantage_mass
+                if saam_audit and saam_audit.original_absolute_advantage_mass > 0.0
+                else 0.0
+            )
+        )
+        self._metrics[mode][
+            "saam/removed_absolute_policy_coefficient_fraction"
+        ].append(float(removed_absolute_policy_coefficient_fraction))
+        self._metrics[mode][
+            "saam/absolute_policy_coefficient_delta_fraction"
+        ].append(float(absolute_policy_coefficient_delta_fraction))
+        self._metrics[mode]["saam/fully_zeroed_trajectories"].append(
+            float(saam_audit.fully_zeroed_trajectories if saam_audit else 0)
+        )
+        self._metrics[mode]["saam/deterministic_error_transitions"].append(
+            float(saam_audit.deterministic_error_transitions if saam_audit else 0)
+        )
+        self._metrics[mode]["saam/infrastructure_timeout_transitions"].append(
+            float(saam_audit.infrastructure_timeout_transitions if saam_audit else 0)
+        )
+        self._metrics[mode]["saam/shared_success_correct_kept"].append(
+            float(saam_audit.shared_success_correct_kept if saam_audit else 0)
+        )
+        self._metrics[mode]["saam/shared_success_wrong_suppressed"].append(
+            float(saam_audit.shared_success_wrong_suppressed if saam_audit else 0)
+        )
+        self._metrics[mode]["saam/correct_error_positive_flips"].append(
+            float(saam_audit.correct_error_positive_flips if saam_audit else 0)
+        )
         self._metrics[mode]["rollout/trainable_token_fraction"].append(
             float(
-                completion_mask.sum()
+                completion_loss_mask.sum()
                 / completion_attention_mask.sum().clamp_min(1)
             )
         )
@@ -603,6 +1061,8 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self._metrics[mode]["rollout/old_policy_forward_seconds"].append(
             old_policy_finished - old_policy_started
         )
+        for name, value in importance_diagnostics.items():
+            self._metrics[mode][f"sampling/vllm_importance/{name}"].append(value)
         self._metrics[mode]["rollout/padded_prompt_token_fraction"].append(
             float(prompt_mask.sum() / prompt_mask.numel())
         )
@@ -615,6 +1075,12 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self._metrics[mode]["loss/policy_coefficient"].append(
             float(self.policy_loss_coefficient)
         )
+        self._metrics[mode]["loss/trajectory_mean_reduction"].append(
+            float(self.policy_reduction == "trajectory_mean")
+        )
+        self._metrics[mode]["loss/trajectory_token_mean_reduction"].append(
+            float(self.policy_reduction == "trajectory_token_mean")
+        )
         if step_rewards:
             self._metrics[mode]["rollout/nonzero_step_reward_fraction"].append(
                 sum(reward != 0.0 for reward in step_rewards) / len(step_rewards)
@@ -625,13 +1091,19 @@ class TransitionGRPOTrainer(GRPOTrainer):
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_attention_mask": completion_attention_mask,
-            "completion_mask": completion_mask,
+            # TRL uses completion_mask both as the model attention mask and the
+            # default policy-loss mask.  Keep all generated reasoning/action tokens
+            # visible to attention and provide the narrower optimization carrier as
+            # tool_mask.  This prevents tool-only updates from changing the causal
+            # context relative to rollout/old-policy scoring.
+            "completion_mask": completion_attention_mask,
+            "tool_mask": completion_loss_mask,
             "rank_completion_mask": rank_completion_mask,
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
             "sampling_per_token_logps": sampling_per_token_logps,
             "importance_sampling_ratio": importance_sampling_ratio,
-            "num_items_in_batch": completion_mask.sum(),
+            "num_items_in_batch": completion_loss_mask.sum(),
             # TRL shuffles every generation-batch value along the transition axis.
             # Keep this constant as aligned batch metadata instead of a Python scalar;
             # a scalar makes shuffle_sequence_dict attempt ``value[i]`` on an int.
@@ -879,6 +1351,12 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 self.accelerator.backward(rank_surrogate)
             detached_loss = detached_loss + detached_rank_loss
         rank_backward_finished = time.perf_counter()
+        self._record_current_gradient_conflicts(
+            model,
+            inputs,
+            policy_normalization_transitions=policy_normalization_transitions,
+            total=total,
+        )
         self._metrics["train"]["time/policy_backward_seconds"].append(
             policy_finished - policy_started
         )

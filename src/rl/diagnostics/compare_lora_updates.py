@@ -9,6 +9,7 @@ Gram matrices without materializing every dense base-model-shaped matrix.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -28,6 +29,15 @@ def _weights(path: Path) -> dict[str, torch.Tensor]:
         key: value.float()
         for key, value in load_file(path / "adapter_model.safetensors").items()
     }
+
+
+def _artifact(path: Path) -> dict[str, str]:
+    weights = path / "adapter_model.safetensors"
+    digest = hashlib.sha256()
+    with weights.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return {"path": str(path), "adapter_sha256": digest.hexdigest()}
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float | None:
@@ -189,7 +199,11 @@ def compare(reference_path: Path, checkpoint_paths: list[Path]) -> dict[str, Any
     return {
         "schema_version": "lora-checkpoint-update-comparison-v1",
         "reference": str(reference_path),
+        "reference_artifact": _artifact(reference_path),
         "checkpoints": names,
+        "checkpoint_artifacts": {
+            name: _artifact(Path(name)) for name in names
+        },
         "tensor_count": len(reference),
         "lora_module_count": len(module_names),
         "raw_adapter": raw,

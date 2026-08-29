@@ -1,23 +1,38 @@
 # Active architecture
 
+The repository has two deliberately separate axes:
+
+- the **training mainline** freezes Atomic version26 SFT1 for Qwen3 SFT expansion, matched local
+  evaluation, and the next RL stage;
+- the **tool-research line** retains Direct/Atomic/Hybrid, checkpoint, alternative carriers and
+  other schemes as identity-separated diagnostics.
+
+They may share Harness implementation, but they may not share a model parser, prompt renderer,
+result directory, checkpoint, or training admission merely because both contain a tool named
+“Atomic”. See `training_mainline.md`.
+
 ## Runtime layers
 
 - `src/harness/`: SQLite tool execution, resident environment state, catalog construction,
   relation derivation, provenance, scalar grounding, and dataset adapters.
-- `src/sft/`: protocol rendering/parsing, causal teacher rollouts, replay and quality gates, SFT
-  dataset export, and current BIRD SFT-2 assembly.
+- `src/sft/`: protocol rendering/parsing, causal teacher rollouts, replay and quality gates, the
+  current version26 SFT1 preparation/training path, and retained SFT-2/control assembly code.
 - `src/tool_modules/`: independently selectable, scheme-owned protocols, execution loops, audits,
   exporters, and tests. `checkpoint_relalg/`, `action_block/`, `relational_program/`,
   `direct_sql_search/`, `iterative_sql/`, and `native_tool_bundle/` do not import one another except
   through an explicit semantic dependency;
   `sql_common/` is the named immutable-SQL execution layer shared by the two SQL schemes.
+  `checkpoint_relalg/qwen3_carrier.py` is retained only for the frozen failed Atomic-v24 diagnostic
+  projection; it is not the current version26 local evaluator.
 - `src/eval/`: cross-scheme evaluation infrastructure, atomic/direct-SQL controls, pass@k
   aggregation, denotation/candidate selection, artifact contracts, and thin compatibility entry
   points only. Scheme implementations no longer live here. `denotation.py` owns the named
   result-comparison registry independently of candidate generation; `candidate_selection.py` owns
   optional multi-candidate selection independently of correctness scoring.
-- `src/rl/`: task loading, tool environment, hidden target support, terminal reward, process credit,
-  SFT-index reward audits, policy objective, and the supported Accelerate backend.
+- `src/rl/`: task loading, tool environments, hidden target support, terminal reward, process credit,
+  SFT-index reward audits, policy objective, TRL/Accelerate backends, and the canonical cross-arm
+  evaluation analyzer. `tool_environment_v26.py` is the current Qwen3 SFT-to-RL handoff; retained
+  atomic/action-block and checkpoint-relalg experiments remain identity-separated controls.
 - `experiment_dashboard/`: local inspection UI; it is not part of training semantics.
 
 ## Shared ownership
@@ -54,9 +69,10 @@ cannot be inferred from observed calls. The complete design specification is a H
 implementation contract. Provider requests contain only a short shared core, a short mode prompt,
 compact native function schemas, and the current dynamic context.
 
-This forward designation does not open training admission. `checkpoint-relalg-v1` remains
-diagnostic-only until its own fresh replay, structure, provider-history, no-leak, behavior, and
-export/admission gates pass. The original atomic runtime is intentionally not duplicated under
+This broad forward designation does not open every mode/profile for training. Current training has
+explicitly returned to the isolated Atomic version26 SFT1 identity described in
+`training_mainline.md`; Direct, Hybrid, checkpointed semantic profiles, Atomic-v24-frozen
+projections, and alternative carriers remain diagnostic. The original atomic runtime is intentionally not duplicated under
 `tool_modules/`; it remains supported for existing RL experiments, frozen controls, and exact
 reproduction. Version54 / `native-tool-bundle` is a frozen diagnostic predecessor with no RL
 admission. Neither legacy line may be silently mixed with or relabeled as `checkpoint-relalg`.

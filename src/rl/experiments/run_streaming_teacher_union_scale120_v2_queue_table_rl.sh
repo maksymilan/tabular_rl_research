@@ -250,12 +250,15 @@ fi
 
 SUMMARY=$ROOT/full_dev_summary.json
 if [[ ! -f "$SUMMARY" ]]; then
-  "$PY" src/rl/distillation/summarize_full_dev.py \
-    --candidate "$RESULT/all.jsonl" \
-    --baseline "sft2:$ER/data/results/sft2_version36_dev1534_greedy_t0_logprobs20_20260801/all.jsonl" \
-    --baseline "exp14:$ER/data/results/stage1_exp14_fixed_process_rank_action_mean_version36_dev1534_greedy_t0_p1_logprobs20_bird_set_20260802/all.jsonl" \
-    --baseline "exp15:$ER/data/results/stage1_exp15_fixed_prefix_action_dpo_version36_dev1534_greedy_t0_p1_logprobs20_bird_set_20260802/all.jsonl" \
-    --eval-inputs "$ER/data/eval_inputs/bird_dev_20240627.jsonl" \
+  "$PY" src/rl/diagnostics/analyze_evaluation_results.py \
+    --examples "$ER/data/eval_inputs/bird_dev_20240627.jsonl" \
+    --arm "candidate=$RESULT/all.jsonl" \
+    --arm "sft2=$ER/data/results/sft2_version36_dev1534_greedy_t0_logprobs20_20260801/all.jsonl" \
+    --arm "exp14=$ER/data/results/stage1_exp14_fixed_process_rank_action_mean_version36_dev1534_greedy_t0_p1_logprobs20_bird_set_20260802/all.jsonl" \
+    --arm "exp15=$ER/data/results/stage1_exp15_fixed_prefix_action_dpo_version36_dev1534_greedy_t0_p1_logprobs20_bird_set_20260802/all.jsonl" \
+    --compare candidate:sft2 --compare candidate:exp14 --compare candidate:exp15 \
+    --expected-count 1534 --protocol-version version36 \
+    --temperature 0 --top-p 1 --denotation-comparison bird-set \
     --output "$SUMMARY"
 fi
 set_status complete "strict120+full_dev complete summary=$SUMMARY exploratory_single_run=1"

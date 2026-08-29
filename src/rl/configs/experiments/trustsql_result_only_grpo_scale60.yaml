@@ -1,0 +1,42 @@
+schema_version: table-agent-rl-experiment-v1
+experiment_name: trustsql_result_only_grpo_scale60
+admission_status: allowed_result_only_control
+reward_type: result
+result_reward_profile: execution-ladder
+policy_reduction: trajectory_token_mean
+process_reward_config: null
+process_admission_policy: counterfactual-completeness
+exclude_empty_reference_results: false
+process_loss: true
+trainable_part: all
+rank_loss:
+  enabled: false
+  coefficient: 0.0
+  beta: 0.1
+optimizer:
+  name: adamw_torch
+  learning_rate: 8.0e-7
+  weight_decay: 0.1
+  steps: 6
+  ppo_iterations: 1
+  lr_scheduler_type: constant
+  warmup_ratio: 0.0
+  kl_beta: 0.0
+  clip_epsilon: 0.2
+  clip_epsilon_high: 0.28
+  gradient_accumulation_steps: 30
+  adam_beta1: 0.9
+  adam_beta2: 0.98
+rollout:
+  # One question/K8 fits a 24GB trainer GPU. Accumulating 30 unchanged-policy
+  # question groups gives 240 trajectories per optimizer step, close to the
+  # TRUST-SQL 32-question/K8 global batch while covering this 60-task set exactly.
+  prompts_per_update: 1
+  group_size: 8
+  max_agent_steps: 30
+  max_new_tokens: 1024
+  max_context_tokens: 8192
+  history_turns: 4
+  temperature: 0.8
+  top_p: 1.0
+  top_k: 0

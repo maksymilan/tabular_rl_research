@@ -1,0 +1,164 @@
+{
+  "schema_version": "gate60-pcgrad-one-step-audit-v1",
+  "gold_sql_read": false,
+  "measurement": "ordinary binary group GRPO; full carrier; vanilla versus positive-anchor PCGrad and full/tool conflict gate; one SGD-style step; no rollout",
+  "step": 0,
+  "example_index": 0,
+  "rows": 34,
+  "positive_rows": 30,
+  "negative_rows": 4,
+  "learning_rate": 4e-06,
+  "gate": {
+    "full_negative_positive_cosine": -0.15623571059611402,
+    "tool_positive_negative_cosine": -0.36610323830255126,
+    "threshold": -0.1,
+    "enabled": true
+  },
+  "projection": {
+    "positive_norm": 0.14641085238232113,
+    "negative_norm": 0.33947674234841335,
+    "negative_positive_dot": -0.007765395899377525,
+    "negative_positive_cosine": -0.15623571059611402,
+    "projection_coefficient": -0.3622572316781524,
+    "projected_negative_norm": 0.33530789837172315,
+    "projected_negative_positive_cosine": 6.177891114930023e-09
+  },
+  "vanilla": {
+    "full": {
+      "rows": 34,
+      "mean_delta": -0.00017897762796458076,
+      "mean_abs_delta": 0.0006978088880286497,
+      "positive_rows": 30,
+      "positive_aligned": 0.5333333333333333,
+      "positive_mean_delta": -0.00014473125338554382,
+      "negative_rows": 4,
+      "negative_aligned": 0.75,
+      "negative_mean_delta": -0.0004358254373073578
+    },
+    "think": {
+      "rows": 34,
+      "mean_delta": -0.0002805450383354636,
+      "mean_abs_delta": 0.0009387836736791275,
+      "positive_rows": 30,
+      "positive_aligned": 0.4666666666666667,
+      "positive_mean_delta": -0.0001863946517308553,
+      "negative_rows": 4,
+      "negative_aligned": 0.75,
+      "negative_mean_delta": -0.0009866729378700256
+    },
+    "tool": {
+      "rows": 34,
+      "mean_delta": -1.9867547106353895e-05,
+      "mean_abs_delta": 0.0003198747645536273,
+      "positive_rows": 30,
+      "positive_aligned": 0.6333333333333333,
+      "positive_mean_delta": -4.251518985256553e-05,
+      "negative_rows": 4,
+      "negative_aligned": 0.25,
+      "negative_mean_delta": 0.00014998977349023335
+    },
+    "span": {
+      "rows": 34,
+      "mean_delta": -0.0001601390540599823,
+      "mean_abs_delta": 0.0006487336667145,
+      "positive_rows": 30,
+      "positive_aligned": 0.6,
+      "positive_mean_delta": -0.00013571158051490785,
+      "negative_rows": 4,
+      "negative_aligned": 0.75,
+      "negative_mean_delta": -0.00034334510564804077
+    }
+  },
+  "pcgrad": {
+    "full": {
+      "rows": 34,
+      "mean_delta": 0.00014083153184722453,
+      "mean_abs_delta": 0.000531220918192583,
+      "positive_rows": 30,
+      "positive_aligned": 0.5,
+      "positive_mean_delta": 9.980921943982442e-05,
+      "negative_rows": 4,
+      "negative_aligned": 0.25,
+      "negative_mean_delta": 0.0004484988749027252
+    },
+    "think": {
+      "rows": 34,
+      "mean_delta": 0.0002543159267481636,
+      "mean_abs_delta": 0.0008022123399902793,
+      "positive_rows": 30,
+      "positive_aligned": 0.5666666666666667,
+      "positive_mean_delta": 0.00021577725807825726,
+      "negative_rows": 4,
+      "negative_aligned": 0.25,
+      "negative_mean_delta": 0.0005433559417724609
+    },
+    "tool": {
+      "rows": 34,
+      "mean_delta": -4.201666374951053e-05,
+      "mean_abs_delta": 0.0001772715652751846,
+      "positive_rows": 30,
+      "positive_aligned": 0.36666666666666664,
+      "positive_mean_delta": -4.9370097500892976e-05,
+      "negative_rows": 4,
+      "negative_aligned": 0.5,
+      "negative_mean_delta": 1.3134089385857806e-05
+    },
+    "span": {
+      "rows": 34,
+      "mean_delta": 8.514150977134705e-05,
+      "mean_abs_delta": 0.0004686680348480449,
+      "positive_rows": 30,
+      "positive_aligned": 0.5333333333333333,
+      "positive_mean_delta": 5.85185984770457e-05,
+      "negative_rows": 4,
+      "negative_aligned": 0.25,
+      "negative_mean_delta": 0.0002848133444786072
+    }
+  },
+  "gated": {
+    "full": {
+      "rows": 34,
+      "mean_delta": 0.00014083153184722453,
+      "mean_abs_delta": 0.000531220918192583,
+      "positive_rows": 30,
+      "positive_aligned": 0.5,
+      "positive_mean_delta": 9.980921943982442e-05,
+      "negative_rows": 4,
+      "negative_aligned": 0.25,
+      "negative_mean_delta": 0.0004484988749027252
+    },
+    "think": {
+      "rows": 34,
+      "mean_delta": 0.0002543159267481636,
+      "mean_abs_delta": 0.0008022123399902793,
+      "positive_rows": 30,
+      "positive_aligned": 0.5666666666666667,
+      "positive_mean_delta": 0.00021577725807825726,
+      "negative_rows": 4,
+      "negative_aligned": 0.25,
+      "negative_mean_delta": 0.0005433559417724609
+    },
+    "tool": {
+      "rows": 34,
+      "mean_delta": -4.201666374951053e-05,
+      "mean_abs_delta": 0.0001772715652751846,
+      "positive_rows": 30,
+      "positive_aligned": 0.36666666666666664,
+      "positive_mean_delta": -4.9370097500892976e-05,
+      "negative_rows": 4,
+      "negative_aligned": 0.5,
+      "negative_mean_delta": 1.3134089385857806e-05
+    },
+    "span": {
+      "rows": 34,
+      "mean_delta": 8.514150977134705e-05,
+      "mean_abs_delta": 0.0004686680348480449,
+      "positive_rows": 30,
+      "positive_aligned": 0.5333333333333333,
+      "positive_mean_delta": 5.85185984770457e-05,
+      "negative_rows": 4,
+      "negative_aligned": 0.25,
+      "negative_mean_delta": 0.0002848133444786072
+    }
+  }
+}

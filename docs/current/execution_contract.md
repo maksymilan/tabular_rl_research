@@ -2,8 +2,9 @@
 
 Status: active shared harness contract across current tool schemes. The forward implementation is
 `checkpoint-relalg-v1` / `checkpoint-relalg` with an explicit `direct|atomic|hybrid` mode;
-version54 / `native-tool-bundle` is now a frozen predecessor diagnostic, and version26 is a frozen
-historical checkpoint control. `src/sft/protocol.py`, the selected scheme protocol,
+version54 / `native-tool-bundle` is now a frozen predecessor diagnostic. Version26 is the frozen
+current SFT/evaluation/RL contract, while remaining closed to new tool-interface development.
+`src/sft/protocol.py`, the selected scheme protocol,
 and `src/tool_modules/registry.py` are executable authority. Old trajectory artifacts remain replay
 inputs, not examples of the current public action interface.
 

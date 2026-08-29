@@ -38,3 +38,9 @@ def test_effective_update_ignores_reciprocal_factor_rescaling(tmp_path: Path) ->
     assert equivalent_stats["update_norm"] == 0.0
     assert changed_stats["update_norm"] > 0.0
     assert result["raw_adapter"][str(equivalent)]["update_norm"] > 0.0
+    assert result["reference_artifact"]["path"] == str(reference)
+    assert len(result["reference_artifact"]["adapter_sha256"]) == 64
+    assert result["checkpoint_artifacts"][str(changed)]["path"] == str(changed)
+    assert len(
+        result["checkpoint_artifacts"][str(changed)]["adapter_sha256"]
+    ) == 64

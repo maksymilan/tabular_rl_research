@@ -1,5 +1,14 @@
 # Evaluation contract
 
+The current Qwen3 training/evaluation identity is the frozen Atomic version26 SFT1 contract. Its
+trusted anchor is checkpoint-560 at 838/1534 = 54.63% BIRD-dev greedy `bird-set`, measured by the
+isolated evaluator under `reproductions/trust_sql/qwen3_8b_atomic_sft1/`. It parses one inline
+`<think>...</think>` plus one JSON action, uses recent-four legal history and the frozen full
+resident-state prompt, and enables the Qwen3 thinking chat template. DeepSeek's provider split
+carrier is not this local evaluator. The later checkpoint-relalg/Atomic-v24-frozen projections and
+checkpoints are diagnostic-only and must not be reported as the matched mainline. See
+`training_mainline.md`.
+
 Tool-agent, RL-checkpoint, and direct-SQL comparisons must use the same task ids, sampling condition,
 database snapshot, external knowledge, generated-query deadline, and denotation metric. Every result
 must name its metric; strict multiset and BIRD reference set equality are not interchangeable.
@@ -28,8 +37,10 @@ reported as pass@k. Direct-SQL multi-candidate evaluation exposes the upstream s
 medoid as `--candidate-aggregation arctic-majority`; use `n=8`, `temperature=0.8`, `top_p=1`,
 a 10-second generated-query timeout, and `bird-set` for that optional Arctic setting.
 
-`src/eval/rollout.py` is the single-sample tool-agent evaluator and
-`src/eval/rollout_passk.py` is the multi-sample evaluator. `src/eval/text2sql.py` and
+`src/eval/rollout.py` is the retained-atomic single-sample evaluator and
+`src/eval/rollout_passk.py` is its multi-sample evaluator. Their dynamic episode scheduling and
+vLLM batching remain the basis of the isolated version26 reproduction boundary. Do not mix them
+with checkpoint-relalg result roots or provider parsers. `src/eval/text2sql.py` and
 `src/eval/text2sql_passk.py` are direct-SQL controls. Result directories and manifests must not mix
 different denotation contracts.
 

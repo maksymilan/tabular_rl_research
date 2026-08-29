@@ -116,6 +116,8 @@ def _error_type(exc: Exception) -> str:
     if isinstance(exc, BatchPlanProtocolError):
         return "protocol_error"
     if isinstance(exc, ProtocolError):
+        if exc.failure_type:
+            return exc.failure_type
         text = str(exc).lower()
         if any(marker in text for marker in (
             "arguments", "unexpected", "requires", "missing", "must be",

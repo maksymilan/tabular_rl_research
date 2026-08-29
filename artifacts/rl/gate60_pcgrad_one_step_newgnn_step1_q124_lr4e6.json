@@ -1,0 +1,112 @@
+{
+  "schema_version": "gate60-pcgrad-one-step-audit-v1",
+  "gold_sql_read": false,
+  "measurement": "ordinary binary group GRPO; full carrier; vanilla versus positive-anchor PCGrad; one SGD-style step; no rollout",
+  "step": 1,
+  "example_index": 124,
+  "rows": 56,
+  "positive_rows": 30,
+  "negative_rows": 26,
+  "learning_rate": 4e-06,
+  "projection": {
+    "positive_norm": 0.16717872717830842,
+    "negative_norm": 0.2816451703973708,
+    "negative_positive_dot": -0.010329682416089891,
+    "negative_positive_cosine": -0.21938334126481218,
+    "projection_coefficient": -0.3695940241665487,
+    "projected_negative_norm": 0.27478393742720103,
+    "projected_negative_positive_cosine": 9.030318998350355e-09
+  },
+  "vanilla": {
+    "full": {
+      "rows": 56,
+      "mean_delta": -0.00011928060225078038,
+      "mean_abs_delta": 0.000598038945879255,
+      "positive_rows": 30,
+      "positive_aligned": 0.43333333333333335,
+      "positive_mean_delta": -4.692574342091878e-05,
+      "negative_rows": 26,
+      "negative_aligned": 0.6153846153846154,
+      "negative_mean_delta": -0.0002027669778236976
+    },
+    "think": {
+      "rows": 56,
+      "mean_delta": -0.00025135731058461327,
+      "mean_abs_delta": 0.0008579234459570476,
+      "positive_rows": 30,
+      "positive_aligned": 0.4,
+      "positive_mean_delta": -0.00017617593208948772,
+      "negative_rows": 26,
+      "negative_aligned": 0.6538461538461539,
+      "negative_mean_delta": -0.0003381050550020658
+    },
+    "tool": {
+      "rows": 56,
+      "mean_delta": 0.0001339424423869267,
+      "mean_abs_delta": 0.00024656233368399886,
+      "positive_rows": 30,
+      "positive_aligned": 0.6333333333333333,
+      "positive_mean_delta": 0.00013465763331623747,
+      "negative_rows": 26,
+      "negative_aligned": 0.4230769230769231,
+      "negative_mean_delta": 0.00013311722208387576
+    },
+    "span": {
+      "rows": 56,
+      "mean_delta": 8.264556527137756e-06,
+      "mean_abs_delta": 0.0005218533000775746,
+      "positive_rows": 30,
+      "positive_aligned": 0.5333333333333333,
+      "positive_mean_delta": 4.656960566838582e-05,
+      "negative_rows": 26,
+      "negative_aligned": 0.5384615384615384,
+      "negative_mean_delta": -3.5933577097379246e-05
+    }
+  },
+  "pcgrad": {
+    "full": {
+      "rows": 56,
+      "mean_delta": -4.1583552956581116e-05,
+      "mean_abs_delta": 0.0006213329200233732,
+      "positive_rows": 30,
+      "positive_aligned": 0.4666666666666667,
+      "positive_mean_delta": -0.00013706336418787637,
+      "negative_rows": 26,
+      "negative_aligned": 0.5384615384615384,
+      "negative_mean_delta": 6.858546000260573e-05
+    },
+    "think": {
+      "rows": 56,
+      "mean_delta": -6.711163691111974e-05,
+      "mean_abs_delta": 0.0008508360811642238,
+      "positive_rows": 30,
+      "positive_aligned": 0.4666666666666667,
+      "positive_mean_delta": -0.00021931926409403483,
+      "negative_rows": 26,
+      "negative_aligned": 0.5384615384615384,
+      "negative_mean_delta": 0.00010851254829993614
+    },
+    "tool": {
+      "rows": 56,
+      "mean_delta": -2.426203640685084e-05,
+      "mean_abs_delta": 0.00020884432290456192,
+      "positive_rows": 30,
+      "positive_aligned": 0.5333333333333333,
+      "positive_mean_delta": -2.2882780467625707e-05,
+      "negative_rows": 26,
+      "negative_aligned": 0.5384615384615384,
+      "negative_mean_delta": -2.5853485567495227e-05
+    },
+    "span": {
+      "rows": 56,
+      "mean_delta": -5.781796893903187e-05,
+      "mean_abs_delta": 0.0004977063675011907,
+      "positive_rows": 30,
+      "positive_aligned": 0.5,
+      "positive_mean_delta": -0.00013254359364509583,
+      "negative_rows": 26,
+      "negative_aligned": 0.5384615384615384,
+      "negative_mean_delta": 2.840390572181115e-05
+    }
+  }
+}

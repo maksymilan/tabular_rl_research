@@ -29,6 +29,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from copy import deepcopy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -67,6 +68,85 @@ DEFAULT_FEWSHOT_IDS = ["spider_train_0", "spider_train_1"]
 DEFAULT_MAX_TOKENS = 768
 MIN_CONTEXT_RETRY_TOKENS = 128
 TERMINAL_ANSWER_CONTRACT = "exact-cited-table-v1"
+TOOL_EXECUTION_TIMEOUT_SECONDS = 10.0
+
+
+class ToolExecutionTimeoutError(ProtocolError):
+    """A model-authored SQLite tool call exceeded its hard execution deadline."""
+
+    def __init__(
+        self,
+        timeout_seconds: float,
+        *,
+        attempted_tool: str | None = None,
+        attempted_arguments: dict | None = None,
+    ) -> None:
+        super().__init__(
+            f"SQLite tool execution exceeded {timeout_seconds:g}s",
+            code="tool_execution_timeout",
+            failure_type="timeout_error",
+            details={
+                "execution_engine": "sqlite",
+                "timeout_seconds": float(timeout_seconds),
+                "state_preserved": True,
+            },
+            attempted_tool=attempted_tool,
+            attempted_arguments=attempted_arguments,
+        )
+
+
+def _temp_table_names(h: Harness) -> set[str]:
+    return {
+        str(row[0])
+        for row in h.conn.execute(
+            "SELECT name FROM temp.sqlite_master WHERE type='table'"
+        )
+    }
+
+
+@contextmanager
+def bounded_harness_execution(
+    h: Harness,
+    timeout_seconds: float = TOOL_EXECUTION_TIMEOUT_SECONDS,
+):
+    """Interrupt one SQLite operation and restore Harness bookkeeping on timeout."""
+    if timeout_seconds <= 0:
+        raise ValueError("tool execution timeout must be positive")
+
+    deadline = time.monotonic() + timeout_seconds
+    views_before = dict(h.views)
+    sequence_before = h._n
+    row_counts_before = dict(getattr(h, "_row_counts", {}))
+    materialized_before = set(getattr(h, "_materialized_handles", set()))
+    temp_tables_before = _temp_table_names(h)
+    timeout_cause: sqlite3.OperationalError | None = None
+    h.conn.set_progress_handler(
+        lambda: 1 if time.monotonic() >= deadline else 0,
+        1_000,
+    )
+    try:
+        yield
+    except sqlite3.OperationalError as exc:
+        if "interrupted" not in str(exc).lower():
+            raise
+        timeout_cause = exc
+    finally:
+        h.conn.set_progress_handler(None, 0)
+
+    if timeout_cause is None:
+        return
+
+    h.conn.rollback()
+    h.views = views_before
+    h._n = sequence_before
+    if hasattr(h, "_row_counts"):
+        h._row_counts = row_counts_before
+    if hasattr(h, "_materialized_handles"):
+        h._materialized_handles = materialized_before
+    for table_name in _temp_table_names(h) - temp_tables_before:
+        quoted = table_name.replace('"', '""')
+        h.conn.execute(f'DROP TABLE IF EXISTS temp."{quoted}"')
+    raise ToolExecutionTimeoutError(timeout_seconds) from timeout_cause
 
 
 def error_limit_reached(error_type: str, count: int, limit: int) -> bool:
@@ -788,8 +868,8 @@ def validate_tool_arguments_against_state(h: Harness, tool: str, args: dict) -> 
             )
 
 
-def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
-                 table_output_rows: int = 0):
+def _execute_tool_unbounded(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
+                            table_output_rows: int = 0):
     """Run one tool call, threading online provenance in `ctx`. Returns (output, created|None).
 
     V2b: a predicate's `value_ref` cites the producing step_id directly (no add_to_memory); the
@@ -928,6 +1008,33 @@ def execute_tool(h: Harness, tool: str, args: dict, ctx: dict, step_id: str,
     ctx["history"][step_id] = {"tool": tool, "arguments": args, "output": output, "references": references}
     ctx["environment"].apply_tool_result(tool, args, output, step_id)
     return output, created
+
+
+def execute_tool(
+    h: Harness,
+    tool: str,
+    args: dict,
+    ctx: dict,
+    step_id: str,
+    table_output_rows: int = 0,
+    *,
+    tool_execution_timeout_seconds: float = TOOL_EXECUTION_TIMEOUT_SECONDS,
+):
+    """Execute one model tool call with the mandatory SQLite deadline."""
+    try:
+        with bounded_harness_execution(h, tool_execution_timeout_seconds):
+            return _execute_tool_unbounded(
+                h,
+                tool,
+                args,
+                ctx,
+                step_id,
+                table_output_rows=table_output_rows,
+            )
+    except ToolExecutionTimeoutError as exc:
+        exc.attempted_tool = tool
+        exc.attempted_arguments = deepcopy(args)
+        raise
 
 
 def _evidence_table(evidence) -> str | None:

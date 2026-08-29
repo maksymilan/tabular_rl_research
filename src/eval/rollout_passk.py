@@ -11,13 +11,11 @@ import argparse
 import json
 import math
 import os
-import sqlite3
 import sys
 import time
 import traceback
 import urllib.error
 import urllib.request
-from contextlib import contextmanager
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -60,6 +58,8 @@ from rollout import (  # noqa: E402
     MAX_ERRORS_PER_TYPE,
     MIN_CONTEXT_RETRY_TOKENS,
     TERMINAL_ANSWER_CONTRACT,
+    ToolExecutionTimeoutError,
+    bounded_harness_execution,
     error_limit_reached,
     execute_tool,
     format_tool_error,
@@ -81,38 +81,6 @@ from tool_modules.registry import (  # noqa: E402
 )
 
 SPIDER = os.path.join(ROOT, "data", "spider_data")
-
-
-class ToolExecutionTimeoutError(RuntimeError):
-    """A bounded SQLite tool/scoring operation exceeded its operational deadline."""
-
-
-@contextmanager
-def bounded_harness_execution(h: Harness, timeout_seconds: float):
-    """Interrupt pathological SQLite work without retaining a half-created relation handle."""
-    if timeout_seconds <= 0:
-        yield
-        return
-
-    deadline = time.monotonic() + timeout_seconds
-    views_before = dict(h.views)
-    sequence_before = h._n
-    h.conn.set_progress_handler(
-        lambda: 1 if time.monotonic() >= deadline else 0,
-        10_000,
-    )
-    try:
-        yield
-    except sqlite3.OperationalError as exc:
-        if "interrupted" not in str(exc).lower():
-            raise
-        h.views = views_before
-        h._n = sequence_before
-        raise ToolExecutionTimeoutError(
-            f"SQLite execution exceeded {timeout_seconds:g}s"
-        ) from exc
-    finally:
-        h.conn.set_progress_handler(None, 0)
 
 
 def load_indexed_examples(
@@ -489,8 +457,14 @@ def run_sample(
                 rec["elapsed_seconds"] = round(time.time() - started, 3)
                 return rec
 
-            with bounded_harness_execution(h, tool_execution_timeout_seconds):
-                out, table_name = execute_tool(h, tool, args, ctx, step_id)
+            out, table_name = execute_tool(
+                h,
+                tool,
+                args,
+                ctx,
+                step_id,
+                tool_execution_timeout_seconds=tool_execution_timeout_seconds,
+            )
             turn["tool_output"] = out
         except (ProtocolError, Exception) as exc:  # noqa: BLE001
             errors += 1
@@ -860,10 +834,10 @@ def main() -> int:
     parser.add_argument(
         "--tool-execution-timeout-seconds",
         type=float,
-        default=0.0,
+        default=10.0,
         help=(
             "per-tool/per-terminal SQLite deadline; an overrun becomes a recoverable "
-            "execution error, while 0 preserves historical unbounded behavior"
+            "timeout_error with state preserved"
         ),
     )
     parser.add_argument(
@@ -907,8 +881,8 @@ def main() -> int:
         parser.error("--first-sample-workers must be <= --sample-workers")
     if args.max_inflight_requests < 0:
         parser.error("--max-inflight-requests must be non-negative")
-    if args.tool_execution_timeout_seconds < 0:
-        parser.error("--tool-execution-timeout-seconds must be non-negative")
+    if args.tool_execution_timeout_seconds <= 0:
+        parser.error("--tool-execution-timeout-seconds must be positive")
     if args.allow_operational_concurrency_resume and not args.resume:
         parser.error("--allow-operational-concurrency-resume requires --resume")
     if args.allow_operational_tool_timeout_resume and not args.resume:

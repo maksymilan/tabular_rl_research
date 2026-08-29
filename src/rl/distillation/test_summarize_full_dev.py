@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.rl.distillation.summarize_full_dev import exact_mcnemar_p
+from src.rl.diagnostics.analyze_evaluation_results import exact_mcnemar_p
 
 
 def test_exact_mcnemar_matches_known_small_cases():
