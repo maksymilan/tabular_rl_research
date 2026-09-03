@@ -25,6 +25,9 @@ from experiment_config import (  # noqa: E402
     verify_base_model_identity,
     validate_runtime_identity,
 )
+from evaluation.formal_v26_matched_eval import (  # noqa: E402
+    content_tree as formal_runtime_content_tree,
+)
 from frameworks.trl.transition_grpo import use_frozen_reference_adapter  # noqa: E402
 
 
@@ -220,6 +223,7 @@ def test_isolated_v26_environment_imports_only_the_exact_frozen_runtime() -> Non
     env["PYTHONPATH"] = os.pathsep.join(
         [
             str(ROOT / "src" / "rl"),
+            str(ROOT / "src"),
             str(runtime_root / "src" / "eval"),
             str(runtime_root / "src" / "harness"),
             str(runtime_root / "src" / "sft"),
@@ -232,7 +236,7 @@ import sys
 import protocol
 import rollout as evaluator
 import executor
-import tool_schemes
+from tool_modules import registry as tool_registry
 import tool_environment_v26 as environment
 from frameworks.trl import rollout
 print(json.dumps({
@@ -247,7 +251,7 @@ print(json.dumps({
         "protocol": inspect.getfile(protocol),
         "rollout": inspect.getfile(evaluator),
         "executor": inspect.getfile(executor),
-        "tool_schemes": inspect.getfile(tool_schemes),
+        "tool_registry": inspect.getfile(tool_registry),
     },
 }))
 """
@@ -271,7 +275,7 @@ print(json.dumps({
         "protocol": str(runtime_root / "src" / "sft" / "protocol.py"),
         "rollout": str(runtime_root / "src" / "eval" / "rollout.py"),
         "executor": str(runtime_root / "src" / "harness" / "executor.py"),
-        "tool_schemes": str(runtime_root / "src" / "sft" / "tool_schemes.py"),
+        "tool_registry": str(ROOT / "src" / "tool_modules" / "registry.py"),
     }
 
 
@@ -310,7 +314,24 @@ def test_runtime_tree_identity_is_stable_across_python_cache_and_resume() -> Non
         cache = runtime_root / "src" / "sft" / "__pycache__" / "protocol.pyc"
         cache.parent.mkdir()
         cache.write_bytes(b"import side effect")
+        (runtime_root / "src" / "eval" / "standalone.pyc").write_bytes(b"bytecode")
+        (runtime_root / "src" / "eval" / "standalone.pyo").write_bytes(b"optimized")
+        pytest_cache = runtime_root / "src" / "harness" / ".pytest_cache" / "README.md"
+        pytest_cache.parent.mkdir()
+        pytest_cache.write_bytes(b"pytest state")
+        (runtime_root / "src" / "harness" / ".DS_Store").write_bytes(b"finder")
         assert runtime_content_tree_sha256(runtime_root) == expected
+        count, formal_digest = formal_runtime_content_tree(runtime_root, exported)
+        assert count == len(files)
+        assert formal_digest == expected
+
+        extra_source = runtime_root / "src" / "sft" / "unexpected.py"
+        extra_source.write_bytes(b"SOURCE DRIFT\n")
+        with pytest.raises(ValueError, match="content tree mismatch"):
+            runtime_content_tree_sha256(runtime_root)
+        _, formal_drift = formal_runtime_content_tree(runtime_root, exported)
+        assert formal_drift != expected
+        extra_source.unlink()
 
         (runtime_root / "src" / "sft" / "protocol.py").write_bytes(b"CHANGED\n")
         with pytest.raises(ValueError, match="content tree mismatch"):
@@ -326,7 +347,7 @@ def test_runner_preloads_identity_modules_before_path_mutating_rl_imports() -> N
         "import protocol as protocol_runtime",
         "import rollout as evaluator_runtime",
         "import executor as executor_runtime",
-        "import tool_schemes as tool_schemes_runtime",
+        "from tool_modules import registry as tool_schemes_runtime",
     ):
         assert source.index(statement) < boundary
 
@@ -375,7 +396,7 @@ def test_runner_embeds_one_base_model_identity_and_checks_it_before_resume_load(
     assert '"base_model_identity": base_model_identity' in source
     assert '"base_model_identity": manifest["base_model_identity"]' in source
     resume_check = source.index("require_resume_base_model_identity(")
-    model_load = source.index(") = load_qlora_model(args)")
+    model_load = source.index("load_qlora_model(", resume_check)
     assert resume_check < model_load
 
 

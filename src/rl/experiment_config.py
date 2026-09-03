@@ -20,7 +20,7 @@ REWARD_TYPES = {
     "process_no_normalize",
 }
 TRAINABLE_PARTS = {"all", "tool_only"}
-RESULT_REWARD_PROFILES = {"binary", "execution-ladder"}
+RESULT_REWARD_PROFILES = {"binary", "execution-ladder", "four-level"}
 POLICY_REDUCTIONS = {
     "transition_mean",
     "trajectory_mean",
@@ -238,9 +238,11 @@ def require_resume_base_model_identity(
 def runtime_content_tree_sha256(runtime_root: Path) -> str:
     """Verify and hash exactly the source files exported by a frozen runtime.
 
-    Python bytecode caches are an import side effect, not runtime source.  They
-    are ignored so an interrupted/resumed run has the same identity, while any
-    other added, removed, or changed file fails the frozen lock.
+    Interpreter, test, and OS caches are side effects, not runtime source.
+    They are ignored so an interrupted/resumed run has the same identity,
+    while any other added, removed, or changed file fails the frozen hash.
+    The digest includes every admitted relative path and its bytes, making an
+    independent exact-file-count gate redundant.
     """
 
     runtime_root = runtime_root.resolve()
@@ -253,6 +255,14 @@ def runtime_content_tree_sha256(runtime_root: Path) -> str:
         raise ValueError(
             f"unsupported protocol runtime export contract: {exported_paths!r}"
         )
+    generated_directories = {
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+    }
+    generated_names = {".DS_Store"}
+    generated_suffixes = {".pyc", ".pyo"}
     files = []
     for relative in exported_paths:
         directory = runtime_root / relative
@@ -261,13 +271,10 @@ def runtime_content_tree_sha256(runtime_root: Path) -> str:
         files.extend(
             path
             for path in directory.rglob("*")
-            if path.is_file() and "__pycache__" not in path.parts
-        )
-    expected_count = int(lock.get("exported_file_count") or 0)
-    if len(files) != expected_count:
-        raise ValueError(
-            "protocol runtime exported file count mismatch: "
-            f"{len(files)} != {expected_count}"
+            if path.is_file()
+            and not any(part in generated_directories for part in path.parts)
+            and path.name not in generated_names
+            and path.suffix not in generated_suffixes
         )
     digest = hashlib.sha256()
     for path in sorted(
@@ -655,14 +662,23 @@ class RLExperimentConfig:
             credit_name = payload.get("credit_assignment")
             if payload["reward_type"] != "result":
                 raise ValueError(f"{credit_name} requires result reward")
-            if payload.get("result_reward_profile", "binary") != "binary":
-                raise ValueError(f"{credit_name} requires binary terminal reward")
+            profile = payload.get("result_reward_profile", "binary")
+            if credit_name == "saam-strict" and profile != "binary":
+                raise ValueError("saam-strict requires binary terminal reward")
+            if credit_name == "saam-asymmetric-error" and profile not in {
+                "binary",
+                "four-level",
+            }:
+                raise ValueError(
+                    "saam-asymmetric-error requires binary or four-level terminal reward"
+                )
             if not bool(payload.get("process_loss", True)):
                 raise ValueError(f"{credit_name} requires an enabled policy loss")
             if bool(rank.get("enabled")):
                 raise ValueError(f"{credit_name} cannot mix a rank loss")
-            if float(optimizer.get("kl_beta", 0.0)) != 0.0:
-                raise ValueError(f"{credit_name} requires optimizer.kl_beta=0")
+            # A future KL arm is a matched SAAM ablation.  Nonzero KL remains
+            # fail-closed behind the pinned runtime/reference checks above;
+            # the baseline config keeps kl_beta=0 until that arm is registered.
         if bool(payload.get("record_gradient_conflicts", False)):
             if bool(rank.get("enabled")):
                 raise ValueError("gradient conflict recording cannot mix a rank loss")

@@ -21,15 +21,12 @@ It owns the shared implementation of:
 python src/rl/diagnostics/analyze_evaluation_results.py \
   --examples data/eval_inputs/bird_dev_20240627.jsonl \
   --indices path/to/frozen_holdout.indices.json \
-  --arm sft2=path/to/sft2/all.jsonl \
-  --arm scale5=path/to/scale5/all.jsonl \
-  --arm scale20=path/to/scale20/all.jsonl \
-  --compare scale5:sft2 \
-  --compare scale20:sft2 \
-  --compare scale20:scale5 \
-  --expected-count 90 \
-  --protocol-version version36 \
-  --protocol-hash 20a8d3b4356d883c \
+  --arm candidate=path/to/version26_candidate/all.jsonl \
+  --arm baseline=path/to/version26_baseline/all.jsonl \
+  --compare candidate:baseline \
+  --expected-count 1534 \
+  --protocol-version version26 \
+  --protocol-hash 4da19387399bd3a5 \
   --temperature 0 --top-p 1 \
   --denotation-comparison bird-set \
   --output path/to/unified_analysis.json

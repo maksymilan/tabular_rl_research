@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - GPU runtime dependency
     torch = None
 
 
-SCHEMA_VERSION = "gradient-conflict-record-v1"
+SCHEMA_VERSION = "gradient-conflict-record-v3"
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -125,7 +125,9 @@ class GradientConflictRecorder:
             if current is None:
                 vector = torch.zeros(parameter.numel(), dtype=torch.float32)
             else:
-                vector = current.detach().float().reshape(-1).cpu()
+                # Transfer before widening to FP32 so a diagnostic capture does
+                # not allocate an extra FP32 temporary on the training GPU.
+                vector = current.detach().cpu().float().reshape(-1)
             chunks.append(vector)
             layers.append(
                 {
@@ -157,6 +159,7 @@ class GradientConflictRecorder:
         combined,
         positive,
         negative,
+        span_gradients: dict[str, tuple[Any, Any]] | None = None,
         layers: dict[str, list[dict[str, Any]]] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -190,6 +193,58 @@ class GradientConflictRecorder:
         }
         if layers is not None:
             summary["layers"] = layers
+        # ``span_gradients`` contains counterfactual positive/negative gradients
+        # for named response carriers (currently ``reason`` and ``tool``).  The
+        # full-response partition above remains the canonical combined/positive/
+        # negative record, while these additional measurements quantify whether
+        # the carrier is diluted by the other span.  Keep exact scalars for every
+        # partition and persist only deterministic sketches unless full vectors
+        # were explicitly requested.
+        span_payload: dict[str, dict[str, Any]] = {}
+        if span_gradients:
+            for name, pair in span_gradients.items():
+                if len(pair) != 2:
+                    raise ValueError(f"span gradient partition {name!r} must be a pair")
+                span_positive, span_negative = (
+                    pair[0].float().cpu(),
+                    pair[1].float().cpu(),
+                )
+                span_positive_norm = float(torch.linalg.vector_norm(span_positive))
+                span_negative_norm = float(torch.linalg.vector_norm(span_negative))
+                span_dot = _dot(span_positive, span_negative)
+                span_sum_norm = float(
+                    torch.linalg.vector_norm(span_positive + span_negative)
+                )
+                span_payload[name] = {
+                    "positive_norm": span_positive_norm,
+                    "negative_norm": span_negative_norm,
+                    "positive_negative_dot": span_dot,
+                    "positive_negative_cosine": _cosine(
+                        span_positive, span_negative
+                    ),
+                    "positive_negative_conflict_mass": max(0.0, -2.0 * span_dot),
+                    "net_over_sum_norm": (
+                        span_sum_norm / (span_positive_norm + span_negative_norm)
+                        if span_positive_norm + span_negative_norm > 0.0
+                        else 0.0
+                    ),
+                    "positive_full_cosine": _cosine(span_positive, positive),
+                    "negative_full_cosine": _cosine(span_negative, negative),
+                    "positive_tool_cosine": None,
+                    "negative_tool_cosine": None,
+                }
+            # The reason/tool cross-cosines are especially useful for identifying
+            # whether full-response opposition comes from the carrier spans.  Do
+            # not assume both are present so the recorder remains extensible.
+            reason_pair = span_gradients.get("reason")
+            tool_pair = span_gradients.get("tool")
+            if reason_pair is not None and tool_pair is not None:
+                for index, sign in enumerate(("positive", "negative")):
+                    span_payload["reason"][f"{sign}_tool_cosine"] = _cosine(
+                        reason_pair[index].float().cpu(),
+                        tool_pair[index].float().cpu(),
+                    )
+            summary["span_gradients"] = span_payload
         if self.save_vectors:
             payload = {
                 "schema_version": SCHEMA_VERSION,
@@ -197,6 +252,102 @@ class GradientConflictRecorder:
                 "combined": combined,
                 "positive": positive,
                 "negative": negative,
+                "metadata": metadata or {},
+            }
+            if span_gradients:
+                payload["span_gradients"] = {
+                    name: {
+                        "positive": pair[0].float().cpu(),
+                        "negative": pair[1].float().cpu(),
+                    }
+                    for name, pair in span_gradients.items()
+                }
+            vector_path = self.output_dir / f"step_{int(step):06d}.pt"
+            temporary = vector_path.with_name(f".{vector_path.name}.{os.getpid()}.tmp")
+            torch.save(payload, temporary)
+            temporary.replace(vector_path)
+            summary["vector_path"] = vector_path.name
+        else:
+            sketch_path = self.output_dir / f"step_{int(step):06d}_sketch.pt"
+            temporary = sketch_path.with_name(f".{sketch_path.name}.{os.getpid()}.tmp")
+            sketch_payload = {
+                "schema_version": SCHEMA_VERSION,
+                "step": int(step),
+                "combined": self._sketch(combined),
+                "positive": self._sketch(positive),
+                "negative": self._sketch(negative),
+            }
+            if span_gradients:
+                sketch_payload["span_gradients"] = {
+                    name: {
+                        "positive": self._sketch(pair[0].float().cpu()),
+                        "negative": self._sketch(pair[1].float().cpu()),
+                    }
+                    for name, pair in span_gradients.items()
+                }
+            torch.save(sketch_payload, temporary)
+            temporary.replace(sketch_path)
+            summary["sketch_path"] = sketch_path.name
+        with self.summary_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(summary, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        return summary
+
+    def record_carrier_gradients(
+        self,
+        *,
+        step: int,
+        combined,
+        carriers: dict[str, Any],
+        layers: dict[str, list[dict[str, Any]]] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Record actual full/reason/tool carrier geometry without sign probes.
+
+        ``combined`` is the real optimizer gradient captured before diagnostics.
+        Each carrier is an all-advantage counterfactual using the same objective
+        and state, with only its response-span mask changed.  This path is the
+        low-overhead diagnostic mode: two carrier backward passes per update,
+        rather than positive/negative probes for every carrier.
+        """
+
+        combined = combined.float().cpu()
+        combined_norm = float(torch.linalg.vector_norm(combined))
+        summary: dict[str, Any] = {
+            "schema_version": SCHEMA_VERSION,
+            "step": int(step),
+            "combined_norm": combined_norm,
+            "metadata": metadata or {},
+            "carrier_gradients": {},
+        }
+        for name, vector in carriers.items():
+            vector = vector.float().cpu()
+            norm = float(torch.linalg.vector_norm(vector))
+            summary["carrier_gradients"][name] = {
+                "norm": norm,
+                "combined_dot": _dot(vector, combined),
+                "combined_cosine": _cosine(vector, combined),
+                "norm_over_combined": (
+                    norm / combined_norm if combined_norm > 0.0 else 0.0
+                ),
+            }
+        reason = carriers.get("reason")
+        tool = carriers.get("tool")
+        if reason is not None and tool is not None:
+            reason = reason.float().cpu()
+            tool = tool.float().cpu()
+            summary["carrier_gradients"]["reason_tool_cosine"] = _cosine(reason, tool)
+        if layers is not None:
+            summary["layers"] = layers
+        if self.save_vectors:
+            payload = {
+                "schema_version": SCHEMA_VERSION,
+                "step": int(step),
+                "combined": combined,
+                "carriers": {
+                    name: vector.float().cpu() for name, vector in carriers.items()
+                },
                 "metadata": metadata or {},
             }
             vector_path = self.output_dir / f"step_{int(step):06d}.pt"
@@ -207,16 +358,16 @@ class GradientConflictRecorder:
         else:
             sketch_path = self.output_dir / f"step_{int(step):06d}_sketch.pt"
             temporary = sketch_path.with_name(f".{sketch_path.name}.{os.getpid()}.tmp")
-            torch.save(
-                {
-                    "schema_version": SCHEMA_VERSION,
-                    "step": int(step),
-                    "combined": self._sketch(combined),
-                    "positive": self._sketch(positive),
-                    "negative": self._sketch(negative),
+            sketch_payload = {
+                "schema_version": SCHEMA_VERSION,
+                "step": int(step),
+                "combined": self._sketch(combined),
+                "carriers": {
+                    name: self._sketch(vector.float().cpu())
+                    for name, vector in carriers.items()
                 },
-                temporary,
-            )
+            }
+            torch.save(sketch_payload, temporary)
             temporary.replace(sketch_path)
             summary["sketch_path"] = sketch_path.name
         with self.summary_path.open("a", encoding="utf-8") as handle:

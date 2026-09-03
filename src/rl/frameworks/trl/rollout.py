@@ -12,16 +12,16 @@ from typing import TYPE_CHECKING, Any, Callable, Sequence
 from protocol import PROTOCOL_VERSION
 import rollout as evaluator_runtime
 
-if PROTOCOL_VERSION == "version26":
-    from tool_environment_v26 import (
-        TOOL_EXECUTION_TIMEOUT_SECONDS,
-        create_tool_use_env,
+if PROTOCOL_VERSION != "version26":
+    raise ImportError(
+        "the active RL mainline is pinned to the frozen version26 protocol; "
+        f"received {PROTOCOL_VERSION!r}"
     )
-else:
-    TOOL_EXECUTION_TIMEOUT_SECONDS = (
-        evaluator_runtime.TOOL_EXECUTION_TIMEOUT_SECONDS
-    )
-    from tool_environment import create_tool_use_env
+
+from tool_environment_v26 import (  # noqa: E402
+    TOOL_EXECUTION_TIMEOUT_SECONDS,
+    create_tool_use_env,
+)
 
 TOOL_ENVIRONMENT_FACTORY_MODULE = create_tool_use_env.__module__
 
@@ -68,7 +68,11 @@ class RolloutSettings:
     def validate(self) -> None:
         if self.reward_mode not in {"result-only", "process"}:
             raise ValueError(f"unsupported reward mode: {self.reward_mode}")
-        if self.result_reward_profile not in {"binary", "execution-ladder"}:
+        if self.result_reward_profile not in {
+            "binary",
+            "execution-ladder",
+            "four-level",
+        }:
             raise ValueError(
                 f"unsupported result reward profile: {self.result_reward_profile}"
             )

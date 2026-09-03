@@ -33,7 +33,6 @@ from target_support import (  # noqa: E402
 )
 from terminal_reward import terminal_result_reward  # noqa: E402
 from task_support import task_text_supports_literal  # noqa: E402
-from tool_environment import ToolUseEnv  # noqa: E402
 
 
 def feature(index: int, **kwargs) -> StepFeature:
@@ -223,6 +222,24 @@ class ProcessRewardTests(unittest.TestCase):
             0.0,
         )
 
+    def test_four_level_uses_result_sign_and_structured_error_tier(self):
+        self.assertEqual(
+            terminal_result_reward(True, profile="four-level", has_errors=False),
+            1.5,
+        )
+        self.assertEqual(
+            terminal_result_reward(True, profile="four-level", has_errors=True),
+            1.0,
+        )
+        self.assertEqual(
+            terminal_result_reward(False, profile="four-level", has_errors=False),
+            -0.5,
+        )
+        self.assertEqual(
+            terminal_result_reward(False, profile="four-level", has_errors=True),
+            -1.0,
+        )
+
     def test_target_row_units_use_bird_raw_cell_equality(self):
         self.assertNotEqual(normalized_row_unit(["1"]), normalized_row_unit([1]))
         self.assertEqual(normalized_row_unit([1]), normalized_row_unit([1.0]))
@@ -262,17 +279,6 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertEqual(target.tables, frozenset({"items"}))
         self.assertNotIn("selected", target.tables)
         self.assertEqual(target.columns, frozenset({"items.id", "items.value"}))
-
-    def test_active_rl_environment_rejects_historical_denotation_metric(self):
-        with self.assertRaisesRegex(ValueError, "require.*bird-set"):
-            ToolUseEnv(
-                {
-                    "db_path": ":memory:",
-                    "question": "x",
-                    "gold_sql": "SELECT 1",
-                },
-                denotation_comparison="strict-multiset",
-            )
 
     def test_process_reward_rejects_historical_denotation_metric(self):
         with self.assertRaisesRegex(ValueError, "bird-set"):

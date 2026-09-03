@@ -24,7 +24,12 @@ class _RecordedEnvironment:
         return deepcopy(self._record)
 
 
-def _score(record: dict, *, generation_truncation: dict | None = None):
+def _score(
+    record: dict,
+    *,
+    generation_truncation: dict | None = None,
+    result_reward_profile: str = "binary",
+):
     return score_completed_rollout(
         _RecordedEnvironment(record),
         [([1], [2])],
@@ -43,7 +48,7 @@ def _score(record: dict, *, generation_truncation: dict | None = None):
         process_admission_policy="counterfactual-completeness",
         denotation_comparison="bird-set",
         counterfactual_suite=None,
-        result_reward_profile="binary",
+        result_reward_profile=result_reward_profile,
         generation_truncation=generation_truncation,
     )
 
@@ -173,3 +178,74 @@ def test_generation_length_persists_false_optimizer_admission() -> None:
     assert sample.audit_record["optimization_exclusion"] == (
         "nonsemantic_runtime_failure"
     )
+
+
+def test_four_level_generation_length_is_a_trainable_negative() -> None:
+    truncation = {"finish_reason": "length", "turn_index": 0}
+    sample = _score(
+        _record(failure_type="generation_length"),
+        generation_truncation=truncation,
+        result_reward_profile="four-level",
+    )
+
+    assert sample.reward == -1.0
+    assert sample.process_update is True
+    assert sample.audit_record["process_update"] is True
+    assert sample.audit_record["result_reward"]["has_structured_error"] is True
+    assert (
+        sample.audit_record["result_reward"]["policy_failure_penalty_enabled"]
+        is True
+    )
+    assert "optimization_exclusion" not in sample.audit_record
+    episode = PolicyEpisode(
+        sample=sample,
+        policy_turns=[
+            PolicyTurn(
+                prompt_ids=(1,),
+                response_ids=(2,),
+                sampling_logprobs=(-0.1,),
+            )
+        ],
+    )
+    updates = build_transition_updates([episode], reward_mode="result-only")
+    assert len(updates) == 1
+    assert updates[0].advantage == 0.0
+    assert sample.audit_record["turns"] == [
+        {
+            "turn_index": 0,
+            "parsed": None,
+            "generation_truncation": truncation,
+        }
+    ]
+
+
+def test_four_level_wrong_timeout_is_a_trainable_negative() -> None:
+    sample = _score(
+        _record(failure_type="timeout_error"),
+        result_reward_profile="four-level",
+    )
+
+    assert sample.reward == -1.0
+    assert sample.process_update is True
+    assert sample.audit_record["result_reward"]["has_structured_error"] is True
+
+
+def test_four_level_recovered_correct_timeout_uses_error_tier() -> None:
+    timeout_event = {
+        "error_type": "timeout_error",
+        "error_code": "tool_execution_timeout",
+        "details": {"state_preserved": True},
+    }
+    sample = _score(
+        _record(
+            correct=True,
+            legal=True,
+            failure_type=None,
+            error_events=[timeout_event],
+        ),
+        result_reward_profile="four-level",
+    )
+
+    assert sample.reward == 1.0
+    assert sample.process_update is True
+    assert sample.audit_record["result_reward"]["has_structured_error"] is True

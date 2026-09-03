@@ -146,6 +146,47 @@ class StateActionAmbiguityTest(unittest.TestCase):
         self.assertEqual(audit.correct_error_positive_flips, 1)
         self.assertGreater(audit.correct_error_positive_mass_flipped, 0.0)
 
+    def test_four_level_timeout_is_penalized_instead_of_zeroed(self):
+        timeout = {
+            "turn_index": 0,
+            "parsed": {
+                "think": "brief",
+                "tool": "inspect_column",
+                "arguments": {"table": "orders", "column": "amount"},
+            },
+            "execution_error_type": "timeout_error",
+            "error_event": {
+                "error_type": "timeout_error",
+                "error_code": "tool_execution_timeout",
+            },
+        }
+        episodes = [
+            _episode("timeout", correct=True, turns=[timeout]),
+            _episode(
+                "wrong",
+                correct=False,
+                turns=[_audited_turn(0, "describe_table", {"tables": ["orders"]})],
+            ),
+        ]
+        episodes[0].sample.audit_record["result_reward"] = {
+            "profile": "four-level",
+        }
+        updates = build_transition_updates(episodes, reward_mode="result-only")
+        credited, audit = apply_asymmetric_error_credit(
+            episodes, updates, error_penalty=1.0
+        )
+        by_key = {
+            (update.trajectory_id, update.turn_index): update.advantage
+            for update in credited
+        }
+        self.assertLess(by_key[("timeout", 0)], 0.0)
+        self.assertEqual(audit.infrastructure_timeout_transitions, 1)
+        self.assertEqual(audit.timeout_penalized_transitions, 1)
+        self.assertEqual(
+            audit.deterministic_error_transitions_by_kind,
+            {"infrastructure_timeout": 1},
+        )
+
     def test_common_action_is_zeroed_but_first_divergent_actions_keep_grpo_credit(self):
         common = _audited_turn(
             0,

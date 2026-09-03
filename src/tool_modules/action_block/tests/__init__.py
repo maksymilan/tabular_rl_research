@@ -1,2 +1,0 @@
-"""Action-block tests."""
-

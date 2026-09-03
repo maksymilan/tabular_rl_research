@@ -1,336 +1,36 @@
-# Canonical Execution Contract
+# Harness 执行契约
 
-Status: active shared harness contract across current tool schemes. The forward implementation is
-`checkpoint-relalg-v1` / `checkpoint-relalg` with an explicit `direct|atomic|hybrid` mode;
-version54 / `native-tool-bundle` is now a frozen predecessor diagnostic. Version26 is the frozen
-current SFT/evaluation/RL contract, while remaining closed to new tool-interface development.
-`src/sft/protocol.py`, the selected scheme protocol,
-and `src/tool_modules/registry.py` are executable authority. Old trajectory artifacts remain replay
-inputs, not examples of the current public action interface.
+更新时间：2026-09-03
 
-The `iterative-sql-v6` scheme uses the same immutable SQLite source and hidden `bird-set` scorer
-but a separate SQL state machine: `execute_sql` adds factual previews to `CURRENT SQL STATE`, while
-an invalid `submit_sql` adds only structured `LAST SQL ERROR` and does not mutate successful state.
-Its exact boundary is documented in `docs/current/iterative_sql_tool_scheme_zh.md`.
+当前训练、评测和 RL 使用 Atomic version26 的 Harness。代码实现以
+`src/rl/tool_environment_v26.py`、`src/sft/protocol.py` 和冻结 runtime 为准。
 
-## One Episode, One State Machine
+## 执行边界
 
-An episode is a sequence of model actions against one immutable source database and one
-harness-managed resident state.
+1. 模型每轮只能发一个符合 version26 schema 的 action；parser 先校验 carrier/schema，再
+   交给 Harness。
+2. Harness 只执行当前 state 中可验证的 relation/table/column/artifact 引用，维护 resident
+   state 和 relation derivation/provenance。
+3. SQLite 执行结果、结构化 observation/error 和 exact result artifact 由 Harness 产生；模型
+   reasoning 不得覆盖这些事实。
+4. terminal 只能引用 Harness 产生的 artifact/列/shape。正确性使用 `bird-set`，不接受模型
+   自报答案值或 gold path。
+5. 每个 error 结构化记录并计入 shared action budget；transport failure 与 semantic
+   argument error 分开审计。
 
-For the forward checkpoint-relalg scheme, every assistant turn contains exactly one native call.
-The three modes share package-owned relation artifacts, EnvironmentState, checkpoint/restore, and
-exact-artifact `answer`; successful commit/restore begins a new provider phase while retaining the
-compact checkpoint history. The original atomic and version51-version54 rules below remain the
-executable compatibility contract for ongoing RL and frozen artifacts, not the base for new tool
-work.
+## 因果和隐私
 
-1. The original atomic renderer starts with the catalog, question, and optional external
-   knowledge, then retains at most four successful assistant/observation pairs. Version51-version54 instead
-   retains four actual provider assistant turns, each followed by all matching tool results. The
-   latest tool result carries resident state and error feedback.
-2. The canonical atomic action has exactly one non-empty `<think>` block followed directly by one complete
-   raw JSON object with exact `tool` and `arguments` keys. An API with native reasoning transport
-   receives one provider-specific prompt and emits the same reason/tool action across its two
-   fields. Version51-version54 use the provider's structured assistant message as the authoritative carrier:
-   one turn may contain 1..8 direct primitive calls.
-3. The harness strictly validates, executes, records, and updates resident state. For version51-version54,
-   every call is validated against the shared bundle pre-state before any call executes, then each
-   primitive is executed/audited in provider order.
-4. The next model input is rebuilt from resident state and bounded rolling legal history. Rejected
-   assistant text is excluded; full schemas, values, and rows remain present only once in resident
-   state.
-5. `answer_from_context` is terminal and is execution-scored against the hidden gold SQL result.
+模型/teacher 只能看到合法 episode prefix、当前 resident state 和最新 feedback。Gold SQL、
+gold result、后续轨迹和 privileged schema 只留在 Harness 端，不能进入 provider request、
+SFT target 或 reward。
 
-```text
-<think>brief reason for the next action</think>
-{"tool":"tool_name","arguments":{...}}
-```
+## 身份
 
-There is no parser repair for a new episode: no closing-tag insertion, JSON completion, shorthand
-tool syntax, argument normalization, or silent parameter rewrite.
+运行必须绑定 protocol `version26`、runtime commit
+`4cd47c957fc6ae791e76a10594c8cd22f4d3b6de`、protocol hash `4da19387399bd3a5`、prompt
+SHA、carrier、history、model、cohort 和 scorer。不同身份必须隔离 output root。
 
-### Provider Transport Adapters
+## 历史兼容
 
-For new DeepSeek episodes, the only active external endpoint is the official
-`https://api.deepseek.com` Chat Completions service. AimixHub/AIHubMix is deprecated and must not be
-used as a provider, proxy, or fallback. The Beta FIM completion endpoint is outside this tool-use
-execution contract; see `provider_api.md`.
-
-A provider adapter is allowed only at the selected scheme boundary when an API explicitly transports a
-model-authored action across separate fields. For example, the atomic DS Flash adapter accepts exactly
-`reasoning_content` plus the one visible action shape selected for that experiment: either one raw
-JSON action under JSON Output or one complete tool-call block without that constraint. It preserves
-both raw fields in the audit record and carries that existing reasoning into the canonical
-`<think>` field. It never invents reasoning, edits JSON/arguments, balances JSON, or accepts
-partial provider envelopes. All other shapes still go to the strict parser unchanged and fail
-normally. The selected
-carrier, request controls, adapter use, and raw provider identity are recorded in turns and
-manifests.
-
-Version51-version54 do not pass through the atomic text parser. They preserve the complete provider
-assistant message, ignores assistant content for execution, validates the structured function
-names/arguments without repair, and returns one native tool-result message for every call id.
-Primitive records carry their shared model-turn identity so storage and replay do not invent
-intermediate model observations.
-
-Checkpoint-relalg also preserves the complete provider assistant message, but requires exactly one
-call and returns exactly one matching tool result. Multiple authored calls are a state-preserving
-semantic protocol error, not a bundle. Its full implementation specification is not inserted into
-the provider prompt; the model sees the selected compact schemas and causal dynamic state only.
-
-The API-facing prompt must contain only the selected provider envelope. For DS Flash, positive
-instructions to emit a visible `<think>` block are removed before the split-field contract and its
-interface-specific example are appended. Bounded rolling history likewise sends prior assistant
-content in the selected raw-JSON or tool-call carrier only; canonical `<think>` text remains in the
-stored trajectory but is not replayed as a contradictory visible example.
-
-If a provider returns `finish_reason=length`, the response is an incomplete provider completion,
-not an authored semantic action. The client may retry that same turn with a bounded larger
-completion budget. Truncated attempts are recorded under `provider_retry_events`, their token use
-is counted, and their content is never sent to the environment. The fresh response must still pass
-the same strict carrier adapter and parser; exhausting the retry budget remains an explicit
-failure.
-
-## Ownership Boundary
-
-| Layer | May author | Must not author |
-| --- | --- | --- |
-| Model | `think`, `tool`, `arguments`, plan goals/statuses | SQL aliases, step ids, provenance, handles, result rows claimed as facts |
-| Harness | execution SQL, handles, `step_id`, state, scalar grounding, references, fact-only relation derivation, audit events | question interpretation, next-action recommendations, semantic guesses that change an invalid model action |
-| Dataset adapter | question, DB path, dialect, optional gold SQL | model-facing execution state |
-| SFT exporter | state-before-action and legal assistant action | rejected actions as targets |
-
-`plan` is control state only. It cannot supply a factual answer or a `value_ref`. A scalar
-`value_ref` names an earlier producing `step_id`; the harness extracts and validates that scalar.
-For `scalar_compute`, an optional `column` selects one unambiguous non-NULL cell from a prior
-one-row table; model-authored values are still outside the trust boundary.
-Canonical plan evidence retains the grounded step output for replay and audit. Its model-visible
-resident rendering exposes only the evidence `step_id` and tool identity; the authoritative table
-or scalar payload already appears under resident tables/values and is not duplicated inside plan.
-
-## Public Tool API
-
-New actions may use only:
-
-`plan`, `describe_table`, `inspect_column`, `condition_filter`, `project`, `scalar_compute`, `join_tables`,
-`group_aggregate`, `extreme_value_select`, `set_op`, `read_subtable`, and `answer_from_context`.
-
-`aggregate`, `pivot`, `derive_column`, old two-table join fields (`left`, `right`, `join_type`,
-`left_prefix`, `right_prefix`), parser shorthands, and truncated-answer repair are **replay-only
-compatibility**. They may be read in historical artifacts but are rejected by the strict parser and
-must not occur in new SFT/RL/eval actions.
-
-All table-producing tools return a harness-created handle such as `filter_002` or `join_003`.
-Handles are the only derived-table names the model may use later. `read_subtable` is the explicit
-way to view row values; handles alone expose schema and row-count metadata. Its public `limit` must
-be an integer from 1 through 20. Larger or non-integer values are explicit argument-validation
-errors and are never silently clamped. It may read matching rows with the shared typed predicate
-tree and may page only with explicit exact-column ordering plus a non-negative offset. These
-arguments affect observation only and never create a filtered or sorted handle.
-
-`project` additionally accepts typed row-date expressions for
-`date_diff_days(start,end)` and `extract_year(date)`. The adapter validates exact source columns
-and deterministically lowers those operations; arbitrary model-authored date functions are not
-required.
-
-Each derived handle also carries one validated `relation-derivation-v1` record describing the
-executed operator, ordered inputs, and formal row/column semantics. This record is bound to that
-handle in resident state. It is not a value source, reward, plan item, or policy recommendation.
-The active schema and module boundary are specified in `docs/current/relation_derivation.md`.
-
-## Current Conditional Aggregation and Wide Output
-
-`group_aggregate` keeps one input table and one `group_by` grain. Each aggregation may add an
-optional `where` predicate:
-
-```json
-{
-  "table": "patients",
-  "group_by": [],
-  "aggregations": [
-    {
-      "op": "count",
-      "column": "*",
-      "as": "female_count",
-      "where": {"column": "gender", "op": "=", "value": "F"}
-    },
-    {
-      "op": "count",
-      "column": "*",
-      "as": "male_count",
-      "where": {"column": "gender", "op": "=", "value": "M"}
-    }
-  ]
-}
-```
-
-The harness compiles these predicates as conditional aggregate expressions over the same source
-rows. This preserves denominator and row-grain identity while returning one row with the requested
-metric columns. `where` accepts the same predicate tree, direct scalar `value_ref`, and computed-set
-`in_table` references as `condition_filter`; execution resolves those values while canonical
-trajectory arguments retain the authored references. Provenance records the corresponding value,
-data, schema, and literal-grounding edges.
-
-The same aggregate action can request ordered category columns instead of category rows:
-
-```json
-{
-  "table": "hypertension_patients",
-  "group_by": ["gender"],
-  "aggregations": [
-    {"op": "count_distinct", "column": "patient", "as": "patient_count"}
-  ],
-  "output_layout": "columns",
-  "category_values": ["M", "F"]
-}
-```
-
-The result is one row with `M` followed by `F`; optional `output_columns` can rename those slots
-when a later tool needs semantic aliases. This wide layout requires
-exactly one grouping column, one aggregation, no passthrough, and a non-empty ordered category list.
-The harness compiles category predicates into the same aggregate input, so there is no intermediate
-grouped table and no second model action. `project` remains an orthogonal selection/expression atom:
-it preserves row orientation and cannot replace wide aggregation. The version16/17 standalone
-`pivot` call remains replay-only.
-
-### Named Scalar Cells
-
-A one-row multi-metric aggregate can feed arithmetic directly:
-
-```json
-{
-  "operation": "percent",
-  "operands": [
-    {"value_ref": "step_7", "column": "usa_nominees"},
-    {"value_ref": "step_7", "column": "total_nominees"}
-  ],
-  "result_name": "percentage"
-}
-```
-
-The canonical trajectory retains these authored references. During execution, the harness verifies
-that `step_7` produced a resident table with exactly one row, resolves each case-insensitive column
-name uniquely against that table's canonical output columns, reads the real cell, and rejects NULL.
-It records two value-provenance edges, each carrying its operand index and selected column. The
-model therefore cannot forge the values, while a single conditional aggregate can support later
-percent, difference, ratio, or percent-change arithmetic without redundant branches.
-
-Without `column`, the existing rule remains strict: the producing result must be 1x1. Named-column
-references do not apply to predicates, which continue to require a scalar-producing step.
-
-## Current Join and Column Naming
-
-For source tables and unambiguous derived handles, arguments use the schema column name shown by
-`describe_table` or the state handle. The model never emits SQLite aliases (`L.`, `R.`) or SQL
-fragments.
-
-`join_tables` has one public connected-component form:
-
-```json
-{
-  "base": "game",
-  "joins": [
-    {
-      "table": "publisher",
-      "on": [{"left": "game.publisher_id", "right": "id"}]
-    },
-    {
-      "table": "platform",
-      "on": [{"left": "game.platform_id", "right": "id"}],
-      "type": "left"
-    }
-  ]
-}
-```
-
-The harness assigns each ordinary relation its visible table/handle name as its namespace:
-
-- `on.left` is an exact logical column already introduced, such as `game.publisher_id`.
-- `on.right` is the bare source column of the new `joins[]` table, such as `id`.
-- `type` is optional and defaults to `inner`; allowed values are `inner`, `left`, and `cross`.
-- Output columns are one flat list such as `game.id`, `publisher.name`, and `platform.name`.
-  A later join never rewrites these as `join_003.game.id`.
-- The public call has no `return_columns`; use the separate `project` atom when narrowing is
-  semantically required.
-
-For a repeated relation, and only then, the model supplies semantic instance names:
-
-```json
-{
-  "base": "employees",
-  "base_role": "employee",
-  "joins": [{
-    "table": "employees",
-    "role": "manager",
-    "on": [{"left": "employee.manager_id", "right": "id"}]
-  }]
-}
-```
-
-SQL implementation aliases such as `L.` and `R.` are never model-visible. Historical
-`tables/on/prefixes/return_columns` and binary join forms remain replay-only.
-
-Version6 keeps the version5 relational call unchanged but compacts wide dotted columns in
-model-visible observations and resident state:
-
-```json
-{
-  "table": "join_003",
-  "column_namespaces": {
-    "game": ["id", "publisher_id", "platform_id"],
-    "publisher": ["id", "name"],
-    "platform": ["id", "name"]
-  },
-  "row_count": 42
-}
-```
-
-The exact column spelling is reconstructed as `namespace.column`. When continuing a join from
-`join_003`, the handle remains the `base` table argument, but `on.left` must use one of these
-logical namespaces, never `join_003.column`. This is a rendering-only compression: canonical
-harness snapshots and replay artifacts retain their full flat column lists.
-
-Version7 completes downstream consumption of the same logical names. Exact dotted identifiers are
-quoted as one physical column when they appear inside `project` scalar expressions. Filters,
-projection, grouping, and ordering may also use a bare suffix only when it resolves to exactly one
-available logical column; ambiguous bare names remain explicit errors. `join_tables.on.left`
-continues to require the exact namespace-qualified form because it selects a relation instance.
-
-## Errors and Recovery
-
-Every generated assistant message consumes one action from `max_steps`, including a rejected one.
-The recoverable types are `protocol_error`, `argument_validation_error`, and an `execution_error`
-whose resident state hash is unchanged.
-
-- The harness preserves state and sends structured `LAST TOOL ERROR` on the next state-only turn.
-- Error counts are capped per type; `nonrecoverable_execution_error`, max-step exhaustion, API failure,
-  and a wrong terminal denotation end the attempt.
-- API transport retries happen inside the client request and are reported separately; they are not
-  model actions or recovery events.
-- Each error becomes an audit-only `error_event` with action index and before/after state hashes.
-- Rejected actions are never SFT targets. The next legal action is marked `feedback_recovery`.
-- A correct terminal answer after any error is `recovered_success`; otherwise it is `clean_success`.
-
-Whole episode restarts, when used for pass@k, are separate attempts and retain separate logs.
-
-The shared relational semantics live in `src/harness/executor.py`,
-`src/harness/relation_derivation/`, `src/harness/provenance.py`,
-`src/harness/observation_binding.py`, and `src/harness/environment_state.py`.
-`src/eval/rollout.py`,
-`src/sft/generate_teacher_rollouts.py`, and `src/rl/tool_environment.py` invoke that same layer.
-The historical Verl token-concatenating adapter is not a current training entry point, because
-state rebuilding needs per-turn loss accounting rather than one appended transcript.
-
-## Migration Rule
-
-Do not mix naming contracts inside one dataset or evaluation. All new tool/protocol diagnostics
-branch from `checkpoint-relalg-v1`; version54 / `native-tool-bundle`, the original atomic local
-baseline version39, and version26 remain frozen compatibility/control lines. New SFT construction remains gated
-on the selected scheme's explicit exporter and training-admission requirements.
-Historical artifacts retain their original model-visible contracts and may only enter
-replay-compatible paths. SFT, evaluation, and RL use the same student runtime prompt; the external
-teacher receives a strict superset whose extra guidance is not exported into student records.
-Every generation/train/eval/RL manifest must record its applicable teacher/student prompt hash,
-public tool-schema hash, protocol version/hash, and provider request controls; historical data is
-not relabeled or mutated in place.
+旧 checkpoint-relalg、native-tool-bundle、Atomic v39/v51/v54 及 SQL scheme 只允许原始
+runner 在隔离目录 replay；它们不是当前 Harness 的新实验入口，也不具备 SFT/RL admission。

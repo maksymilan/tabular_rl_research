@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "src" / "rl"))
 from frameworks.trl.transition_batch import (  # noqa: E402
     PolicyEpisode,
     PolicyTurn,
+    build_transition_microbatch_ranges,
     build_transition_updates,
     policy_reduction_advantages,
     retain_policy_contributing_updates,
@@ -78,6 +79,39 @@ def _episode(
 
 
 class TransitionBatchTest(unittest.TestCase):
+    def test_dynamic_microbatch_budget_uses_padded_prompt_completion_cost(self):
+        ranges = build_transition_microbatch_ranges(
+            [100, 110, 500, 510, 900],
+            [50, 60, 100, 110, 120],
+            max_rows=8,
+            token_budget=1_500,
+        )
+        # The first two rows cost 2 * (110 + 60) = 340. Adding row three
+        # costs 3 * (500 + 100) = 1,800, so it starts a new micro-batch.
+        self.assertEqual(ranges, [(0, 2), (2, 4), (4, 5)])
+
+    def test_dynamic_microbatch_respects_row_cap_and_keeps_oversized_row(self):
+        ranges = build_transition_microbatch_ranges(
+            [100] * 5 + [2_000],
+            [50] * 5 + [2_000],
+            max_rows=2,
+            token_budget=100,
+        )
+        # Every normal pair exceeds the deliberately tiny token budget, while
+        # the final 4k row is still admitted alone rather than being dropped.
+        self.assertEqual(ranges, [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6)])
+
+    def test_zero_token_budget_preserves_fixed_row_ranges(self):
+        self.assertEqual(
+            build_transition_microbatch_ranges(
+                [10] * 5,
+                [4] * 5,
+                max_rows=2,
+                token_budget=0,
+            ),
+            [(0, 2), (2, 4), (4, 5)],
+        )
+
     def test_decimal_homogeneous_group_has_strict_zero_advantage(self):
         self.assertEqual(
             standardized_group_advantages([0.2] * 8, [True] * 8),

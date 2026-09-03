@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import gc
 import math
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,7 @@ else:
     _TRL_IMPORT_ERROR = None
 
 from frameworks.trl.transition_batch import (
+    build_transition_microbatch_ranges,
     build_transition_updates,
     policy_reduction_advantages,
     retain_policy_contributing_updates,
@@ -62,6 +65,25 @@ def _adapter_trainable_parameters(model, adapter_name: str) -> list[str]:
     ]
 
 
+@dataclass(frozen=True)
+class _TransitionMicrobatchPlan:
+    """Immutable row/column layout shared by all forwards for one batch.
+
+    The transition tensors are padded once at the batch level.  Every compact
+    microbatch can therefore derive its non-padding columns from the Python
+    lengths instead of scanning CUDA masks and synchronizing the host for each
+    slice.  ``trim_bounds`` contains ``(prompt_start, completion_end)`` for
+    each range; ``None`` preserves the old behavior for an all-padding side.
+    """
+
+    ranges: tuple[tuple[int, int], ...]
+    trim_bounds: tuple[tuple[int | None, int | None], ...]
+    prompt_lengths: tuple[int, ...]
+    completion_lengths: tuple[int, ...]
+    prompt_width: int
+    completion_width: int
+
+
 @contextmanager
 def use_frozen_reference_adapter(model, adapter_name: str):
     """Select a reference without PEFT's default trainability side effect."""
@@ -99,6 +121,7 @@ class TransitionGRPOTrainer(GRPOTrainer):
         *args,
         rollout_collector,
         reward_mode: str,
+        trainer_sharding: str = "replicated",
         train_turns: str = "all",
         trainable_part: str = "all",
         rank_loss_coefficient: float = 0.0,
@@ -111,11 +134,15 @@ class TransitionGRPOTrainer(GRPOTrainer):
         policy_reduction: str = "transition_mean",
         credit_assignment: str = "trajectory",
         error_penalty: float = 1.0,
+        span_balance_alpha: float | None = None,
         record_gradient_conflicts: bool = False,
         gradient_conflict_dir: Path | None = None,
         gradient_conflict_save_vectors: bool = False,
+        gradient_conflict_max_transitions: int = 0,
+        gradient_conflict_carrier_only: bool = False,
         reference_adapter_name: str | None = None,
         transition_micro_batch_size: int = 2,
+        transition_micro_batch_tokens: int = 0,
         **kwargs,
     ):
         if _TRL_IMPORT_ERROR is not None:
@@ -124,6 +151,10 @@ class TransitionGRPOTrainer(GRPOTrainer):
             ) from _TRL_IMPORT_ERROR
         if transition_micro_batch_size < 1:
             raise ValueError("transition_micro_batch_size must be positive")
+        if transition_micro_batch_tokens < 0:
+            raise ValueError("transition_micro_batch_tokens must be non-negative")
+        if gradient_conflict_max_transitions < 0:
+            raise ValueError("gradient_conflict_max_transitions must be non-negative")
         if trainable_part not in {"all", "tool_only"}:
             raise ValueError(f"unsupported trainable_part: {trainable_part}")
         if rank_loss_coefficient < 0:
@@ -156,6 +187,13 @@ class TransitionGRPOTrainer(GRPOTrainer):
             )
         if not math.isfinite(error_penalty) or error_penalty <= 0.0:
             raise ValueError("error_penalty must be finite and positive")
+        if span_balance_alpha is not None:
+            if not math.isfinite(span_balance_alpha) or not 0.0 <= span_balance_alpha <= 1.0:
+                raise ValueError("span_balance_alpha must be in [0, 1]")
+            if trainable_part != "all":
+                raise ValueError(
+                    "span_balance_alpha is only defined for the full response carrier"
+                )
         if record_gradient_conflicts and rank_loss_coefficient != 0.0:
             raise ValueError("gradient conflict recording currently requires rank loss=0")
         if rank_beta <= 0:
@@ -195,6 +233,9 @@ class TransitionGRPOTrainer(GRPOTrainer):
             )
         self.rollout_collector = rollout_collector
         self.transition_reward_mode = reward_mode
+        if trainer_sharding not in {"replicated", "fsdp"}:
+            raise ValueError(f"unsupported trainer_sharding: {trainer_sharding}")
+        self.trainer_sharding = trainer_sharding
         self.transition_train_turns = train_turns
         self.transition_trainable_part = trainable_part
         self.rank_loss_coefficient = rank_loss_coefficient
@@ -207,12 +248,18 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self.policy_reduction = policy_reduction
         self.credit_assignment = credit_assignment
         self.error_penalty = float(error_penalty)
+        self.span_balance_alpha = (
+            None if span_balance_alpha is None else float(span_balance_alpha)
+        )
         self.record_gradient_conflicts = bool(record_gradient_conflicts)
         self.gradient_conflict_dir = gradient_conflict_dir
         self.gradient_conflict_save_vectors = bool(gradient_conflict_save_vectors)
+        self.gradient_conflict_max_transitions = int(gradient_conflict_max_transitions)
+        self.gradient_conflict_carrier_only = bool(gradient_conflict_carrier_only)
         self.gradient_conflict_recorder = None
         self.reference_adapter_name = reference_adapter_name
-        self.transition_micro_batch_size = transition_micro_batch_size
+        self.transition_micro_batch_size = int(transition_micro_batch_size)
+        self.transition_micro_batch_tokens = int(transition_micro_batch_tokens)
         kwargs.setdefault("reward_funcs", _dummy_reward)
         super().__init__(*args, **kwargs)
         # TRL creates a policy-copy adapter named ``ref`` for any PEFT model with
@@ -253,8 +300,6 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 )
         if self.credit_assignment == "saam-strict" and self.beta != 0.0:
             raise ValueError("saam-strict pilot requires KL beta=0")
-        if self.credit_assignment == "saam-asymmetric-error" and self.beta != 0.0:
-            raise ValueError("saam-asymmetric-error requires KL beta=0")
         if self.record_gradient_conflicts:
             if self.beta != 0.0:
                 raise ValueError("gradient conflict recording requires KL beta=0")
@@ -272,22 +317,75 @@ class TransitionGRPOTrainer(GRPOTrainer):
                     save_vectors=self.gradient_conflict_save_vectors,
                 )
 
+    def _span_balanced_mask(
+        self,
+        response_ids,
+    ) -> tuple[float, ...]:
+        """Return a per-token mask whose two spans receive fixed total mass.
+
+        TRL's GRPO loss takes a weighted mean when ``tool_mask`` is supplied.  A
+        weight of ``(1-alpha)/R`` on every reasoning token and ``alpha/T`` on
+        every tool token therefore implements a convex combination of the two
+        span means without changing the transition-level SAAM coefficient.  A
+        malformed carrier is kept on the ordinary full-response mean so the
+        diagnostic does not silently drop a sampled transition.
+        """
+
+        alpha = self.span_balance_alpha
+        if alpha is None:
+            return tuple(1.0 for _ in response_ids)
+        try:
+            raw_tool_mask = tool_token_loss_mask(
+                self.processing_class,
+                response_ids,
+            )
+        except ToolMaskUnavailable:
+            return tuple(1.0 for _ in response_ids)
+        tool_count = sum(raw_tool_mask)
+        reason_count = len(raw_tool_mask) - tool_count
+        if tool_count < 1 or reason_count < 1:
+            return tuple(1.0 for _ in response_ids)
+        reason_weight = (1.0 - alpha) / reason_count
+        tool_weight = alpha / tool_count
+        return tuple(
+            tool_weight if active else reason_weight
+            for active in raw_tool_mask
+        )
+
     def _counterfactual_policy_gradient(
         self,
         model,
         inputs: dict[str, Any],
         *,
         policy_normalization_transitions: int,
-        positive: bool,
+        positive: bool | None,
+        carrier: str = "full",
     ):
-        """Backpropagate one sign partition using the exact mixed-batch objective."""
+        """Backpropagate one sign/carrier partition using the exact objective.
 
-        total = int(inputs["completion_ids"].shape[0])
-        for start in range(0, total, self.transition_micro_batch_size):
-            end = min(total, start + self.transition_micro_batch_size)
-            micro_inputs = self._slice_batch(inputs, start, end)
+        ``carrier=full`` is the ordinary response objective.  ``reason`` and
+        ``tool`` are diagnostic counterfactuals only: they select the causal
+        response span with a mask while preserving the same prompt, attention
+        context, advantages, clipping, and importance correction.  The caller
+        restores the real optimizer gradient after these probes, so this never
+        changes the training update.
+        """
+
+        if carrier not in {"full", "reason", "tool"}:
+            raise ValueError(f"unsupported gradient carrier: {carrier}")
+
+        microbatch_plan = self._build_transition_microbatch_plan(inputs)
+        for range_index, (start, end) in enumerate(microbatch_plan.ranges):
+            micro_inputs = self._slice_batch(
+                inputs,
+                start,
+                end,
+                trim_bounds=microbatch_plan.trim_bounds[range_index],
+            )
             advantages = micro_inputs["advantages"]
-            if positive:
+            if positive is None:
+                selected = torch.ones_like(advantages, dtype=torch.bool)
+            elif positive:
                 selected = advantages > 0.0
             else:
                 selected = advantages < 0.0
@@ -296,11 +394,71 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 advantages,
                 torch.zeros_like(advantages),
             )
+            if carrier != "full":
+                carrier_tool_mask = micro_inputs.get("carrier_tool_mask")
+                carrier_valid = micro_inputs.get("carrier_mask_valid")
+                if carrier_tool_mask is None or carrier_valid is None:
+                    raise RuntimeError(
+                        "reason/tool gradient recording requires carrier masks"
+                    )
+                valid = carrier_valid.to(dtype=micro_inputs["completion_mask"].dtype)
+                if carrier == "tool":
+                    selected_mask = carrier_tool_mask
+                else:
+                    selected_mask = (
+                        micro_inputs["completion_attention_mask"] - carrier_tool_mask
+                    ).clamp_min(0)
+                # Invalid carriers are excluded from both span probes.  Treating
+                # a malformed response as all-reasoning would create a spurious
+                # reason gradient and hide carrier-format failures.
+                micro_inputs["tool_mask"] = selected_mask * valid.unsqueeze(1)
+            else:
+                # Full-response diagnostics must remain independent of the
+                # optimization carrier (tool-only/span-balanced experiments may
+                # otherwise be mislabeled as full-response measurements).
+                micro_inputs["tool_mask"] = micro_inputs["completion_attention_mask"]
             with self.compute_loss_context_manager():
                 micro_loss = super()._compute_loss(model, micro_inputs)
             weight = (end - start) / policy_normalization_transitions
             scaled_loss = micro_loss * weight * self.policy_loss_coefficient
             self.accelerator.backward(scaled_loss)
+
+    @staticmethod
+    def _select_gradient_probe_inputs(
+        inputs: dict[str, Any],
+        max_transitions: int,
+    ) -> tuple[dict[str, Any], int, int]:
+        """Select a deterministic bounded subset for diagnostic probe passes.
+
+        The optimizer still consumes the complete transition batch.  This helper
+        only bounds the six counterfactual passes used for gradient diagnostics,
+        preventing a long rollout batch from multiplying activation memory and
+        runtime.
+        """
+
+        total = int(inputs["completion_ids"].shape[0])
+        if max_transitions <= 0 or total <= max_transitions:
+            return inputs, total, total
+        device = inputs["completion_ids"].device
+        indices = torch.linspace(
+            0,
+            total - 1,
+            steps=max_transitions,
+            device=device,
+            dtype=torch.float64,
+        ).round().to(dtype=torch.long)
+        indices = torch.unique_consecutive(indices)
+        selected: dict[str, Any] = {}
+        for key, value in inputs.items():
+            if (
+                torch.is_tensor(value)
+                and value.ndim > 0
+                and int(value.shape[0]) == total
+            ):
+                selected[key] = value.index_select(0, indices)
+            else:
+                selected[key] = value
+        return selected, total, int(indices.numel())
 
     def _record_current_gradient_conflicts(
         self,
@@ -310,15 +468,26 @@ class TransitionGRPOTrainer(GRPOTrainer):
         policy_normalization_transitions: int,
         total: int,
     ) -> None:
-        """Record mixed, positive-only, and negative-only gradients before clipping."""
+        """Record full-response and reason/tool gradient geometry before clipping."""
 
         recorder = self.gradient_conflict_recorder
-        if not self.record_gradient_conflicts:
+        if not self.record_gradient_conflicts or recorder is None:
             return
+        if self.gradient_conflict_carrier_only:
+            self._record_carrier_only_gradients(
+                model,
+                inputs,
+                policy_normalization_transitions=policy_normalization_transitions,
+                total=total,
+            )
+            return
+        # Keep the optimizer gradient off GPU while the diagnostic probes run.
+        # The probes are diagnostic-only, so a CPU copy is sufficient and avoids
+        # adding a full trainable-gradient clone to the probe peak.
         saved_gradients = [
             (
                 parameter,
-                parameter.grad.detach().clone()
+                parameter.grad.detach().cpu()
                 if parameter.grad is not None
                 else None,
             )
@@ -330,12 +499,17 @@ class TransitionGRPOTrainer(GRPOTrainer):
         else:
             combined = combined_layers = None
         started = time.perf_counter()
+        probe_inputs, source_total, probe_total = self._select_gradient_probe_inputs(
+            inputs,
+            self.gradient_conflict_max_transitions,
+        )
         model.zero_grad(set_to_none=True)
         self._counterfactual_policy_gradient(
             model,
-            inputs,
-            policy_normalization_transitions=policy_normalization_transitions,
+            probe_inputs,
+            policy_normalization_transitions=probe_total,
             positive=True,
+            carrier="full",
         )
         if recorder is not None:
             positive, positive_layers = recorder.capture(model)
@@ -344,17 +518,55 @@ class TransitionGRPOTrainer(GRPOTrainer):
         model.zero_grad(set_to_none=True)
         self._counterfactual_policy_gradient(
             model,
-            inputs,
-            policy_normalization_transitions=policy_normalization_transitions,
+            probe_inputs,
+            policy_normalization_transitions=probe_total,
             positive=False,
+            carrier="full",
         )
         if recorder is not None:
             negative, negative_layers = recorder.capture(model)
         else:
             negative = negative_layers = None
+        span_gradients = {}
+        span_layers = {}
+        for carrier in ("reason", "tool"):
+            model.zero_grad(set_to_none=True)
+            self._counterfactual_policy_gradient(
+                model,
+                probe_inputs,
+                policy_normalization_transitions=probe_total,
+                positive=True,
+                carrier=carrier,
+            )
+            if recorder is not None:
+                span_positive, span_positive_layers = recorder.capture(model)
+            else:
+                span_positive = span_positive_layers = None
+            model.zero_grad(set_to_none=True)
+            self._counterfactual_policy_gradient(
+                model,
+                probe_inputs,
+                policy_normalization_transitions=probe_total,
+                positive=False,
+                carrier=carrier,
+            )
+            if recorder is not None:
+                span_negative, span_negative_layers = recorder.capture(model)
+            else:
+                span_negative = span_negative_layers = None
+            if recorder is not None:
+                span_gradients[carrier] = (span_positive, span_negative)
+                span_layers[carrier] = {
+                    "positive": span_positive_layers,
+                    "negative": span_negative_layers,
+                }
         model.zero_grad(set_to_none=True)
         for parameter, gradient in saved_gradients:
-            parameter.grad = gradient
+            parameter.grad = (
+                gradient.to(device=parameter.device)
+                if gradient is not None
+                else None
+            )
         if recorder is None:
             return
         summary = recorder.record(
@@ -362,17 +574,42 @@ class TransitionGRPOTrainer(GRPOTrainer):
             combined=combined,
             positive=positive,
             negative=negative,
+            span_gradients=span_gradients,
             layers={
                 "combined": combined_layers,
                 "positive": positive_layers,
                 "negative": negative_layers,
+                "span": span_layers,
             },
             metadata={
                 "stage": "pre_clip",
                 "credit_assignment": self.credit_assignment,
                 "error_penalty": self.error_penalty,
-                "transition_count": total,
-                "policy_normalization_transitions": policy_normalization_transitions,
+                "transition_count": probe_total,
+                "source_transition_count": source_total,
+                "policy_normalization_transitions": probe_total,
+                "sampled_probe": probe_total < source_total,
+                "carrier_valid_transitions": int(
+                    probe_inputs["carrier_mask_valid"].sum().item()
+                ),
+                "carrier_invalid_transitions": int(
+                    (~probe_inputs["carrier_mask_valid"].bool()).sum().item()
+                ),
+                "reason_tokens": int(
+                    (
+                        (
+                            probe_inputs["completion_attention_mask"]
+                            - probe_inputs["carrier_tool_mask"]
+                        ).clamp_min(0)
+                        * probe_inputs["carrier_mask_valid"].bool().unsqueeze(1)
+                    ).sum().item()
+                ),
+                "tool_tokens": int(
+                    (
+                        probe_inputs["carrier_tool_mask"]
+                        * probe_inputs["carrier_mask_valid"].bool().unsqueeze(1)
+                    ).sum().item()
+                ),
             },
         )
         elapsed = time.perf_counter() - started
@@ -388,10 +625,166 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self._metrics["train"]["gradient_conflict/negative_combined_cosine"].append(
             float(summary["negative_combined_cosine"])
         )
+        span_summary = summary.get("span_gradients", {})
+        for carrier in ("reason", "tool"):
+            values = span_summary.get(carrier)
+            if not values:
+                continue
+            prefix = f"gradient_conflict/{carrier}"
+            self._metrics["train"][f"{prefix}_positive_negative_cosine"].append(
+                float(values["positive_negative_cosine"])
+            )
+            self._metrics["train"][f"{prefix}_positive_negative_conflict_mass"].append(
+                float(values["positive_negative_conflict_mass"])
+            )
+            self._metrics["train"][f"{prefix}_positive_norm"].append(
+                float(values["positive_norm"])
+            )
+            self._metrics["train"][f"{prefix}_negative_norm"].append(
+                float(values["negative_norm"])
+            )
+            self._metrics["train"][f"{prefix}_positive_full_cosine"].append(
+                float(values["positive_full_cosine"])
+            )
+            self._metrics["train"][f"{prefix}_negative_full_cosine"].append(
+                float(values["negative_full_cosine"])
+            )
+        if "reason" in span_summary:
+            self._metrics["train"]["gradient_conflict/reason_tool_positive_cosine"].append(
+                float(span_summary["reason"]["positive_tool_cosine"] or 0.0)
+            )
+            self._metrics["train"]["gradient_conflict/reason_tool_negative_cosine"].append(
+                float(span_summary["reason"]["negative_tool_cosine"] or 0.0)
+            )
         self._metrics["train"]["gradient_conflict/record_seconds"].append(elapsed)
+        # Release CPU probe vectors and allocator cache before the next rollout.
+        del saved_gradients, probe_inputs, span_gradients, span_layers
+        del combined, positive, negative, combined_layers, positive_layers, negative_layers
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def _record_carrier_only_gradients(
+        self,
+        model,
+        inputs: dict[str, Any],
+        *,
+        policy_normalization_transitions: int,
+        total: int,
+    ) -> None:
+        """Record only actual reason/tool carrier gradients.
+
+        The full gradient is already present from the real optimizer objective.
+        Two all-advantage masked probes isolate reason and tool carriers; no
+        positive/negative sign probes are performed in this mode.
+        """
+
+        recorder = self.gradient_conflict_recorder
+        if recorder is None:
+            return
+        saved_gradients = [
+            (
+                parameter,
+                parameter.grad.detach().cpu()
+                if parameter.grad is not None
+                else None,
+            )
+            for parameter in model.parameters()
+            if parameter.requires_grad
+        ]
+        combined, combined_layers = recorder.capture(model)
+        started = time.perf_counter()
+        probe_inputs, source_total, probe_total = self._select_gradient_probe_inputs(
+            inputs,
+            self.gradient_conflict_max_transitions,
+        )
+        carriers: dict[str, Any] = {}
+        carrier_layers: dict[str, list[dict[str, Any]]] = {}
+        for carrier in ("reason", "tool"):
+            model.zero_grad(set_to_none=True)
+            self._counterfactual_policy_gradient(
+                model,
+                probe_inputs,
+                policy_normalization_transitions=probe_total,
+                positive=None,
+                carrier=carrier,
+            )
+            carriers[carrier], carrier_layers[carrier] = recorder.capture(model)
+        model.zero_grad(set_to_none=True)
+        for parameter, gradient in saved_gradients:
+            parameter.grad = (
+                gradient.to(device=parameter.device)
+                if gradient is not None
+                else None
+            )
+        summary = recorder.record_carrier_gradients(
+            step=self._step + 1,
+            combined=combined,
+            carriers=carriers,
+            layers={"combined": combined_layers, "carriers": carrier_layers},
+            metadata={
+                "stage": "pre_clip",
+                "credit_assignment": self.credit_assignment,
+                "error_penalty": self.error_penalty,
+                "mode": "carrier-only",
+                "transition_count": probe_total,
+                "source_transition_count": source_total,
+                "policy_normalization_transitions": probe_total,
+                "sampled_probe": probe_total < source_total,
+                "carrier_valid_transitions": int(
+                    probe_inputs["carrier_mask_valid"].sum().item()
+                ),
+                "carrier_invalid_transitions": int(
+                    (~probe_inputs["carrier_mask_valid"].bool()).sum().item()
+                ),
+                "reason_tokens": int(
+                    (
+                        (
+                            probe_inputs["completion_attention_mask"]
+                            - probe_inputs["carrier_tool_mask"]
+                        ).clamp_min(0)
+                        * probe_inputs["carrier_mask_valid"].bool().unsqueeze(1)
+                    ).sum().item()
+                ),
+                "tool_tokens": int(
+                    (
+                        probe_inputs["carrier_tool_mask"]
+                        * probe_inputs["carrier_mask_valid"].bool().unsqueeze(1)
+                    ).sum().item()
+                ),
+            },
+        )
+        elapsed = time.perf_counter() - started
+        self._metrics["train"]["gradient_conflict/carrier_only_record_seconds"].append(
+            elapsed
+        )
+        for carrier in ("reason", "tool"):
+            values = summary["carrier_gradients"][carrier]
+            prefix = f"gradient_conflict/{carrier}"
+            self._metrics["train"][f"{prefix}_norm"].append(float(values["norm"]))
+            self._metrics["train"][f"{prefix}_combined_cosine"].append(
+                float(values["combined_cosine"])
+            )
+            self._metrics["train"][f"{prefix}_norm_over_combined"].append(
+                float(values["norm_over_combined"])
+            )
+        self._metrics["train"]["gradient_conflict/reason_tool_cosine"].append(
+            float(summary["carrier_gradients"].get("reason_tool_cosine", 0.0))
+        )
+        del saved_gradients, probe_inputs, carriers, carrier_layers
+        del combined, combined_layers
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     @staticmethod
-    def _slice_batch(inputs: dict[str, Any], start: int, end: int) -> dict[str, Any]:
+    def _slice_batch(
+        inputs: dict[str, Any],
+        start: int,
+        end: int,
+        *,
+        trim_bounds: tuple[int | None, int | None] | None = None,
+    ) -> dict[str, Any]:
         """Slice rows and remove padding columns that are empty in this microbatch.
 
         The frozen pool contains short early actions and much longer late actions.  Retaining the
@@ -411,23 +804,36 @@ class TransitionGRPOTrainer(GRPOTrainer):
             else:
                 sliced[key] = value
         prompt_width = int(sliced["prompt_ids"].shape[1])
-        prompt_support = sliced["prompt_mask"].bool().any(dim=0)
-        if bool(prompt_support.any()):
-            prompt_start = int(prompt_support.nonzero(as_tuple=False)[0].item())
+        if trim_bounds is None:
+            prompt_support = sliced["prompt_mask"].bool().any(dim=0)
+            prompt_start = (
+                int(prompt_support.nonzero(as_tuple=False)[0].item())
+                if bool(prompt_support.any())
+                else None
+            )
+        else:
+            prompt_start = trim_bounds[0]
+        if prompt_start is not None:
             for key in ("prompt_ids", "prompt_mask"):
                 sliced[key] = sliced[key][:, prompt_start:prompt_width]
 
         completion_width = int(sliced["completion_ids"].shape[1])
-        completion_support = sliced["completion_attention_mask"].bool().any(dim=0)
-        if bool(completion_support.any()):
-            completion_end = int(
-                completion_support.nonzero(as_tuple=False)[-1].item()
-            ) + 1
+        if trim_bounds is None:
+            completion_support = sliced["completion_attention_mask"].bool().any(dim=0)
+            completion_end = (
+                int(completion_support.nonzero(as_tuple=False)[-1].item()) + 1
+                if bool(completion_support.any())
+                else None
+            )
+        else:
+            completion_end = trim_bounds[1]
+        if completion_end is not None:
             completion_keys = (
                 "completion_ids",
                 "completion_attention_mask",
                 "completion_mask",
                 "tool_mask",
+                "carrier_tool_mask",
                 "rank_completion_mask",
                 "old_per_token_logps",
                 "sampling_per_token_logps",
@@ -443,6 +849,120 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 ):
                     sliced[key] = value[:, :completion_end]
         return sliced
+
+    def _build_transition_microbatch_plan(
+        self,
+        inputs: dict[str, Any],
+        *,
+        prompt_lengths: list[int] | tuple[int, ...] | None = None,
+        completion_lengths: list[int] | tuple[int, ...] | None = None,
+    ) -> _TransitionMicrobatchPlan:
+        """Build one reusable row/column plan for all transition forwards.
+
+        ``transition_micro_batch_size`` remains the hard row cap and preserves
+        the historical behavior when the token budget is zero.  In dynamic
+        mode, rows are expected to have been length-ordered before padding so
+        the padded-token estimate is also a useful proxy for actual FLOPs.
+        """
+
+        batch_size = int(inputs["completion_ids"].shape[0])
+        if prompt_lengths is None:
+            prompt_lengths = (
+                inputs["prompt_mask"]
+                .sum(dim=1)
+                .detach()
+                .to(device="cpu")
+                .tolist()
+            )
+        if completion_lengths is None:
+            completion_lengths = (
+                inputs["completion_attention_mask"]
+                .sum(dim=1)
+                .detach()
+                .to(device="cpu")
+                .tolist()
+            )
+        prompt_lengths = tuple(int(value) for value in prompt_lengths)
+        completion_lengths = tuple(int(value) for value in completion_lengths)
+        if len(prompt_lengths) != batch_size or len(completion_lengths) != batch_size:
+            raise RuntimeError(
+                "transition length metadata is not aligned with the batch"
+            )
+        ranges = tuple(
+            build_transition_microbatch_ranges(
+                prompt_lengths,
+                completion_lengths,
+                max_rows=self.transition_micro_batch_size,
+                token_budget=self.transition_micro_batch_tokens,
+            )
+        )
+        prompt_width = int(inputs["prompt_ids"].shape[1])
+        completion_width = int(inputs["completion_ids"].shape[1])
+        trim_bounds = []
+        for start, end in ranges:
+            max_prompt_length = max(prompt_lengths[start:end], default=0)
+            max_completion_length = max(completion_lengths[start:end], default=0)
+            trim_bounds.append(
+                (
+                    prompt_width - max_prompt_length
+                    if max_prompt_length
+                    else None,
+                    max_completion_length if max_completion_length else None,
+                )
+            )
+        return _TransitionMicrobatchPlan(
+            ranges=ranges,
+            trim_bounds=tuple(trim_bounds),
+            prompt_lengths=prompt_lengths,
+            completion_lengths=completion_lengths,
+            prompt_width=prompt_width,
+            completion_width=completion_width,
+        )
+
+    def _transition_microbatch_ranges(
+        self,
+        inputs: dict[str, Any],
+    ) -> list[tuple[int, int]]:
+        """Return deterministic fixed-row or padded-token transition slices."""
+
+        return list(self._build_transition_microbatch_plan(inputs).ranges)
+
+    @staticmethod
+    def _pad_transition_rows(
+        rows,
+        *,
+        padding_value,
+        padding_side: str,
+        device,
+    ):
+        """Pad on CPU once, then transfer one dense tensor to the trainer device.
+
+        Creating every variable-length row directly on CUDA and padding the list
+        there causes one allocator/copy pair per transition.  The values and
+        padding policy are unchanged when the same rows are padded on CPU first;
+        only the number of host-to-device transfers changes.
+        """
+
+        padded = pad(
+            rows,
+            padding_value=padding_value,
+            padding_side=padding_side,
+        )
+        return padded.to(device=device)
+
+    @staticmethod
+    def _transition_length_key(update) -> tuple[int, int, int, str, int]:
+        """Return a deterministic key that keeps similarly sized rows adjacent."""
+
+        prompt_length = len(update.prompt_ids)
+        completion_length = len(update.response_ids)
+        return (
+            prompt_length + completion_length,
+            prompt_length,
+            completion_length,
+            str(update.trajectory_id),
+            int(update.turn_index),
+        )
 
     def _importance_sampling_ratio(
         self,
@@ -524,14 +1044,27 @@ class TransitionGRPOTrainer(GRPOTrainer):
             "cap_exceeded_fraction": float(cap_exceeded.float().mean()),
         }
 
-    def _transition_token_logps_compact(self, model, inputs):
-        """Evaluate transition logprobs in length-bucketed, padding-trimmed microbatches."""
-        total = int(inputs["completion_ids"].shape[0])
-        global_completion_width = int(inputs["completion_ids"].shape[1])
+    def _transition_token_logps_compact(
+        self,
+        model,
+        inputs,
+        *,
+        microbatch_plan: _TransitionMicrobatchPlan | None = None,
+    ):
+        """Evaluate transition logprobs in compact, length-bucketed microbatches."""
+        microbatch_plan = microbatch_plan or self._build_transition_microbatch_plan(
+            inputs
+        )
+        global_completion_width = microbatch_plan.completion_width
         rows = []
-        for start in range(0, total, self.transition_micro_batch_size):
-            end = min(total, start + self.transition_micro_batch_size)
-            micro_inputs = self._slice_batch(inputs, start, end)
+        preallocated = None
+        for range_index, (start, end) in enumerate(microbatch_plan.ranges):
+            micro_inputs = self._slice_batch(
+                inputs,
+                start,
+                end,
+                trim_bounds=microbatch_plan.trim_bounds[range_index],
+            )
             input_ids = torch.cat(
                 [micro_inputs["prompt_ids"], micro_inputs["completion_ids"]],
                 dim=1,
@@ -551,17 +1084,76 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 local_completion_width,
                 batch_size=end - start,
             )
-            if local_completion_width < global_completion_width:
-                per_token_logps = F.pad(
-                    per_token_logps,
-                    (0, global_completion_width - local_completion_width),
-                    value=0.0,
+            # Old-policy and reference scoring are under no_grad.  Write those
+            # compact results directly into the final tensor to avoid one
+            # F.pad allocation plus a second cat allocation per microbatch.
+            # Keep the concatenation path when gradients are enabled because the
+            # ranking backward path needs the original autograd graph.
+            if not torch.is_grad_enabled():
+                if preallocated is None:
+                    preallocated = per_token_logps.new_zeros(
+                        (
+                            int(inputs["completion_ids"].shape[0]),
+                            global_completion_width,
+                        )
+                    )
+                preallocated[start:end, :local_completion_width].copy_(
+                    per_token_logps
                 )
-            rows.append(per_token_logps)
+            else:
+                if local_completion_width < global_completion_width:
+                    per_token_logps = F.pad(
+                        per_token_logps,
+                        (0, global_completion_width - local_completion_width),
+                        value=0.0,
+                    )
+                rows.append(per_token_logps)
+        if preallocated is not None:
+            return preallocated
         return torch.cat(rows, dim=0)
 
-    def _sync_qlora_weights_to_vllm(self, model) -> int:
-        """Stream dequantized base+LoRA weights without mutating 4-bit training weights."""
+    @staticmethod
+    @contextmanager
+    def _summon_fsdp_full_params(model):
+        """Expose FSDP shards while synchronizing the merged actor to vLLM."""
+
+        try:
+            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        except ImportError:
+            yield
+            return
+        # ``summon_full_params(recurse=True)`` already traverses every nested
+        # FSDP unit.  Calling it once per unit causes repeated all-gathers
+        # (and, with NCCL/P2P, can even deadlock while a parent gather is still
+        # outstanding).  Find only FSDP roots so each shard is gathered once.
+        fsdp_roots = []
+
+        def visit(module, inside_fsdp: bool = False):
+            is_fsdp = isinstance(module, FSDP)
+            if is_fsdp and not inside_fsdp:
+                fsdp_roots.append(module)
+            for child in module.children():
+                visit(child, inside_fsdp or is_fsdp)
+
+        visit(model)
+        if not fsdp_roots:
+            yield
+            return
+        with ExitStack() as stack:
+            for module in fsdp_roots:
+                stack.enter_context(
+                    FSDP.summon_full_params(
+                        module,
+                        recurse=True,
+                        writeback=False,
+                        rank0_only=True,
+                        offload_to_cpu=True,
+                    )
+                )
+            yield
+
+    def _sync_qlora_weights_to_vllm(self, model, *, stream: bool = True) -> int:
+        """Stream merged base+LoRA weights without mutating training weights."""
         import bitsandbytes as bnb
 
         config = model.peft_config["default"]
@@ -579,34 +1171,46 @@ class TransitionGRPOTrainer(GRPOTrainer):
             base_layer = getattr(module, "base_layer", None)
             lora_a = getattr(module, "lora_A", {})
             lora_b = getattr(module, "lora_B", {})
-            if (
-                isinstance(base_layer, bnb.nn.Linear4bit)
-                and "default" in lora_a
-                and "default" in lora_b
-            ):
+            if base_layer is not None and "default" in lora_a and "default" in lora_b:
                 targets.append((module_name, module, base_layer))
         if not targets:
             return 0
+        if not stream:
+            return len(targets)
 
         client = self.vllm_generation.vllm_client
         with torch.no_grad():
             for module_name, module, base_layer in targets:
-                quant_state = getattr(base_layer.weight, "quant_state", None)
-                if quant_state is None:
-                    raise RuntimeError(
-                        f"4-bit layer has no quantization state: {module_name}"
+                if isinstance(base_layer, bnb.nn.Linear4bit):
+                    quant_state = getattr(base_layer.weight, "quant_state", None)
+                    if quant_state is None:
+                        raise RuntimeError(
+                            f"4-bit layer has no quantization state: {module_name}"
+                        )
+                    base_weight = bnb.functional.dequantize_4bit(
+                        base_layer.weight.data,
+                        quant_state,
                     )
-                base_weight = bnb.functional.dequantize_4bit(
-                    base_layer.weight.data,
-                    quant_state,
-                )
+                else:
+                    base_weight = base_layer.weight.detach()
                 delta_weight = module.get_delta_weight("default")
                 merged_weight = (
                     base_weight.to(dtype=torch.bfloat16)
                     + delta_weight.to(dtype=torch.bfloat16)
                 ).contiguous()
+                # TRL's NCCL communicator requires the source tensor on the
+                # trainer CUDA device.  FSDP full-param gathering is offloaded
+                # to CPU to avoid materializing a second full decoder shard;
+                # copy one merged layer back to GPU at a time.
+                if not merged_weight.is_cuda:
+                    merged_weight = merged_weight.to(
+                        device=torch.device("cuda", torch.cuda.current_device()),
+                        non_blocking=True,
+                    )
                 name = f"{module_name}.weight"
                 name = name.removeprefix("base_model.model.")
+                name = name.replace("._fsdp_wrapped_module.", ".")
+                name = name.removeprefix("_fsdp_wrapped_module.")
                 name = name.replace(".base_layer", "")
                 client.update_named_param(name, merged_weight)
                 del merged_weight, delta_weight, base_weight
@@ -614,6 +1218,38 @@ class TransitionGRPOTrainer(GRPOTrainer):
         return len(targets)
 
     def _sync_policy_weights(self, mode: str) -> None:
+        # In DDP every rank owns a complete QLoRA replica, but only rank 0 may
+        # stream weights to the shared vLLM server. Concurrent parameter-update
+        # requests from multiple trainers race inside the server and can leave
+        # the rollout policy half-updated. The barrier also guarantees that all
+        # ranks start their next rollout from the same policy version.
+        distributed = self.accelerator.num_processes > 1
+        if distributed and self.trainer_sharding == "fsdp":
+            started = time.perf_counter()
+            unwrapped = self.accelerator.unwrap_model(self.model)
+            # FSDP all-gather is collective.  Non-main ranks participate in the
+            # summon but never issue vLLM parameter updates.
+            with self._summon_fsdp_full_params(unwrapped):
+                synced_qlora_layers = (
+                    self._sync_qlora_weights_to_vllm(
+                        unwrapped,
+                        stream=self.accelerator.is_main_process,
+                    )
+                    if is_peft_model(unwrapped)
+                    else 0
+                )
+            if self.accelerator.is_main_process:
+                self._metrics[mode]["rollout/weight_sync_seconds"].append(
+                    time.perf_counter() - started
+                )
+                self._metrics[mode]["rollout/qlora_layers_synced"].append(
+                    float(synced_qlora_layers)
+                )
+            self.accelerator.wait_for_everyone()
+            return
+        if distributed and not self.accelerator.is_main_process:
+            self.accelerator.wait_for_everyone()
+            return
         started = time.perf_counter()
         unwrapped = self.accelerator.unwrap_model(self.model)
         synced_qlora_layers = (
@@ -629,6 +1265,8 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self._metrics[mode]["rollout/qlora_layers_synced"].append(
             float(synced_qlora_layers)
         )
+        if distributed:
+            self.accelerator.wait_for_everyone()
 
     def _generate_and_score_completions(
         self,
@@ -773,6 +1411,11 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 kl_beta=self.beta,
             )
         )
+        if self.transition_micro_batch_tokens > 0:
+            # Dynamic packing is most effective when adjacent rows have similar
+            # prompt/completion lengths. Transition metadata remains attached
+            # to each row, so this changes only batch order, not the objective.
+            updates.sort(key=self._transition_length_key)
         tool_loss_masks = None
         skipped_tool_mask_transitions = 0
         if self.transition_trainable_part == "tool_only":
@@ -791,40 +1434,91 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 retained_masks.append(mask)
             updates = retained_updates
             tool_loss_masks = retained_masks
+        if self.span_balance_alpha is not None:
+            if tool_loss_masks is not None:
+                raise RuntimeError(
+                    "span balancing cannot be combined with the tool-only carrier"
+                )
+            tool_loss_masks = [
+                self._span_balanced_mask(update.response_ids)
+                for update in updates
+            ]
+            # Span balancing returns fractional per-token weights.  Keep the
+            # values in floating point all the way into TRL's weighted-mean
+            # loss; converting them to an integer mask silently turns every
+            # valid weight below one into zero and produces a no-op update.
+            invalid_masks = [
+                index
+                for index, mask in enumerate(tool_loss_masks)
+                if not mask
+                or any(not math.isfinite(float(weight)) for weight in mask)
+                or sum(float(weight) for weight in mask) <= 0.0
+            ]
+            if invalid_masks:
+                raise RuntimeError(
+                    "span-balanced loss mask has no positive finite weight for "
+                    f"transitions {invalid_masks[:8]}"
+                )
         if not updates:
             raise RuntimeError(
                 "the rollout batch produced no transitions with trainable tokens; "
                 "refusing to advance optimizer or scheduler state"
             )
 
-        trajectory_to_index: dict[str, int] = {}
-        trajectory_example_indices = []
-        trajectory_correct = []
-        transition_trajectory_indices = []
-        for update in updates:
-            trajectory_index = trajectory_to_index.get(update.trajectory_id)
-            if trajectory_index is None:
-                trajectory_index = len(trajectory_to_index)
-                trajectory_to_index[update.trajectory_id] = trajectory_index
-                trajectory_example_indices.append(update.example_index)
-                trajectory_correct.append(update.trajectory_correct)
-            transition_trajectory_indices.append(trajectory_index)
-        trajectory_pairs = build_trajectory_pairs(
-            trajectory_example_indices,
-            trajectory_correct,
-        )
+        # Preserve the actual think/tool boundary separately from the training
+        # carrier only when the corresponding diagnostic is enabled.  It is not
+        # part of the policy objective; parsing it for every transition in the
+        # normal training run is pure host work (and used to duplicate the span
+        # mask decoding).
+        carrier_tool_masks: list[tuple[int, ...]] | None = None
+        carrier_mask_valid: list[bool] | None = None
+        if self.record_gradient_conflicts:
+            carrier_tool_masks = []
+            carrier_mask_valid = []
+            for update in updates:
+                try:
+                    carrier_tool_masks.append(
+                        tool_token_loss_mask(
+                            self.processing_class,
+                            update.response_ids,
+                        )
+                    )
+                    carrier_mask_valid.append(True)
+                except (ToolMaskUnavailable, ValueError):
+                    carrier_tool_masks.append((0,) * len(update.response_ids))
+                    carrier_mask_valid.append(False)
+
+        transition_trajectory_indices = None
+        trajectory_pairs = []
+        if self.rank_loss_coefficient != 0.0:
+            trajectory_to_index: dict[str, int] = {}
+            trajectory_example_indices = []
+            trajectory_correct = []
+            transition_trajectory_indices = []
+            for update in updates:
+                trajectory_index = trajectory_to_index.get(update.trajectory_id)
+                if trajectory_index is None:
+                    trajectory_index = len(trajectory_to_index)
+                    trajectory_to_index[update.trajectory_id] = trajectory_index
+                    trajectory_example_indices.append(update.example_index)
+                    trajectory_correct.append(update.trajectory_correct)
+                transition_trajectory_indices.append(trajectory_index)
+            trajectory_pairs = build_trajectory_pairs(
+                trajectory_example_indices,
+                trajectory_correct,
+            )
 
         device = self.accelerator.device
         prompt_ids_list = [
-            torch.tensor(update.prompt_ids, device=device, dtype=torch.long)
+            torch.tensor(update.prompt_ids, dtype=torch.long)
             for update in updates
         ]
         completion_ids_list = [
-            torch.tensor(update.response_ids, device=device, dtype=torch.long)
+            torch.tensor(update.response_ids, dtype=torch.long)
             for update in updates
         ]
         sampling_logps_list = [
-            torch.tensor(update.sampling_logprobs, device=device, dtype=torch.float32)
+            torch.tensor(update.sampling_logprobs, dtype=torch.float32)
             for update in updates
         ]
         prompt_mask_list = [torch.ones_like(ids) for ids in prompt_ids_list]
@@ -833,73 +1527,96 @@ class TransitionGRPOTrainer(GRPOTrainer):
         ]
         completion_loss_mask_list = (
             [
-                torch.tensor(mask, device=device, dtype=torch.long)
+                torch.tensor(mask, dtype=torch.float32)
                 for mask in tool_loss_masks
             ]
             if tool_loss_masks is not None
             else completion_attention_mask_list
         )
-        rank_loss_masks = []
+        rank_loss_masks = None
         skipped_rank_tool_masks = 0
-        if (
-            self.rank_loss_coefficient != 0.0
-            and self.rank_score_tokens == "tool_only"
-            and tool_loss_masks is not None
-        ):
-            # Process+Rank tool-only training selects the same response token carrier for both
-            # losses.  Parsing every action twice was pure host overhead.
-            rank_loss_masks = list(tool_loss_masks)
-        elif self.rank_loss_coefficient != 0.0 and self.rank_score_tokens == "tool_only":
-            for update in updates:
-                try:
-                    rank_loss_masks.append(
-                        tool_token_loss_mask(
-                            self.processing_class,
-                            update.response_ids,
+        if self.rank_loss_coefficient != 0.0:
+            rank_loss_masks = []
+            if self.rank_score_tokens == "tool_only" and tool_loss_masks is not None:
+                # Process+Rank tool-only training selects the same response token
+                # carrier for both losses.  Parsing every action twice is pure
+                # host overhead.
+                rank_loss_masks = list(tool_loss_masks)
+            elif self.rank_score_tokens == "tool_only":
+                for update in updates:
+                    try:
+                        rank_loss_masks.append(
+                            tool_token_loss_mask(
+                                self.processing_class,
+                                update.response_ids,
+                            )
                         )
-                    )
-                except ToolMaskUnavailable:
-                    skipped_rank_tool_masks += 1
-                    rank_loss_masks.append((0,) * len(update.response_ids))
-        else:
-            rank_loss_masks = [
-                tuple(1 for _ in update.response_ids)
-                for update in updates
-            ]
+                    except ToolMaskUnavailable:
+                        skipped_rank_tool_masks += 1
+                        rank_loss_masks.append((0,) * len(update.response_ids))
+            else:
+                rank_loss_masks = [
+                    tuple(1 for _ in update.response_ids)
+                    for update in updates
+                ]
 
-        prompt_ids = pad(
+        prompt_ids = self._pad_transition_rows(
             prompt_ids_list,
             padding_value=self.pad_token_id,
             padding_side="left",
+            device=device,
         )
-        prompt_mask = pad(prompt_mask_list, padding_value=0, padding_side="left")
-        completion_ids = pad(
+        prompt_mask = self._pad_transition_rows(
+            prompt_mask_list,
+            padding_value=0,
+            padding_side="left",
+            device=device,
+        )
+        completion_ids = self._pad_transition_rows(
             completion_ids_list,
             padding_value=self.pad_token_id,
             padding_side="right",
+            device=device,
         )
-        completion_attention_mask = pad(
+        completion_attention_mask = self._pad_transition_rows(
             completion_attention_mask_list,
             padding_value=0,
             padding_side="right",
+            device=device,
         )
-        completion_loss_mask = pad(
+        completion_loss_mask = self._pad_transition_rows(
             completion_loss_mask_list,
             padding_value=0,
             padding_side="right",
+            device=device,
         )
-        rank_completion_mask = pad(
-            [
-                torch.tensor(mask, device=device, dtype=torch.long)
-                for mask in rank_loss_masks
-            ],
-            padding_value=0,
-            padding_side="right",
-        )
-        sampling_per_token_logps = pad(
+        carrier_tool_mask = None
+        if carrier_tool_masks is not None:
+            carrier_tool_mask = self._pad_transition_rows(
+                [
+                    torch.tensor(mask, dtype=torch.long)
+                    for mask in carrier_tool_masks
+                ],
+                padding_value=0,
+                padding_side="right",
+                device=device,
+            )
+        rank_completion_mask = None
+        if rank_loss_masks is not None:
+            rank_completion_mask = self._pad_transition_rows(
+                [
+                    torch.tensor(mask, dtype=torch.long)
+                    for mask in rank_loss_masks
+                ],
+                padding_value=0,
+                padding_side="right",
+                device=device,
+            )
+        sampling_per_token_logps = self._pad_transition_rows(
             sampling_logps_list,
             padding_value=0.0,
             padding_side="right",
+            device=device,
         )
         forward_inputs = {
             "prompt_ids": prompt_ids,
@@ -907,11 +1624,40 @@ class TransitionGRPOTrainer(GRPOTrainer):
             "completion_ids": completion_ids,
             "completion_attention_mask": completion_attention_mask,
         }
+        microbatch_plan = self._build_transition_microbatch_plan(
+            forward_inputs,
+            prompt_lengths=[len(update.prompt_ids) for update in updates],
+            completion_lengths=[len(update.response_ids) for update in updates],
+        )
+        microbatch_ranges = microbatch_plan.ranges
+        prompt_lengths = microbatch_plan.prompt_lengths
+        completion_lengths = microbatch_plan.completion_lengths
+        padded_costs = [
+            (end - start)
+            * (
+                max(prompt_lengths[start:end])
+                + max(completion_lengths[start:end])
+            )
+            for start, end in microbatch_ranges
+        ]
+        self._metrics[mode]["rollout/micro_batch_count"].append(
+            float(len(microbatch_ranges))
+        )
+        self._metrics[mode]["rollout/micro_batch_mean_rows"].append(
+            float(len(updates) / len(microbatch_ranges))
+        )
+        self._metrics[mode]["rollout/micro_batch_max_padded_tokens"].append(
+            float(max(padded_costs, default=0))
+        )
+        self._metrics[mode]["rollout/micro_batch_mean_padded_tokens"].append(
+            float(sum(padded_costs) / len(padded_costs))
+        )
         old_policy_started = time.perf_counter()
         with torch.no_grad():
             old_per_token_logps = self._transition_token_logps_compact(
                 self.model,
                 forward_inputs,
+                microbatch_plan=microbatch_plan,
             )
             if self.beta != 0.0:
                 unwrapped = self.accelerator.unwrap_model(self.model)
@@ -932,6 +1678,7 @@ class TransitionGRPOTrainer(GRPOTrainer):
                     ref_per_token_logps = self._transition_token_logps_compact(
                         self.model,
                         forward_inputs,
+                        microbatch_plan=microbatch_plan,
                     )
             else:
                 ref_per_token_logps = None
@@ -1028,6 +1775,9 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self._metrics[mode]["saam/infrastructure_timeout_transitions"].append(
             float(saam_audit.infrastructure_timeout_transitions if saam_audit else 0)
         )
+        self._metrics[mode]["saam/timeout_penalized_transitions"].append(
+            float(saam_audit.timeout_penalized_transitions if saam_audit else 0)
+        )
         self._metrics[mode]["saam/shared_success_correct_kept"].append(
             float(saam_audit.shared_success_correct_kept if saam_audit else 0)
         )
@@ -1043,6 +1793,33 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 / completion_attention_mask.sum().clamp_min(1)
             )
         )
+        if carrier_mask_valid is not None and carrier_tool_mask is not None:
+            self._metrics[mode]["gradient_conflict/carrier_valid_transitions"].append(
+                float(sum(carrier_mask_valid))
+            )
+            self._metrics[mode]["gradient_conflict/carrier_invalid_transitions"].append(
+                float(len(carrier_mask_valid) - sum(carrier_mask_valid))
+            )
+            valid_carrier = torch.tensor(
+                carrier_mask_valid, device=device, dtype=torch.bool
+            ).unsqueeze(1)
+            valid_reason_mask = (
+                (completion_attention_mask - carrier_tool_mask).clamp_min(0)
+                * valid_carrier
+            )
+            valid_tool_mask = carrier_tool_mask * valid_carrier
+            self._metrics[mode]["gradient_conflict/reason_tokens"].append(
+                float(valid_reason_mask.sum())
+            )
+            self._metrics[mode]["gradient_conflict/tool_tokens"].append(
+                float(valid_tool_mask.sum())
+            )
+            self._metrics[mode]["gradient_conflict/tool_token_fraction"].append(
+                float(
+                    valid_tool_mask.sum()
+                    / (valid_reason_mask.sum() + valid_tool_mask.sum()).clamp_min(1)
+                )
+            )
         self._metrics[mode]["rollout/tool_mask_skipped_transitions"].append(
             float(skipped_tool_mask_transitions)
         )
@@ -1098,7 +1875,6 @@ class TransitionGRPOTrainer(GRPOTrainer):
             # context relative to rollout/old-policy scoring.
             "completion_mask": completion_attention_mask,
             "tool_mask": completion_loss_mask,
-            "rank_completion_mask": rank_completion_mask,
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
             "sampling_per_token_logps": sampling_per_token_logps,
@@ -1113,38 +1889,65 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 device=device,
                 dtype=torch.long,
             ),
-            "transition_trajectory_indices": torch.tensor(
-                transition_trajectory_indices,
-                device=device,
-                dtype=torch.long,
-            ),
-            "transition_example_indices": torch.tensor(
-                [update.example_index for update in updates],
-                device=device,
-                dtype=torch.long,
-            ),
-            "transition_trajectory_correct": torch.tensor(
-                [update.trajectory_correct for update in updates],
-                device=device,
-                dtype=torch.bool,
-            ),
-            "transition_legal_success": torch.tensor(
-                [update.legal_success for update in updates],
-                device=device,
-                dtype=torch.bool,
-            ),
-            "transition_local_penalty": torch.tensor(
-                [update.local_penalty for update in updates],
-                device=device,
-                dtype=torch.float32,
-            ),
         }
+        if carrier_tool_mask is not None and carrier_mask_valid is not None:
+            output.update(
+                {
+                    "carrier_tool_mask": carrier_tool_mask,
+                    "carrier_mask_valid": torch.tensor(
+                        carrier_mask_valid,
+                        device=device,
+                        dtype=torch.bool,
+                    ),
+                }
+            )
+        if rank_completion_mask is not None and transition_trajectory_indices is not None:
+            output.update(
+                {
+                    "rank_completion_mask": rank_completion_mask,
+                    "transition_trajectory_indices": torch.tensor(
+                        transition_trajectory_indices,
+                        device=device,
+                        dtype=torch.long,
+                    ),
+                    "transition_example_indices": torch.tensor(
+                        [update.example_index for update in updates],
+                        device=device,
+                        dtype=torch.long,
+                    ),
+                    "transition_trajectory_correct": torch.tensor(
+                        [update.trajectory_correct for update in updates],
+                        device=device,
+                        dtype=torch.bool,
+                    ),
+                    "transition_legal_success": torch.tensor(
+                        [update.legal_success for update in updates],
+                        device=device,
+                        dtype=torch.bool,
+                    ),
+                    "transition_local_penalty": torch.tensor(
+                        [update.local_penalty for update in updates],
+                        device=device,
+                        dtype=torch.float32,
+                    ),
+                }
+            )
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         return output
 
-    def _transition_sequence_logps(self, model, inputs):
-        per_token_logps = self._transition_token_logps_compact(model, inputs)
+    def _transition_sequence_logps(
+        self,
+        model,
+        inputs,
+        *,
+        microbatch_plan: _TransitionMicrobatchPlan | None = None,
+    ):
+        per_token_logps = self._transition_token_logps_compact(
+            model,
+            inputs,
+            microbatch_plan=microbatch_plan,
+        )
         return self._sequence_scores_from_token_logps(per_token_logps, inputs)
 
     def _sequence_scores_from_token_logps(self, per_token_logps, inputs):
@@ -1156,7 +1959,13 @@ class TransitionGRPOTrainer(GRPOTrainer):
             ].sum(dim=-1).clamp_min(1)
         return sequence_logps
 
-    def _ranking_coefficients(self, model, inputs):
+    def _ranking_coefficients(
+        self,
+        model,
+        inputs,
+        *,
+        microbatch_plan: _TransitionMicrobatchPlan | None = None,
+    ):
         if self.rank_loss_coefficient == 0.0:
             return None, None
         transition_trajectory_indices = inputs["transition_trajectory_indices"]
@@ -1182,7 +1991,11 @@ class TransitionGRPOTrainer(GRPOTrainer):
                     inputs,
                 )
                 if reuse_old_policy_scores
-                else self._transition_sequence_logps(model, inputs)
+                else self._transition_sequence_logps(
+                    model,
+                    inputs,
+                    microbatch_plan=microbatch_plan,
+                )
             )
             token_support = inputs["rank_completion_mask"].any(dim=-1)
             score_selected = torch.tensor(
@@ -1313,6 +2126,7 @@ class TransitionGRPOTrainer(GRPOTrainer):
         model.train()
         inputs = self._prepare_inputs(inputs)
         total = int(inputs["completion_ids"].shape[0])
+        microbatch_plan = self._build_transition_microbatch_plan(inputs)
         normalization = inputs.get("policy_normalization_transitions")
         policy_normalization_transitions = (
             int(normalization[0].item()) if normalization is not None else total
@@ -1320,9 +2134,13 @@ class TransitionGRPOTrainer(GRPOTrainer):
         detached_loss = torch.zeros((), device=self.accelerator.device)
         policy_started = time.perf_counter()
         if self.policy_loss_coefficient != 0.0:
-            for start in range(0, total, self.transition_micro_batch_size):
-                end = min(total, start + self.transition_micro_batch_size)
-                micro_inputs = self._slice_batch(inputs, start, end)
+            for range_index, (start, end) in enumerate(microbatch_plan.ranges):
+                micro_inputs = self._slice_batch(
+                    inputs,
+                    start,
+                    end,
+                    trim_bounds=microbatch_plan.trim_bounds[range_index],
+                )
                 with self.compute_loss_context_manager():
                     micro_loss = super()._compute_loss(model, micro_inputs)
                 weight = (end - start) / policy_normalization_transitions
@@ -1335,12 +2153,17 @@ class TransitionGRPOTrainer(GRPOTrainer):
         transition_coefficients, detached_rank_loss = self._ranking_coefficients(
             model,
             inputs,
+            microbatch_plan=microbatch_plan,
         )
         rank_coefficients_finished = time.perf_counter()
         if transition_coefficients is not None:
-            for start in range(0, total, self.transition_micro_batch_size):
-                end = min(total, start + self.transition_micro_batch_size)
-                micro_inputs = self._slice_batch(inputs, start, end)
+            for range_index, (start, end) in enumerate(microbatch_plan.ranges):
+                micro_inputs = self._slice_batch(
+                    inputs,
+                    start,
+                    end,
+                    trim_bounds=microbatch_plan.trim_bounds[range_index],
+                )
                 with self.compute_loss_context_manager():
                     sequence_logps = self._transition_sequence_logps(
                         model,

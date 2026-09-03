@@ -140,6 +140,7 @@ class SAAMMaskAudit:
     deterministic_error_transitions: int = 0
     deterministic_error_transitions_by_kind: dict[str, int] | None = None
     infrastructure_timeout_transitions: int = 0
+    timeout_penalized_transitions: int = 0
     shared_success_correct_kept: int = 0
     shared_success_wrong_suppressed: int = 0
     correct_error_positive_flips: int = 0
@@ -453,6 +454,12 @@ def apply_asymmetric_error_credit(
     zeroed_initial = 0
     error_counts: defaultdict[str, int] = defaultdict(int)
     timeout_count = 0
+    timeout_penalized = 0
+    episode_by_trajectory = {
+        str(episode.sample.audit_record["trajectory_id"]): episode
+        for episode in episodes
+        if episode.sample.process_update
+    }
     kept_correct = 0
     suppressed_wrong = 0
     correct_error_flips = 0
@@ -461,7 +468,20 @@ def apply_asymmetric_error_credit(
         key = (update.trajectory_id, update.turn_index)
         identity = identities[key]
         error_kind = errors.get(key)
-        if error_kind == "infrastructure_timeout":
+        result_reward = (
+            episode_by_trajectory[identity.trajectory_id]
+            .sample.audit_record.get("result_reward")
+            or {}
+        )
+        # The final four-level result contract always treats a tool timeout as
+        # a policy-visible penalty action.  Keep the explicit flag for older
+        # records, but do not let a missing sidecar field silently turn a
+        # four-level timeout back into the historical zero-credit behavior.
+        timeout_penalty_enabled = bool(
+            result_reward.get("policy_failure_penalty_enabled", False)
+            or result_reward.get("profile") == "four-level"
+        )
+        if error_kind == "infrastructure_timeout" and not timeout_penalty_enabled:
             effective = 0.0
             decision = "infrastructure_timeout_zero"
             timeout_count += 1
@@ -470,6 +490,19 @@ def apply_asymmetric_error_credit(
                 zeroed += 1
                 zeroed_tokens += len(update.response_ids)
                 zeroed_initial += int(update.turn_index == 0)
+        elif error_kind == "infrastructure_timeout":
+            # A four-level result-only run treats a timeout as a policy-visible
+            # error.  Keep the historical zeroing for binary controls, but in
+            # this explicitly opted-in profile force the timed-out action
+            # negative, including a correct trajectory that recovered later.
+            effective = -max(abs(float(update.advantage)), error_penalty)
+            decision = "deterministic_error_negative:infrastructure_timeout"
+            timeout_count += 1
+            timeout_penalized += 1
+            error_counts["infrastructure_timeout"] += 1
+            if identity.correct and update.advantage > 0.0:
+                correct_error_flips += 1
+                correct_error_flip_mass += float(update.advantage)
         elif error_kind in DETERMINISTIC_ERROR_KINDS:
             effective = -max(abs(float(update.advantage)), error_penalty)
             decision = f"deterministic_error_negative:{error_kind}"
@@ -531,6 +564,7 @@ def apply_asymmetric_error_credit(
         deterministic_error_transitions=sum(error_counts.values()),
         deterministic_error_transitions_by_kind=dict(sorted(error_counts.items())),
         infrastructure_timeout_transitions=timeout_count,
+        timeout_penalized_transitions=timeout_penalized,
         shared_success_correct_kept=kept_correct,
         shared_success_wrong_suppressed=suppressed_wrong,
         correct_error_positive_flips=correct_error_flips,

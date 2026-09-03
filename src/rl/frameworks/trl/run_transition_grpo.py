@@ -11,6 +11,7 @@ import math
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +63,7 @@ ACTIVE_EVAL_DIR = ACTIVE_RUNTIME_ROOT / "src" / "eval"
 ACTIVE_HARNESS_DIR = ACTIVE_RUNTIME_ROOT / "src" / "harness"
 ACTIVE_SFT_DIR = ACTIVE_RUNTIME_ROOT / "src" / "sft"
 sys.path[:0] = [
+    str(ROOT / "src"),
     str(ROOT / "src" / "rl"),
     str(ACTIVE_EVAL_DIR),
     str(ACTIVE_HARNESS_DIR),
@@ -71,7 +73,7 @@ sys.path[:0] = [
 import protocol as protocol_runtime  # noqa: E402
 import rollout as evaluator_runtime  # noqa: E402
 import executor as executor_runtime  # noqa: E402
-import tool_schemes as tool_schemes_runtime  # noqa: E402
+from tool_modules import registry as tool_schemes_runtime  # noqa: E402
 
 import bitsandbytes as bnb
 import torch
@@ -108,10 +110,11 @@ IMPLEMENTATION_SOURCE_FILES = (
     "src/rl/frameworks/trl/tool_loss_mask.py",
     "src/rl/frameworks/trl/training_precision.py",
     "src/rl/frameworks/trl/trajectory_ranking.py",
+    "src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_a100.sh",
     "src/rl/rollout_scoring.py",
     "src/rl/terminal_reward.py",
-    "src/rl/tool_environment.py",
     "src/rl/tool_environment_v26.py",
+    "src/tool_modules/registry.py",
 )
 from counterfactual_suite import (  # noqa: E402
     SCHEMA_VERSION as COUNTERFACTUAL_SCHEMA_VERSION,
@@ -143,6 +146,7 @@ from frameworks.trl.training_precision import (  # noqa: E402
     optimizer_moment_precision_audit,
     promote_trainable_parameters_to_fp32,
     require_adam_moments_fp32,
+    trainable_parameter_precision_audit,
     require_trainable_parameters_fp32,
 )
 
@@ -150,14 +154,73 @@ from frameworks.trl.training_precision import (  # noqa: E402
 FROZEN_REFERENCE_ADAPTER_NAME = "frozen_sft_reference"
 
 
+def _distributed_env() -> tuple[int, int, int]:
+    """Return ``(world_size, rank, local_rank)`` from torchrun's environment."""
+
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if world_size < 1 or not 0 <= rank < world_size or local_rank < 0:
+        raise RuntimeError(
+            "invalid distributed environment: "
+            f"WORLD_SIZE={world_size}, RANK={rank}, LOCAL_RANK={local_rank}"
+        )
+    return world_size, rank, local_rank
+
+
+def _init_distributed() -> tuple[int, int, int]:
+    """Select the local CUDA device before loading a per-rank model replica."""
+
+    world_size, rank, local_rank = _distributed_env()
+    if world_size == 1:
+        return world_size, rank, local_rank
+    if not torch.cuda.is_available():
+        raise RuntimeError("multi-GPU training requires CUDA")
+    torch.cuda.set_device(local_rank)
+    return world_size, rank, local_rank
+
+
+def _start_distributed_process_group() -> None:
+    """Start NCCL only after PEFT has loaded the adapter state dict.
+
+    PEFT 0.19 detects an initialized device mesh and attempts to use the
+    Transformers tensor-parallel sharder. The host's Transformers 4.57.6 lacks
+    one symbol that PEFT imports, so initializing NCCL before adapter loading
+    turns ordinary DDP into an unrelated TP compatibility failure.
+    """
+
+    world_size, _, local_rank = _distributed_env()
+    if world_size <= 1 or torch.distributed.is_initialized():
+        return
+    torch.cuda.set_device(local_rank)
+    torch.distributed.init_process_group(backend="nccl")
+
+
+def _distributed_barrier() -> None:
+    world_size, _, _ = _distributed_env()
+    if world_size > 1 and torch.distributed.is_initialized():
+        torch.distributed.barrier()
+
+
+def _is_main_process() -> bool:
+    return _distributed_env()[1] == 0
+
+
 class TrainingPrecisionGuardCallback(TrainerCallback):
     """Fail on the first completed update if mixed precision touched optimizer state."""
 
-    def __init__(self, *, require_fp32_adam_moments: bool):
+    def __init__(
+        self,
+        *,
+        require_fp32_adam_moments: bool,
+        require_fp32_trainable: bool = True,
+    ):
         self.require_fp32_adam_moments = require_fp32_adam_moments
+        self.require_fp32_trainable = require_fp32_trainable
 
     def on_step_end(self, args, state, control, **kwargs):
-        require_trainable_parameters_fp32(kwargs["model"])
+        if self.require_fp32_trainable:
+            require_trainable_parameters_fp32(kwargs["model"])
         if self.require_fp32_adam_moments:
             optimizer_audit = optimizer_moment_precision_audit(kwargs["optimizer"])
             # A homogeneous zero-advantage group may legitimately create no Adam state.
@@ -218,7 +281,7 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
     parser.add_argument("--reward-mode", choices=("result-only", "process"), default="result-only")
     parser.add_argument(
         "--result-reward-profile",
-        choices=("binary", "execution-ladder"),
+        choices=("binary", "execution-ladder", "four-level"),
         default="binary",
     )
     parser.add_argument(
@@ -251,13 +314,31 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
         "--record-gradient-conflicts",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="record mixed/positive-only/negative-only pre-clip gradients per update",
+        help="record full, reason-only, and tool-only pre-clip gradient geometry per update",
     )
     parser.add_argument(
         "--gradient-conflict-save-vectors",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="also persist full FP32 gradient vectors (default stores exact stats plus sketches)",
+    )
+    parser.add_argument(
+        "--gradient-conflict-max-transitions",
+        type=int,
+        default=0,
+        help=(
+            "bound each diagnostic probe to this many deterministic transitions; "
+            "0 keeps the full update (training remains full-batch)"
+        ),
+    )
+    parser.add_argument(
+        "--gradient-conflict-carrier-only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "record only all-advantage reason/tool carrier gradients; skip the "
+            "positive/negative full-response probes"
+        ),
     )
     parser.add_argument("--expected-records", type=int)
     parser.add_argument("--protocol-runtime-root", type=Path)
@@ -293,10 +374,36 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
     parser.add_argument("--ppo-iterations", type=int, default=2)
     parser.add_argument("--prompts-per-update", type=int, default=1)
     parser.add_argument("--group-size", type=int, default=4)
-    parser.add_argument("--transition-micro-batch-size", type=int, default=2)
+    parser.add_argument(
+        "--transition-micro-batch-size",
+        type=int,
+        default=2,
+        help=(
+            "fixed transition row count; when --transition-micro-batch-tokens "
+            "is set, this becomes the hard maximum row count"
+        ),
+    )
+    parser.add_argument(
+        "--transition-micro-batch-tokens",
+        type=int,
+        default=0,
+        help=(
+            "padded prompt+completion token budget per transition micro-batch; "
+            "zero preserves fixed-row batching"
+        ),
+    )
     parser.add_argument("--policy-loss-coefficient", type=float, default=1.0)
     parser.add_argument("--train-turns", choices=("all", "last"), default="all")
     parser.add_argument("--trainable-part", choices=("all", "tool_only"), default="all")
+    parser.add_argument(
+        "--span-balance-alpha",
+        type=float,
+        default=None,
+        help=(
+            "when set with trainable-part=all, give alpha of each turn's loss "
+            "to the tool span and 1-alpha to the reasoning span"
+        ),
+    )
     parser.add_argument("--rank-loss-coefficient", type=float, default=0.0)
     parser.add_argument("--rank-beta", type=float, default=0.1)
     parser.add_argument(
@@ -367,6 +474,24 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
     parser.add_argument("--vllm-host", default="127.0.0.1")
     parser.add_argument("--vllm-port", type=int, default=8000)
     parser.add_argument("--vllm-group-port", type=int, default=51216)
+    parser.add_argument(
+        "--trainer-sharding",
+        choices=("replicated", "fsdp"),
+        default=os.environ.get("TABLE_RL_TRAINER_SHARDING", "replicated"),
+        help=(
+            "replicated keeps one complete model per trainer rank (DDP); fsdp "
+            "uses one FULL_SHARD model across the trainer ranks"
+        ),
+    )
+    parser.add_argument(
+        "--fsdp-base-storage",
+        choices=("bf16", "4bit"),
+        default=os.environ.get("TABLE_RL_FSDP_BASE_STORAGE", "bf16"),
+        help=(
+            "base weight storage for fsdp; bf16 is the supported sharded path, "
+            "while 4bit is rejected until Params4bit sharding is validated"
+        ),
+    )
     if experiment_config is not None:
         parser.set_defaults(**experiment_config.argparse_defaults(ROOT))
     return parser.parse_args(), experiment_config
@@ -420,6 +545,28 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def merge_distributed_rollouts(output_dir: Path, world_size: int) -> None:
+    """Merge rank-local rollout logs after a successful distributed update."""
+
+    if world_size <= 1:
+        return
+    sources = [
+        output_dir / f"rollouts.rank{rank}.jsonl"
+        for rank in range(world_size)
+    ]
+    temporary = output_dir / f".rollouts.jsonl.{os.getpid()}.tmp"
+    try:
+        with temporary.open("w", encoding="utf-8") as target:
+            for source in sources:
+                if source.is_file():
+                    target.write(source.read_text(encoding="utf-8"))
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, output_dir / "rollouts.jsonl")
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def implementation_source_sha256(
     extra_relative_paths: tuple[str, ...] = (),
 ) -> dict[str, str]:
@@ -455,9 +602,9 @@ def protocol_module_path_audit(runtime_root: Path | None) -> dict[str, Any]:
             executor_runtime,
             expected_root / "src" / "harness" / "executor.py",
         ),
-        "tool_schemes": (
+        "tool_registry": (
             tool_schemes_runtime,
-            expected_root / "src" / "sft" / "tool_schemes.py",
+            ROOT / "src" / "tool_modules" / "registry.py",
         ),
     }
     module_paths = {}
@@ -470,11 +617,7 @@ def protocol_module_path_audit(runtime_root: Path | None) -> dict[str, Any]:
                 f"{actual_path} != {expected_path}"
             )
         module_paths[name] = str(actual_path)
-    expected_factory = (
-        "tool_environment_v26"
-        if protocol_runtime.PROTOCOL_VERSION == "version26"
-        else "tool_environment"
-    )
+    expected_factory = "tool_environment_v26"
     if TOOL_ENVIRONMENT_FACTORY_MODULE != expected_factory:
         raise RuntimeError(
             "rollout environment does not match the imported protocol: "
@@ -645,17 +788,32 @@ def validate_fixed_pool_manifest(args: argparse.Namespace) -> dict[str, Any] | N
 
 
 def require_clean_output(path: Path, resume: Path | None) -> None:
+    """Create a shared output directory once when torchrun has multiple ranks."""
+
+    world_size, rank, _ = _distributed_env()
+    if world_size > 1 and rank != 0:
+        for _ in range(300):
+            if path.is_dir():
+                break
+            time.sleep(0.1)
+        if not path.is_dir():
+            raise SystemExit(
+                f"distributed rank started before output directory was created: {path}"
+            )
+        return
     if resume is not None:
         if not path.is_dir():
             raise SystemExit(
                 f"resume output directory does not exist: {path}"
             )
-        return
-    if path.exists() and any(path.iterdir()):
-        raise SystemExit(
-            f"output directory is not empty: {path}; use an isolated directory"
-        )
-    path.mkdir(parents=True, exist_ok=True)
+    else:
+        if path.exists() and any(path.iterdir()):
+            raise SystemExit(
+                f"output directory is not empty: {path}; use an isolated directory"
+            )
+        path.mkdir(parents=True, exist_ok=True)
+    if world_size > 1:
+        _distributed_barrier()
 
 
 def resume_checkpoint_global_step(checkpoint: Path) -> int:
@@ -717,12 +875,28 @@ def load_counterfactual_suites(
     return manifest, suites
 
 
-def load_qlora_model(args: argparse.Namespace):
-    quantization = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
+def load_qlora_model(
+    args: argparse.Namespace,
+    *,
+    trainer_sharding: str = "replicated",
+    fsdp_base_storage: str = "bf16",
+):
+    if trainer_sharding not in {"replicated", "fsdp"}:
+        raise ValueError(f"unsupported trainer sharding: {trainer_sharding}")
+    if trainer_sharding == "fsdp" and fsdp_base_storage != "bf16":
+        raise ValueError(
+            "FSDP sharding currently requires bf16 base storage; refusing "
+            "unvalidated Params4bit sharding"
+        )
+    quantization = (
+        BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        if trainer_sharding == "replicated"
+        else None
     )
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_path,
@@ -731,18 +905,42 @@ def load_qlora_model(args: argparse.Namespace):
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
-    base_model = AutoModelForCausalLM.from_pretrained(
-        args.model_path,
-        quantization_config=quantization,
-        torch_dtype=torch.bfloat16,
-        device_map={"": 0},
-        trust_remote_code=True,
-    )
+    _, _, local_rank = _distributed_env()
+    model_kwargs = {
+        "torch_dtype": torch.bfloat16,
+        # ``device_map={"": 0}`` is correct for the historical single-GPU
+        # launcher, but would put every torchrun rank on the first visible GPU.
+        # LOCAL_RANK is relative to CUDA_VISIBLE_DEVICES and keeps one complete
+        # initialization on each rank before FSDP shards it.
+        "device_map": {"": local_rank},
+        "trust_remote_code": True,
+        "low_cpu_mem_usage": True,
+    }
+    if quantization is not None:
+        model_kwargs["quantization_config"] = quantization
+    base_model = AutoModelForCausalLM.from_pretrained(args.model_path, **model_kwargs)
     base_model.config.use_cache = False
-    base_model = prepare_model_for_kbit_training(
-        base_model,
-        use_gradient_checkpointing=True,
-    )
+    # The FSDP path deliberately loads an unquantized BF16 base so floating
+    # parameters can be sharded.  ``prepare_model_for_kbit_training`` is a
+    # QLoRA helper: on a BF16 model it casts frozen parameters to FP32, which
+    # creates a second full copy before FSDP wrapping and can OOM a 40 GB GPU.
+    # Activation checkpointing is supplied by the FSDP plugin instead.
+    if trainer_sharding == "replicated":
+        base_model = prepare_model_for_kbit_training(
+            base_model,
+            use_gradient_checkpointing=True,
+        )
+    # PEFT 0.19 unconditionally imports EmbeddingParallel while loading an
+    # adapter, but Transformers 4.57.6 does not export that class.  We do not
+    # use a Transformers tensor-parallel plan here; provide a compatibility
+    # placeholder so ordinary DDP/FSDP adapter loading can proceed.
+    import transformers.integrations.tensor_parallel as tensor_parallel
+
+    if not hasattr(tensor_parallel, "EmbeddingParallel"):
+        class EmbeddingParallel:  # noqa: N801 - mirrors Transformers' public name
+            pass
+
+        tensor_parallel.EmbeddingParallel = EmbeddingParallel
     adapter_path = args.resume_from_checkpoint or args.adapter_path
     model = PeftModel.from_pretrained(
         base_model,
@@ -765,13 +963,33 @@ def load_qlora_model(args: argparse.Namespace):
             model,
             FROZEN_REFERENCE_ADAPTER_NAME,
         )
-    precision_audit = promote_trainable_parameters_to_fp32(model)
-    model.gradient_checkpointing_enable()
+    if trainer_sharding == "fsdp":
+        # The adapter checkpoint is FP32 while the unquantized FSDP base is
+        # BF16.  FSDP cannot flatten mixed dtypes inside one decoder block, so
+        # use BF16 adapter parameters for this isolated sharded diagnostic.
+        # AdamW still keeps its moment buffers in FP32.  The production
+        # replicated QLoRA path below retains its FP32 adapter contract.
+        with torch.no_grad():
+            for parameter in model.parameters():
+                if parameter.is_floating_point() and parameter.dtype != torch.bfloat16:
+                    parameter.data = parameter.data.to(dtype=torch.bfloat16)
+        precision_audit = trainable_parameter_precision_audit(model)
+    else:
+        precision_audit = promote_trainable_parameters_to_fp32(model)
+    if trainer_sharding == "replicated":
+        model.gradient_checkpointing_enable()
     return model, tokenizer, precision_audit, reference_adapter_audit
 
 
 def main() -> None:
     args, experiment_config = parse_args()
+    world_size, rank, _ = _init_distributed()
+    if args.trainer_sharding == "fsdp" and world_size < 2:
+        raise SystemExit("FSDP trainer sharding requires at least two trainer ranks")
+    if args.trainer_sharding == "fsdp" and args.fsdp_base_storage != "bf16":
+        raise SystemExit(
+            "FSDP trainer sharding currently requires --fsdp-base-storage bf16"
+        )
     require_clean_output(args.output_dir, args.resume_from_checkpoint)
     if args.prompts_per_update < 1 or args.group_size < 2:
         raise SystemExit("prompts-per-update must be positive and group-size must be at least 2")
@@ -779,6 +997,8 @@ def main() -> None:
         raise SystemExit("ppo-iterations must be positive")
     if args.gradient_accumulation_steps < 1:
         raise SystemExit("gradient-accumulation-steps must be positive")
+    if args.transition_micro_batch_tokens < 0:
+        raise SystemExit("transition-micro-batch-tokens must be non-negative")
     if args.save_steps < 1 or args.save_total_limit < 1:
         raise SystemExit("save-steps and save-total-limit must be positive")
     try:
@@ -814,16 +1034,23 @@ def main() -> None:
         credit_name = args.credit_assignment
         if args.reward_mode != "result-only":
             raise SystemExit(f"{credit_name} requires --reward-mode result-only")
-        if args.result_reward_profile != "binary":
-            raise SystemExit(f"{credit_name} requires binary terminal rewards")
+        if credit_name == "saam-strict" and args.result_reward_profile != "binary":
+            raise SystemExit("saam-strict requires binary terminal rewards")
+        if credit_name == "saam-asymmetric-error" and args.result_reward_profile not in {
+            "binary",
+            "four-level",
+        }:
+            raise SystemExit(
+                "saam-asymmetric-error requires binary or four-level terminal rewards"
+            )
         if args.train_turns != "all":
             raise SystemExit(f"{credit_name} requires --train-turns all")
         if args.policy_loss_coefficient <= 0.0:
             raise SystemExit(f"{credit_name} requires an enabled policy loss")
         if args.rank_loss_coefficient != 0.0:
             raise SystemExit(f"{credit_name} cannot mix a trajectory ranking loss")
-        if args.kl_beta != 0.0:
-            raise SystemExit(f"{credit_name} requires --kl-beta 0")
+        # SAAM permits a future matched KL arm.  Nonzero KL still requires the
+        # immutable reference adapter and complete runtime identity contract.
     if not math.isfinite(args.error_penalty) or args.error_penalty <= 0.0:
         raise SystemExit("error-penalty must be finite and positive")
     if args.record_gradient_conflicts:
@@ -1092,7 +1319,7 @@ def main() -> None:
     )
 
     per_device_batch = args.prompts_per_update * args.group_size
-    training_args = GRPOConfig(
+    training_args_kwargs = dict(
         output_dir=str(args.output_dir),
         max_steps=args.optimizer_steps,
         per_device_train_batch_size=per_device_batch,
@@ -1105,8 +1332,12 @@ def main() -> None:
         lr_scheduler_type=args.lr_scheduler_type,
         warmup_ratio=args.warmup_ratio,
         max_grad_norm=1.0,
-        bf16=True,
-        gradient_checkpointing=True,
+        # Accelerate's FSDP preparation upcasts trainable FlatParameters to
+        # FP32 whenever TrainingArguments.bf16=True.  The sharded diagnostic
+        # already loads the base and adapter in BF16; leave the Trainer AMP
+        # switch off so it does not create a second full-precision flat copy.
+        bf16=args.trainer_sharding != "fsdp",
+        gradient_checkpointing=args.trainer_sharding != "fsdp",
         gradient_checkpointing_kwargs={"use_reentrant": False},
         disable_dropout=True,
         max_completion_length=args.max_new_tokens,
@@ -1140,12 +1371,42 @@ def main() -> None:
         data_seed=args.seed,
         log_completions=False,
     )
+    if args.trainer_sharding == "fsdp":
+        # FSDP1 FULL_SHARD is intentionally selected for the first model-sharded
+        # test.  The Qwen3 decoder blocks are the communication units; keeping
+        # ``use_orig_params`` allows the custom LoRA optimizer and precision
+        # audit to retain their original Parameter objects.
+        training_args_kwargs.update(
+            fsdp="full_shard auto_wrap",
+            fsdp_config={
+                "transformer_layer_cls_to_wrap": ["Qwen3DecoderLayer"],
+                "use_orig_params": True,
+                # Every rank loads the same local checkpoint before wrapping;
+                # avoid an extra full-model broadcast on the first test.
+                "sync_module_states": False,
+                "activation_checkpointing": True,
+                "state_dict_type": "SHARDED_STATE_DICT",
+            },
+        )
+    training_args = GRPOConfig(**training_args_kwargs)
     (
         model,
         tokenizer,
         trainable_precision_promotion,
         reference_adapter_load_audit,
-    ) = load_qlora_model(args)
+    ) = load_qlora_model(
+        args,
+        trainer_sharding=args.trainer_sharding,
+        fsdp_base_storage=args.fsdp_base_storage,
+    )
+    # Adapter loading must happen before NCCL creates a device mesh (see the
+    # compatibility note in _start_distributed_process_group).
+    _start_distributed_process_group()
+    rollout_log_path = (
+        args.output_dir / "rollouts.jsonl"
+        if world_size == 1
+        else args.output_dir / f"rollouts.rank{rank}.jsonl"
+    )
     rollout_collector = (
         FixedPoolRolloutCollector(
             args.fixed_rollout_pool,
@@ -1157,7 +1418,7 @@ def main() -> None:
             rollout_settings,
             process_config=process_config,
             counterfactual_suites=counterfactual_suites,
-            rollout_log_path=args.output_dir / "rollouts.jsonl",
+            rollout_log_path=rollout_log_path,
         )
     )
     trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
@@ -1187,6 +1448,7 @@ def main() -> None:
         reward_mode=args.reward_mode,
         train_turns=args.train_turns,
         trainable_part=args.trainable_part,
+        trainer_sharding=args.trainer_sharding,
         rank_loss_coefficient=args.rank_loss_coefficient,
         rank_beta=args.rank_beta,
         rank_score_tokens=args.rank_score_tokens,
@@ -1197,16 +1459,21 @@ def main() -> None:
         policy_reduction=args.policy_reduction,
         credit_assignment=args.credit_assignment,
         error_penalty=args.error_penalty,
+        span_balance_alpha=args.span_balance_alpha,
         record_gradient_conflicts=args.record_gradient_conflicts,
         gradient_conflict_dir=args.output_dir / "gradient_conflicts",
         gradient_conflict_save_vectors=args.gradient_conflict_save_vectors,
+        gradient_conflict_max_transitions=args.gradient_conflict_max_transitions,
+        gradient_conflict_carrier_only=args.gradient_conflict_carrier_only,
         reference_adapter_name=(
             FROZEN_REFERENCE_ADAPTER_NAME if args.kl_beta != 0.0 else None
         ),
         transition_micro_batch_size=args.transition_micro_batch_size,
+        transition_micro_batch_tokens=args.transition_micro_batch_tokens,
         callbacks=[
             TrainingPrecisionGuardCallback(
-                require_fp32_adam_moments=args.optimizer_name == "adamw_torch"
+                require_fp32_adam_moments=args.optimizer_name == "adamw_torch",
+                require_fp32_trainable=args.trainer_sharding != "fsdp",
             )
         ],
     )
@@ -1217,8 +1484,11 @@ def main() -> None:
     # initialized state yet.
     trainable_precision_after_trainer_init = promote_trainable_parameters_to_fp32(
         trainer.model
+    ) if args.trainer_sharding != "fsdp" else trainable_parameter_precision_audit(
+        trainer.model
     )
-    require_trainable_parameters_fp32(trainer.model)
+    if args.trainer_sharding != "fsdp":
+        require_trainable_parameters_fp32(trainer.model)
     reference_adapter_after_trainer_audit = (
         frozen_reference_adapter_audit(
             trainer.model,
@@ -1236,6 +1506,16 @@ def main() -> None:
     )
     manifest = {
         "schema_version": "table-agent-trl-transition-grpo-v2",
+        "trainer_parallelism": {
+            "mode": (
+                "fsdp_full_shard"
+                if args.trainer_sharding == "fsdp"
+                else ("ddp" if world_size > 1 else "single")
+            ),
+            "world_size": world_size,
+            "base_storage": args.fsdp_base_storage,
+            "rollout_log": str(rollout_log_path),
+        },
         "framework": "trl",
         "framework_version": importlib.metadata.version("trl"),
         "torch_version": importlib.metadata.version("torch"),
@@ -1245,7 +1525,11 @@ def main() -> None:
         "peft_version": importlib.metadata.version("peft"),
         "bitsandbytes_version": importlib.metadata.version("bitsandbytes"),
         "precision_contract": {
-            "trainable_parameters": "float32",
+            "trainable_parameters": (
+                "bfloat16 (FSDP sharded diagnostic)"
+                if args.trainer_sharding == "fsdp"
+                else "float32"
+            ),
             "optimizer_moments": (
                 "float32"
                 if args.optimizer_name == "adamw_torch"
@@ -1306,15 +1590,17 @@ def main() -> None:
         "error_penalty": args.error_penalty,
         "gradient_conflict_logging": {
             "enabled": bool(args.record_gradient_conflicts),
+            "schema_version": "gradient-conflict-record-v3"
+            if args.record_gradient_conflicts
+            else None,
             "directory": (
                 str(args.output_dir / "gradient_conflicts")
                 if args.record_gradient_conflicts
                 else None
             ),
             "save_vectors": bool(args.gradient_conflict_save_vectors),
-            "schema_version": "gradient-conflict-record-v1"
-            if args.record_gradient_conflicts
-            else None,
+            "max_probe_transitions": int(args.gradient_conflict_max_transitions),
+            "carrier_only": bool(args.gradient_conflict_carrier_only),
         },
         "process_admission_policy": args.process_admission_policy,
         "records": len(records),
@@ -1329,8 +1615,10 @@ def main() -> None:
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "seed": args.seed,
         "transition_micro_batch_size": args.transition_micro_batch_size,
+        "transition_micro_batch_tokens": args.transition_micro_batch_tokens,
         "train_turns": args.train_turns,
         "trainable_part": args.trainable_part,
+        "span_balance_alpha": args.span_balance_alpha,
         "policy_loss_coefficient": args.policy_loss_coefficient,
         "rank_loss_coefficient": args.rank_loss_coefficient,
         "rank_beta": args.rank_beta,
@@ -1384,9 +1672,11 @@ def main() -> None:
             else None
         ),
     }
-    atomic_write_json(args.output_dir / "run_manifest.json", manifest)
-    write_implementation_lock(args.output_dir, manifest)
-    snapshot_implementation_sources(args.output_dir, implementation_hashes)
+    if _is_main_process():
+        atomic_write_json(args.output_dir / "run_manifest.json", manifest)
+        write_implementation_lock(args.output_dir, manifest)
+        snapshot_implementation_sources(args.output_dir, implementation_hashes)
+    _distributed_barrier()
     if checkpoint_gate_spec is not None:
         snapshot_gate_script = (
             args.output_dir
@@ -1410,7 +1700,7 @@ def main() -> None:
                     "checkpoint gate receipt exists before the resumed policy reached its step"
                 )
         trainer.add_callback(SynchronousCheckpointGateCallback(runtime_gate_spec))
-    if reference_filter_audit:
+    if reference_filter_audit and _is_main_process():
         (args.output_dir / "reference_result_filter.json").write_text(
             json.dumps(
                 {
@@ -1435,26 +1725,33 @@ def main() -> None:
             else None
         )
     )
-    final_trainable_precision = require_trainable_parameters_fp32(trainer.model)
-    optimizer_precision = optimizer_moment_precision_audit(trainer.optimizer)
-    if args.optimizer_name == "adamw_torch":
-        optimizer_precision = require_adam_moments_fp32(trainer.optimizer)
-    (args.output_dir / "training_precision.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "table-agent-trl-training-precision-v1",
-                "optimizer_name": args.optimizer_name,
-                "trainable_parameters": final_trainable_precision,
-                "optimizer_state": optimizer_precision,
-            },
-            ensure_ascii=False,
-            indent=2,
+    _distributed_barrier()
+    if _is_main_process():
+        merge_distributed_rollouts(args.output_dir, world_size)
+        final_trainable_precision = (
+            trainable_parameter_precision_audit(trainer.model)
+            if args.trainer_sharding == "fsdp"
+            else require_trainable_parameters_fp32(trainer.model)
         )
-        + "\n",
-        encoding="utf-8",
-    )
-    trainer.save_model(str(args.output_dir / "final"))
-    tokenizer.save_pretrained(args.output_dir / "final")
+        optimizer_precision = optimizer_moment_precision_audit(trainer.optimizer)
+        if args.optimizer_name == "adamw_torch":
+            optimizer_precision = require_adam_moments_fp32(trainer.optimizer)
+        (args.output_dir / "training_precision.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "table-agent-trl-training-precision-v1",
+                    "optimizer_name": args.optimizer_name,
+                    "trainable_parameters": final_trainable_precision,
+                    "optimizer_state": optimizer_precision,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        trainer.save_model(str(args.output_dir / "final"))
+        tokenizer.save_pretrained(args.output_dir / "final")
 
 
 if __name__ == "__main__":

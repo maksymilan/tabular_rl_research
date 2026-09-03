@@ -1,2 +1,0 @@
-"""Native-tool-bundle tests."""
-

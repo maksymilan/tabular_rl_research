@@ -18,7 +18,7 @@ from typing import Any
 import protocol as v26_protocol
 import rollout as v26_rollout
 from executor import Harness
-from tool_schemes import ATOMIC_TOOL_SCHEME, build_atomic_tool_scheme
+from tool_modules.registry import ATOMIC_TOOL_SCHEME, build_atomic_tool_scheme
 
 
 ENVIRONMENT_IMPLEMENTATION = "atomic-v26-isolated-v1"

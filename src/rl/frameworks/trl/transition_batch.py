@@ -75,6 +75,75 @@ class TransitionUpdate:
     local_penalty: float = 0.0
 
 
+def build_transition_microbatch_ranges(
+    prompt_lengths: Sequence[int],
+    completion_lengths: Sequence[int],
+    *,
+    max_rows: int,
+    token_budget: int = 0,
+) -> list[tuple[int, int]]:
+    """Pack adjacent transitions under a padded-token budget.
+
+    The trainer pads prompts and completions independently, then concatenates
+    them for the model forward.  A batch containing ``n`` rows therefore has a
+    conservative padded-token footprint of ``n * (max_prompt + max_completion)``.
+    ``token_budget=0`` preserves the historical fixed-row behavior.  A single
+    row is always admitted even when it exceeds the budget; otherwise an
+    individual long transition could never make progress.
+
+    The caller is responsible for ordering rows by length when padding
+    efficiency matters.  Keeping this helper pure Python makes the packing
+    contract testable without importing Torch or TRL.
+    """
+
+    if len(prompt_lengths) != len(completion_lengths):
+        raise ValueError("prompt and completion length vectors must align")
+    if max_rows < 1:
+        raise ValueError("max_rows must be positive")
+    if token_budget < 0:
+        raise ValueError("token_budget must be non-negative")
+    total = len(prompt_lengths)
+    if total == 0:
+        return []
+    if token_budget == 0:
+        return [
+            (start, min(total, start + max_rows))
+            for start in range(0, total, max_rows)
+        ]
+
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    max_prompt = 0
+    max_completion = 0
+    for index, (prompt_length, completion_length) in enumerate(
+        zip(prompt_lengths, completion_lengths, strict=True)
+    ):
+        prompt_length = int(prompt_length)
+        completion_length = int(completion_length)
+        if prompt_length < 1 or completion_length < 1:
+            raise ValueError("transition lengths must be positive")
+        candidate_rows = index - start + 1
+        candidate_max_prompt = max(max_prompt, prompt_length)
+        candidate_max_completion = max(max_completion, completion_length)
+        candidate_cost = candidate_rows * (
+            candidate_max_prompt + candidate_max_completion
+        )
+        exceeds_rows = candidate_rows > max_rows
+        exceeds_tokens = candidate_cost > token_budget
+        # A long transition is allowed to stand alone even if its own padded
+        # footprint exceeds the configured budget.
+        if index > start and (exceeds_rows or exceeds_tokens):
+            ranges.append((start, index))
+            start = index
+            max_prompt = prompt_length
+            max_completion = completion_length
+        else:
+            max_prompt = candidate_max_prompt
+            max_completion = candidate_max_completion
+    ranges.append((start, total))
+    return ranges
+
+
 def standardized_group_advantages(
     rewards: Sequence[float],
     eligible: Sequence[bool],
