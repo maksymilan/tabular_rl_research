@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.rl.trajectory_semantic_ranker import (
+from rl.diagnostics.semantic.trajectory_semantic_ranker import (
     GoldSemanticCompiler,
     TrajectorySemanticCompiler,
     semantic_overlap,

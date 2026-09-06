@@ -43,7 +43,7 @@ arguments。tool call 之后模型只能基于 Harness 返回的 observation/err
 实现位置：
 
 - action schema/parser：`src/sft/protocol.py`、`src/sft/prompt_contract.py`
-- environment：`src/rl/tool_environment_v26.py`
+- environment：`src/rl/runtime/tool_environment_v26.py`
 - relation facts：`src/harness/relation_derivation/`
 - frozen runtime：`/home/dengyan/tabular_rl_outputs/runtime/version26-4cd47c957fc6ae791e76a10594c8cd22f4d3b6de`
 

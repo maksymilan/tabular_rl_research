@@ -10,13 +10,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from experiment_config import (
+from rl.configuration.experiment_config import (
     QWEN3_8B_BASE_MODEL_FILES,
     RLExperimentConfig,
     base_model_aggregate_sha256,
     validate_base_model_identity_contract,
 )
-from process_credit import ProcessRewardConfig
+from rl.objectives.process_credit import ProcessRewardConfig
 
 
 QWEN3_8B_BASE_MODEL_AGGREGATE_SHA256 = (

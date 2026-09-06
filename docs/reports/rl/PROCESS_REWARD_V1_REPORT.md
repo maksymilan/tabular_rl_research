@@ -43,7 +43,7 @@ r_{i,t}=C_i c^+_{i,t}-P_i c^-_{i,t},\qquad
   - 惩罚事件提取；
   - 正负信用归一化；
   - 奖励守恒和正确轨迹正总量断言。
-- `src/rl/process_objective.py`
+- `src/rl/objectives/process_objective.py`
   - 实现逐步加权策略目标；
   - `beta > 0` 时强制要求调用方提供来自冻结 SFT-2 reference 的逐步 KL；
   - 不允许把当前 rollout policy 或 base model 静默当作 `pi_SFT-2`。

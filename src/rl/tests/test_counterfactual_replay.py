@@ -7,10 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-RL_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(RL_DIR))
+SRC_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(SRC_DIR))
 
-from trajectory_replay import (  # noqa: E402
+from rl.runtime.trajectory_replay import (  # noqa: E402
     CounterfactualReplayError,
     derive_observation_bindings,
     evaluate_counterfactual_suite,

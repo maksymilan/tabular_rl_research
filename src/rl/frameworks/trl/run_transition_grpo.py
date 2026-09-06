@@ -89,16 +89,16 @@ from trl import GRPOConfig
 
 
 IMPLEMENTATION_SOURCE_FILES = (
-    "src/rl/counterfactual_suite.py",
-    "src/rl/experiment_config.py",
-    "src/rl/reference_result_filter.py",
-    "src/rl/task_loader.py",
+    "src/rl/runtime/counterfactual_suite.py",
+    "src/rl/configuration/experiment_config.py",
+    "src/rl/runtime/reference_result_filter.py",
+    "src/rl/runtime/task_loader.py",
     "src/rl/frameworks/trl/fixed_rollout_pool.py",
     "src/rl/frameworks/trl/checkpoint_gate.py",
-    "src/rl/diagnostics/analyze_grpo_training.py",
-    "src/rl/diagnostics/compare_lora_updates.py",
-    "src/rl/diagnostics/prepare_vanilla_grpo_resume.py",
-    "src/rl/diagnostics/audit_saam_lineage_replay.py",
+    "src/rl/scenarios/diagnostics/analyze_grpo_training.py",
+    "src/rl/scenarios/diagnostics/compare_lora_updates.py",
+    "src/rl/scenarios/diagnostics/prepare_vanilla_grpo_resume.py",
+    "src/rl/scenarios/diagnostics/audit_saam_lineage_replay.py",
     "src/rl/frameworks/trl/run_atomic_transition_grpo.sh",
     "src/rl/frameworks/trl/run_transition_grpo.py",
     "src/rl/frameworks/trl/start_vllm_server.sh",
@@ -110,39 +110,40 @@ IMPLEMENTATION_SOURCE_FILES = (
     "src/rl/frameworks/trl/tool_loss_mask.py",
     "src/rl/frameworks/trl/training_precision.py",
     "src/rl/frameworks/trl/trajectory_ranking.py",
-    "src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_a100.sh",
-    "src/rl/rollout_scoring.py",
-    "src/rl/terminal_reward.py",
-    "src/rl/tool_environment_v26.py",
+    "src/rl/scenarios/rl_main/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh",
+    "src/rl/runtime/rollout_scoring.py",
+    "src/rl/runtime/terminal_reward.py",
+    "src/rl/runtime/tool_environment_v26.py",
     "src/tool_modules/registry.py",
 )
-from counterfactual_suite import (  # noqa: E402
+from rl.runtime.counterfactual_suite import (  # noqa: E402
     SCHEMA_VERSION as COUNTERFACTUAL_SCHEMA_VERSION,
     CounterfactualSuiteManifest,
     load_counterfactual_suite_manifest,
 )
-from experiment_config import (  # noqa: E402
+from rl.configuration.experiment_config import (  # noqa: E402
     RLExperimentConfig,
     require_resume_base_model_identity,
     runtime_content_tree_sha256,
     verify_base_model_identity,
     validate_runtime_identity,
 )
-from reference_result_filter import filter_training_records  # noqa: E402
-from task_loader import load_rl_task_records  # noqa: E402
-from frameworks.trl.rollout import (  # noqa: E402
+from rl.runtime.reference_result_filter import filter_training_records  # noqa: E402
+from rl.runtime.task_loader import load_rl_task_records  # noqa: E402
+from rl.frameworks.trl.rollout import (  # noqa: E402
     RolloutSettings,
     TableAgentRolloutCollector,
     TOOL_ENVIRONMENT_FACTORY_MODULE,
 )
-from frameworks.trl.fixed_rollout_pool import FixedPoolRolloutCollector  # noqa: E402
-from frameworks.trl.checkpoint_gate import (  # noqa: E402
+from rl.frameworks.trl.fixed_rollout_pool import FixedPoolRolloutCollector  # noqa: E402
+from rl.frameworks.trl.checkpoint_gate import (  # noqa: E402
     CheckpointGateSpec,
     build_checkpoint_gate_spec,
     run_checkpoint_gate,
 )
-from frameworks.trl.transition_grpo import TransitionGRPOTrainer  # noqa: E402
-from frameworks.trl.training_precision import (  # noqa: E402
+from rl.frameworks.trl.transition_grpo import TransitionGRPOTrainer  # noqa: E402
+from rl.frameworks.trl.mechanism import RLMechanism  # noqa: E402
+from rl.frameworks.trl.training_precision import (  # noqa: E402
     optimizer_moment_precision_audit,
     promote_trainable_parameters_to_fp32,
     require_adam_moments_fp32,
@@ -193,13 +194,30 @@ def _start_distributed_process_group() -> None:
     if world_size <= 1 or torch.distributed.is_initialized():
         return
     torch.cuda.set_device(local_rank)
-    torch.distributed.init_process_group(backend="nccl")
+    # The launcher may expose a non-contiguous physical GPU set through
+    # CUDA_VISIBLE_DEVICES (for example 5,6). Bind the process group to the
+    # local device explicitly instead of letting NCCL infer it from a global
+    # rank or a later barrier; the latter can select the wrong CUDA context and
+    # leave the watchdog waiting on the first FSDP collective.
+    init_parameters = inspect.signature(
+        torch.distributed.init_process_group
+    ).parameters
+    if "device_id" in init_parameters:
+        torch.distributed.init_process_group(
+            backend="nccl",
+            device_id=torch.device("cuda", local_rank),
+        )
+    else:  # pragma: no cover - compatibility with older torch builds
+        torch.distributed.init_process_group(backend="nccl")
 
 
 def _distributed_barrier() -> None:
-    world_size, _, _ = _distributed_env()
+    world_size, _, local_rank = _distributed_env()
     if world_size > 1 and torch.distributed.is_initialized():
-        torch.distributed.barrier()
+        try:
+            torch.distributed.barrier(device_ids=[local_rank])
+        except TypeError:  # pragma: no cover - compatibility with older torch builds
+            torch.distributed.barrier()
 
 
 def _is_main_process() -> bool:
@@ -285,6 +303,29 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
         default="binary",
     )
     parser.add_argument(
+        "--result-advantage-profile",
+        choices=(
+            "stored",
+            "correctness-primary-clean-secondary",
+            "class-conditional-routing",
+            "smc-mode-concentration",
+        ),
+        default="stored",
+        help=(
+            "group advantage source; class-conditional-routing keeps correctness "
+            "primary in mixed groups, uses cleanliness for all-correct efficiency, "
+            "and gives all-wrong groups no result-only advantage"
+            "; smc-mode-concentration selects the highest-probability correct and "
+            "wrong trajectories in mixed groups"
+        ),
+    )
+    parser.add_argument(
+        "--clean-advantage-weight",
+        type=float,
+        default=0.25,
+        help="bounded clean/error magnitude modifier for the correctness-primary profile",
+    )
+    parser.add_argument(
         "--policy-reduction",
         choices=(
             "transition_mean",
@@ -295,13 +336,20 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
     )
     parser.add_argument(
         "--credit-assignment",
-        choices=("trajectory", "saam-strict", "saam-asymmetric-error"),
+        choices=(
+            "trajectory",
+            "saam-strict",
+            "saam-asymmetric-error",
+            "saam-asymmetric-error-no-mask",
+        ),
         default="trajectory",
         help=(
             "trajectory keeps vanilla terminal GRPO credit; saam-strict zeros only "
             "mixed-outcome exact state-action coefficients without renormalization; "
             "saam-asymmetric-error keeps correct shared actions, suppresses wrong "
-            "shared actions, and applies local deterministic-error penalties"
+            "shared actions, and applies local deterministic-error penalties; "
+            "saam-asymmetric-error-no-mask keeps only the local error penalties "
+            "for a matched mask ablation"
         ),
     )
     parser.add_argument(
@@ -492,13 +540,23 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
             "while 4bit is rejected until Params4bit sharding is validated"
         ),
     )
+    parser.add_argument(
+        "--replicated-base-storage",
+        choices=("bf16", "4bit"),
+        default=os.environ.get("TABLE_RL_REPLICATED_BASE_STORAGE", "4bit"),
+        help=(
+            "base weight storage for the replicated/single-GPU path; bf16 keeps "
+            "the same frozen-base compute as FSDP, while 4bit is the explicit "
+            "low-memory fallback"
+        ),
+    )
     if experiment_config is not None:
         parser.set_defaults(**experiment_config.argparse_defaults(ROOT))
     return parser.parse_args(), experiment_config
 
 
 def load_process_config(path: Path | None):
-    from process_credit import ProcessRewardConfig
+    from rl.objectives.process_credit import ProcessRewardConfig
 
     if path is None:
         return ProcessRewardConfig()
@@ -880,6 +938,7 @@ def load_qlora_model(
     *,
     trainer_sharding: str = "replicated",
     fsdp_base_storage: str = "bf16",
+    replicated_base_storage: str = "4bit",
 ):
     if trainer_sharding not in {"replicated", "fsdp"}:
         raise ValueError(f"unsupported trainer sharding: {trainer_sharding}")
@@ -888,6 +947,11 @@ def load_qlora_model(
             "FSDP sharding currently requires bf16 base storage; refusing "
             "unvalidated Params4bit sharding"
         )
+    if replicated_base_storage not in {"bf16", "4bit"}:
+        raise ValueError(
+            "replicated base storage must be either bf16 or 4bit, got "
+            f"{replicated_base_storage!r}"
+        )
     quantization = (
         BitsAndBytesConfig(
             load_in_4bit=True,
@@ -895,7 +959,7 @@ def load_qlora_model(
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
         )
-        if trainer_sharding == "replicated"
+        if trainer_sharding == "replicated" and replicated_base_storage == "4bit"
         else None
     )
     tokenizer = AutoTokenizer.from_pretrained(
@@ -925,7 +989,7 @@ def load_qlora_model(
     # QLoRA helper: on a BF16 model it casts frozen parameters to FP32, which
     # creates a second full copy before FSDP wrapping and can OOM a 40 GB GPU.
     # Activation checkpointing is supplied by the FSDP plugin instead.
-    if trainer_sharding == "replicated":
+    if trainer_sharding == "replicated" and replicated_base_storage == "4bit":
         base_model = prepare_model_for_kbit_training(
             base_model,
             use_gradient_checkpointing=True,
@@ -1030,18 +1094,25 @@ def main() -> None:
         raise SystemExit("policy-loss-coefficient must be non-negative")
     if args.policy_loss_coefficient == 0.0 and args.rank_loss_coefficient == 0.0:
         raise SystemExit("at least one policy or rank loss must be enabled")
-    if args.credit_assignment in {"saam-strict", "saam-asymmetric-error"}:
+    if args.credit_assignment in {
+        "saam-strict",
+        "saam-asymmetric-error",
+        "saam-asymmetric-error-no-mask",
+    }:
         credit_name = args.credit_assignment
         if args.reward_mode != "result-only":
             raise SystemExit(f"{credit_name} requires --reward-mode result-only")
         if credit_name == "saam-strict" and args.result_reward_profile != "binary":
             raise SystemExit("saam-strict requires binary terminal rewards")
-        if credit_name == "saam-asymmetric-error" and args.result_reward_profile not in {
+        if credit_name in {
+            "saam-asymmetric-error",
+            "saam-asymmetric-error-no-mask",
+        } and args.result_reward_profile not in {
             "binary",
             "four-level",
         }:
             raise SystemExit(
-                "saam-asymmetric-error requires binary or four-level terminal rewards"
+                f"{credit_name} requires binary or four-level terminal rewards"
             )
         if args.train_turns != "all":
             raise SystemExit(f"{credit_name} requires --train-turns all")
@@ -1051,6 +1122,20 @@ def main() -> None:
             raise SystemExit(f"{credit_name} cannot mix a trajectory ranking loss")
         # SAAM permits a future matched KL arm.  Nonzero KL still requires the
         # immutable reference adapter and complete runtime identity contract.
+    if args.result_advantage_profile != "stored":
+        if args.reward_mode != "result-only":
+            raise SystemExit("result advantage profiles require --reward-mode result-only")
+        if args.credit_assignment not in {
+            "saam-asymmetric-error",
+            "saam-asymmetric-error-no-mask",
+            "trajectory",
+        }:
+            raise SystemExit(
+                "non-stored result advantage profiles require "
+                "--credit-assignment saam-asymmetric-error"
+            )
+    if not math.isfinite(args.clean_advantage_weight) or not 0.0 <= args.clean_advantage_weight < 1.0:
+        raise SystemExit("clean-advantage-weight must be finite and in [0, 1)")
     if not math.isfinite(args.error_penalty) or args.error_penalty <= 0.0:
         raise SystemExit("error-penalty must be finite and positive")
     if args.record_gradient_conflicts:
@@ -1319,6 +1404,9 @@ def main() -> None:
     )
 
     per_device_batch = args.prompts_per_update * args.group_size
+    fsdp_activation_checkpointing = (
+        os.environ.get("RL_FSDP_ACTIVATION_CHECKPOINTING", "1") == "1"
+    )
     training_args_kwargs = dict(
         output_dir=str(args.output_dir),
         max_steps=args.optimizer_steps,
@@ -1384,7 +1472,7 @@ def main() -> None:
                 # Every rank loads the same local checkpoint before wrapping;
                 # avoid an extra full-model broadcast on the first test.
                 "sync_module_states": False,
-                "activation_checkpointing": True,
+                "activation_checkpointing": fsdp_activation_checkpointing,
                 "state_dict_type": "SHARDED_STATE_DICT",
             },
         )
@@ -1398,6 +1486,7 @@ def main() -> None:
         args,
         trainer_sharding=args.trainer_sharding,
         fsdp_base_storage=args.fsdp_base_storage,
+        replicated_base_storage=args.replicated_base_storage,
     )
     # Adapter loading must happen before NCCL creates a device mesh (see the
     # compatibility note in _start_distributed_process_group).
@@ -1446,6 +1535,16 @@ def main() -> None:
         optimizers=(optimizer, None),
         rollout_collector=rollout_collector,
         reward_mode=args.reward_mode,
+        mechanism=RLMechanism.from_legacy_args(
+            reward_mode=args.reward_mode,
+            result_advantage_profile=args.result_advantage_profile,
+            clean_advantage_weight=args.clean_advantage_weight,
+            policy_reduction=args.policy_reduction,
+            credit_assignment=args.credit_assignment,
+            error_penalty=args.error_penalty,
+            span_balance_alpha=args.span_balance_alpha,
+            kl_beta=args.kl_beta,
+        ),
         train_turns=args.train_turns,
         trainable_part=args.trainable_part,
         trainer_sharding=args.trainer_sharding,
@@ -1459,6 +1558,8 @@ def main() -> None:
         policy_reduction=args.policy_reduction,
         credit_assignment=args.credit_assignment,
         error_penalty=args.error_penalty,
+        result_advantage_profile=args.result_advantage_profile,
+        clean_advantage_weight=args.clean_advantage_weight,
         span_balance_alpha=args.span_balance_alpha,
         record_gradient_conflicts=args.record_gradient_conflicts,
         gradient_conflict_dir=args.output_dir / "gradient_conflicts",
@@ -1510,11 +1611,37 @@ def main() -> None:
             "mode": (
                 "fsdp_full_shard"
                 if args.trainer_sharding == "fsdp"
-                else ("ddp" if world_size > 1 else "single")
+                else ("ddp_replicated" if world_size > 1 else "single_gpu_replicated")
             ),
             "world_size": world_size,
-            "base_storage": args.fsdp_base_storage,
+            "base_storage": (
+                args.fsdp_base_storage
+                if args.trainer_sharding == "fsdp"
+                else args.replicated_base_storage
+            ),
             "rollout_log": str(rollout_log_path),
+        },
+        "replicated_execution_options": {
+            "base_storage": args.replicated_base_storage,
+            "single_process": world_size == 1,
+        },
+        "fsdp_execution_options": {
+            "microbatch_no_sync": bool(
+                getattr(trainer, "fsdp_microbatch_no_sync", False)
+            ),
+            "inference_full_params": bool(
+                getattr(trainer, "fsdp_inference_full_params", False)
+            ),
+            "activation_checkpointing": (
+                fsdp_activation_checkpointing
+                if args.trainer_sharding == "fsdp"
+                else None
+            ),
+            "length_sort_before_training": (
+                args.trainer_sharding == "fsdp"
+                and args.transition_micro_batch_tokens > 0
+            ),
+            "microbatch_alignment_guard": args.trainer_sharding == "fsdp",
         },
         "framework": "trl",
         "framework_version": importlib.metadata.version("trl"),
@@ -1585,6 +1712,8 @@ def main() -> None:
         ),
         "reward_mode": args.reward_mode,
         "result_reward_profile": args.result_reward_profile,
+        "result_advantage_profile": args.result_advantage_profile,
+        "clean_advantage_weight": args.clean_advantage_weight,
         "policy_reduction": args.policy_reduction,
         "credit_assignment": args.credit_assignment,
         "error_penalty": args.error_penalty,

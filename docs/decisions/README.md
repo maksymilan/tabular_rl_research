@@ -7,7 +7,7 @@ use `docs/current/` for active behavior.
   implementation references inside it are historical.
 - `process_reward_density.md`: formal motivation for dense, grounded process credit.
 - `process_reward_design.md`: reward-design exploration; active implementation is
-  `src/rl/process_credit.py`.
+  `src/rl/objectives/process_credit.py`.
 - `context_management_design.md`: origin of bounded context; SQL-compiled perception injection is
   superseded by causal online tool choice.
 - `subtable_vs_memory.md`: historical state-ownership analysis.

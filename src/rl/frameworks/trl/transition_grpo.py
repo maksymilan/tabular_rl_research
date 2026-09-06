@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import gc
 import math
+import os
 import time
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -24,23 +25,17 @@ except ImportError as exc:  # pragma: no cover - exercised in the GPU environmen
 else:
     _TRL_IMPORT_ERROR = None
 
-from frameworks.trl.transition_batch import (
+from rl.frameworks.trl.transition_batch import (
     build_transition_microbatch_ranges,
-    build_transition_updates,
-    policy_reduction_advantages,
     retain_policy_contributing_updates,
 )
-from frameworks.trl.state_action_ambiguity import (
-    CREDIT_ASSIGNMENTS,
-    apply_asymmetric_error_credit,
-    apply_state_action_ambiguity_mask,
-)
-from frameworks.trl.gradient_conflict import GradientConflictRecorder
-from frameworks.trl.tool_loss_mask import (
+from rl.frameworks.trl.state_action_ambiguity import CREDIT_ASSIGNMENTS
+from rl.frameworks.trl.gradient_conflict import GradientConflictRecorder
+from rl.frameworks.trl.tool_loss_mask import (
     ToolMaskUnavailable,
     tool_token_loss_mask,
 )
-from frameworks.trl.trajectory_ranking import (
+from rl.frameworks.trl.trajectory_ranking import (
     RANK_SCORE_REDUCTIONS,
     RANK_SCORE_SCOPES,
     RANK_SCORE_TOKENS,
@@ -49,6 +44,7 @@ from frameworks.trl.trajectory_ranking import (
     build_trajectory_pairs,
     rank_transition_selected,
 )
+from rl.frameworks.trl.mechanism import RLMechanism
 
 
 def _dummy_reward(completions, **kwargs):
@@ -134,6 +130,8 @@ class TransitionGRPOTrainer(GRPOTrainer):
         policy_reduction: str = "transition_mean",
         credit_assignment: str = "trajectory",
         error_penalty: float = 1.0,
+        result_advantage_profile: str = "stored",
+        clean_advantage_weight: float = 0.25,
         span_balance_alpha: float | None = None,
         record_gradient_conflicts: bool = False,
         gradient_conflict_dir: Path | None = None,
@@ -141,6 +139,7 @@ class TransitionGRPOTrainer(GRPOTrainer):
         gradient_conflict_max_transitions: int = 0,
         gradient_conflict_carrier_only: bool = False,
         reference_adapter_name: str | None = None,
+        mechanism: RLMechanism | None = None,
         transition_micro_batch_size: int = 2,
         transition_micro_batch_tokens: int = 0,
         **kwargs,
@@ -177,16 +176,41 @@ class TransitionGRPOTrainer(GRPOTrainer):
             raise ValueError("saam-strict requires all causal turns")
         if credit_assignment == "saam-strict" and rank_loss_coefficient != 0.0:
             raise ValueError("saam-strict pilot does not mix a trajectory ranking loss")
-        if credit_assignment == "saam-asymmetric-error" and reward_mode != "result-only":
-            raise ValueError("saam-asymmetric-error requires result-only terminal rewards")
-        if credit_assignment == "saam-asymmetric-error" and train_turns != "all":
-            raise ValueError("saam-asymmetric-error requires all causal turns")
-        if credit_assignment == "saam-asymmetric-error" and rank_loss_coefficient != 0.0:
+        if credit_assignment in {
+            "saam-asymmetric-error",
+            "saam-asymmetric-error-no-mask",
+        } and reward_mode != "result-only":
+            raise ValueError(f"{credit_assignment} requires result-only terminal rewards")
+        if credit_assignment in {
+            "saam-asymmetric-error",
+            "saam-asymmetric-error-no-mask",
+        } and train_turns != "all":
+            raise ValueError(f"{credit_assignment} requires all causal turns")
+        if credit_assignment in {
+            "saam-asymmetric-error",
+            "saam-asymmetric-error-no-mask",
+        } and rank_loss_coefficient != 0.0:
             raise ValueError(
-                "saam-asymmetric-error does not mix a trajectory ranking loss"
+                f"{credit_assignment} does not mix a trajectory ranking loss"
             )
         if not math.isfinite(error_penalty) or error_penalty <= 0.0:
             raise ValueError("error_penalty must be finite and positive")
+        if result_advantage_profile not in {
+            "stored",
+            "correctness-primary-clean-secondary",
+            "class-conditional-routing",
+            "smc-mode-concentration",
+        }:
+            raise ValueError(
+                "unsupported result_advantage_profile: "
+                f"{result_advantage_profile}"
+            )
+        if not math.isfinite(clean_advantage_weight) or not 0.0 <= clean_advantage_weight < 1.0:
+            raise ValueError("clean_advantage_weight must be finite and in [0, 1)")
+        if result_advantage_profile != "stored" and reward_mode != "result-only":
+            raise ValueError(
+                "result advantage profiles require result-only terminal rewards"
+            )
         if span_balance_alpha is not None:
             if not math.isfinite(span_balance_alpha) or not 0.0 <= span_balance_alpha <= 1.0:
                 raise ValueError("span_balance_alpha must be in [0, 1]")
@@ -232,7 +256,15 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 "dense_outcome rank scores require dense_outcome updates"
             )
         self.rollout_collector = rollout_collector
-        self.transition_reward_mode = reward_mode
+        self.mechanism = mechanism or RLMechanism.from_legacy_args(
+            reward_mode=reward_mode,
+            result_advantage_profile=result_advantage_profile,
+            clean_advantage_weight=clean_advantage_weight,
+            policy_reduction=policy_reduction,
+            credit_assignment=credit_assignment,
+            error_penalty=error_penalty,
+        )
+        self.transition_reward_mode = self.mechanism.reward_mode
         if trainer_sharding not in {"replicated", "fsdp"}:
             raise ValueError(f"unsupported trainer_sharding: {trainer_sharding}")
         self.trainer_sharding = trainer_sharding
@@ -246,10 +278,15 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self.rank_update_scope = rank_update_scope
         self.policy_loss_coefficient = policy_loss_coefficient
         self.policy_reduction = policy_reduction
-        self.credit_assignment = credit_assignment
-        self.error_penalty = float(error_penalty)
+        self.credit_assignment = self.mechanism.credit_assignment
+        self.error_penalty = float(self.mechanism.error_penalty)
+        self.result_advantage_profile = self.mechanism.result_advantage_profile
+        self.clean_advantage_weight = float(self.mechanism.clean_advantage_weight)
+        self.policy_reduction = self.mechanism.policy_reduction
         self.span_balance_alpha = (
-            None if span_balance_alpha is None else float(span_balance_alpha)
+            None
+            if self.mechanism.span_balance_alpha is None
+            else float(self.mechanism.span_balance_alpha)
         )
         self.record_gradient_conflicts = bool(record_gradient_conflicts)
         self.gradient_conflict_dir = gradient_conflict_dir
@@ -260,6 +297,22 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self.reference_adapter_name = reference_adapter_name
         self.transition_micro_batch_size = int(transition_micro_batch_size)
         self.transition_micro_batch_tokens = int(transition_micro_batch_tokens)
+        # Delaying FSDP gradient synchronization until the last transition
+        # microbatch is mathematically equivalent to synchronizing every
+        # microbatch, while removing one reduce-scatter per microbatch. Keep it
+        # opt-in until the A100 fixed-pool gate confirms the extra local
+        # gradient residency fits safely.
+        self.fsdp_microbatch_no_sync = (
+            trainer_sharding == "fsdp"
+            and os.environ.get("RL_FSDP_MICROBATCH_NO_SYNC", "0") == "1"
+        )
+        # Inference-only old-policy/reference scoring can keep full FSDP
+        # parameters resident for the complete pass. This trades peak memory
+        # for avoiding repeated layer all-gathers and is independently gated.
+        self.fsdp_inference_full_params = (
+            trainer_sharding == "fsdp"
+            and os.environ.get("RL_FSDP_INFERENCE_FULL_PARAMS", "0") == "1"
+        )
         kwargs.setdefault("reward_funcs", _dummy_reward)
         super().__init__(*args, **kwargs)
         # TRL creates a policy-copy adapter named ``ref`` for any PEFT model with
@@ -417,11 +470,16 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 # optimization carrier (tool-only/span-balanced experiments may
                 # otherwise be mislabeled as full-response measurements).
                 micro_inputs["tool_mask"] = micro_inputs["completion_attention_mask"]
-            with self.compute_loss_context_manager():
-                micro_loss = super()._compute_loss(model, micro_inputs)
-            weight = (end - start) / policy_normalization_transitions
-            scaled_loss = micro_loss * weight * self.policy_loss_coefficient
-            self.accelerator.backward(scaled_loss)
+            synchronize = range_index == len(microbatch_plan.ranges) - 1
+            with self._microbatch_sync_context(
+                model,
+                synchronize=synchronize,
+            ):
+                with self.compute_loss_context_manager():
+                    micro_loss = super()._compute_loss(model, micro_inputs)
+                weight = (end - start) / policy_normalization_transitions
+                scaled_loss = micro_loss * weight * self.policy_loss_coefficient
+                self.accelerator.backward(scaled_loss)
 
     @staticmethod
     def _select_gradient_probe_inputs(
@@ -964,6 +1022,106 @@ class TransitionGRPOTrainer(GRPOTrainer):
             int(update.turn_index),
         )
 
+    @staticmethod
+    def _sort_transition_batch_by_length(
+        inputs: dict[str, Any],
+    ) -> tuple[dict[str, Any], tuple[int, ...], tuple[int, ...]]:
+        """Restore the length order before token-budget microbatch planning.
+
+        TRL shuffles every generation-batch tensor before ``training_step``.  That
+        is harmless for a fixed row cap, but a greedy padded-token planner is
+        order-sensitive: the same rows can produce a different number of
+        microbatches after the shuffle.  FSDP ranks must execute the same number
+        of model collectives, so recover the deterministic order established by
+        the rollout-side scheduler before building the plan.  This only permutes
+        rows; it does not change any loss value or normalization term.
+        """
+
+        completion_ids = inputs["completion_ids"]
+        batch_size = int(completion_ids.shape[0])
+        prompt_lengths = tuple(
+            int(value)
+            for value in inputs["prompt_mask"]
+            .sum(dim=1)
+            .detach()
+            .to(device="cpu")
+            .tolist()
+        )
+        completion_lengths = tuple(
+            int(value)
+            for value in inputs["completion_attention_mask"]
+            .sum(dim=1)
+            .detach()
+            .to(device="cpu")
+            .tolist()
+        )
+        if len(prompt_lengths) != batch_size or len(completion_lengths) != batch_size:
+            raise RuntimeError("transition length metadata is not aligned with the batch")
+        order = sorted(
+            range(batch_size),
+            key=lambda index: (
+                prompt_lengths[index] + completion_lengths[index],
+                prompt_lengths[index],
+                completion_lengths[index],
+                index,
+            ),
+        )
+        sorted_prompt_lengths = tuple(prompt_lengths[index] for index in order)
+        sorted_completion_lengths = tuple(
+            completion_lengths[index] for index in order
+        )
+        if order == list(range(batch_size)):
+            return inputs, sorted_prompt_lengths, sorted_completion_lengths
+
+        indices = torch.tensor(
+            order,
+            device=completion_ids.device,
+            dtype=torch.long,
+        )
+        sorted_inputs: dict[str, Any] = {}
+        for key, value in inputs.items():
+            if (
+                torch.is_tensor(value)
+                and value.ndim > 0
+                and int(value.shape[0]) == batch_size
+            ):
+                sorted_inputs[key] = value.index_select(0, indices)
+            else:
+                sorted_inputs[key] = value
+        return sorted_inputs, sorted_prompt_lengths, sorted_completion_lengths
+
+    def _assert_fsdp_microbatch_alignment(
+        self,
+        microbatch_plan: _TransitionMicrobatchPlan,
+        *,
+        stage: str,
+    ) -> None:
+        """Fail closed before a model forward if ranks disagree on slot count."""
+
+        if self.trainer_sharding != "fsdp" or self.accelerator.num_processes < 2:
+            return
+        import torch.distributed as dist
+
+        if not dist.is_available() or not dist.is_initialized():
+            return
+        device = self.accelerator.device
+        count = torch.tensor(
+            [len(microbatch_plan.ranges)],
+            device=device,
+            dtype=torch.long,
+        )
+        minimum = count.clone()
+        maximum = count.clone()
+        dist.all_reduce(minimum, op=dist.ReduceOp.MIN)
+        dist.all_reduce(maximum, op=dist.ReduceOp.MAX)
+        if int(minimum.item()) != int(maximum.item()):
+            raise RuntimeError(
+                "FSDP transition microbatch schedule mismatch before "
+                f"{stage}: local={len(microbatch_plan.ranges)}, "
+                f"global_min={int(minimum.item())}, "
+                f"global_max={int(maximum.item())}"
+            )
+
     def _importance_sampling_ratio(
         self,
         old_per_token_logps,
@@ -1112,10 +1270,57 @@ class TransitionGRPOTrainer(GRPOTrainer):
             return preallocated
         return torch.cat(rows, dim=0)
 
+    @contextmanager
+    def _microbatch_sync_context(self, model, *, synchronize: bool):
+        """Delay FSDP gradient synchronization until the final microbatch.
+
+        ``Accelerator.no_sync`` only delegates to a top-level ``no_sync``
+        attribute. A PEFT wrapper can instead contain FSDP roots below it, so
+        locate those roots explicitly and enter one context per root. The last
+        microbatch remains synchronized and therefore produces the same
+        reduced gradient as the eager path, up to floating-point reduction
+        order.
+        """
+
+        if synchronize or not self.fsdp_microbatch_no_sync:
+            yield
+            return
+        try:
+            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        except ImportError:  # pragma: no cover - only reached without FSDP
+            with self.accelerator.no_sync(model):
+                yield
+            return
+
+        roots = []
+
+        def visit(module, inside_fsdp: bool = False):
+            is_fsdp = isinstance(module, FSDP)
+            if is_fsdp and not inside_fsdp:
+                roots.append(module)
+            for child in module.children():
+                visit(child, inside_fsdp or is_fsdp)
+
+        visit(model)
+        if not roots:
+            # Keep the helper usable for a DDP-wrapped smoke test as well.
+            with self.accelerator.no_sync(model):
+                yield
+            return
+        with ExitStack() as stack:
+            for root in roots:
+                stack.enter_context(root.no_sync())
+            yield
+
     @staticmethod
     @contextmanager
-    def _summon_fsdp_full_params(model):
-        """Expose FSDP shards while synchronizing the merged actor to vLLM."""
+    def _summon_fsdp_full_params(
+        model,
+        *,
+        rank0_only: bool = True,
+        offload_to_cpu: bool = True,
+    ):
+        """Expose FSDP shards for one bounded, collective-safe pass."""
 
         try:
             from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -1146,10 +1351,24 @@ class TransitionGRPOTrainer(GRPOTrainer):
                         module,
                         recurse=True,
                         writeback=False,
-                        rank0_only=True,
-                        offload_to_cpu=True,
+                        rank0_only=rank0_only,
+                        offload_to_cpu=offload_to_cpu,
                     )
                 )
+            yield
+
+    @contextmanager
+    def _inference_full_params_context(self, model):
+        """Keep full BF16 params resident during one no-grad scoring pass."""
+
+        if not self.fsdp_inference_full_params:
+            yield
+            return
+        with self._summon_fsdp_full_params(
+            model,
+            rank0_only=False,
+            offload_to_cpu=False,
+        ):
             yield
 
     def _sync_qlora_weights_to_vllm(self, model, *, stream: bool = True) -> int:
@@ -1288,9 +1507,8 @@ class TransitionGRPOTrainer(GRPOTrainer):
         preparation_started = time.perf_counter()
         episodes = self.rollout_collector.collect(inputs, self)
         collect_finished = time.perf_counter()
-        updates = build_transition_updates(
+        updates = self.mechanism.build_updates(
             episodes,
-            reward_mode=self.transition_reward_mode,
             train_turns=self.transition_train_turns,
         )
         if self.offline_rollout_pool:
@@ -1331,22 +1549,14 @@ class TransitionGRPOTrainer(GRPOTrainer):
         removed_absolute_policy_coefficient_fraction = 0.0
         absolute_policy_coefficient_delta_fraction = 0.0
         if self.credit_assignment == "saam-strict":
-            vanilla_effective_advantages = policy_reduction_advantages(
-                updates,
-                reduction=self.policy_reduction,
-                normalization_transition_count=original_transition_count,
-                normalization_trajectory_count=original_trajectory_count,
+            vanilla_effective_advantages = self.mechanism.effective_advantages(
+                updates, transition_count=original_transition_count,
+                trajectory_count=original_trajectory_count,
             )
-            updates, saam_audit = apply_state_action_ambiguity_mask(
-                episodes,
-                updates,
-                credit_assignment=self.credit_assignment,
-            )
-            masked_effective_advantages = policy_reduction_advantages(
-                updates,
-                reduction=self.policy_reduction,
-                normalization_transition_count=original_transition_count,
-                normalization_trajectory_count=original_trajectory_count,
+            updates, saam_audit = self.mechanism.apply_credit(episodes, updates)
+            masked_effective_advantages = self.mechanism.effective_advantages(
+                updates, transition_count=original_transition_count,
+                trajectory_count=original_trajectory_count,
             )
             for update, vanilla_value, masked_value in zip(
                 updates,
@@ -1365,23 +1575,18 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 removed_absolute_policy_coefficient_fraction = (
                     vanilla_mass - masked_mass
                 ) / vanilla_mass
-        elif self.credit_assignment == "saam-asymmetric-error":
-            vanilla_effective_advantages = policy_reduction_advantages(
-                updates,
-                reduction=self.policy_reduction,
-                normalization_transition_count=original_transition_count,
-                normalization_trajectory_count=original_trajectory_count,
+        elif self.credit_assignment in {
+            "saam-asymmetric-error",
+            "saam-asymmetric-error-no-mask",
+        }:
+            vanilla_effective_advantages = self.mechanism.effective_advantages(
+                updates, transition_count=original_transition_count,
+                trajectory_count=original_trajectory_count,
             )
-            updates, saam_audit = apply_asymmetric_error_credit(
-                episodes,
-                updates,
-                error_penalty=self.error_penalty,
-            )
-            masked_effective_advantages = policy_reduction_advantages(
-                updates,
-                reduction=self.policy_reduction,
-                normalization_transition_count=original_transition_count,
-                normalization_trajectory_count=original_trajectory_count,
+            updates, saam_audit = self.mechanism.apply_credit(episodes, updates)
+            masked_effective_advantages = self.mechanism.effective_advantages(
+                updates, transition_count=original_transition_count,
+                trajectory_count=original_trajectory_count,
             )
             vanilla_mass = sum(abs(value) for value in vanilla_effective_advantages)
             masked_mass = sum(abs(value) for value in masked_effective_advantages)
@@ -1629,6 +1834,10 @@ class TransitionGRPOTrainer(GRPOTrainer):
             prompt_lengths=[len(update.prompt_ids) for update in updates],
             completion_lengths=[len(update.response_ids) for update in updates],
         )
+        self._assert_fsdp_microbatch_alignment(
+            microbatch_plan,
+            stage="old-policy scoring",
+        )
         microbatch_ranges = microbatch_plan.ranges
         prompt_lengths = microbatch_plan.prompt_lengths
         completion_lengths = microbatch_plan.completion_lengths
@@ -1653,7 +1862,11 @@ class TransitionGRPOTrainer(GRPOTrainer):
             float(sum(padded_costs) / len(padded_costs))
         )
         old_policy_started = time.perf_counter()
-        with torch.no_grad():
+        # ``inference_mode`` creates inference tensors that FSDP's
+        # ``summon_full_params`` cannot attach its parameter hooks to.  Keep
+        # the compatible no-grad path; it still removes the autograd graph and
+        # permits the optional full-param gather to be tested independently.
+        with torch.no_grad(), self._inference_full_params_context(self.model):
             old_per_token_logps = self._transition_token_logps_compact(
                 self.model,
                 forward_inputs,
@@ -1696,11 +1909,10 @@ class TransitionGRPOTrainer(GRPOTrainer):
             importance_sampling_ratio,
         )
 
-        effective_advantages = policy_reduction_advantages(
+        effective_advantages = self.mechanism.effective_advantages(
             updates,
-            reduction=self.policy_reduction,
-            normalization_transition_count=original_transition_count,
-            normalization_trajectory_count=original_trajectory_count,
+            transition_count=original_transition_count,
+            trajectory_count=original_trajectory_count,
         )
         advantages = torch.tensor(
             effective_advantages,
@@ -2126,7 +2338,20 @@ class TransitionGRPOTrainer(GRPOTrainer):
         model.train()
         inputs = self._prepare_inputs(inputs)
         total = int(inputs["completion_ids"].shape[0])
-        microbatch_plan = self._build_transition_microbatch_plan(inputs)
+        (
+            inputs,
+            prompt_lengths,
+            completion_lengths,
+        ) = self._sort_transition_batch_by_length(inputs)
+        microbatch_plan = self._build_transition_microbatch_plan(
+            inputs,
+            prompt_lengths=prompt_lengths,
+            completion_lengths=completion_lengths,
+        )
+        self._assert_fsdp_microbatch_alignment(
+            microbatch_plan,
+            stage="training backward",
+        )
         normalization = inputs.get("policy_normalization_transitions")
         policy_normalization_transitions = (
             int(normalization[0].item()) if normalization is not None else total
@@ -2141,13 +2366,18 @@ class TransitionGRPOTrainer(GRPOTrainer):
                     end,
                     trim_bounds=microbatch_plan.trim_bounds[range_index],
                 )
-                with self.compute_loss_context_manager():
-                    micro_loss = super()._compute_loss(model, micro_inputs)
-                weight = (end - start) / policy_normalization_transitions
-                scaled_loss = (
-                    micro_loss * weight * self.policy_loss_coefficient
-                )
-                self.accelerator.backward(scaled_loss)
+                synchronize = range_index == len(microbatch_plan.ranges) - 1
+                with self._microbatch_sync_context(
+                    model,
+                    synchronize=synchronize,
+                ):
+                    with self.compute_loss_context_manager():
+                        micro_loss = super()._compute_loss(model, micro_inputs)
+                    weight = (end - start) / policy_normalization_transitions
+                    scaled_loss = (
+                        micro_loss * weight * self.policy_loss_coefficient
+                    )
+                    self.accelerator.backward(scaled_loss)
                 detached_loss = detached_loss + scaled_loss.detach()
         policy_finished = time.perf_counter()
         transition_coefficients, detached_rank_loss = self._ranking_coefficients(
@@ -2164,14 +2394,19 @@ class TransitionGRPOTrainer(GRPOTrainer):
                     end,
                     trim_bounds=microbatch_plan.trim_bounds[range_index],
                 )
-                with self.compute_loss_context_manager():
-                    sequence_logps = self._transition_sequence_logps(
-                        model,
-                        micro_inputs,
-                    )
-                    coefficients = transition_coefficients[start:end]
-                    rank_surrogate = (sequence_logps * coefficients).sum()
-                self.accelerator.backward(rank_surrogate)
+                synchronize = range_index == len(microbatch_plan.ranges) - 1
+                with self._microbatch_sync_context(
+                    model,
+                    synchronize=synchronize,
+                ):
+                    with self.compute_loss_context_manager():
+                        sequence_logps = self._transition_sequence_logps(
+                            model,
+                            micro_inputs,
+                        )
+                        coefficients = transition_coefficients[start:end]
+                        rank_surrogate = (sequence_logps * coefficients).sum()
+                    self.accelerator.backward(rank_surrogate)
             detached_loss = detached_loss + detached_rank_loss
         rank_backward_finished = time.perf_counter()
         self._record_current_gradient_conflicts(

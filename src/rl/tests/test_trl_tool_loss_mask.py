@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from frameworks.trl.tool_loss_mask import (
+from rl.frameworks.trl.tool_loss_mask import (
     ToolMaskUnavailable,
     tool_token_loss_mask,
 )

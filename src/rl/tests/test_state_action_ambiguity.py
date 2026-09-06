@@ -10,11 +10,11 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from frameworks.trl.state_action_ambiguity import (  # noqa: E402
+from rl.frameworks.trl.state_action_ambiguity import (  # noqa: E402
     apply_asymmetric_error_credit,
     apply_state_action_ambiguity_mask,
 )
-from frameworks.trl.transition_batch import (  # noqa: E402
+from rl.frameworks.trl.transition_batch import (  # noqa: E402
     PolicyEpisode,
     PolicyTurn,
     build_transition_updates,

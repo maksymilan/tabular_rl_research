@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from src.rl.tool_state_obligation_quality import score_tool_state_trajectory
+from rl.diagnostics.semantic.tool_state_obligation_quality import score_tool_state_trajectory
 
 
 SCHEMA = {

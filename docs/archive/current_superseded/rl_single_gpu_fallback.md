@@ -24,7 +24,7 @@
 
 入口和配置：
 
-- `src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
+- `src/rl/scenarios/rl_main/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
 - `src/rl/configs/experiments/qwen3_8b_atomic_v26_saam_screened500_single_gpu.yaml`
 
 在 `a100` 上先做静态 preflight，再做一次一更新 live gate；gate 通过后才启动正式 200
@@ -32,9 +32,9 @@ updates。未指定 GPU 时 launcher 会在 0–3 中重新检查并选择两张
 显式指定 `TRAIN_GPU` 和 `VLLM_GPU`：
 
 ```bash
-bash src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh preflight
-TRAIN_GPU=0 VLLM_GPU=1 bash src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh gate
-bash src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh run
+bash src/rl/scenarios/rl_main/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh preflight
+TRAIN_GPU=0 VLLM_GPU=1 bash src/rl/scenarios/rl_main/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh gate
+bash src/rl/scenarios/rl_main/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh run
 ```
 
 `gate` 默认使用 4 rows / 16,384 tokens；确认显存余量后可另设

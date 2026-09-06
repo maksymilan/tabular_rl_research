@@ -12,7 +12,7 @@
 | 服务器职责 | A100 优先做 RL 主实验；A100 不可用时，table_rl/NewGNN 可按降级拓扑做 RL；三机均可评测 | 用户于 2026-09-06 确认；`server_resources.md` |
 | A100 serving | 另用一张 A100 跑 online vLLM | 当前 live gate 进程和 formal launcher |
 | RL credit | `saam-asymmetric-error` | `src/rl/frameworks/trl/state_action_ambiguity.py` |
-| RL reward | four-level result reward | `src/rl/terminal_reward.py` |
+| RL reward | four-level result reward | `src/rl/runtime/terminal_reward.py` |
 | RL 梯度更新 | reason/tool 各 0.5 的加权 full-response 梯度 | `span_balance_alpha=0.5` |
 | timeout | 视为 policy error，timeout action 使用局部负向惩罚 | SAAM asymmetric-error |
 | RL 起点 | cumulative SFT `checkpoint-6380` | A100 formal/live launcher |

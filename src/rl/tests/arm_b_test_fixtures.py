@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
-from src.rl.vanilla_grpo_arm_b import (
+from rl.scenarios.data.vanilla_grpo_arm_b import (
     GENERATION_SEED_SCHEME,
     INITIAL_ADAPTER_SHA256,
     PENDING_MANIFEST_SCHEMA,

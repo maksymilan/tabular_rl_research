@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.rl.frameworks.trl.checkpoint_gate import (
+from rl.frameworks.trl.checkpoint_gate import (
     build_checkpoint_gate_spec,
     run_checkpoint_gate,
     sha256_file,
@@ -39,7 +39,7 @@ else:
 def make_spec(tmp_path: Path):
     root = tmp_path / "project"
     output = tmp_path / "run"
-    script = root / "src/rl/diagnostics/gate.py"
+    script = root / "src/rl/scenarios/diagnostics/gate.py"
     tasks = root / "tasks.jsonl"
     tasks_manifest = root / "tasks.manifest.json"
     adapter = root / "adapter"

@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 
 
-RL_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(RL_DIR))
+SRC_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(SRC_DIR))
 
-from select_policy_boundary_grpo_tasks import (  # noqa: E402
+from rl.scenarios.data.select_policy_boundary_grpo_tasks import (  # noqa: E402
     DEFAULT_SEED,
     _load_pool,
     main,

@@ -37,9 +37,14 @@ baseline；checkpoint-6380 必须按同一 matched contract 重新评测。
 - RL 主实验：`a100`，一张 A100 做单进程 replicated trainer，另一张做 online vLLM；评测完成前不要在其上启动第二套 evaluator。
 - matched evaluation：优先 `table_rl` 或 `NewGNN`，GPU/port 由 handoff 脚本显式绑定并记录。
 - evaluator：`reproductions/trust_sql/qwen3_8b_atomic_sft1/`
-- handoff：`src/rl/evaluation/run_v26_matched_eval_handoff.sh`
+- handoff：`src/rl/scenarios/evaluation/run_v26_matched_eval_handoff.sh`
 - baseline cohort：`data/eval_inputs/bird_train_baseline300_v1.jsonl` 仅用于 train-side
   diagnostics；BIRD-dev full eval 使用其独立固定题集，二者不可混称。
+
+代码边界：通用规划、分片和 matched runner 统一位于
+`src/rl/evaluation/runners/`；具体 checkpoint/cohort 的评测场景位于
+`src/rl/scenarios/evaluation/`。评测 contract 是运行产物，不放在源码目录；重放历史
+contract 时设置 `ATOMIC_V26_EVAL_CONTRACT` 指向归档 JSON。
 
 ## 训练后 handoff
 

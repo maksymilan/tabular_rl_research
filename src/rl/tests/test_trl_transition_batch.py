@@ -15,13 +15,16 @@ except ImportError:  # The lightweight local audit environment has no Torch.
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from frameworks.trl.transition_batch import (  # noqa: E402
+from rl.frameworks.trl.transition_batch import (  # noqa: E402
     PolicyEpisode,
     PolicyTurn,
     build_transition_microbatch_ranges,
     build_transition_updates,
+    class_conditional_routing_advantages,
+    correctness_primary_clean_secondary_advantages,
     policy_reduction_advantages,
     retain_policy_contributing_updates,
+    smc_mode_concentration_advantages,
     standardized_group_advantages,
 )
 
@@ -79,6 +82,73 @@ def _episode(
 
 
 class TransitionBatchTest(unittest.TestCase):
+    def test_smc_selects_highest_probability_correct_and_wrong_modes(self):
+        def episode(trajectory_id, correct, logprob):
+            turns = [
+                PolicyTurn(
+                    prompt_ids=(1, 2),
+                    response_ids=(3, 4),
+                    sampling_logprobs=(logprob, logprob),
+                )
+            ]
+            sample = SimpleNamespace(
+                reward=1.0 if correct else -1.0,
+                correct=correct,
+                process_update=True,
+                step_rewards=None,
+                turns=[([1, 2], [3, 4])],
+                audit_record={
+                    "trajectory_id": trajectory_id,
+                    "example_index": 11,
+                },
+            )
+            return PolicyEpisode(sample=sample, policy_turns=turns)
+
+        episodes = [
+            episode("correct-low", True, -1.2),
+            episode("correct-high", True, -0.4),
+            episode("wrong-low", False, -0.9),
+            episode("wrong-high", False, -0.3),
+        ]
+        self.assertEqual(
+            smc_mode_concentration_advantages(episodes),
+            [0.0, 1.0, 0.0, -1.0],
+        )
+
+    def test_smc_is_zero_for_homogeneous_groups(self):
+        def episode(trajectory_id, correct):
+            turn = _turn(10 + len(trajectory_id))
+            sample = SimpleNamespace(
+                reward=1.0 if correct else -1.0,
+                correct=correct,
+                process_update=True,
+                step_rewards=None,
+                turns=[(list(turn.prompt_ids), list(turn.response_ids))],
+                audit_record={
+                    "trajectory_id": trajectory_id,
+                    "example_index": 12,
+                },
+            )
+            return PolicyEpisode(sample=sample, policy_turns=[turn])
+
+        self.assertEqual(
+            smc_mode_concentration_advantages(
+                [episode("a", True), episode("b", True)]
+            ),
+            [0.0, 0.0],
+        )
+
+    def test_smc_requires_finite_sampled_logprobs_in_mixed_group(self):
+        good = _episode("good", 1.0, [1.0])
+        bad = _episode("bad", 0.0, [0.0])
+        bad.policy_turns[0] = PolicyTurn(
+            prompt_ids=bad.policy_turns[0].prompt_ids,
+            response_ids=bad.policy_turns[0].response_ids,
+            sampling_logprobs=(float("nan"), float("nan")),
+        )
+        with self.assertRaises(ValueError):
+            smc_mode_concentration_advantages([good, bad])
+
     def test_dynamic_microbatch_budget_uses_padded_prompt_completion_cost(self):
         ranges = build_transition_microbatch_ranges(
             [100, 110, 500, 510, 900],
@@ -183,6 +253,64 @@ class TransitionBatchTest(unittest.TestCase):
             [update.trajectory_turn_weight for update in updates],
             [0.5, 0.5, 1.0],
         )
+
+    def test_correctness_primary_profile_cannot_flip_outcome_sign(self):
+        correct_clean = _episode("correct-clean", 1.5, [0.0], example_index=7)
+        correct_error = _episode("correct-error", 1.0, [0.0], example_index=7)
+        correct_error.sample.audit_record["errors"] = 1
+        wrong_clean = _episode("wrong-clean", -0.5, [0.0], example_index=7)
+        wrong_clean.sample.correct = False
+        wrong_error = _episode("wrong-error", -1.0, [0.0], example_index=7)
+        wrong_error.sample.correct = False
+        wrong_error.sample.audit_record["error_events"] = [{"error_type": "execution_error"}]
+        values = correctness_primary_clean_secondary_advantages(
+            [correct_clean, correct_error, wrong_clean, wrong_error],
+            clean_weight=0.25,
+        )
+        self.assertGreater(values[0], 0.0)
+        self.assertGreater(values[1], 0.0)
+        self.assertLess(values[2], 0.0)
+        self.assertLess(values[3], 0.0)
+
+    def test_class_conditional_routing_preserves_correct_efficiency_signal(self):
+        correct_clean = _episode("correct-clean", 1.5, [0.0], example_index=7)
+        correct_error = _episode("correct-error", 1.0, [0.0], example_index=7)
+        correct_error.sample.audit_record["errors"] = 1
+        values = class_conditional_routing_advantages(
+            [correct_clean, correct_error], clean_weight=0.25
+        )
+        self.assertGreater(values[0], 0.0)
+        self.assertLess(values[1], 0.0)
+        self.assertAlmostEqual(abs(values[0]), 0.25, places=4)
+
+    def test_class_conditional_routing_does_not_reward_wrong_clean(self):
+        wrong_clean = _episode("wrong-clean", -0.5, [0.0], example_index=7)
+        wrong_clean.sample.correct = False
+        wrong_error = _episode("wrong-error", -1.0, [0.0], example_index=7)
+        wrong_error.sample.correct = False
+        wrong_error.sample.audit_record["error_events"] = [
+            {"error_type": "execution_error"}
+        ]
+        values = class_conditional_routing_advantages(
+            [wrong_clean, wrong_error], clean_weight=0.25
+        )
+        self.assertEqual(values, [0.0, 0.0])
+
+    def test_class_conditional_routing_mixed_group_keeps_wrong_side_equal(self):
+        correct_clean = _episode("correct-clean", 1.5, [0.0], example_index=7)
+        wrong_clean = _episode("wrong-clean", -0.5, [0.0], example_index=7)
+        wrong_clean.sample.correct = False
+        wrong_error = _episode("wrong-error", -1.0, [0.0], example_index=7)
+        wrong_error.sample.correct = False
+        wrong_error.sample.audit_record["error_events"] = [
+            {"error_type": "execution_error"}
+        ]
+        values = class_conditional_routing_advantages(
+            [correct_clean, wrong_clean, wrong_error], clean_weight=0.25
+        )
+        self.assertGreater(values[0], 0.0)
+        self.assertLess(values[1], 0.0)
+        self.assertEqual(values[1], values[2])
 
     def test_trajectory_mean_gives_long_and_short_trajectories_equal_mass(self):
         updates = build_transition_updates(

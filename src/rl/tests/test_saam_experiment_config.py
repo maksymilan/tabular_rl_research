@@ -12,7 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from experiment_config import RLExperimentConfig  # noqa: E402
+from rl.configuration.experiment_config import RLExperimentConfig  # noqa: E402
 
 
 class SAAMExperimentConfigTest(unittest.TestCase):
@@ -82,6 +82,50 @@ class SAAMExperimentConfigTest(unittest.TestCase):
         payload = copy.deepcopy(self.payload)
         payload["credit_assignment"] = "saam-asymmetric-error"
         payload["error_penalty"] = 0.0
+        with self.assertRaises(ValueError):
+            self._load(payload)
+
+    def test_smc_mode_concentration_is_an_isolated_trajectory_arm(self):
+        payload = copy.deepcopy(self.payload)
+        payload["result_advantage_profile"] = "smc-mode-concentration"
+        payload["credit_assignment"] = "trajectory"
+        config = self._load(payload)
+        defaults = config.argparse_defaults(ROOT)
+        self.assertEqual(
+            defaults["result_advantage_profile"],
+            "smc-mode-concentration",
+        )
+        self.assertEqual(defaults["credit_assignment"], "trajectory")
+
+    def test_smc_rejects_saam_composition(self):
+        payload = copy.deepcopy(self.payload)
+        payload["result_advantage_profile"] = "smc-mode-concentration"
+        payload["credit_assignment"] = "saam-asymmetric-error"
+        with self.assertRaises(ValueError):
+            self._load(payload)
+
+    def test_nested_mechanism_is_validated_and_maps_to_trainer(self):
+        payload = copy.deepcopy(self.payload)
+        payload["credit_assignment"] = "trajectory"
+        payload["mechanism"] = {
+            "reward_mode": "result-only",
+            "result_advantage_profile": "stored",
+            "clean_advantage_weight": 0.4,
+            "policy_reduction": "trajectory_token_mean",
+            "credit_assignment": "saam-asymmetric-error",
+            "error_penalty": 1.25,
+            "span_balance_alpha": 0.5,
+            "kl_beta": 0.0,
+        }
+        config = self._load(payload)
+        defaults = config.argparse_defaults(ROOT)
+        self.assertEqual(defaults["credit_assignment"], "saam-asymmetric-error")
+        self.assertEqual(defaults["error_penalty"], 1.25)
+        self.assertEqual(defaults["span_balance_alpha"], 0.5)
+
+    def test_nested_mechanism_rejects_invalid_reduction(self):
+        payload = copy.deepcopy(self.payload)
+        payload["mechanism"] = {"policy_reduction": "unknown"}
         with self.assertRaises(ValueError):
             self._load(payload)
 

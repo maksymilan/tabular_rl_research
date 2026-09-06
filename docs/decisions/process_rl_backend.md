@@ -109,8 +109,8 @@ tool plans pass; only differing denotations fail.
 External reviewer labels remain audit evidence only. They are not reward targets and are not used as
 an online allow/deny list.
 
-The replay and manifest boundary is now implemented in `src/rl/trajectory_replay.py` and
-`src/rl/counterfactual_suite.py`. Database generation remains a separate offline stage. Inspection
+The replay and manifest boundary is now implemented in `src/rl/runtime/trajectory_replay.py` and
+`src/rl/runtime/counterfactual_suite.py`. Database generation remains a separate offline stage. Inspection
 and pilot execution of the released TestSuiteEval generator showed that its semantic approach is
 appropriate, but the original implementation cannot be imported unchanged for BIRD: it assumes
 away NULLs and some schema forms and does not robustly quote all BIRD identifiers. The BIRD

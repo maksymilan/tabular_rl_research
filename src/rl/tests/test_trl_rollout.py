@@ -18,11 +18,11 @@ sys.path[:0] = [
     str(ROOT / "src" / "sft"),
 ]
 
-from frameworks.trl.rollout import (  # noqa: E402
+from rl.frameworks.trl.rollout import (  # noqa: E402
     RolloutSettings,
     TableAgentRolloutCollector,
 )
-from frameworks.trl.transition_batch import build_transition_updates  # noqa: E402
+from rl.frameworks.trl.transition_batch import build_transition_updates  # noqa: E402
 
 
 class _Tokenized:

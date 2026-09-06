@@ -5,11 +5,11 @@ from copy import deepcopy
 from pathlib import Path
 
 
-RL_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(RL_DIR))
+SRC_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(SRC_DIR))
 
-from rollout_scoring import score_completed_rollout  # noqa: E402
-from frameworks.trl.transition_batch import (  # noqa: E402
+from rl.runtime.rollout_scoring import score_completed_rollout  # noqa: E402
+from rl.frameworks.trl.transition_batch import (  # noqa: E402
     PolicyEpisode,
     PolicyTurn,
     build_transition_updates,

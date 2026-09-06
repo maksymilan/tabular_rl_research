@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from merge_rl_task_artifacts import merge_artifacts
+from rl.scenarios.data.merge_rl_task_artifacts import merge_artifacts
 
 
 class MergeRlTaskArtifactsTests(unittest.TestCase):

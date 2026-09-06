@@ -193,6 +193,7 @@ def verify_model_and_adapter(
     model_size: str = "8b",
     model_specs: Path | None = None,
     adapter_lock: Path | None = None,
+    allow_unpinned_adapter: bool = False,
 ) -> dict[str, Any]:
     if model_size == "8b":
         from verify_qwen3_model import verify_model
@@ -248,20 +249,27 @@ def verify_model_and_adapter(
     adapter_report = None
     if adapter is not None:
         if not isinstance(expected_adapter, dict):
-            raise ValueError("adapter evaluation requires a pinned adapter lock")
+            if not allow_unpinned_adapter:
+                raise ValueError("adapter evaluation requires a pinned adapter lock")
+            expected_adapter = {}
         resolved = adapter.resolve()
-        if resolved != Path(expected_adapter["path"]):
+        if expected_adapter.get("path") and resolved != Path(expected_adapter["path"]):
+            if not allow_unpinned_adapter:
+                raise ValueError(
+                    f"adapter path mismatch: expected {expected_adapter['path']}, got {resolved}"
+                )
+            expected_adapter = {}
+        expected_checkpoint_name = expected_adapter.get("checkpoint_name")
+        if expected_checkpoint_name and resolved.name != expected_checkpoint_name:
             raise ValueError(
-                f"adapter path mismatch: expected {expected_adapter['path']}, got {resolved}"
-            )
-        if resolved.name != expected_adapter["checkpoint_name"]:
-            raise ValueError(
-                f"adapter must be {expected_adapter['checkpoint_name']}, got {resolved.name}"
+                f"adapter must be {expected_checkpoint_name}, got {resolved.name}"
             )
         trainer_state = load_object(resolved / "trainer_state.json")
-        if int(trainer_state.get("global_step", -1)) != expected_adapter["global_step"]:
+        actual_global_step = int(trainer_state.get("global_step", -1))
+        expected_global_step = expected_adapter.get("global_step")
+        if expected_global_step is not None and actual_global_step != expected_global_step:
             raise ValueError(
-                f"adapter global_step mismatch: expected {expected_adapter['global_step']}, "
+                f"adapter global_step mismatch: expected {expected_global_step}, "
                 f"got {trainer_state.get('global_step')!r}"
             )
         adapter_config = load_object(resolved / "adapter_config.json")
@@ -285,12 +293,19 @@ def verify_model_and_adapter(
                     f"adapter base repository mismatch: {base_reference} != {expected_repo}"
                 )
         files: dict[str, Any] = {}
-        for name, expected_hash in sorted(expected_adapter["files_sha256"].items()):
+        required_adapter_files = {
+            "adapter_model.safetensors",
+            "adapter_config.json",
+            "trainer_state.json",
+        }
+        expected_file_hashes = expected_adapter.get("files_sha256") or {}
+        for name in sorted(set(expected_file_hashes) | required_adapter_files):
             path = resolved / name
             if not path.is_file():
                 raise ValueError(f"adapter artifact is missing: {path}")
             actual_hash = sha256(path)
-            if actual_hash != expected_hash:
+            expected_hash = expected_file_hashes.get(name)
+            if expected_hash is not None and actual_hash != expected_hash:
                 raise ValueError(
                     f"adapter artifact hash mismatch for {name}: expected {expected_hash}, "
                     f"got {actual_hash}"
@@ -302,7 +317,8 @@ def verify_model_and_adapter(
             "rank": rank,
             "base_model_name_or_path": base_reference,
             "checkpoint_name": resolved.name,
-            "global_step": expected_adapter["global_step"],
+            "global_step": actual_global_step,
+            "hashes_pinned": bool(expected_file_hashes),
             "files": files,
         }
 
@@ -330,6 +346,7 @@ def verify_all(
     model_size: str = "8b",
     model_specs: Path | None = None,
     adapter_lock: Path | None = None,
+    allow_unpinned_adapter: bool = False,
 ) -> dict[str, Any]:
     lock = load_object(lock_path)
     if mode not in {"base", "adapter"}:
@@ -353,6 +370,7 @@ def verify_all(
         model_size=model_size,
         model_specs=model_specs,
         adapter_lock=adapter_lock,
+        allow_unpinned_adapter=allow_unpinned_adapter,
     )
     return {
         "status": "ok",
@@ -382,6 +400,14 @@ def main() -> int:
     parser.add_argument("--model-size", choices=("4b", "8b"), default="8b")
     parser.add_argument("--model-specs", type=Path)
     parser.add_argument("--adapter-lock", type=Path)
+    parser.add_argument(
+        "--allow-unpinned-adapter",
+        action="store_true",
+        help=(
+            "allow an RL adapter outside the historical SFT lock while still "
+            "checking its structure and recording artifact hashes"
+        ),
+    )
     args = parser.parse_args()
     try:
         report = verify_all(
@@ -400,6 +426,7 @@ def main() -> int:
             model_size=args.model_size,
             model_specs=args.model_specs,
             adapter_lock=args.adapter_lock,
+            allow_unpinned_adapter=args.allow_unpinned_adapter,
         )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         print(f"remote evaluation asset gate failed: {exc}", file=sys.stderr)

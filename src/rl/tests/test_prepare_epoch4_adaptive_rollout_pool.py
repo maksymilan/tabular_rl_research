@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from src.rl.prepare_epoch4_adaptive_rollout_pool import prepare_pool
+from rl.scenarios.data.prepare_epoch4_adaptive_rollout_pool import prepare_pool
 
 
 def _task(index: int, prefix: str, sql: str) -> dict:

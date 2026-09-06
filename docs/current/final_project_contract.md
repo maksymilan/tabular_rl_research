@@ -75,7 +75,7 @@ SFT anchor，也不得作为当前 RL 起点；完成结果和 matched evaluatio
 正式入口：
 
 - `src/rl/configs/experiments/qwen3_8b_atomic_v26_saam_screened500_single_gpu.yaml`
-- `src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
+- `src/rl/scenarios/rl_main/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
 
 A100 已有的 update-40 运行从 `checkpoint-6380` 启动，`global_step=40` 可审计，随后在
 step49 因 OOM 退出；该运行使用 700 题、每 update 14 题，因此只作为历史诊断。同步盘点见

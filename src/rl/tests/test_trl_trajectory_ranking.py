@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from frameworks.trl.trajectory_ranking import (
+from rl.frameworks.trl.trajectory_ranking import (
     TrajectoryPair,
     build_pairs_from_transition_metadata,
     build_trajectory_pairs,

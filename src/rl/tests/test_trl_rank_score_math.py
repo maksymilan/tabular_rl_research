@@ -14,7 +14,7 @@ pytest.importorskip("trl")
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from frameworks.trl.transition_grpo import TransitionGRPOTrainer
+from rl.frameworks.trl.transition_grpo import TransitionGRPOTrainer
 
 
 def _ranking_fixture(reduction: str):

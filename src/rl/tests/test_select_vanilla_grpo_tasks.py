@@ -6,10 +6,11 @@ import sys
 from pathlib import Path
 
 RL_DIR = Path(__file__).resolve().parents[1]
-if str(RL_DIR) not in sys.path:
-    sys.path.insert(0, str(RL_DIR))
+SRC_DIR = Path(__file__).resolve().parents[2]
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
-from select_vanilla_grpo_tasks import freeze_cohort  # noqa: E402
+from rl.scenarios.data.select_vanilla_grpo_tasks import freeze_cohort  # noqa: E402
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:

@@ -33,8 +33,8 @@ compatibility stub；需要重放历史结果时必须显式使用 archive 中�
 ```text
 工具：Atomic version26
 RL 配置：src/rl/configs/experiments/qwen3_8b_atomic_v26_saam_screened500_single_gpu.yaml
-RL launcher：src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh
-环境：src/rl/tool_environment_v26.py
+RL launcher：src/rl/scenarios/rl_main/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh
+环境：src/rl/runtime/tool_environment_v26.py
 评测：reproductions/trust_sql/qwen3_8b_atomic_sft1/
 ```
 

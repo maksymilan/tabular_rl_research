@@ -6,25 +6,25 @@ from pathlib import Path
 
 import pytest
 
-from src.rl.diagnostics.audit_vanilla_grpo_arm_b_k16_validation import (
+from rl.scenarios.diagnostics.audit_vanilla_grpo_arm_b_k16_validation import (
     audit_validation,
 )
-from src.rl.diagnostics.audit_vanilla_grpo_arm_b_wide_k8_screen import (
+from rl.scenarios.diagnostics.audit_vanilla_grpo_arm_b_wide_k8_screen import (
     audit_wide_screen,
 )
-from src.rl.diagnostics.validate_arm_b_training_inputs import validate
-from src.rl.prepare_vanilla_grpo_arm_b_wide3000 import freeze_wide_cohort
-from src.rl.select_vanilla_grpo_arm_b_k16 import (
+from rl.scenarios.diagnostics.validate_arm_b_training_inputs import validate
+from rl.scenarios.data.prepare_vanilla_grpo_arm_b_wide3000 import freeze_wide_cohort
+from rl.scenarios.data.select_vanilla_grpo_arm_b_k16 import (
     _selection_manifest,
     confirm_and_select,
 )
-from src.rl.tests.arm_b_test_fixtures import (
+from rl.tests.arm_b_test_fixtures import (
     generation_artifacts,
     task,
     write_json,
     write_jsonl,
 )
-from src.rl.vanilla_grpo_arm_b import (
+from rl.scenarios.data.vanilla_grpo_arm_b import (
     ARM_B_SEED_REGISTRY,
     F1_GENERATION_SEED,
     F2_GENERATION_SEED,

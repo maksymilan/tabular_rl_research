@@ -35,7 +35,7 @@ export NCCL_SHM_DISABLE=${NCCL_SHM_DISABLE:-1}
 export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-lo}
 export NCCL_LAUNCH_MODE=${NCCL_LAUNCH_MODE:-GROUP}
 export HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
-export PYTHONPATH="$PROJECT_DIR/src/rl:$PROJECT_DIR/src/eval:$PROJECT_DIR/src/harness:$PROJECT_DIR/src/sft:${PYTHONPATH:-}"
+export PYTHONPATH="$PROJECT_DIR/src:$PROJECT_DIR/src/rl:$PROJECT_DIR/src/eval:$PROJECT_DIR/src/harness:$PROJECT_DIR/src/sft:${PYTHONPATH:-}"
 
 experiment_args=()
 if [[ -n "$EXPERIMENT_CONFIG" ]]; then

@@ -7,9 +7,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from rollout_scoring import RolloutSample
+from rl.runtime.rollout_scoring import RolloutSample
 
-from frameworks.trl.transition_batch import PolicyEpisode, PolicyTurn
+from rl.frameworks.trl.transition_batch import PolicyEpisode, PolicyTurn
 
 
 SCHEMA_VERSION = "table-agent-fixed-policy-episode-v1"

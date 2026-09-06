@@ -10,7 +10,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from frameworks.trl.training_precision import (  # noqa: E402
+from rl.frameworks.trl.training_precision import (  # noqa: E402
     optimizer_moment_precision_audit,
     promote_trainable_parameters_to_fp32,
     require_adam_moments_fp32,

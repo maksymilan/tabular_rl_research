@@ -8,10 +8,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-RL_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(RL_DIR))
+SRC_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(SRC_DIR))
 
-from counterfactual_suite import (  # noqa: E402
+from rl.runtime.counterfactual_suite import (  # noqa: E402
     SCHEMA_VERSION,
     load_counterfactual_suite_manifest,
     sha256_file,

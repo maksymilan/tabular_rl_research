@@ -9,9 +9,10 @@ import unittest
 from pathlib import Path
 
 RL_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(RL_DIR))
+SRC_DIR = RL_DIR.parent
+sys.path.insert(0, str(SRC_DIR))
 
-from process_credit import (  # noqa: E402
+from rl.objectives.process_credit import (  # noqa: E402
     ProcessRewardConfig,
     StepFeature,
     _expression_columns,
@@ -22,17 +23,17 @@ from process_credit import (  # noqa: E402
     normalized_search_reduction,
     replay_step_features,
 )
-from process_objective import process_policy_loss, sampled_forward_kl  # noqa: E402
+from rl.objectives.process_objective import process_policy_loss, sampled_forward_kl  # noqa: E402
 from provenance import build_grounding_references, build_references  # noqa: E402
-from review_grounding_edges_external import build_review_package  # noqa: E402
-from target_support import (  # noqa: E402
+from rl.scenarios.audits.review_grounding_edges_external import build_review_package  # noqa: E402
+from rl.runtime.target_support import (  # noqa: E402
     TargetSupport,
     build_target_support,
     normalized_row_unit,
     observed_target_row_units,
 )
-from terminal_reward import terminal_result_reward  # noqa: E402
-from task_support import task_text_supports_literal  # noqa: E402
+from rl.runtime.terminal_reward import terminal_result_reward  # noqa: E402
+from rl.runtime.task_support import task_text_supports_literal  # noqa: E402
 
 
 def feature(index: int, **kwargs) -> StepFeature:
@@ -1024,7 +1025,7 @@ class ProcessRewardTests(unittest.TestCase):
         )
 
     def test_simple_process_config_uses_only_declared_positive_and_penalty_terms(self):
-        config_path = RL_DIR / "configs" / "simple_process_reward.json"
+        config_path = SRC_DIR / "rl" / "configs" / "simple_process_reward.json"
         values = {
             key: value
             for key, value in json.loads(config_path.read_text(encoding="utf-8")).items()
@@ -1061,7 +1062,7 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertAlmostEqual(result.total_reward, 0.83)
 
     def test_simple_process_config_allows_zero_reward_clean_failure(self):
-        config_path = RL_DIR / "configs" / "simple_process_reward.json"
+        config_path = SRC_DIR / "rl" / "configs" / "simple_process_reward.json"
         values = {
             key: value
             for key, value in json.loads(config_path.read_text(encoding="utf-8")).items()
@@ -1226,7 +1227,7 @@ class ProcessRewardTests(unittest.TestCase):
         self.assertAlmostEqual(result.steps[2].reward, -0.3)
 
     def test_active_atomic_config_matches_dataclass_and_reward_bounds(self):
-        config_path = RL_DIR / "configs" / "atomic_process_reward.json"
+        config_path = SRC_DIR / "rl" / "configs" / "atomic_process_reward.json"
         values = {
             key: value
             for key, value in json.loads(config_path.read_text(encoding="utf-8")).items()

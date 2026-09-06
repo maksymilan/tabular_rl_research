@@ -15,13 +15,13 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT / "src" / "rl")]
 
-from frameworks.trl.fixed_rollout_pool import (  # noqa: E402
+from rl.frameworks.trl.fixed_rollout_pool import (  # noqa: E402
     deserialize_episode,
     load_rows,
     write_rows_atomic,
 )
-from frameworks.trl.transition_batch import build_transition_updates  # noqa: E402
-from process_credit import (  # noqa: E402
+from rl.frameworks.trl.transition_batch import build_transition_updates  # noqa: E402
+from rl.objectives.process_credit import (  # noqa: E402
     ProcessRewardConfig,
     StepFeature,
     allocate_process_rewards,

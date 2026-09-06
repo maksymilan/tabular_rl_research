@@ -11,10 +11,11 @@ import pytest
 
 
 RL_DIR = Path(__file__).resolve().parents[1]
-if str(RL_DIR) not in sys.path:
-    sys.path.insert(0, str(RL_DIR))
+SRC_DIR = Path(__file__).resolve().parents[2]
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
-from prepare_policy_boundary_s2_tasks import (  # noqa: E402
+from rl.scenarios.data.prepare_policy_boundary_s2_tasks import (  # noqa: E402
     CANONICAL_INPUT_COUNTS,
     CANONICAL_INPUT_SHA256,
     DEFAULT_SEED,
@@ -24,7 +25,7 @@ from prepare_policy_boundary_s2_tasks import (  # noqa: E402
     SCHEMA_VERSION,
     prepare_s2_pool,
 )
-from select_vanilla_grpo_tasks import exclusion_ids  # noqa: E402
+from rl.scenarios.data.select_vanilla_grpo_tasks import exclusion_ids  # noqa: E402
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -317,7 +318,7 @@ def test_production_contract_pins_all_known_inputs_and_cli_is_explicit() -> None
     }
     assert CANONICAL_INPUT_COUNTS["sft1_index"] == (4471, 678)
     assert DEFAULT_SEED == "qwen3-v26-policy-boundary-s2-extra600-v1-20260812"
-    script = RL_DIR / "prepare_policy_boundary_s2_tasks.py"
+    script = RL_DIR / "scenarios" / "data" / "prepare_policy_boundary_s2_tasks.py"
     result = subprocess.run(
         [sys.executable, str(script), "--help"],
         capture_output=True,

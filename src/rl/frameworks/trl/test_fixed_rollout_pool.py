@@ -7,14 +7,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from frameworks.trl.fixed_rollout_pool import (
+from rl.frameworks.trl.fixed_rollout_pool import (
     FixedPoolRolloutCollector,
     deserialize_episode,
     serialize_episode,
     write_rows_atomic,
 )
-from frameworks.trl.transition_batch import PolicyEpisode, PolicyTurn
-from rollout_scoring import RolloutSample
+from rl.frameworks.trl.transition_batch import PolicyEpisode, PolicyTurn
+from rl.runtime.rollout_scoring import RolloutSample
 
 
 def episode(example_index: int, sample_index: int) -> PolicyEpisode:

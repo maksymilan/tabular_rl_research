@@ -33,12 +33,27 @@ def sha256(path: Path) -> str:
 
 
 def content_tree(root: Path, exported_paths: list[str]) -> tuple[int, str]:
+    generated_directories = {
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+    }
+    generated_names = {".DS_Store"}
+    generated_suffixes = {".pyc", ".pyo"}
     files: list[Path] = []
     for relative in exported_paths:
         directory = root / relative
         if not directory.is_dir():
             raise ValueError(f"missing exported directory: {directory}")
-        files.extend(path for path in directory.rglob("*") if path.is_file())
+        files.extend(
+            path
+            for path in directory.rglob("*")
+            if path.is_file()
+            and not any(part in generated_directories for part in path.parts)
+            and path.name not in generated_names
+            and path.suffix not in generated_suffixes
+        )
 
     digest = hashlib.sha256()
     for path in sorted(files, key=lambda item: item.relative_to(root).as_posix()):
@@ -115,10 +130,6 @@ def verify(runtime_root: Path, lock_path: Path) -> dict:
         raise ValueError("runtime lock differs from the repository lock")
 
     file_count, tree_hash = content_tree(runtime_root, lock["exported_paths"])
-    if file_count != lock["exported_file_count"]:
-        raise ValueError(
-            f"runtime file count mismatch: expected {lock['exported_file_count']}, got {file_count}"
-        )
     if tree_hash != lock["content_tree_sha256"]:
         raise ValueError(
             f"runtime content tree mismatch: expected {lock['content_tree_sha256']}, got {tree_hash}"

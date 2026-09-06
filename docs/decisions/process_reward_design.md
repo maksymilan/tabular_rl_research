@@ -240,6 +240,6 @@ reward-v3:           加 learned critic(真在线 + 失败任务进展);多正�
 - 历史编译器 / Plan IR:`archive/code/gold_sql_compiler/src/harness/compiler.py`
   (`_condition`、`_join_on`)、`src/harness/plan.py`(`Step`、`TABLE_REF_ARGS`、条件树遍历 `_value_ref_ids`)
 - 感知工具真实返回:`src/harness/executor.py`(`inspect_column`/`describe_table`/`preview`/`read_subtable`)
-- RL 环境 / 终局控制:`src/rl/tool_environment.py`、`src/rl/terminal_reward.py`
+- RL 环境 / 终局控制:`src/rl/runtime/tool_environment_v26.py`、`src/rl/runtime/terminal_reward.py`
 - 观察作为上下文管理(非 memory)+ 反命名:`draft/context_management_design.md`、`draft/subtable_vs_memory.md`
 - 观察数据构造方向:`draft/reflection_trajectory_data_plan.md`;provenance/V2c:`draft/provenance_redesign.md`

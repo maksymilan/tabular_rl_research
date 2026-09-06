@@ -15,7 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from experiment_config import (  # noqa: E402
+from rl.configuration.experiment_config import (  # noqa: E402
     BASE_MODEL_IDENTITY_SCHEMA_VERSION,
     QWEN3_8B_BASE_MODEL_FILES,
     RLExperimentConfig,
@@ -25,10 +25,10 @@ from experiment_config import (  # noqa: E402
     verify_base_model_identity,
     validate_runtime_identity,
 )
-from evaluation.formal_v26_matched_eval import (  # noqa: E402
+from rl.evaluation.runners.formal_v26_matched_eval import (  # noqa: E402
     content_tree as formal_runtime_content_tree,
 )
-from frameworks.trl.transition_grpo import use_frozen_reference_adapter  # noqa: E402
+from rl.frameworks.trl.transition_grpo import use_frozen_reference_adapter  # noqa: E402
 
 
 V26_PROTOCOL_HASH = "4da19387399bd3a5"
@@ -237,8 +237,8 @@ import protocol
 import rollout as evaluator
 import executor
 from tool_modules import registry as tool_registry
-import tool_environment_v26 as environment
-from frameworks.trl import rollout
+from rl.runtime import tool_environment_v26 as environment
+from rl.frameworks.trl import rollout
 print(json.dumps({
     "protocol_version": protocol.PROTOCOL_VERSION,
     "factory_module": rollout.TOOL_ENVIRONMENT_FACTORY_MODULE,
@@ -342,7 +342,7 @@ def test_runner_preloads_identity_modules_before_path_mutating_rl_imports() -> N
     source = (
         ROOT / "src" / "rl" / "frameworks" / "trl" / "run_transition_grpo.py"
     ).read_text(encoding="utf-8")
-    boundary = source.index("from counterfactual_suite import")
+    boundary = source.index("from rl.runtime.counterfactual_suite import")
     for statement in (
         "import protocol as protocol_runtime",
         "import rollout as evaluator_runtime",
@@ -370,7 +370,7 @@ def test_implementation_lock_covers_every_eager_rl_policy_module() -> None:
         "src/rl/counterfactual_suite.py",
         "src/rl/reference_result_filter.py",
         "src/rl/frameworks/trl/fixed_rollout_pool.py",
-        "src/rl/diagnostics/prepare_vanilla_grpo_resume.py",
+        "src/rl/scenarios/diagnostics/prepare_vanilla_grpo_resume.py",
         "src/rl/frameworks/trl/run_atomic_transition_grpo.sh",
         "src/rl/frameworks/trl/start_vllm_server.sh",
         "src/rl/frameworks/trl/tool_loss_mask.py",

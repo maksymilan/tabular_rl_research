@@ -5,16 +5,16 @@ import sys
 import unittest
 from pathlib import Path
 
-RL_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(RL_DIR))
+SRC_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(SRC_DIR))
 
-from audit_reward_sensitivity import (  # noqa: E402
+from rl.scenarios.audits.audit_reward_sensitivity import (  # noqa: E402
     build_scenarios,
     reward_map,
     score_episodes,
     summarize_results,
 )
-from process_credit import ProcessRewardConfig, StepFeature  # noqa: E402
+from rl.objectives.process_credit import ProcessRewardConfig, StepFeature  # noqa: E402
 
 
 class RewardSensitivityTests(unittest.TestCase):

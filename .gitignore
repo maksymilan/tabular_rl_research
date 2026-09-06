@@ -23,3 +23,10 @@ experiment_dashboard/frontend/dist/
 
 # Generated and ad-hoc research reports (tracked historical reports remain versioned)
 /docs/reports/
+
+# Evaluation contracts and shard manifests are generated run artifacts. Keep
+# historical copies under archive/ when provenance requires retention.
+/src/rl/evaluation/**/*.json
+/src/rl/evaluation/**/evaluation_plan.json
+/src/rl/evaluation/**/eval_shards/
+/evaluation_outputs/

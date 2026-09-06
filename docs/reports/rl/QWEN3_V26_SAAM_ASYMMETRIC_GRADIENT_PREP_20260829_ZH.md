@@ -57,7 +57,7 @@ rollout carrier、Harness、采样和优化器身份，也不把 BIRD-dev 1534 �
 - `src/rl/frameworks/trl/gradient_conflict.py`：梯度统计、sketch 和可选完整向量记录。
 - `src/rl/frameworks/trl/transition_grpo.py`：非对称 credit 分支和梯度记录钩子。
 - `src/rl/frameworks/trl/run_transition_grpo.py`：CLI、manifest、实现源码锁。
-- `src/rl/experiment_config.py`：新 credit、`error_penalty`、梯度记录配置校验。
+- `src/rl/config/experiment_config.py`：新 credit、`error_penalty`、梯度记录配置校验。
 - `src/rl/configs/experiments/qwen3_8b_atomic_v26_saam_asymmetric_gate60.yaml`：本轮
   Gate60 配置，默认只保存梯度统计和 sketch。
 

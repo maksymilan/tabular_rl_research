@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from select_passk_rl_examples import (
+from rl.scenarios.data.select_passk_rl_examples import (
     has_infrastructure_failure,
     has_mixed_attempt_outcomes,
     sample_correct_count,

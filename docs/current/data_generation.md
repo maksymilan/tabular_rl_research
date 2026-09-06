@@ -32,15 +32,15 @@ request、student prompt、SFT target 或 reward 中。
 - 冻结 SFT1：fixed-1000 来源中 678 causal episodes / 4,471 targets。
 - RL cohort：目标约500题；每题 K=8 且正确轨迹数2–6；只使用已完成筛选的RL数据，用于 version26
   four-level + SAAM formal candidate；cohort manifest 和 manual audit 必须先通过
-  `src/rl/diagnostics/audit_qwen3_v26_saam700.py`。
+  `src/rl/scenarios/diagnostics/audit_qwen3_v26_saam700.py`。
 - 新 teacher generation 当前暂停。恢复时只用官方 DeepSeek
   `https://api.deepseek.com/chat/completions`，不允许第三方代理或隐式 fallback。
 
 ## 运行入口
 
 - SFT：`src/sft/prepare_qwen3_atomic_sft1_newgnn.sh`
-- RL cohort preflight：`src/rl/diagnostics/audit_qwen3_v26_saam700.py`
-- 正式 RL：`src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
+- RL cohort preflight：`src/rl/scenarios/diagnostics/audit_qwen3_v26_saam700.py`
+- 正式 RL：`src/rl/scenarios/rl_main/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
 
 历史 SFT2、projection/rewrite/delete、checkpoint-relalg 和其他工具版本均为 archive/reports
 中的诊断，不得作为当前数据扩增路径。

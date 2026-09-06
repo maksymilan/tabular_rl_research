@@ -193,6 +193,165 @@ def standardized_group_advantages(
     return advantages
 
 
+def _episode_has_harness_error(episode: PolicyEpisode) -> bool:
+    audit = episode.sample.audit_record
+    if audit.get("errors") or audit.get("error_events"):
+        return True
+    return any(
+        isinstance(turn, dict)
+        and (
+            turn.get("error_event")
+            or turn.get("execution_error")
+            or turn.get("execution_error_type")
+        )
+        for turn in (audit.get("turns") or [])
+    )
+
+
+def correctness_primary_clean_secondary_advantages(
+    episodes: Sequence[PolicyEpisode],
+    *,
+    clean_weight: float = 0.25,
+) -> list[float]:
+    """Make denotation correctness primary and Harness cleanliness bounded.
+
+    The correctness bit determines the sign after group standardization.  The
+    clean/error bit can only scale that sign by ``1 +/- clean_weight``; it can
+    never turn a wrong trajectory positive or a correct trajectory negative.
+    This is intentionally a group-level transform, not a new model-authored or
+    gold-SQL reward.
+    """
+    if not 0.0 <= clean_weight < 1.0:
+        raise ValueError("clean_weight must be in [0, 1)")
+    eligible = [bool(episode.sample.process_update) for episode in episodes]
+    primary = standardized_group_advantages(
+        [1.0 if bool(episode.sample.correct) else 0.0 for episode in episodes],
+        eligible,
+    )
+    result: list[float] = []
+    for episode, advantage in zip(episodes, primary, strict=True):
+        if advantage == 0.0:
+            result.append(0.0)
+            continue
+        clean = not _episode_has_harness_error(episode)
+        if bool(episode.sample.correct):
+            multiplier = 1.0 + clean_weight if clean else 1.0 - clean_weight
+        else:
+            multiplier = 1.0 - clean_weight if clean else 1.0 + clean_weight
+        result.append(float(advantage) * multiplier)
+    return result
+
+
+def class_conditional_routing_advantages(
+    episodes: Sequence[PolicyEpisode],
+    *,
+    clean_weight: float = 0.25,
+) -> list[float]:
+    """Route result advantages by the outcome composition of each GRPO group.
+
+    Mixed groups use denotation correctness for the sign.  Cleanliness only
+    changes the magnitude of correct trajectories; clean and erroneous wrong
+    trajectories remain equally negative so legality cannot become a proxy for
+    correctness.  All-correct groups use cleanliness as a bounded efficiency
+    signal, while all-wrong groups receive no result-only advantage because
+    they contain no correct reference from which to infer a preferred path.
+    """
+    if not 0.0 <= clean_weight < 1.0:
+        raise ValueError("clean_weight must be in [0, 1)")
+    eligible = [bool(episode.sample.process_update) for episode in episodes]
+    correct = [bool(episode.sample.correct) for episode in episodes]
+    eligible_correct = [ok and keep for ok, keep in zip(correct, eligible, strict=True)]
+    eligible_wrong = [not ok and keep for ok, keep in zip(correct, eligible, strict=True)]
+    has_correct = any(eligible_correct)
+    has_wrong = any(eligible_wrong)
+    if has_wrong and not has_correct:
+        return [0.0] * len(episodes)
+    if not has_wrong:
+        clean = [
+            1.0 if not _episode_has_harness_error(episode) else 0.0
+            for episode in episodes
+        ]
+        return [
+            clean_weight * advantage
+            for advantage in standardized_group_advantages(clean, eligible)
+        ]
+
+    primary = standardized_group_advantages(
+        [1.0 if ok else 0.0 for ok in correct],
+        eligible,
+    )
+    result: list[float] = []
+    for episode, is_correct, advantage in zip(
+        episodes, correct, primary, strict=True
+    ):
+        if advantage == 0.0:
+            result.append(0.0)
+            continue
+        if not is_correct:
+            result.append(float(advantage))
+            continue
+        clean = not _episode_has_harness_error(episode)
+        multiplier = 1.0 + clean_weight if clean else 1.0 - clean_weight
+        result.append(float(advantage) * multiplier)
+    return result
+
+
+def smc_mode_concentration_advantages(
+    episodes: Sequence[PolicyEpisode],
+) -> list[float]:
+    """Select the highest-probability correct/wrong modes in a mixed group.
+
+    This is an isolated diagnostic profile for the proposed SMC-GRPO idea.  It
+    does not use Harness-authored explanations or gold SQL: the Harness only
+    supplies the terminal correctness bit, while the rollout stores the old
+    policy's sampled token log-probabilities.  A trajectory score is the mean
+    sampled log-probability over all authored response tokens.  In a mixed
+    group, only the highest-scoring correct trajectory receives ``+1`` and only
+    the highest-scoring wrong trajectory receives ``-1``.  Homogeneous groups
+    receive no advantage because they do not provide a within-question
+    correctness contrast.
+
+    The sparse +/-1 coefficients intentionally match the scale of a binary
+    standardized GRPO group with one positive and one negative member.  The
+    score is used only for selection, not as a reward, so an unusually long or
+    low-probability trajectory cannot create an unbounded policy coefficient.
+    """
+
+    result = [0.0] * len(episodes)
+    eligible = [bool(episode.sample.process_update) for episode in episodes]
+    correct = [bool(episode.sample.correct) for episode in episodes]
+
+    def trajectory_score(episode: PolicyEpisode) -> float:
+        values = [
+            float(logprob)
+            for turn in episode.policy_turns
+            for logprob in turn.sampling_logprobs
+        ]
+        if not values or not all(math.isfinite(value) for value in values):
+            raise ValueError(
+                "smc-mode-concentration requires finite sampled logprobs for "
+                "every eligible trajectory"
+            )
+        return math.fsum(values) / len(values)
+
+    correct_indices = [
+        index for index, keep in enumerate(eligible)
+        if keep and correct[index]
+    ]
+    wrong_indices = [
+        index for index, keep in enumerate(eligible)
+        if keep and not correct[index]
+    ]
+    if not correct_indices or not wrong_indices:
+        return result
+
+    best_correct = max(correct_indices, key=lambda index: trajectory_score(episodes[index]))
+    best_wrong = max(wrong_indices, key=lambda index: trajectory_score(episodes[index]))
+    result[best_correct] = 1.0
+    result[best_wrong] = -1.0
+    return result
+
+
 def policy_reduction_advantages(
     updates: Sequence[TransitionUpdate],
     *,
@@ -265,12 +424,23 @@ def build_transition_updates(
     *,
     reward_mode: str,
     train_turns: str = "all",
+    result_advantage_profile: str = "stored",
+    clean_advantage_weight: float = 0.25,
 ) -> list[TransitionUpdate]:
     """Flatten causal turns while preserving trajectory- or step-local credit."""
     if reward_mode not in {"result-only", "process"}:
         raise ValueError(f"unsupported reward mode: {reward_mode}")
     if train_turns not in {"all", "last"}:
         raise ValueError(f"unsupported train_turns value: {train_turns}")
+    if result_advantage_profile not in {
+        "stored",
+        "correctness-primary-clean-secondary",
+        "class-conditional-routing",
+        "smc-mode-concentration",
+    }:
+        raise ValueError(
+            f"unsupported result advantage profile: {result_advantage_profile}"
+        )
 
     for episode in episodes:
         episode.validate()
@@ -283,10 +453,24 @@ def build_transition_updates(
             raise ValueError("rollout audit is missing the GRPO example_index")
         result_groups[audit["example_index"]].append(episode_index)
     for indices in result_groups.values():
-        group_advantages = standardized_group_advantages(
-            [float(episodes[index].sample.reward) for index in indices],
-            [bool(episodes[index].sample.process_update) for index in indices],
-        )
+        group = [episodes[index] for index in indices]
+        if result_advantage_profile == "correctness-primary-clean-secondary":
+            group_advantages = correctness_primary_clean_secondary_advantages(
+                group,
+                clean_weight=clean_advantage_weight,
+            )
+        elif result_advantage_profile == "class-conditional-routing":
+            group_advantages = class_conditional_routing_advantages(
+                group,
+                clean_weight=clean_advantage_weight,
+            )
+        elif result_advantage_profile == "smc-mode-concentration":
+            group_advantages = smc_mode_concentration_advantages(group)
+        else:
+            group_advantages = standardized_group_advantages(
+                [float(episodes[index].sample.reward) for index in indices],
+                [bool(episodes[index].sample.process_update) for index in indices],
+            )
         for index, advantage in zip(indices, group_advantages, strict=True):
             trajectory_advantages[index] = advantage
     updates: list[TransitionUpdate] = []

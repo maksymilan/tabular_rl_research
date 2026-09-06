@@ -486,6 +486,7 @@ def run(args: argparse.Namespace) -> int:
                 asset_command.extend(("--adapter-lock", str(adapter_lock)))
         if args.adapter is not None:
             asset_command.extend(("--adapter", str(args.adapter)))
+            asset_command.append("--allow-unpinned-adapter")
         asset_report = run_json_command(asset_command, paths["asset_gate"])
 
         update(stage="preflight")

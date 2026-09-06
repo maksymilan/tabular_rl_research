@@ -6,7 +6,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from frameworks.trl.transition_grpo import TransitionGRPOTrainer
+from rl.frameworks.trl.transition_grpo import TransitionGRPOTrainer
 
 
 def _trainer(mode: str = "token_truncate", cap: float = 3.0):

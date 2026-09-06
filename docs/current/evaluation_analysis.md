@@ -1,6 +1,6 @@
 # Unified evaluation-result analysis
 
-`src/rl/diagnostics/analyze_evaluation_results.py` is the canonical analyzer for deterministic
+`src/rl/scenarios/diagnostics/analyze_evaluation_results.py` is the canonical analyzer for deterministic
 single-sample evaluation `all.jsonl` artifacts. New experiments must use this CLI instead of adding
 an experiment-named summarizer.
 
@@ -18,7 +18,7 @@ It owns the shared implementation of:
 ## Standard invocation
 
 ```bash
-python src/rl/diagnostics/analyze_evaluation_results.py \
+python src/rl/scenarios/diagnostics/analyze_evaluation_results.py \
   --examples data/eval_inputs/bird_dev_20240627.jsonl \
   --indices path/to/frozen_holdout.indices.json \
   --arm candidate=path/to/version26_candidate/all.jsonl \
@@ -73,9 +73,9 @@ training.
 The following historical entrypoints remain only because frozen launchers and reports refer to
 their old CLI or JSON schema:
 
-- `src/rl/distillation/summarize_full_dev.py`;
-- `src/rl/diagnostics/summarize_routed_coupled_behavior_smoke.py`;
-- `src/rl/diagnostics/measure_policy_behavior_shift.py`.
+- `archive/code/legacy_rl/distillation/summarize_full_dev.py`;
+- `src/rl/scenarios/diagnostics/summarize_routed_coupled_behavior_smoke.py`;
+- `src/rl/scenarios/diagnostics/measure_policy_behavior_shift.py`.
 
 They contain no independent metric implementation; each delegates to the unified analyzer and
 only translates arguments/output into its historical schema. Do not call them from new experiments.

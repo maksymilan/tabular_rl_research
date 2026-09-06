@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.rl.select_epoch4_pass8_boundary_cohort import (
+from rl.scenarios.data.select_epoch4_pass8_boundary_cohort import (
     build_group_index,
     select_groups,
     sql_structure,

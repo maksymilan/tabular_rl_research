@@ -39,24 +39,24 @@ sys.path[:0] = [
     str(PROTOCOL_RUNTIME_ROOT / "src" / "sft"),
 ]
 
-from frameworks.trl.fixed_rollout_pool import (  # noqa: E402
+from rl.frameworks.trl.fixed_rollout_pool import (  # noqa: E402
     serialize_episode,
     write_rows_atomic,
 )
-from frameworks.trl.rollout import (  # noqa: E402
+from rl.frameworks.trl.rollout import (  # noqa: E402
     RolloutSettings,
     TableAgentRolloutCollector,
     create_tool_use_env,
 )
-from frameworks.trl.transition_batch import PolicyEpisode, PolicyTurn  # noqa: E402
+from rl.frameworks.trl.transition_batch import PolicyEpisode, PolicyTurn  # noqa: E402
 from protocol import (  # noqa: E402
     PROTOCOL_VERSION,
     protocol_hash,
     student_runtime_system_prompt,
     tool_schema_hash,
 )
-from rollout_scoring import episode_example, score_completed_rollout  # noqa: E402
-from task_loader import load_rl_task_records  # noqa: E402
+from rl.runtime.rollout_scoring import episode_example, score_completed_rollout  # noqa: E402
+from rl.runtime.task_loader import load_rl_task_records  # noqa: E402
 
 
 def sha256_file(path: Path) -> str:

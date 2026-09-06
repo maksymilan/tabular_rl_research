@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl"))
 
-from compare_process_reward_variants import compare, summarize
+from rl.scenarios.audits.compare_process_reward_variants import compare, summarize
 
 
 def _row(reward: float, *, error: bool = False) -> dict:

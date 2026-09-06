@@ -6,10 +6,10 @@ import sys
 import unittest
 from pathlib import Path
 
-RL_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(RL_DIR))
+SRC_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(SRC_DIR))
 
-from review_grounding_edges_external import (  # noqa: E402
+from rl.scenarios.audits.review_grounding_edges_external import (  # noqa: E402
     _compact_output,
     _edge_id,
     _evidence_rows,

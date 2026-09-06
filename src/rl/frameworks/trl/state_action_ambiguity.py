@@ -22,20 +22,25 @@ from collections import defaultdict
 from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
-from frameworks.trl.transition_batch import PolicyEpisode, TransitionUpdate
+from rl.frameworks.trl.transition_batch import PolicyEpisode, TransitionUpdate
 
 try:
     # Keep lineage resolution in the audited replay implementation so the online
     # and offline identities cannot silently diverge.  The trainer's source lock
     # includes this module when the lineage-aware credit mode is enabled.
-    from diagnostics.audit_saam_lineage_replay import LineageReplay
+    from rl.scenarios.diagnostics.audit_saam_lineage_replay import LineageReplay
 except ImportError:  # pragma: no cover - dependency-light unit tests may omit it
     LineageReplay = None
 
 
 SCHEMA_VERSION = "saam-grpo-credit-v2"
 CREDIT_ASSIGNMENTS = frozenset(
-    {"trajectory", "saam-strict", "saam-asymmetric-error"}
+    {
+        "trajectory",
+        "saam-strict",
+        "saam-asymmetric-error",
+        "saam-asymmetric-error-no-mask",
+    }
 )
 DETERMINISTIC_ERROR_KINDS = frozenset(
     {
@@ -398,6 +403,7 @@ def apply_asymmetric_error_credit(
     updates: Sequence[TransitionUpdate],
     *,
     error_penalty: float = 1.0,
+    use_ambiguity_mask: bool = True,
 ) -> tuple[list[TransitionUpdate], SAAMMaskAudit]:
     """Apply asymmetric SAAM plus local deterministic Harness-error penalties.
 
@@ -441,11 +447,15 @@ def apply_asymmetric_error_credit(
         for values in repeated_groups
         if {identity.correct for identity in values} == {False, True}
     ]
-    ambiguous_keys = {
-        (identity.trajectory_id, identity.turn_index)
-        for values in ambiguous_groups
-        for identity in values
-    }
+    ambiguous_keys = (
+        {
+            (identity.trajectory_id, identity.turn_index)
+            for values in ambiguous_groups
+            for identity in values
+        }
+        if use_ambiguity_mask
+        else set()
+    )
 
     masked: list[TransitionUpdate] = []
     removed_mass = 0.0
@@ -546,7 +556,11 @@ def apply_asymmetric_error_credit(
     )
     return masked, SAAMMaskAudit(
         schema_version=SCHEMA_VERSION,
-        credit_assignment="saam-asymmetric-error",
+        credit_assignment=(
+            "saam-asymmetric-error"
+            if use_ambiguity_mask
+            else "saam-asymmetric-error-no-mask"
+        ),
         eligible_episodes=sum(bool(episode.sample.process_update) for episode in episodes),
         eligible_transitions=len(original),
         matchable_transitions=matchable,

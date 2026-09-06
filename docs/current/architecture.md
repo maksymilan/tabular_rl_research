@@ -30,14 +30,17 @@ online rollout vLLM 在第二张 A100 上运行；评测在 `table_rl` 或 `NewG
 
 | 层 | 当前入口 | 责任 |
 |---|---|---|
-| Harness/environment | `src/rl/tool_environment_v26.py` | 合法调用、状态、SQLite、denotation、错误 |
+| Harness/environment | `src/rl/runtime/tool_environment_v26.py` | 合法调用、状态、SQLite、denotation、错误 |
+| Runtime adapters | `src/rl/runtime/` | task loading、replay、terminal reward、rollout scoring 等固定运行时能力 |
 | Atomic protocol | 外部 immutable version26 runtime 的 `src/sft/protocol.py`、`src/sft/prompt_contract.py`（工作树源码可能为历史版本） | action schema、carrier、prompt/history |
 | Relation facts | `src/harness/relation_derivation/` | derived relation 的事实 provenance |
 | Rollout | `src/rl/frameworks/trl/rollout.py` | causal model↔Harness episode |
-| Reward | `src/rl/terminal_reward.py` | four-level terminal reward |
+| Reward | `src/rl/runtime/terminal_reward.py` | four-level terminal reward |
+| Objectives | `src/rl/objectives/` | process objective 与 credit 计算 |
 | Credit | `src/rl/frameworks/trl/state_action_ambiguity.py` | SAAM asymmetric-error masks |
 | Trainer | `src/rl/frameworks/trl/run_transition_grpo.py` 的 replicated trainer | transition loss、单卡更新、checkpoint |
 | Evaluation | `reproductions/trust_sql/qwen3_8b_atomic_sft1/` | version26 matched BIRD-dev greedy |
+| Experiment scenarios | `src/rl/scenarios/` | 数据准备、审计和反事实实验的场景入口；复用固定模块 |
 
 ## 身份边界
 
@@ -49,9 +52,9 @@ Harness replay/state/provenance/dependency。
 ## 默认入口
 
 - RL config：`src/rl/configs/experiments/qwen3_8b_atomic_v26_saam_screened500_single_gpu.yaml`
-- A100 launcher：`src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
+- A100 launcher：`src/rl/scenarios/rl_main/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
 - SFT launcher：`src/sft/train_qwen3_8b_atomic_sft1_newgnn.sh`
-- matched handoff：`src/rl/evaluation/run_v26_matched_eval_handoff.sh`
+- matched handoff：`src/rl/scenarios/evaluation/run_v26_matched_eval_handoff.sh`
 
 ## 历史代码策略
 

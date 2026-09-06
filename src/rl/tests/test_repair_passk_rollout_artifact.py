@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from repair_passk_rollout_artifact import repaired_rows
+from rl.scenarios.data.repair_passk_rollout_artifact import repaired_rows
 
 
 class RepairPasskRolloutArtifactTests(unittest.TestCase):

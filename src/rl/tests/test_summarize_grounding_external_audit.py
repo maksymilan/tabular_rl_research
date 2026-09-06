@@ -5,10 +5,10 @@ import sys
 import unittest
 from pathlib import Path
 
-RL_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(RL_DIR))
+SRC_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(SRC_DIR))
 
-from summarize_grounding_external_audit import (  # noqa: E402
+from rl.scenarios.audits.summarize_grounding_external_audit import (  # noqa: E402
     component_counts,
     index_unique,
     project_review_edges,

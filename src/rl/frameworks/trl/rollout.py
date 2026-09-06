@@ -18,18 +18,18 @@ if PROTOCOL_VERSION != "version26":
         f"received {PROTOCOL_VERSION!r}"
     )
 
-from tool_environment_v26 import (  # noqa: E402
+from rl.runtime.tool_environment_v26 import (  # noqa: E402
     TOOL_EXECUTION_TIMEOUT_SECONDS,
     create_tool_use_env,
 )
 
 TOOL_ENVIRONMENT_FACTORY_MODULE = create_tool_use_env.__module__
 
-from rollout_scoring import episode_example, score_completed_rollout
-from frameworks.trl.transition_batch import PolicyEpisode, PolicyTurn
+from rl.runtime.rollout_scoring import episode_example, score_completed_rollout
+from rl.frameworks.trl.transition_batch import PolicyEpisode, PolicyTurn
 
 if TYPE_CHECKING:
-    from process_credit import ProcessRewardConfig
+    from rl.objectives.process_credit import ProcessRewardConfig
 
 
 GenerateBatch = Callable[[list[str]], dict[str, Any]]

@@ -8,7 +8,7 @@ promotion 完成前，不把它写成已验证的 accuracy 提升。
 
 ## 固定身份
 
-- environment：`src/rl/tool_environment_v26.py`
+- environment：`src/rl/runtime/tool_environment_v26.py`
 - protocol runtime：Atomic version26，commit `4cd47c957fc6ae791e76a10594c8cd22f4d3b6de`
 - protocol hash：`4da19387399bd3a5`
 - student prompt SHA：`848598074e653648d52b58dfa1a54dd777beabae16cb91d83c4ba1a54b5d7316`
@@ -30,7 +30,7 @@ SQL 或 gold trajectory：
 timeout 属于有结构化 Harness error 的 policy action；即使后续恢复并答对，timeout action
 也要按局部负向惩罚计入 SAAM credit，而不是 zero credit。
 
-实现：`src/rl/terminal_reward.py` 的 `four-level` profile。timeout 按当前 transition
+实现：`src/rl/runtime/terminal_reward.py` 的 `four-level` profile。timeout 按当前 transition
 contract 处理，不把模型文字解释当作额外 reward 事实。
 
 ## SAAM asymmetric-error credit
@@ -75,7 +75,7 @@ updates 和评测口径，并写入独立 output root。系数/调度在启动�
   为单进程 `world_size=1`，不初始化 NCCL；actor 基座保持 BF16，AdamW 状态使用 FP32。显存不足时
   只能显式切换 `OPTIMIZER_NAME=paged_adamw_8bit`，并在独立 manifest 中标注为降级路径。
 - canonical launcher：
-  `src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
+  `src/rl/scenarios/rl_main/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
 
 launcher 必须 fail-closed：preflight cohort/config/adapter，检查目标 GPU/端口，训练完成后
 校验 run manifest、implementation lock、precision audit、checkpoint 和 replay/audit。

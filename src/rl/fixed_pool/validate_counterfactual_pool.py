@@ -20,16 +20,16 @@ sys.path[:0] = [
     str(ROOT / "src" / "sft"),
 ]
 
-from counterfactual_suite import load_counterfactual_suite_manifest  # noqa: E402
-from external_failure_adapter import normalize_failure_record  # noqa: E402
-from frameworks.trl.fixed_rollout_pool import (  # noqa: E402
+from rl.runtime.counterfactual_suite import load_counterfactual_suite_manifest  # noqa: E402
+from rl.runtime.external_failure_adapter import normalize_failure_record  # noqa: E402
+from rl.frameworks.trl.fixed_rollout_pool import (  # noqa: E402
     deserialize_episode,
     load_rows,
     write_rows_atomic,
 )
-from frameworks.trl.transition_batch import build_transition_updates  # noqa: E402
-from process_credit import ProcessRewardConfig, score_rollout_trajectory  # noqa: E402
-from trajectory_replay import evaluate_counterfactual_suite  # noqa: E402
+from rl.frameworks.trl.transition_batch import build_transition_updates  # noqa: E402
+from rl.objectives.process_credit import ProcessRewardConfig, score_rollout_trajectory  # noqa: E402
+from rl.runtime.trajectory_replay import evaluate_counterfactual_suite  # noqa: E402
 
 
 def load_process_config(path: Path) -> ProcessRewardConfig:
