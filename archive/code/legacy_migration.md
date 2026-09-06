@@ -17,6 +17,13 @@
 | thin aliases under `src/eval/` and `src/sft/` | `archive/code/legacy_compatibility/` | no active compatibility stubs remain |
 | branch-only RL/SFT/eval files importing retired schemes | `archive/code/legacy_compatibility/` | replay/audit only |
 | historical RL/SFT/eval launchers and configs | `archive/experiments/{rl,sft,evaluation}/` | preserve manifest and source hash |
+| `src/sft/atomic_version40.py`–`atomic_version49.py` and prompt layers | `archive/code/legacy_compatibility/atomic_versions40_49/` | retired protocol chain |
+| `src/sft/tests/test_atomic_version40.py`–`test_atomic_version49.py` | `archive/code/legacy_compatibility/atomic_versions40_49/` | tests for retired variants |
+| `src/eval/audit_context_handle_card_ablation.py` | `archive/code/legacy_compatibility/atomic_versions40_49/` | historical context-card audit |
+| root `tmp_*.py` and `tmp_run_diag_*.sh` scratch files | `archive/code/scratch/` | unreferenced one-off diagnostics, retained verbatim |
+| `src/rl/experiments/run_phase0_sft2_equal300_passk4_table_rl.sh`, `run_phase1_process_current_equal300_passk4_table_rl.sh` | `archive/experiments/evaluation/legacy_version36/` | duplicate frozen version36 launchers, retained for replay |
+| `src/rl/experiments/run_exp15_exact_prefix_*.sh`, `finalize*exp15_exact_prefix*.sh` | `archive/experiments/rl/legacy_exp15_exact_prefix/` | duplicate frozen Action-DPO launchers |
+| `src/rl/experiments/{run,watchdog}*rank*followup*queue_table_rl.sh` | `archive/experiments/rl/legacy_exp10_11/` | frozen rank follow-up queue/watchdog group |
 
 ## 迁移原则
 

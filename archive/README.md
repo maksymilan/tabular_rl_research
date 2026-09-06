@@ -11,6 +11,11 @@ Archived code is retained for reproducibility and audit, not imported by the act
   native-tool-bundle, relational-program, and shared SQL runners.
 - `code/legacy_compatibility/`: retired thin aliases and branch-specific runners moved out of
   `src/` so they cannot be imported by the active mainline.
+- `code/legacy_compatibility/atomic_versions40_49/`: retired Atomic protocol chain, prompt layers,
+  tests, and context-card audit retained for explicit historical replay.
+- `code/scratch/`: unreferenced root-level one-off diagnostics retained for audit.
+- `code/remote_snapshots/`: remote runtime copies retained with source paths and hashes; never
+  imported by active code.
 - `code/legacy_migration.md`: the completed source-to-archive map and replay boundary.
 
 Do not repair archived code merely to satisfy active tests. If a historical experiment must be
