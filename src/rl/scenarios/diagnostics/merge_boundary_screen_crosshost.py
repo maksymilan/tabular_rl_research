@@ -9,7 +9,6 @@ published with one atomic directory rename.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -20,6 +19,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from rl.diagnostics.io import sha256_bytes as _diagnostic_sha256_bytes
+from rl.diagnostics.io import sha256_file as _diagnostic_sha256_file
+from rl.diagnostics.validation import require as _diagnostic_require
 
 
 SCHEMA_VERSION = "qwen3-v26-boundary-screen-crosshost-merge-v1"
@@ -75,20 +78,15 @@ class SourceGroup:
 
 
 def sha256_bytes(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
+    return _diagnostic_sha256_bytes(payload)
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return _diagnostic_sha256_file(path)
 
 
 def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise ValueError(message)
+    _diagnostic_require(condition, message)
 
 
 def _require_file(path: Path, label: str) -> None:

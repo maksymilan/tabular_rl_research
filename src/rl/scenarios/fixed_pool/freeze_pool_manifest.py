@@ -3,24 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+try:
+    from rl.fixed_pool.io import load_jsonl, sha256_file, task_id
+except ModuleNotFoundError:
+    from fixed_pool.io import load_jsonl, sha256_file, task_id
 
 
-def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as source:
-        return [json.loads(line) for line in source if line.strip()]
 
 
 def file_record(path: Path) -> dict[str, Any]:

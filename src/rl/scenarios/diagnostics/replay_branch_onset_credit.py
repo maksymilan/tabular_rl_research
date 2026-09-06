@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import collections
-import json
 import math
 import sys
 from pathlib import Path
@@ -27,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl" / "diagnostics"))
 
 import rl.scenarios.diagnostics.audit_saam_lineage_replay as lineage  # noqa: E402
-from rl.scenarios.diagnostics.replay_lineage_asymmetric_credit import _group_rows, _local_statuses, _read_rows  # noqa: E402
+from rl.diagnostics.replay import group_rollouts, local_error_statuses, read_rows  # noqa: E402
 from rl.frameworks.trl.transition_batch import standardized_group_advantages  # noqa: E402
 
 
@@ -66,7 +65,7 @@ def replay(
 ) -> dict[str, Any]:
     if not math.isfinite(error_penalty) or error_penalty <= 0:
         raise ValueError("error_penalty must be positive and finite")
-    grouped = _group_rows(rows)
+    grouped = group_rollouts(rows)
     all_records: list[dict[str, Any]] = []
     branch_state_count = 0
     branch_event_count = 0
@@ -86,7 +85,7 @@ def replay(
         state_events: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
         for row, is_eligible, advantage in zip(group, eligible, advantages, strict=True):
             events, _ = lineage.LineageReplay(row).replay()
-            statuses = _local_statuses(row)
+            statuses = local_error_statuses(row, error_signature=lineage.error_signature)
             if len(events) != len(statuses):
                 raise ValueError(f"event/status mismatch for {row.get('trajectory_id')}")
             event_rows: list[dict[str, Any]] = []
@@ -252,7 +251,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     result = replay(
-        _read_rows(args.rollouts),
+        read_rows(args.rollouts),
         expected_group_size=args.expected_group_size,
         error_penalty=args.error_penalty,
         homogeneous_action_only=not args.allow_mixed_action_branch,

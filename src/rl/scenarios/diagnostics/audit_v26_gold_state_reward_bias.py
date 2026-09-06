@@ -33,6 +33,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
+from rl.diagnostics.io import sha256_file as _diagnostic_sha256_file
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -137,11 +138,7 @@ def replay_time_limit(seconds: float | None):
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _diagnostic_sha256_file(path)
 
 
 def load_process_config(path: Path) -> ProcessRewardConfig:

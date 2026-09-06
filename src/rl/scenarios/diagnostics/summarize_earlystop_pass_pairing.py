@@ -4,33 +4,27 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from rl.scenarios.diagnostics.audit_earlystop_mixed180_training import atomic_json
+from rl.diagnostics.metrics import exact_sign_p
+from rl.diagnostics.records import group_by_example_index, load_jsonl
+from rl.diagnostics.reporting import write_report
 
 
-def exact_sign_p(improved: int, regressed: int) -> float:
-    discordant = improved + regressed
-    if not discordant:
-        return 1.0
-    tail = sum(
-        math.comb(discordant, index)
-        for index in range(min(improved, regressed) + 1)
-    )
-    return min(1.0, 2.0 * tail / (2**discordant))
+# Historical callers imported ``atomic_json`` from this scenario.  Keep the
+# spelling as a compatibility alias while routing writes through the public API.
+atomic_json = write_report
 
 
 def summarize(path: Path) -> dict[str, Any]:
-    rows = [json.loads(line) for line in path.open() if line.strip()]
+    rows = load_jsonl(path)
     if len(rows) != 2880:
         raise ValueError(f"expected 2880 rollout rows, got {len(rows)}")
-    by_pass: list[dict[int, list[dict[str, Any]]]] = [defaultdict(list), defaultdict(list)]
-    for pass_index, block in enumerate((rows[:1440], rows[1440:])):
-        for row in block:
-            by_pass[pass_index][int(row["example_index"])].append(row)
+    by_pass = [
+        group_by_example_index(block)
+        for block in (rows[:1440], rows[1440:])
+    ]
     if set(by_pass[0]) != set(by_pass[1]) or len(by_pass[0]) != 180:
         raise ValueError("two training passes do not contain the same 180 tasks")
     per_task = []

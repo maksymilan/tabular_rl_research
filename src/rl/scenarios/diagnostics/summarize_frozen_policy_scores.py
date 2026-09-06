@@ -9,10 +9,12 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from rl.diagnostics.metrics import percentile as _percentile
+from rl.diagnostics.records import load_jsonl as _load_jsonl
+
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as source:
-        return [json.loads(line) for line in source if line.strip()]
+    return _load_jsonl(path)
 
 
 def mean(values: list[float]) -> float | None:
@@ -20,16 +22,7 @@ def mean(values: list[float]) -> float | None:
 
 
 def percentile(values: list[float], quantile: float) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    position = (len(ordered) - 1) * quantile
-    left = math.floor(position)
-    right = math.ceil(position)
-    if left == right:
-        return ordered[left]
-    fraction = position - left
-    return ordered[left] * (1.0 - fraction) + ordered[right] * fraction
+    return _percentile(values, quantile, default=float("nan")) if values else None
 
 
 def pearson(left: list[float], right: list[float]) -> float | None:

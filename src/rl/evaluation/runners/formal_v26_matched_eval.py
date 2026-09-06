@@ -31,6 +31,7 @@ from typing import Any, Iterator, Sequence
 
 
 from rl.evaluation.runners.contracts import default_contract
+from rl.evaluation.runners.identity import evaluation_identity
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parents[4]
 DEFAULT_CONTRACT = default_contract("qwen3_8b_v26_vanilla_formal_matched_contract.json")
@@ -1091,91 +1092,6 @@ def stop_owned_process_group(process: subprocess.Popen[Any] | None) -> dict[str,
     return report
 
 
-def evaluation_identity(
-    contract: dict[str, Any],
-    *,
-    arm: str,
-    adapter: dict[str, Any],
-    runtime: Path,
-    model: Path,
-    derived: Path,
-    versions: dict[str, str],
-    implementation: dict[str, str],
-    gpu_id: int,
-    port: int,
-    served_model: str,
-) -> dict[str, Any]:
-    evaluation = contract["evaluation"]
-    serving = contract["serving"]
-    return {
-        "schema_version": "qwen3-v26-formal-evaluation-identity-v1",
-        "created_at_utc": utc_now(),
-        "arm": arm,
-        "base_model": str(model),
-        "base_model_revision": contract["model"]["revision"],
-        "base_model_identity_sha256": contract["model"]["base_model_identity"][
-            "aggregate_sha256"
-        ],
-        "adapter_path": adapter["path"],
-        "adapter_sha256": adapter["adapter_sha256"],
-        "adapter_config_sha256": adapter["adapter_config_sha256"],
-        "adapter_config_semantic_sha256": adapter[
-            "adapter_config_semantic_sha256"
-        ],
-        "dataset": contract["input"]["dataset"],
-        "input_path": str(derived),
-        "input_sha256": contract["input"]["derived_sha256"],
-        "task_identity_sha256_without_db_path": contract["input"][
-            "task_identity_sha256_without_db_path"
-        ],
-        "protocol_version": contract["runtime"]["protocol_version"],
-        "protocol_hash": contract["runtime"]["protocol_hash"],
-        "runtime": str(runtime),
-        "runtime_sha256": contract["runtime"]["content_tree_sha256"],
-        "serving": {
-            **serving,
-            "package_versions": versions,
-            "formal_wrapper_sha256": implementation["formal_v26_rollout_passk.py"],
-            "frozen_rollout_passk_sha256": contract["runtime"]["key_file_sha256"][
-                "src/eval/rollout_passk.py"
-            ],
-            "tokenizer_config_sha256": contract["model"]["tokenizer_config_sha256"],
-            "chat_template_sha256": contract["model"]["chat_template_sha256"],
-        },
-        "concurrency": {
-            "workers": evaluation["workers"],
-            "sample_workers": evaluation["sample_workers"],
-            "first_sample_workers": evaluation["first_sample_workers"],
-            "max_inflight_requests": evaluation["max_inflight_requests"],
-            "max_num_seqs": serving["max_num_seqs"],
-        },
-        "decode": {
-            "temperature": evaluation["temperature"],
-            "top_p": evaluation["top_p"],
-            "max_tokens": evaluation["max_tokens"],
-            "n_samples": evaluation["n_samples"],
-            "pass_k": evaluation["pass_k"],
-            "enable_thinking": evaluation["enable_thinking"],
-            "api_retries": evaluation["api_retries"],
-        },
-        "agent": {
-            "max_steps": evaluation["max_steps"],
-            "context_mode": evaluation["context_mode"],
-            "history_turns": evaluation["history_turns"],
-            "rolling_prompt_variant": evaluation["rolling_prompt_variant"],
-            "rolling_observation_style": evaluation["rolling_observation_style"],
-            "denotation_comparison": evaluation["denotation_comparison"],
-            "few_shot": evaluation["few_shot"],
-        },
-        "tool_execution_timeout_seconds": evaluation[
-            "tool_execution_timeout_seconds"
-        ],
-        "operational": {
-            "physical_gpu_id": gpu_id,
-            "port": port,
-            "served_model": served_model,
-        },
-    }
 
 
 def sample_api_error(sample: dict[str, Any]) -> str | None:

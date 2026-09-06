@@ -9,6 +9,8 @@ import argparse
 import json
 from pathlib import Path
 
+from rl.diagnostics.reporting import write_report
+
 try:
     from rl.scenarios.diagnostics.analyze_evaluation_results import analyze_results
 except ModuleNotFoundError:  # Direct execution from a runtime snapshot.
@@ -44,10 +46,7 @@ def main() -> None:
     # Remove index-list extensions that did not exist in the historical schema.
     output["sequence_change"].pop("exact_action_sequence_changed_indices", None)
     output["sequence_change"].pop("first_exact_action_changed_indices", None)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    write_report(args.output, output)
     print(json.dumps(output, ensure_ascii=False, indent=2))
 
 

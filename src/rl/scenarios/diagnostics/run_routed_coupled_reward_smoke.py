@@ -10,71 +10,39 @@ from __future__ import annotations
 
 import argparse
 import inspect
-import json
 import math
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from rl.diagnostics.records import load_jsonl as _load_jsonl
+from rl.diagnostics.trajectory import (
+    NEGATIVE_DENSE_CATEGORIES,
+    POSITIVE_DENSE_CATEGORIES,
+    dense_reward_category,
+)
+from rl.frameworks.trl.tool_loss_mask import tool_token_loss_mask as _tool_mask
 
-POSITIVE_CATEGORIES = {
-    "correct_key_evidence",
-    "correct_key_backslice",
-    "correct_terminal",
-}
-NEGATIVE_CATEGORIES = {"severe_local_error"}
+
+POSITIVE_CATEGORIES = POSITIVE_DENSE_CATEGORIES
+NEGATIVE_CATEGORIES = NEGATIVE_DENSE_CATEGORIES
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as source:
-        return [json.loads(line) for line in source if line.strip()]
+    return _load_jsonl(path)
 
 
 def tool_token_loss_mask(tokenizer, response_ids: list[int]) -> tuple[int, ...]:
-    def decode(ids: list[int]) -> str:
-        return tokenizer.decode(
-            ids,
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False,
-        )
-
-    text = decode(response_ids)
-    think_end = text.find("</think>")
-    if think_end < 0:
-        raise ValueError("response has no closing think marker")
-    json_start = text.find("{", think_end + len("</think>"))
-    if json_start < 0:
-        raise ValueError("response has no JSON action suffix")
-    if text[think_end + len("</think>") : json_start].strip():
-        raise ValueError("non-whitespace content lies before JSON")
-    result = []
-    previous = 0
-    for end in range(1, len(response_ids) + 1):
-        current = len(decode(response_ids[:end]))
-        if current < previous:
-            raise ValueError("tokenizer prefix decoding is not monotonic")
-        result.append(int(current > json_start))
-        previous = current
+    result = _tool_mask(tokenizer, response_ids)
     if not any(result) or all(result):
         raise ValueError("response does not contain both reasoning and action tokens")
-    return tuple(result)
+    return result
 
 
 def reward_category(
     transition: dict[str, Any], feature: dict[str, Any]
 ) -> str:
-    values = feature["features"]
-    if values["dense_severe_local_bad_event"]:
-        return "severe_local_error"
-    if transition["trajectory_correct"]:
-        if values["dense_operator_backslice_bonus"]:
-            return "correct_key_backslice"
-        if values["dense_observation_support_bonus"]:
-            return "correct_key_evidence"
-        if values["is_terminal"]:
-            return "correct_terminal"
-        return "correct_other_clean"
-    return "incorrect_other_clean"
+    return dense_reward_category(transition, feature)
 
 
 def routed_advantage(row: dict[str, Any]) -> float:

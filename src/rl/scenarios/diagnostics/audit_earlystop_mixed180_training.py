@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -11,6 +10,11 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
+
+from rl.diagnostics.io import read_jsonl as _diagnostic_read_jsonl
+from rl.diagnostics.io import sha256_file as _diagnostic_sha256_file
+from rl.diagnostics.validation import regular_file as _diagnostic_regular_file
+from rl.diagnostics.validation import require as _diagnostic_require
 
 
 SCHEMA_VERSION = "earlystop-mixed180-training-completion-audit-v1"
@@ -35,11 +39,8 @@ EXPECTED_IMPLEMENTATION_LOCK_SHA256 = (
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    """Compatibility export backed by :mod:`rl.diagnostics.io`."""
+    return _diagnostic_sha256_file(path)
 
 
 def load_object(path: Path) -> dict[str, Any]:
@@ -50,25 +51,19 @@ def load_object(path: Path) -> dict[str, Any]:
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows = []
-    with path.open(encoding="utf-8") as source:
-        for line_number, line in enumerate(source, 1):
-            if not line.strip():
-                raise ValueError(f"empty JSONL row {line_number}: {path}")
-            value = json.loads(line)
-            if not isinstance(value, dict):
-                raise ValueError(f"non-object JSONL row {line_number}: {path}")
-            rows.append(value)
-    return rows
+    """Compatibility export backed by strict diagnostics JSONL parsing."""
+    return [dict(row) for row in _diagnostic_read_jsonl(path, allow_blank=False)]
 
 
 def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise ValueError(message)
+    _diagnostic_require(condition, message)
 
 
 def _regular(path: Path, label: str) -> None:
-    _require(path.is_file() and not path.is_symlink(), f"invalid {label}: {path}")
+    try:
+        _diagnostic_regular_file(path, label)
+    except ValueError as exc:
+        raise ValueError(f"invalid {label}: {path}") from exc
 
 
 def _task_index(row: dict[str, Any]) -> int:

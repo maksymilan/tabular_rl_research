@@ -11,10 +11,12 @@ import json
 from collections import Counter
 from pathlib import Path
 try:
-    from rl.data_selection.passk import sample_attempt_count, sample_correct_count
+    from rl.data_selection.passk import sample_correct_count
+    from rl.data_selection.pilot import legal_rate, pilot_bucket, select_pilot
     from rl.shared.io import read_jsonl
 except ModuleNotFoundError:
-    from data_selection.passk import sample_attempt_count, sample_correct_count
+    from data_selection.passk import sample_correct_count
+    from data_selection.pilot import legal_rate, pilot_bucket, select_pilot
     from shared.io import read_jsonl
 
 
@@ -23,28 +25,11 @@ def load_records(path: Path) -> list[dict]:
     return read_jsonl(path)
 
 
-def legal_rate(record: dict) -> float:
-    samples = record.get("samples") or []
-    if not samples:
-        return 1.0 if record.get("legal") else 0.0
-    return sum(bool(sample.get("legal")) for sample in samples) / len(samples)
-
-
 def correct_count(record: dict) -> int:
     return sample_correct_count(record)
 
 
-def bucket(record: dict) -> str:
-    n_samples = sample_attempt_count(record)
-    cc = correct_count(record)
-    lr = legal_rate(record)
-    if lr < 0.8:
-        return "format_or_execution_unstable"
-    if cc == 0:
-        return "legal_but_all_wrong"
-    if 0 < cc < n_samples:
-        return "mixed_success"
-    return "already_easy"
+bucket = pilot_bucket
 
 
 def main() -> int:
@@ -57,20 +42,7 @@ def main() -> int:
     args = parser.parse_args()
 
     records = load_records(Path(args.input))
-    enriched = [{**record, "rl_bucket": bucket(record), "rl_legal_rate": legal_rate(record)}
-                for record in records]
-    order = {"mixed_success": 0, "legal_but_all_wrong": 1, "already_easy": 2,
-             "format_or_execution_unstable": 3}
-    allowed = {"mixed_success"}
-    if args.include_hard:
-        allowed.add("legal_but_all_wrong")
-    selected = [
-        record for record in sorted(enriched, key=lambda item: (
-            order[item["rl_bucket"]],
-            item.get("example_index", 10**9),
-        ))
-        if record["rl_bucket"] in allowed
-    ][:args.limit]
+    selected = select_pilot(records, limit=args.limit, include_hard=args.include_hard)
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

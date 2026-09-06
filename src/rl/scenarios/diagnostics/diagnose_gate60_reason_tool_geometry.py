@@ -10,7 +10,8 @@ from typing import Any
 
 import torch
 
-from rl.scenarios.diagnostics.diagnose_gate60_gradient_conflict import GradientScorer, build_rows, load_jsonl
+from rl.diagnostics.gradient import GradientScorer, build_rows
+from rl.diagnostics.records import load_jsonl
 
 
 def dot(left: list[torch.Tensor], right: list[torch.Tensor]) -> float:

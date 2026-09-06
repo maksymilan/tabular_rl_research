@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import math
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Sequence
+
+from rl.diagnostics.io import (
+    parse_jsonl_bytes as _diagnostic_parse_jsonl_bytes,
+    read_json as _diagnostic_read_json,
+    read_jsonl as _diagnostic_read_jsonl,
+    sha256_bytes as _diagnostic_sha256_bytes,
+    sha256_file as _diagnostic_sha256_file,
+)
+from rl.diagnostics.validation import finite_number as _diagnostic_finite_number
 
 
 SCHEMA_VERSION = "vanilla-grpo-rollout-probe-audit-v1"
@@ -42,36 +49,20 @@ _TIMEOUT_MARKER_KEYS = frozenset(
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    """Compatibility export backed by :mod:`rl.diagnostics.io`."""
+    return _diagnostic_sha256_file(path)
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_bytes())
-    if not isinstance(value, dict):
-        raise ValueError(f"manifest must be a JSON object: {path}")
-    return value
+    return dict(_diagnostic_read_json(path, require_object=True))
 
 
 def _parse_jsonl(data: bytes, *, path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for line_number, line in enumerate(data.splitlines(), start=1):
-        if not line.strip():
-            continue
-        value = json.loads(line)
-        if not isinstance(value, dict):
-            raise ValueError(
-                f"trajectory row {line_number} must be a JSON object: {path}"
-            )
-        rows.append(value)
-    return rows
+    return [dict(row) for row in _diagnostic_parse_jsonl_bytes(data, source=path)]
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    return _parse_jsonl(path.read_bytes(), path=path)
+    return [dict(row) for row in _diagnostic_read_jsonl(path)]
 
 
 def _contains_timeout_marker(value: Any) -> bool:
@@ -91,10 +82,7 @@ def _contains_timeout_marker(value: Any) -> bool:
 
 
 def _is_finite_number(value: Any) -> bool:
-    return (
-        type(value) in {int, float}
-        and math.isfinite(float(value))
-    )
+    return _diagnostic_finite_number(value)
 
 
 def _policy_evidence_is_valid(policy_turns: Any) -> bool:
@@ -541,8 +529,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(manifest, dict):
             raise ValueError(f"manifest must be a JSON object: {args.manifest}")
         rows = _parse_jsonl(trajectories_bytes, path=args.trajectories)
-        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
-        trajectories_sha256 = hashlib.sha256(trajectories_bytes).hexdigest()
+        manifest_sha256 = _diagnostic_sha256_bytes(manifest_bytes)
+        trajectories_sha256 = _diagnostic_sha256_bytes(trajectories_bytes)
         result = audit(
             manifest,
             rows,

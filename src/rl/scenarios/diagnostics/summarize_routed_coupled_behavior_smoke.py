@@ -11,6 +11,8 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
+from rl.diagnostics.reporting import write_report
+
 try:
     from rl.scenarios.diagnostics.analyze_evaluation_results import analyze_results
 except ModuleNotFoundError:  # Direct execution from a runtime snapshot.
@@ -120,10 +122,7 @@ def main() -> None:
         result["lr4e-6_vs_lr1e-6"] = _legacy_pair(
             unified["comparisons"]["lr4e-6_vs_lr1e-6"]
         )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    write_report(args.output, result)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

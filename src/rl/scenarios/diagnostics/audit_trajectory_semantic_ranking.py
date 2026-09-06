@@ -16,7 +16,6 @@ No optimizer or model server is used by this audit.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import statistics
@@ -27,6 +26,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterable
+
+from rl.diagnostics.io import read_jsonl as _diagnostic_read_jsonl
+from rl.diagnostics.io import sha256_file as _diagnostic_sha256_file
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [
@@ -68,16 +70,12 @@ def remap_replay_handles(value: Any, handle_map: dict[str, str]) -> Any:
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    """Compatibility export backed by :mod:`rl.diagnostics.io`."""
+    return _diagnostic_sha256_file(path)
 
 
 def rows(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as source:
-        return [json.loads(line) for line in source if line.strip()]
+    return [dict(row) for row in _diagnostic_read_jsonl(path)]
 
 
 def quantile(values: list[float], probability: float) -> float | None:

@@ -18,6 +18,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
 
+from rl.diagnostics.io import read_json as _diagnostic_read_json
+from rl.diagnostics.io import read_jsonl as _diagnostic_read_jsonl
+from rl.diagnostics.io import sha256_file as _diagnostic_sha256_file
+
 try:
     import torch
 except ImportError:  # The production TRL runtime has Torch; local audits may not.
@@ -39,21 +43,15 @@ GROUP_ADVANTAGE_SUM_ABS_TOLERANCE = 2e-6
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as source:
-        return json.load(source)
+    return dict(_diagnostic_read_json(path, require_object=True))
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as source:
-        return [json.loads(line) for line in source if line.strip()]
+    return [dict(row) for row in _diagnostic_read_jsonl(path)]
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _diagnostic_sha256_file(path)
 
 
 def checkpoint_precision_audit(checkpoint_dir: Path) -> dict[str, Any]:

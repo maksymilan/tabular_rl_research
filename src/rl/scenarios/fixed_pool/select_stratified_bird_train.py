@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import random
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-
-LEVEL_MAP = {"easy": "simple", "medium": "moderate", "hard": "challenging"}
+try:
+    from rl.fixed_pool.selection import LEVEL_MAP, level_of, select
+except ModuleNotFoundError:
+    from fixed_pool.selection import LEVEL_MAP, level_of, select
 
 
 def sha256_file(path: Path) -> str:
@@ -28,46 +29,6 @@ def load(paths: list[Path]) -> list[dict[str, Any]]:
         with path.open(encoding="utf-8") as source:
             rows.extend(json.loads(line) for line in source if line.strip())
     return rows
-
-
-def level_of(row: dict[str, Any]) -> str:
-    raw = str((row.get("metadata") or {}).get("difficulty_proxy") or "").lower()
-    try:
-        return LEVEL_MAP[raw]
-    except KeyError as exc:
-        raise ValueError(f"missing/unsupported difficulty proxy for {row.get('example_id')}: {raw}") from exc
-
-
-def select(rows: list[dict[str, Any]], per_level: int, seed: int) -> list[dict[str, Any]]:
-    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    seen: set[str] = set()
-    for row in rows:
-        task_id = str(row.get("example_id") or row.get("instance_id") or "")
-        if not task_id or task_id in seen:
-            continue
-        seen.add(task_id)
-        if not row.get("gold_sql") and not row.get("query"):
-            continue
-        db_path = Path(str(row.get("db_path") or ""))
-        if not db_path.is_file():
-            continue
-        grouped[level_of(row)].append(row)
-    rng = random.Random(seed)
-    selected = []
-    for level in ("simple", "moderate", "challenging"):
-        candidates = sorted(
-            grouped[level],
-            key=lambda row: str(row.get("example_id") or row.get("instance_id")),
-        )
-        if len(candidates) < per_level:
-            raise ValueError(f"only {len(candidates)} usable {level} tasks; need {per_level}")
-        rng.shuffle(candidates)
-        for row in candidates[:per_level]:
-            retained = dict(row)
-            retained.setdefault("metadata", {})["fixed_pool_difficulty"] = level
-            selected.append(retained)
-    rng.shuffle(selected)
-    return selected
 
 
 def main() -> None:

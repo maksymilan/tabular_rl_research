@@ -19,6 +19,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from rl.diagnostics.validation import require as _diagnostic_require
+
 try:
     from rl.scenarios.diagnostics import audit_vanilla_grpo_train600_v2_step5 as gate
 except ImportError:
@@ -66,7 +68,7 @@ _original_validate_manifest = _engine._validate_manifest
 
 
 def _require(condition: bool, message: str) -> None:
-    _engine._require(condition, message)
+    _diagnostic_require(condition, message)
 
 
 def _validate_experiment_config(config: Mapping[str, Any]) -> None:

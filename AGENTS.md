@@ -87,6 +87,42 @@ GPU 编号、端口和路径由 launcher 动态选择空闲资源后写入 run m
   `src/sft/train_qwen3_8b_atomic_sft1_newgnn.sh`
 - matched evaluator：`reproductions/trust_sql/qwen3_8b_atomic_sft1/`
 
+## 当前项目架构与代码落点
+
+后续开发必须沿以下分层扩展，不得按个人习惯把新代码直接丢入任意目录：
+
+- `src/rl/runtime/`：Atomic v26 Harness、task loading、trajectory replay、terminal/result
+  scoring、failure normalization。这里不放实验选择策略或 GPU/进程编排。
+- `src/rl/data_selection/`：可复用的 pass@k、pilot、cohort、分层、排除和确定性选择策略。
+  选择策略不得在 `scenarios/data/` 重新实现 JSONL 解析、稳定 task identity、哈希或排序规则。
+- `src/rl/configuration/`：实验配置 schema、Atomic identity、model/checkpoint、reward、
+  optimizer、rollout 和 admission 校验。新 launcher 不得复制这些校验常量。
+- `src/rl/experiments/`：命名实验定义、active experiment registry 和当前方案 contract
+  检查。实验名称、配置路径和主线 admission 必须从这里解析。
+- `src/rl/fixed_pool/`：固定池生成、组装、重评分、反事实验证、分层选择以及公共 I/O/identity。
+  `scenarios/fixed_pool/` 只保留具体 admission/freeze/repair 流程的薄 CLI。
+- `src/rl/evaluation/runners/`：evaluation plan、contract、identity、shard 聚合和正式
+  runner 的共享执行原语。场景入口放在 `scenarios/evaluation/`，不得复制 shard 覆盖校验、
+  manifest 生成或 identity 构造。
+- `src/rl/frameworks/`：TRL trainer、rollout、transition batch、loss mask、ranking、
+  precision 和 GPU launcher 基础设施。场景只传入参数，不复制训练循环或资源锁逻辑。
+- `src/rl/scenarios/`：唯一允许放实验特定 CLI 的地方，按 `data/`、`evaluation/`、
+  `fixed_pool/`、`diagnostics/`、`rl_main/` 分类；脚本必须组合共享 API。
+- `archive/`：历史实验、旧 protocol、旧 launcher 和一次性诊断的唯一归档位置。归档代码
+  不得被当前 Atomic v26 SFT/RL 入口隐式导入。
+
+新增功能的默认流程是：先判断它属于哪个共享层；若会被两个以上场景调用，必须提取为共享
+模块；场景文件只保留参数解析、组合调用和场景输出。不得新增根目录临时脚本、兼容 stub、
+重复 `load_jsonl`/`sha256_file`/`task_id`/cohort predicate 或内联 GPU 编排。迁移旧代码时保留
+旧入口的必要兼容行为，并同时更新 `docs/current/module_extraction_status.md`、相关测试和
+manifest contract；确认所有调用方迁移后才能删除旧实现。
+
+每次改动前检查 `git status` 并保留已有 dirty worktree；改动后至少运行相关单元测试、模块
+import/compile smoke 和 `git diff --check`。任何实验启动前必须先通过 preflight，并在 immutable
+manifest 中记录 protocol、prompt、model、checkpoint、cohort、runtime 和 implementation
+identity。若新设计与本节或 `docs/current/final_project_contract.md` 冲突，先更新 decision
+register，再写代码。
+
 启动任何实验前先做 preflight，确认 protocol/prompt/model/checkpoint/cohort 哈希和输出目录；
 训练必须生成 immutable manifest、implementation lock、precision audit 和 fresh replay/audit
 证据。变更代码后运行与改动相关的单元测试和 `git diff --check`。

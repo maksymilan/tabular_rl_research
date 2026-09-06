@@ -7,15 +7,14 @@ perform while preserving identical validation and hashing semantics.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 try:  # direct script execution (PYTHONPATH=src/rl)
-    from rl.shared.io import read_jsonl, sha256_file
+    from rl.diagnostics.io import read_json, read_jsonl, sha256_file
     from rl.shared.stats import percentile_nearest_rank
 except ModuleNotFoundError:  # direct execution with src/rl itself on sys.path
-    from shared.io import read_jsonl, sha256_file
+    from diagnostics.io import read_json, read_jsonl, sha256_file
     from shared.stats import percentile_nearest_rank
 
 if TYPE_CHECKING:
@@ -33,9 +32,7 @@ def load_process_reward_config(
     """Load and validate a process-reward config, ignoring manifest metadata keys."""
     values: dict[str, Any] = dict(defaults or {})
     if path is not None:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError(f"{path} must contain a JSON object")
+        payload = read_json(path, require_object=True)
         values.update({key: value for key, value in payload.items() if not key.startswith("_")})
     # Keep diagnostics importable in lightweight environments; process-credit
     # dependencies (sqlglot/Harness adapters) are needed only when loading a

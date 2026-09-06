@@ -8,26 +8,24 @@ shift an exact fixed-prefix measurement of policy movement on the training pool.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import inspect
-import json
 import math
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
+from rl.diagnostics.io import sha256_file
+from rl.diagnostics.records import load_jsonl as _load_jsonl
+from rl.diagnostics.trajectory import dense_reward_category
+from rl.frameworks.trl.tool_loss_mask import tool_token_loss_mask as _tool_mask
+
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as source:
-        return [json.loads(line) for line in source if line.strip()]
+    return _load_jsonl(path)
 
 
 def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return sha256_file(path)
 
 
 def transition_key(row: dict[str, Any]) -> tuple[str, int]:
@@ -41,18 +39,7 @@ def feature_key(row: dict[str, Any]) -> tuple[str, int]:
 def reward_category(
     transition: dict[str, Any], feature_row: dict[str, Any]
 ) -> str:
-    features = feature_row["features"]
-    if features["dense_severe_local_bad_event"]:
-        return "severe_local_error"
-    if transition["trajectory_correct"]:
-        if features["dense_operator_backslice_bonus"]:
-            return "correct_key_backslice"
-        if features["dense_observation_support_bonus"]:
-            return "correct_key_evidence"
-        if features["is_terminal"]:
-            return "correct_terminal"
-        return "correct_other_clean"
-    return "incorrect_other_clean"
+    return dense_reward_category(transition, feature_row)
 
 
 def enrich_rows(
@@ -92,36 +79,7 @@ def parse_adapter(value: str) -> tuple[str, Path]:
 
 def tool_token_loss_mask(tokenizer, response_ids: list[int]) -> tuple[int, ...]:
     """Reproduce the frozen trainer's exact raw-JSON suffix mask."""
-    if not response_ids:
-        raise ValueError("tool-only masking requires a non-empty response")
-
-    def decode(ids: list[int]) -> str:
-        return tokenizer.decode(
-            ids,
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False,
-        )
-
-    text = decode(response_ids)
-    think_end = text.find("</think>")
-    if think_end < 0:
-        raise ValueError("response has no closing </think> marker")
-    json_start = text.find("{", think_end + len("</think>"))
-    if json_start < 0:
-        raise ValueError("response has no raw JSON action suffix")
-    if text[think_end + len("</think>") : json_start].strip():
-        raise ValueError("non-whitespace content lies between think and JSON")
-    mask = []
-    previous_length = 0
-    for end in range(1, len(response_ids) + 1):
-        prefix_length = len(decode(response_ids[:end]))
-        if prefix_length < previous_length:
-            raise ValueError("tokenizer prefix decoding is not monotonic")
-        mask.append(int(prefix_length > json_start))
-        previous_length = prefix_length
-    if not any(mask):
-        raise ValueError("tool-only mask contains no active token")
-    return tuple(mask)
+    return _tool_mask(tokenizer, response_ids)
 
 
 class MultiAdapterScorer:

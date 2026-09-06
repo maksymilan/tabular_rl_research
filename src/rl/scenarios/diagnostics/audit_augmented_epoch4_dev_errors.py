@@ -8,19 +8,12 @@ incorrect).  This file never exports dev rows or changes rewards.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
+from rl.diagnostics.io import sha256_file
+
 import rl.scenarios.diagnostics.audit_dev_incorrect_train_consistency as base
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def main() -> None:

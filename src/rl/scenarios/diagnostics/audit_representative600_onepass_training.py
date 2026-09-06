@@ -18,6 +18,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from rl.diagnostics.validation import require as _diagnostic_require
+
 try:  # Package import in tests and repository entry points.
     from . import audit_earlystop_mixed180_training as common
     from . import audit_vanilla_grpo_train600_step5 as step5_audit
@@ -127,8 +129,7 @@ REQUIRED_IMPLEMENTATION_FILES = {
 
 
 def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise ValueError(message)
+    _diagnostic_require(condition, message)
 
 
 def _require_fields(

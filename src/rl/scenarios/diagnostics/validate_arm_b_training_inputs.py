@@ -8,12 +8,13 @@ that activated Arm B.  It does not generate trajectories or start training.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from rl.diagnostics.io import sha256_file as _diagnostic_sha256_file
+from rl.diagnostics.validation import require as _diagnostic_require
 
 from rl.scenarios.data.vanilla_grpo_arm_b import (
     ARM_B_SEED_REGISTRY,
@@ -65,16 +66,11 @@ SHA_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise ValueError(message)
+    _diagnostic_require(condition, message)
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return _diagnostic_sha256_file(path)
 
 
 def _regular_file(path: Path, label: str) -> None:

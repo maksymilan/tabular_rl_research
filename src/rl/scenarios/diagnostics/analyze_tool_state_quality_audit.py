@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import random
 import statistics
-from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+
+from rl.diagnostics.io import write_json
+from rl.diagnostics.metrics import auc, bootstrap_ci, cohens_d_pooled, mean
+from rl.diagnostics.records import load_jsonl
 
 
 PRODUCER_TOOLS = (
@@ -19,51 +21,8 @@ PRODUCER_TOOLS = (
 CATEGORIES = ("source", "join", "predicate", "grain", "value", "set", "rank", "output")
 
 
-def auc(positive: list[float], negative: list[float]) -> float | None:
-    if not positive or not negative:
-        return None
-    ordered = sorted([(value, 1) for value in positive] + [(value, 0) for value in negative])
-    rank_sum = 0.0
-    index = 0
-    while index < len(ordered):
-        stop = index + 1
-        while stop < len(ordered) and ordered[stop][0] == ordered[index][0]:
-            stop += 1
-        rank_sum += ((index + 1 + stop) / 2) * sum(label for _, label in ordered[index:stop])
-        index = stop
-    return (rank_sum - len(positive) * (len(positive) + 1) / 2) / (len(positive) * len(negative))
-
-
-def percentile(values: list[float], probability: float) -> float:
-    ordered = sorted(values)
-    position = probability * (len(ordered) - 1)
-    lower, upper = math.floor(position), math.ceil(position)
-    if lower == upper:
-        return ordered[lower]
-    fraction = position - lower
-    return ordered[lower] * (1 - fraction) + ordered[upper] * fraction
-
-
-def bootstrap(
-    positive: list[dict[str, Any]],
-    negative: list[dict[str, Any]],
-    statistic: Callable[[list[dict[str, Any]], list[dict[str, Any]]], float],
-    *,
-    samples: int = 2000,
-    seed: int = 42,
-) -> dict[str, float]:
-    rng = random.Random(seed)
-    values = []
-    for _ in range(samples):
-        pos = [positive[rng.randrange(len(positive))] for _ in positive]
-        neg = [negative[rng.randrange(len(negative))] for _ in negative]
-        values.append(statistic(pos, neg))
-    return {"p2_5": percentile(values, 0.025), "p97_5": percentile(values, 0.975)}
-
-
 def analyze(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as source:
-        rows = [json.loads(line) for line in source if line.strip()]
+    rows = load_jsonl(path)
     scored = [row for row in rows if row.get("score") is not None]
     correct = [row for row in scored if row["correct"]]
     incorrect = [row for row in scored if not row["correct"]]
@@ -72,12 +31,8 @@ def analyze(path: Path) -> dict[str, Any]:
         return [float(row[key]) for row in group if row.get(key) is not None]
 
     correct_scores, incorrect_scores = values(correct, "score"), values(incorrect, "score")
-    gap = statistics.fmean(correct_scores) - statistics.fmean(incorrect_scores)
-    pooled = math.sqrt(
-        ((len(correct_scores) - 1) * statistics.variance(correct_scores)
-         + (len(incorrect_scores) - 1) * statistics.variance(incorrect_scores))
-        / (len(correct_scores) + len(incorrect_scores) - 2)
-    )
+    gap = mean(correct_scores) - mean(incorrect_scores)
+    effect_size = cohens_d_pooled(correct_scores, incorrect_scores)
 
     formulations = {
         "q_rank": lambda row: float(row["score"]),
@@ -133,26 +88,20 @@ def analyze(path: Path) -> dict[str, Any]:
         "incorrect": len(incorrect),
         "separation": {
             "mean_gap": gap,
-            "cohens_d_pooled": gap / pooled if pooled else None,
+            "cohens_d_pooled": effect_size,
             "roc_auc": auc(correct_scores, incorrect_scores),
-            "mean_gap_bootstrap_95": bootstrap(
-                correct, incorrect,
-                lambda ok, bad: statistics.fmean(float(row["score"]) for row in ok)
-                - statistics.fmean(float(row["score"]) for row in bad),
+            "mean_gap_bootstrap_95": (
+                bootstrap_ci(correct, incorrect, lambda ok, bad: mean(float(row["score"]) for row in ok)
+                - mean(float(row["score"]) for row in bad))
+                if correct and incorrect else None
             ),
-            "roc_auc_bootstrap_95": bootstrap(
-                correct, incorrect,
-                lambda ok, bad: float(auc(
-                    [float(row["score"]) for row in ok],
-                    [float(row["score"]) for row in bad],
-                )),
+            "roc_auc_bootstrap_95": (
+                bootstrap_ci(correct, incorrect, lambda ok, bad: float(auc(
+                    [float(row["score"]) for row in ok], [float(row["score"]) for row in bad])) or 0.0)
+                if correct and incorrect else None
             ),
-            "correct_at_or_below_incorrect_median": sum(
-                value <= statistics.median(incorrect_scores) for value in correct_scores
-            ),
-            "incorrect_at_or_above_correct_median": sum(
-                value >= statistics.median(correct_scores) for value in incorrect_scores
-            ),
+            "correct_at_or_below_incorrect_median": (sum(value <= statistics.median(incorrect_scores) for value in correct_scores) if incorrect_scores else 0),
+            "incorrect_at_or_above_correct_median": (sum(value >= statistics.median(correct_scores) for value in incorrect_scores) if correct_scores else 0),
             "correct_score_one": sum(math.isclose(value, 1.0) for value in correct_scores),
             "incorrect_score_one": sum(math.isclose(value, 1.0) for value in incorrect_scores),
         },
@@ -163,7 +112,7 @@ def analyze(path: Path) -> dict[str, Any]:
         },
         "category_overlap": category_stats,
         "tool_presence": tool_stats,
-        "correct_tool_mean_range": max(correct_tool_means) - min(correct_tool_means),
+        "correct_tool_mean_range": max(correct_tool_means) - min(correct_tool_means) if correct_tool_means else None,
         "warnings": [
             "tool-presence means are observational and confounded by task semantics",
             "the pool has one trajectory per task, so no empirical within-task ranking test is possible",
@@ -177,8 +126,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     result = analyze(args.scores)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json(args.output, result)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

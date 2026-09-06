@@ -7,6 +7,7 @@ from .passk import (
     sample_correct_count,
     select_records,
 )
+from .pilot import legal_rate, pilot_bucket, select_pilot
 
 __all__ = [
     "has_infrastructure_failure",
@@ -14,4 +15,7 @@ __all__ = [
     "sample_attempt_count",
     "sample_correct_count",
     "select_records",
+    "legal_rate",
+    "pilot_bucket",
+    "select_pilot",
 ]

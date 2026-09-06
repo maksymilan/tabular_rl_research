@@ -3,30 +3,21 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+try:
+    from rl.fixed_pool.io import load_jsonl, sha256_file, task_id
+except ModuleNotFoundError:
+    from fixed_pool.io import load_jsonl, sha256_file, task_id
+
 
 LEVELS = ("simple", "moderate", "challenging")
 
 
-def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
-
-def task_id(row: dict[str, Any]) -> str:
-    return str(row.get("example_id") or row.get("instance_id") or row.get("trajectory_id"))
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def main() -> int:

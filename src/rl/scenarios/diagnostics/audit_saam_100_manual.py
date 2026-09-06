@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from rl.diagnostics.replay import format_action
+
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl" / "diagnostics"))
 
@@ -69,48 +71,8 @@ def _condition(value: Any) -> str:
 
 
 def _action(event: dict[str, Any]) -> str:
-    action = event.get("action") or {}
-    tool = action.get("tool", "?")
-    args = action.get("arguments", {})
-    if not isinstance(args, dict):
-        return tool
-    if tool == "describe_table":
-        return "D(" + ",".join(map(str, args.get("tables", []))) + ")"
-    if tool == "condition_filter":
-        return f"F({_node(args.get('table'))};{_condition(args.get('conditions'))};ret={args.get('return_columns')})"
-    if tool == "inspect_column":
-        return f"I({_node(args.get('table'))}.{args.get('column')})"
-    if tool == "read_subtable":
-        return f"R({_node(args.get('table'))};cols={args.get('columns')};n={args.get('limit')})"
-    if tool == "join_tables":
-        joins = []
-        for item in args.get("joins", []):
-            edges = []
-            for edge in item.get("on", []):
-                left = edge.get("left")
-                left = _node(left) if isinstance(left, dict) else str(left)
-                edges.append(f"{left}={edge.get('right')}")
-            joins.append(f"{_node(item.get('table'))}[{','.join(edges)}]")
-        return f"J({_node(args.get('base'))};{'|'.join(joins)})"
-    if tool == "project":
-        return f"P({_node(args.get('table'))};expr={args.get('expressions')};d={args.get('distinct')})"
-    if tool == "group_aggregate":
-        aggs = ",".join(
-            f"{item.get('op')}:{item.get('column')}"
-            for item in args.get("aggregations", [])
-            if isinstance(item, dict)
-        )
-        return f"G({_node(args.get('table'))};gb={args.get('group_by')};{aggs})"
-    if tool == "extreme_value_select":
-        return f"E({_node(args.get('table'))};ord={args.get('order_by')};k={args.get('top_k')};ret={args.get('return_columns')})"
-    if tool == "scalar_compute":
-        return f"C({args.get('operation')};n={len(args.get('operands', []))})"
-    if tool == "set_op":
-        return f"S({_node(args.get('left'))},{_node(args.get('right'))};{args.get('op')})"
-    if tool == "answer_from_context":
-        evidence = args.get("evidence") or {}
-        return f"A({_node(evidence.get('table'))})"
-    return tool
+    # Compatibility spelling retained for historical imports.
+    return format_action(event)
 
 
 def _prepare(rows: list[dict[str, Any]]) -> tuple[dict[tuple[int, int, str], Any], dict[str, set[bool]], dict[str, set[bool]], dict[str, set[bool]]]:

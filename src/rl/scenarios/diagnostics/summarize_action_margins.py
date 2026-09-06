@@ -9,10 +9,11 @@ from pathlib import Path
 from statistics import fmean, median
 from typing import Any
 
+from rl.diagnostics.records import load_jsonl as _load_jsonl
+
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as source:
-        return [json.loads(line) for line in source if line.strip()]
+    return _load_jsonl(path)
 
 
 def summary(rows: list[dict[str, Any]]) -> dict[str, Any]:

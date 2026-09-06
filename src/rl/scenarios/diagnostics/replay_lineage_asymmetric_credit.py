@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import collections
-import json
 import math
 import sys
 from pathlib import Path
@@ -27,37 +26,26 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "src" / "rl" / "diagnostics"))
 
 import rl.scenarios.diagnostics.audit_saam_lineage_replay as lineage  # noqa: E402
-from rl.scenarios.diagnostics.audit_saam_100_manual import _action  # noqa: E402
 from rl.frameworks.trl.transition_batch import standardized_group_advantages  # noqa: E402
+from rl.diagnostics.replay import (  # noqa: E402
+    format_action,
+    group_rollouts,
+    local_error_statuses,
+    read_rows,
+    stable_action_digest,
+)
 
 
 SCHEMA_VERSION = "lineage-asymmetric-error-override-replay-v1"
 
 
-def _read_rows(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as source:
-        for line_number, raw in enumerate(source, start=1):
-            if not raw.strip():
-                continue
-            row = json.loads(raw)
-            if not isinstance(row, dict):
-                raise ValueError(f"{path}:{line_number}: expected object")
-            rows.append(row)
-    return rows
+_read_rows = read_rows
 
 
-def _group_rows(rows: Iterable[dict[str, Any]]) -> dict[tuple[int, int], list[dict[str, Any]]]:
-    grouped: dict[tuple[int, int], list[dict[str, Any]]] = collections.defaultdict(list)
-    for row in rows:
-        key = (int(row["policy_global_step"]), int(row["example_index"]))
-        grouped[key].append(row)
-    for values in grouped.values():
-        values.sort(key=lambda row: str(row.get("trajectory_id", "")))
-    return dict(grouped)
+_group_rows = group_rollouts
 
 
-def _error_signature(turn: dict[str, Any], event: dict[str, Any]) -> str:
+def error_signature(turn: dict[str, Any], event: dict[str, Any]) -> str:
     parsed = turn.get("parsed")
     if isinstance(parsed, dict):
         action = {"tool": parsed.get("tool"), "arguments": parsed.get("arguments")}
@@ -67,78 +55,19 @@ def _error_signature(turn: dict[str, Any], event: dict[str, Any]) -> str:
             "arguments": event.get("attempted_arguments"),
             "model_output": turn.get("model_output"),
         }
-    return lineage._digest(action)
+    return stable_action_digest(action)
+
+
+_error_signature = error_signature
 
 
 def _local_statuses(row: dict[str, Any]) -> list[dict[str, Any]]:
-    statuses: list[dict[str, Any]] = []
-    prior_error: dict[str, Any] | None = None
-    for depth, turn in enumerate(row.get("turns") or []):
-        event = turn.get("error_event")
-        if not isinstance(event, dict):
-            statuses.append({"kind": "success", "error_type": None, "local_error": False})
-            prior_error = None
-            continue
-
-        error_type = str(event.get("error_type") or turn.get("execution_error_type") or "unknown_error")
-        error_code = str(event.get("error_code") or "")
-        message = str(event.get("message") or turn.get("execution_error") or "")
-        signature = _error_signature(turn, event)
-        before = event.get("state_before_hash")
-        after = event.get("state_after_hash")
-        unchanged = bool(before and after and before == after)
-        explicit_no_progress = (
-            error_type == "no_progress_error"
-            or error_code == "no_progress_error"
-            or "no_progress" in message.lower()
-        )
-        repeated_no_progress = bool(
-            prior_error
-            and unchanged
-            and prior_error.get("unchanged")
-            and prior_error.get("signature") == signature
-            and prior_error.get("after") == before
-        )
-        if error_type == "timeout_error" or error_code == "tool_execution_timeout":
-            kind = "infrastructure_timeout"
-            local_error = False
-        elif explicit_no_progress or repeated_no_progress:
-            kind = "no_progress_repeat"
-            local_error = True
-        elif error_type == "protocol_error":
-            kind = "protocol_error"
-            local_error = True
-        elif error_type == "argument_validation_error":
-            kind = "argument_validation_error"
-            local_error = True
-        else:
-            # Gate60 execution errors are deterministic Harness rejections.  The only observed
-            # infrastructure failure is the separately typed timeout handled above.
-            kind = "execution_error"
-            local_error = True
-        statuses.append(
-            {
-                "kind": kind,
-                "error_type": error_type,
-                "error_code": error_code or None,
-                "local_error": local_error,
-                "state_unchanged": unchanged,
-                "message": message,
-            }
-        )
-        prior_error = {
-            "signature": signature,
-            "unchanged": unchanged,
-            "before": before,
-            "after": after,
-            "depth": depth,
-        }
-    return statuses
+    return local_error_statuses(row, error_signature=error_signature)
 
 
 def _short_action(event: dict[str, Any], turn: dict[str, Any]) -> str:
     if event.get("action_matchable"):
-        return _action(event)
+        return format_action(event)
     error = turn.get("error_event")
     if isinstance(error, dict):
         attempted = error.get("attempted_tool")

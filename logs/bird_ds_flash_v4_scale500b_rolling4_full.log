@@ -1,0 +1,574 @@
+[1/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_03230
+[2/500] ERR attempts=1 steps=11 errs=4 type=wrong_answer bird_train_02898
+[3/500] OK  attempts=1 steps=5 errs=1 type=None bird_train_02312
+[4/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_05515
+[5/500] OK  attempts=1 steps=7 errs=0 type=None bird_train_05615
+[6/500] ERR attempts=1 steps=9 errs=1 type=wrong_answer bird_train_00622
+[7/500] ERR attempts=1 steps=10 errs=0 type=wrong_answer bird_train_04236
+[8/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_06578
+[9/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_01841
+[10/500] ERR attempts=1 steps=8 errs=1 type=wrong_answer bird_train_04082
+[11/500] OK  attempts=1 steps=8 errs=0 type=None bird_train_00151
+[12/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_04100
+[13/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_04791
+[14/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_01573
+[15/500] OK  attempts=1 steps=7 errs=1 type=None bird_train_00956
+[16/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_00193
+[17/500] ERR attempts=1 steps=8 errs=0 type=wrong_answer bird_train_00924
+[18/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_01404
+[19/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_05069
+[20/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_03007
+[21/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_06116
+[22/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_01209
+[23/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_05780
+[24/500] OK  attempts=1 steps=7 errs=2 type=None bird_train_02282
+[25/500] ERR attempts=1 steps=9 errs=2 type=wrong_answer bird_train_03051
+[26/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_06548
+[27/500] ERR attempts=1 steps=11 errs=1 type=wrong_answer bird_train_05750
+[28/500] ERR attempts=1 steps=8 errs=0 type=wrong_answer bird_train_02035
+[29/500] OK  attempts=1 steps=10 errs=1 type=None bird_train_02537
+[30/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_04144
+[31/500] OK  attempts=1 steps=5 errs=1 type=None bird_train_05589
+[32/500] ERR attempts=1 steps=8 errs=1 type=wrong_answer bird_train_03148
+[33/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_03613
+[34/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_04970
+[35/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_05562
+[36/500] OK  attempts=1 steps=9 errs=2 type=None bird_train_01377
+[37/500] ERR attempts=1 steps=7 errs=3 type=protocol_error bird_train_01221
+[38/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_03218
+[39/500] OK  attempts=1 steps=7 errs=1 type=None bird_train_00393
+[40/500] ERR attempts=1 steps=8 errs=1 type=wrong_answer bird_train_04702
+[41/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_04418
+[42/500] OK  attempts=1 steps=6 errs=1 type=None bird_train_03803
+[43/500] ERR attempts=1 steps=8 errs=1 type=wrong_answer bird_train_00461
+[44/500] ERR attempts=1 steps=7 errs=1 type=wrong_answer bird_train_00302
+[45/500] ERR attempts=1 steps=10 errs=1 type=wrong_answer bird_train_05772
+[46/500] OK  attempts=1 steps=7 errs=0 type=None bird_train_01088
+[47/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_04647
+[48/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_04201
+[49/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_05253
+[50/500] ERR attempts=1 steps=13 errs=1 type=wrong_answer bird_train_03995
+[51/500] ERR attempts=1 steps=8 errs=0 type=wrong_answer bird_train_01430
+[52/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_05135
+[53/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_01865
+[54/500] ERR attempts=1 steps=6 errs=4 type=execution_error bird_train_00003
+[55/500] ERR attempts=1 steps=7 errs=1 type=wrong_answer bird_train_02065
+[56/500] ERR attempts=1 steps=5 errs=0 type=wrong_answer bird_train_01024
+[57/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_04052
+[58/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_03938
+[59/500] ERR attempts=1 steps=8 errs=3 type=protocol_error bird_train_02655
+[60/500] ERR attempts=1 steps=6 errs=3 type=protocol_error bird_train_03912
+[61/500] ERR attempts=1 steps=6 errs=1 type=wrong_answer bird_train_02580
+[62/500] ERR attempts=1 steps=9 errs=2 type=wrong_answer bird_train_05340
+[63/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_03875
+[64/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_05518
+[65/500] ERR attempts=1 steps=6 errs=1 type=wrong_answer bird_train_05369
+[66/500] OK  attempts=1 steps=5 errs=1 type=None bird_train_04780
+[67/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_01613
+[68/500] ERR attempts=1 steps=11 errs=3 type=protocol_error bird_train_01010
+[69/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01763
+[70/500] ERR attempts=1 steps=6 errs=3 type=protocol_error bird_train_04867
+[71/500] ERR attempts=1 steps=5 errs=1 type=wrong_answer bird_train_02803
+[72/500] ERR attempts=1 steps=5 errs=0 type=wrong_answer bird_train_06455
+[73/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_06581
+[74/500] ERR attempts=1 steps=11 errs=3 type=protocol_error bird_train_04027
+[75/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04036
+[76/500] ERR attempts=1 steps=5 errs=3 type=protocol_error bird_train_05949
+[77/500] ERR attempts=1 steps=8 errs=1 type=wrong_answer bird_train_02892
+[78/500] ERR attempts=1 steps=8 errs=1 type=wrong_answer bird_train_06419
+[79/500] ERR attempts=1 steps=8 errs=2 type=wrong_answer bird_train_05208
+[80/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_00545
+[81/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_05738
+[82/500] OK  attempts=1 steps=8 errs=1 type=None bird_train_02292
+[83/500] ERR attempts=1 steps=9 errs=0 type=wrong_answer bird_train_01738
+[84/500] ERR attempts=1 steps=7 errs=1 type=wrong_answer bird_train_05673
+[85/500] OK  attempts=1 steps=3 errs=0 type=None bird_train_04389
+[86/500] ERR attempts=1 steps=5 errs=0 type=wrong_answer bird_train_05070
+[87/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_01280
+[88/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_04110
+[89/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_06449
+[90/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_00613
+[91/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_04744
+[92/500] OK  attempts=1 steps=7 errs=0 type=None bird_train_02305
+[93/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_05008
+[94/500] ERR attempts=1 steps=8 errs=1 type=wrong_answer bird_train_00814
+[95/500] OK  attempts=1 steps=8 errs=0 type=None bird_train_02361
+[96/500] OK  attempts=1 steps=7 errs=0 type=None bird_train_02353
+[97/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_04070
+[98/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_05747
+[99/500] ERR attempts=1 steps=10 errs=1 type=wrong_answer bird_train_05962
+[100/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_01240
+[101/500] ERR attempts=1 steps=11 errs=2 type=wrong_answer bird_train_05994
+[102/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_03459
+[103/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_01409
+[104/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_02748
+[105/500] ERR attempts=1 steps=8 errs=0 type=wrong_answer bird_train_05970
+[106/500] OK  attempts=1 steps=6 errs=1 type=None bird_train_03178
+[107/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_02717
+[108/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_03003
+[109/500] ERR attempts=1 steps=7 errs=1 type=wrong_answer bird_train_03599
+[110/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_05086
+[111/500] OK  attempts=1 steps=3 errs=0 type=None bird_train_04985
+[112/500] ERR attempts=1 steps=9 errs=2 type=wrong_answer bird_train_00789
+[113/500] OK  attempts=1 steps=8 errs=0 type=None bird_train_00558
+[114/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_04988
+[115/500] OK  attempts=1 steps=5 errs=1 type=None bird_train_03044
+[116/500] OK  attempts=1 steps=7 errs=0 type=None bird_train_00799
+[117/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_04814
+[118/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_05788
+[119/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_04957
+[120/500] OK  attempts=1 steps=10 errs=2 type=None bird_train_06052
+[121/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_05408
+[122/500] OK  attempts=1 steps=5 errs=1 type=None bird_train_04094
+[123/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_01854
+[124/500] OK  attempts=1 steps=8 errs=2 type=None bird_train_03386
+[125/500] ERR attempts=1 steps=5 errs=3 type=protocol_error bird_train_04907
+[126/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_05934
+[127/500] ERR attempts=1 steps=12 errs=1 type=wrong_answer bird_train_05930
+[128/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_02278
+[129/500] ERR attempts=1 steps=9 errs=1 type=wrong_answer bird_train_04274
+[130/500] OK  attempts=1 steps=9 errs=1 type=None bird_train_06066
+[131/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_03146
+[132/500] OK  attempts=1 steps=7 errs=1 type=None bird_train_03234
+[133/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_01494
+[134/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_01187
+[135/500] OK  attempts=1 steps=11 errs=0 type=None bird_train_05776
+[136/500] OK  attempts=1 steps=9 errs=2 type=None bird_train_02853
+[137/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04828
+[138/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_04792
+[139/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_06595
+[140/500] OK  attempts=1 steps=7 errs=0 type=None bird_train_04507
+[141/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_03254
+[142/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_02629
+[143/500] ERR attempts=1 steps=8 errs=2 type=wrong_answer bird_train_05674
+[144/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_00236
+[145/500] ERR attempts=1 steps=9 errs=1 type=wrong_answer bird_train_02765
+[146/500] OK  attempts=1 steps=5 errs=1 type=None bird_train_05003
+[147/500] ERR attempts=1 steps=5 errs=0 type=wrong_answer bird_train_02979
+[148/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_02964
+[149/500] ERR attempts=1 steps=6 errs=1 type=wrong_answer bird_train_04729
+[150/500] ERR attempts=1 steps=7 errs=1 type=wrong_answer bird_train_02731
+[151/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_05193
+[152/500] ERR attempts=1 steps=10 errs=3 type=protocol_error bird_train_02420
+[153/500] ERR attempts=1 steps=11 errs=3 type=protocol_error bird_train_06414
+[154/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_03036
+[155/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_03141
+[156/500] OK  attempts=1 steps=7 errs=0 type=None bird_train_00705
+[157/500] ERR attempts=1 steps=5 errs=0 type=wrong_answer bird_train_03171
+[158/500] ERR attempts=1 steps=14 errs=1 type=wrong_answer bird_train_04157
+[159/500] OK  attempts=1 steps=7 errs=2 type=None bird_train_05367
+[160/500] OK  attempts=1 steps=7 errs=1 type=None bird_train_02588
+[161/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_06205
+[162/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_05635
+[163/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_01112
+[164/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_03966
+[165/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_05436
+[166/500] OK  attempts=1 steps=7 errs=1 type=None bird_train_05409
+[167/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_04863
+[168/500] OK  attempts=1 steps=7 errs=0 type=None bird_train_01327
+[169/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_05066
+[170/500] ERR attempts=1 steps=3 errs=0 type=wrong_answer bird_train_03705
+[171/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_05290
+[172/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_05163
+[173/500] ERR attempts=1 steps=11 errs=1 type=wrong_answer bird_train_02386
+[174/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_05775
+[175/500] OK  attempts=1 steps=6 errs=1 type=None bird_train_04993
+[176/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_04795
+[177/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_04721
+[178/500] OK  attempts=1 steps=3 errs=0 type=None bird_train_00304
+[179/500] ERR attempts=1 steps=10 errs=3 type=wrong_answer bird_train_05426
+[180/500] ERR attempts=1 steps=5 errs=0 type=wrong_answer bird_train_03704
+[181/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_01123
+[182/500] OK  attempts=1 steps=7 errs=1 type=None bird_train_04005
+[183/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_04965
+[184/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_02684
+[185/500] ERR attempts=1 steps=6 errs=1 type=wrong_answer bird_train_02871
+[186/500] ERR attempts=1 steps=7 errs=1 type=wrong_answer bird_train_04559
+[187/500] ERR attempts=1 steps=12 errs=0 type=wrong_answer bird_train_03607
+[188/500] OK  attempts=1 steps=13 errs=2 type=None bird_train_01640
+[189/500] ERR attempts=1 steps=9 errs=1 type=wrong_answer bird_train_06276
+[190/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_01983
+[191/500] ERR attempts=1 steps=11 errs=6 type=protocol_error bird_train_05941
+[192/500] OK  attempts=1 steps=9 errs=1 type=None bird_train_01678
+[193/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_04942
+[194/500] ERR attempts=1 steps=6 errs=1 type=wrong_answer bird_train_05398
+[195/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_02539
+[196/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_02374
+[197/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_02976
+[198/500] OK  attempts=1 steps=8 errs=0 type=None bird_train_00642
+[199/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_05232
+[200/500] OK  attempts=1 steps=10 errs=0 type=None bird_train_05996
+[201/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_05206
+[202/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_03717
+[203/500] ERR attempts=1 steps=12 errs=2 type=wrong_answer bird_train_03561
+[204/500] OK  attempts=1 steps=6 errs=1 type=None bird_train_04608
+[205/500] OK  attempts=1 steps=6 errs=1 type=None bird_train_01754
+[206/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_00374
+[207/500] OK  attempts=1 steps=8 errs=1 type=None bird_train_04229
+[208/500] ERR attempts=1 steps=10 errs=2 type=wrong_answer bird_train_00987
+[209/500] ERR attempts=1 steps=11 errs=2 type=wrong_answer bird_train_01986
+[210/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_03846
+[211/500] ERR attempts=1 steps=8 errs=1 type=wrong_answer bird_train_05212
+[212/500] OK  attempts=1 steps=10 errs=1 type=None bird_train_04499
+[213/500] OK  attempts=1 steps=9 errs=1 type=None bird_train_04635
+[214/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_06196
+[215/500] OK  attempts=1 steps=11 errs=1 type=None bird_train_02646
+[216/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_05024
+[217/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_05413
+[218/500] OK  attempts=1 steps=8 errs=0 type=None bird_train_01091
+[219/500] ERR attempts=1 steps=8 errs=0 type=wrong_answer bird_train_03461
+[220/500] ERR attempts=1 steps=6 errs=0 type=wrong_answer bird_train_02989
+[221/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_01289
+[222/500] OK  attempts=1 steps=10 errs=2 type=None bird_train_04133
+[223/500] ERR attempts=1 steps=9 errs=0 type=wrong_answer bird_train_03686
+[224/500] ERR attempts=1 steps=9 errs=3 type=protocol_error bird_train_04240
+[225/500] ERR attempts=1 steps=9 errs=0 type=wrong_answer bird_train_02264
+[226/500] OK  attempts=1 steps=7 errs=0 type=None bird_train_06368
+[227/500] OK  attempts=1 steps=9 errs=2 type=None bird_train_01878
+[228/500] ERR attempts=1 steps=11 errs=3 type=protocol_error bird_train_00965
+[229/500] OK  attempts=1 steps=8 errs=0 type=None bird_train_00828
+[230/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_02812
+[231/500] ERR attempts=1 steps=11 errs=3 type=protocol_error bird_train_00180
+[232/500] ERR attempts=1 steps=6 errs=1 type=wrong_answer bird_train_00015
+[233/500] OK  attempts=1 steps=10 errs=0 type=None bird_train_03347
+[234/500] ERR attempts=1 steps=5 errs=0 type=wrong_answer bird_train_04978
+[235/500] OK  attempts=1 steps=13 errs=1 type=None bird_train_00940
+[236/500] OK  attempts=1 steps=10 errs=1 type=None bird_train_00196
+[237/500] ERR attempts=1 steps=8 errs=1 type=wrong_answer bird_train_02595
+[238/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_06207
+[239/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_02950
+[240/500] ERR attempts=1 steps=7 errs=1 type=wrong_answer bird_train_01773
+[241/500] ERR attempts=1 steps=11 errs=0 type=wrong_answer bird_train_00918
+[242/500] OK  attempts=1 steps=9 errs=0 type=None bird_train_03696
+[243/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_06428
+[244/500] OK  attempts=1 steps=8 errs=0 type=None bird_train_00223
+[245/500] ERR attempts=1 steps=8 errs=0 type=wrong_answer bird_train_00046
+[246/500] OK  attempts=1 steps=5 errs=1 type=None bird_train_04457
+[247/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_05653
+[248/500] OK  attempts=1 steps=11 errs=0 type=None bird_train_00973
+[249/500] OK  attempts=1 steps=8 errs=1 type=None bird_train_00832
+[250/500] ERR attempts=1 steps=14 errs=1 type=wrong_answer bird_train_05737
+[251/500] ERR attempts=1 steps=9 errs=0 type=wrong_answer bird_train_03053
+[252/500] OK  attempts=1 steps=7 errs=0 type=None bird_train_02354
+[253/500] ERR attempts=1 steps=8 errs=0 type=wrong_answer bird_train_02615
+[254/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_05148
+[255/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_03179
+[256/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_04314
+[257/500] ERR attempts=1 steps=9 errs=3 type=protocol_error bird_train_00729
+[258/500] OK  attempts=1 steps=13 errs=2 type=None bird_train_03499
+[259/500] ERR attempts=1 steps=8 errs=0 type=wrong_answer bird_train_05399
+[260/500] ERR attempts=1 steps=6 errs=1 type=wrong_answer bird_train_04803
+[261/500] ERR attempts=1 steps=10 errs=4 type=protocol_error bird_train_05706
+[262/500] OK  attempts=1 steps=7 errs=0 type=None bird_train_02792
+[263/500] ERR attempts=1 steps=11 errs=0 type=wrong_answer bird_train_02113
+[264/500] OK  attempts=1 steps=9 errs=1 type=None bird_train_01311
+[265/500] ERR attempts=1 steps=9 errs=1 type=wrong_answer bird_train_01575
+[266/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_00777
+[267/500] OK  attempts=1 steps=6 errs=0 type=None bird_train_03029
+[268/500] ERR attempts=1 steps=8 errs=1 type=wrong_answer bird_train_03731
+[269/500] OK  attempts=1 steps=9 errs=2 type=None bird_train_01487
+[270/500] OK  attempts=1 steps=9 errs=2 type=None bird_train_06054
+[271/500] ERR attempts=1 steps=9 errs=1 type=wrong_answer bird_train_03631
+[272/500] ERR attempts=1 steps=11 errs=3 type=protocol_error bird_train_01128
+[273/500] ERR attempts=1 steps=9 errs=2 type=wrong_answer bird_train_04708
+[274/500] OK  attempts=1 steps=8 errs=0 type=None bird_train_02391
+[275/500] OK  attempts=1 steps=9 errs=0 type=None bird_train_02424
+[276/500] ERR attempts=1 steps=11 errs=1 type=wrong_answer bird_train_01174
+[277/500] ERR attempts=1 steps=8 errs=3 type=protocol_error bird_train_02497
+[278/500] ERR attempts=1 steps=10 errs=1 type=wrong_answer bird_train_01126
+[279/500] OK  attempts=1 steps=5 errs=0 type=None bird_train_04669
+[280/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_02795
+[281/500] OK  attempts=1 steps=3 errs=0 type=None bird_train_06408
+[282/500] ERR attempts=1 steps=10 errs=0 type=wrong_answer bird_train_04205
+[283/500] OK  attempts=1 steps=4 errs=0 type=None bird_train_03987
+[284/500] OK  attempts=1 steps=13 errs=2 type=None bird_train_04603
+[285/500] ERR attempts=1 steps=11 errs=1 type=wrong_answer bird_train_01198
+[286/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_02563
+[287/500] ERR attempts=1 steps=7 errs=0 type=wrong_answer bird_train_01090
+[288/500] ERR attempts=1 steps=6 errs=3 type=protocol_error bird_train_00831
+[289/500] ERR attempts=1 steps=19 errs=3 type=protocol_error bird_train_05932
+[290/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02377
+[291/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02499
+[292/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03441
+[293/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00850
+[294/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02732
+[295/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06285
+[296/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04105
+[297/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01551
+[298/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00312
+[299/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05308
+[300/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01507
+[301/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02182
+[302/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06220
+[303/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02413
+[304/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05651
+[305/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03227
+[306/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06033
+[307/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00753
+[308/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02846
+[309/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00356
+[310/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04223
+[311/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01510
+[312/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00899
+[313/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03452
+[314/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05473
+[315/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05164
+[316/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02441
+[317/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01708
+[318/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01267
+[319/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00208
+[320/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02723
+[321/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05009
+[322/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03761
+[323/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03770
+[324/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06244
+[325/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05478
+[326/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03570
+[327/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01356
+[328/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02135
+[329/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00298
+[330/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01224
+[331/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02470
+[332/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00161
+[333/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03726
+[334/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00587
+[335/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01967
+[336/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04701
+[337/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02339
+[338/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06467
+[339/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05906
+[340/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02187
+[341/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04861
+[342/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03402
+[343/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02515
+[344/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02383
+[345/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00890
+[346/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01179
+[347/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03630
+[348/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03060
+[349/500] ERR attempts=1 steps=0 errs=0 type=api_error bird_train_00884
+[350/500] ERR attempts=1 steps=0 errs=0 type=api_error bird_train_04488
+[351/500] ERR attempts=1 steps=0 errs=0 type=api_error bird_train_01662
+[352/500] ERR attempts=1 steps=0 errs=0 type=api_error bird_train_03999
+[353/500] ERR attempts=1 steps=0 errs=0 type=api_error bird_train_00396
+[354/500] ERR attempts=1 steps=4 errs=3 type=protocol_error bird_train_06364
+[355/500] ERR attempts=1 steps=4 errs=0 type=wrong_answer bird_train_00235
+[356/500] ERR attempts=1 steps=7 errs=3 type=protocol_error bird_train_00345
+[357/500] ERR attempts=1 steps=9 errs=4 type=protocol_error bird_train_04098
+[358/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01295
+[359/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05986
+[360/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04297
+[361/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04167
+[362/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02237
+[363/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02852
+[364/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05113
+[365/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05787
+[366/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05116
+[367/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03951
+[368/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01419
+[369/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05766
+[370/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04283
+[371/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00104
+[372/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00385
+[373/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01979
+[374/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03645
+[375/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02561
+[376/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04748
+[377/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01347
+[378/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02680
+[379/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01298
+[380/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05046
+[381/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01304
+[382/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01413
+[383/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04575
+[384/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03345
+[385/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00685
+[386/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01495
+[387/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03886
+[388/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06461
+[389/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03067
+[390/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05250
+[391/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03862
+[392/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03694
+[393/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00836
+[394/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01870
+[395/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06225
+[396/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03641
+[397/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02422
+[398/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01997
+[399/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01488
+[400/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05358
+[401/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05688
+[402/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01732
+[403/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04689
+[404/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00960
+[405/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00098
+[406/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03529
+[407/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05681
+[408/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03700
+[409/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05429
+[410/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05327
+[411/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02271
+[412/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03885
+[413/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00367
+[414/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01301
+[415/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04706
+[416/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01365
+[417/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02924
+[418/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02488
+[419/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04103
+[420/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03236
+[421/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01219
+[422/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01798
+[423/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01338
+[424/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01204
+[425/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04390
+[426/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04530
+[427/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01293
+[428/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00797
+[429/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02334
+[430/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02027
+[431/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02477
+[432/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03377
+[433/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01250
+[434/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06221
+[435/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05067
+[436/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06248
+[437/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02168
+[438/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05650
+[439/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00792
+[440/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00281
+[441/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01296
+[442/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02319
+[443/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02427
+[444/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00088
+[445/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06535
+[446/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03485
+[447/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04396
+[448/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01485
+[449/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00372
+[450/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01766
+[451/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01378
+[452/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01943
+[453/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05733
+[454/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02084
+[455/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02516
+[456/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04273
+[457/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03589
+[458/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02376
+[459/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04369
+[460/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02719
+[461/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03692
+[462/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00153
+[463/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03780
+[464/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04760
+[465/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01262
+[466/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05210
+[467/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06025
+[468/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01318
+[469/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02009
+[470/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03826
+[471/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00340
+[472/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01092
+[473/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02864
+[474/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04387
+[475/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05104
+[476/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03661
+[477/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01417
+[478/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01971
+[479/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01978
+[480/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02191
+[481/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01317
+[482/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02407
+[483/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00177
+[484/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02626
+[485/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04632
+[486/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_06420
+[487/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_01359
+[488/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03448
+[489/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03672
+[490/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_03368
+[491/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02345
+[492/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05685
+[493/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00680
+[494/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00288
+[495/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04129
+[496/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04872
+[497/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_04351
+[498/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_05785
+[499/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_02839
+[500/500] ERR attempts=1 steps=3 errs=3 type=protocol_error bird_train_00278
+{
+  "generator": "src/sft/rollout_external_data.py",
+  "method": "external_llm_closed_loop",
+  "model": "deepseek-v4-flash",
+  "split": "train",
+  "examples_file": "data/eval_inputs/bird_train_sft1_scale500b.jsonl",
+  "source_count": 500,
+  "attempted_this_run": 500,
+  "resume": false,
+  "output": "data/trajectories/bird_ds_flash_v4_scale500b_rolling4_full_success.jsonl",
+  "failures_output": "data/trajectories/bird_ds_flash_v4_scale500b_rolling4_full_failures.jsonl",
+  "all_output": "data/trajectories/bird_ds_flash_v4_scale500b_rolling4_full_all.jsonl",
+  "protocol_hash": "d18c629372c8a7ab",
+  "max_steps": 30,
+  "max_errors_per_type": 3,
+  "attempts_per_example": 1,
+  "max_tokens": 2048,
+  "table_output_rows": 0,
+  "context_mode": "rolling-legal-history",
+  "history_turns": 4,
+  "rolling_prompt_variant": "full",
+  "sft_export_eligible": false,
+  "teacher_parser": "strict_no_repair",
+  "error_actions_are_sft_targets": false,
+  "api_transport_retries_per_request": 3,
+  "counts": {
+    "total": 500,
+    "correct": 139,
+    "legal": 266,
+    "failed": 361,
+    "failure:wrong_answer": 127,
+    "failure:protocol_error": 228,
+    "failure:execution_error": 1,
+    "failure:api_error": 5,
+    "examples": 500,
+    "examples_correct": 139,
+    "examples_failed": 361,
+    "final_failure:wrong_answer": 127,
+    "final_failure:protocol_error": 228,
+    "final_failure:execution_error": 1,
+    "final_failure:api_error": 5
+  },
+  "raw_attempt_records": 500,
+  "unique_examples": 500,
+  "duplicate_attempt_records": 0,
+  "tool_hist": {
+    "condition_filter": 189,
+    "describe_table": 152,
+    "read_subtable": 141,
+    "answer_from_context": 139,
+    "inspect_column": 53,
+    "group_aggregate": 48,
+    "join_tables": 38,
+    "project": 25,
+    "plan": 24,
+    "extreme_value_select": 19,
+    "set_op": 1
+  },
+  "error_turn_tool_hist": {},
+  "usage_total": {
+    "prompt_tokens": 9226731,
+    "completion_tokens": 359181,
+    "total_tokens": 9585912,
+    "prompt_tokens_details.cached_tokens": 5425280,
+    "completion_tokens_details.reasoning_tokens": 195559,
+    "api_request_attempts": 2667,
+    "api_transport_retries": 11,
+    "api_context_retries": 0
+  },
+  "elapsed_seconds": 11408.527,
+  "accuracy": 0.278,
+  "legal_rate": 0.532,
+  "example_success_rate": 0.278
+}

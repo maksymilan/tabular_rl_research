@@ -15,14 +15,23 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
 
+from rl.diagnostics.metrics import (
+    distribution,
+    exact_mcnemar_p,
+    js_divergence_bits,
+    percentile,
+)
+from rl.diagnostics.records import (
+    actions,
+    load_jsonl,
+    only_sample,
+    selected_rows,
+)
+from rl.diagnostics.reporting import write_report
+
 
 PREFERRED_DIFFICULTIES = ("simple", "moderate", "challenging")
 _MISSING = object()
-
-
-def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as source:
-        return [json.loads(line) for line in source if line.strip()]
 
 
 def load_indices(path: Path) -> list[int]:
@@ -32,37 +41,6 @@ def load_indices(path: Path) -> list[int]:
     if len(indices) != len(set(indices)):
         raise ValueError("indices contain duplicates")
     return indices
-
-
-def only_sample(row: dict[str, Any]) -> dict[str, Any]:
-    samples = row.get("samples") or []
-    if len(samples) != 1:
-        raise ValueError(
-            f"expected exactly one sample for example {row.get('example_index')}"
-        )
-    return samples[0]
-
-
-def actions(row: dict[str, Any]) -> tuple[tuple[str, str], ...]:
-    sequence = []
-    for turn in only_sample(row).get("turns") or []:
-        parsed = turn.get("parsed") or {}
-        tool = parsed.get("tool")
-        arguments = parsed.get("arguments")
-        if tool is None or arguments is None:
-            continue
-        sequence.append(
-            (
-                str(tool),
-                json.dumps(
-                    arguments,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-            )
-        )
-    return tuple(sequence)
 
 
 def edit_distance(left: Sequence[Any], right: Sequence[Any]) -> int:
@@ -90,82 +68,6 @@ def common_prefix_length(left: Sequence[Any], right: Sequence[Any]) -> int:
             break
         count += 1
     return count
-
-
-def percentile(values: list[float], fraction: float) -> float:
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    position = (len(ordered) - 1) * fraction
-    lower = math.floor(position)
-    upper = math.ceil(position)
-    if lower == upper:
-        return ordered[lower]
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
-
-
-def distribution(values: list[float]) -> dict[str, float]:
-    return {
-        "mean": statistics.fmean(values) if values else 0.0,
-        "median": statistics.median(values) if values else 0.0,
-        "p75": percentile(values, 0.75),
-        "p90": percentile(values, 0.90),
-        "max": max(values, default=0.0),
-    }
-
-
-def exact_mcnemar_p(gains: int, regressions: int) -> float:
-    discordant = gains + regressions
-    if not discordant:
-        return 1.0
-    tail = sum(
-        math.comb(discordant, index)
-        for index in range(min(gains, regressions) + 1)
-    )
-    return min(1.0, 2.0 * tail / (2**discordant))
-
-
-def js_divergence_bits(left: Counter[str], right: Counter[str]) -> float:
-    # Stable summation order makes the serialized float reproducible across
-    # processes instead of depending on hash randomization of a set.
-    keys = sorted(set(left) | set(right))
-    left_total = sum(left.values())
-    right_total = sum(right.values())
-    result = 0.0
-    for key in keys:
-        p = left[key] / left_total if left_total else 0.0
-        q = right[key] / right_total if right_total else 0.0
-        midpoint = (p + q) / 2.0
-        if p:
-            result += 0.5 * p * math.log2(p / midpoint)
-        if q:
-            result += 0.5 * q * math.log2(q / midpoint)
-    return result
-
-
-def selected_rows(path: Path, indices: list[int]) -> dict[int, dict[str, Any]]:
-    wanted = set(indices)
-    selected: dict[int, dict[str, Any]] = {}
-    duplicates = set()
-    for row in load_jsonl(path):
-        index = int(row["example_index"])
-        if index not in wanted:
-            continue
-        if index in selected:
-            duplicates.add(index)
-        selected[index] = row
-    if duplicates:
-        raise ValueError(f"{path} has duplicate examples: {sorted(duplicates)}")
-    if set(selected) != wanted:
-        missing = sorted(wanted - set(selected))
-        extra = sorted(set(selected) - wanted)
-        raise ValueError(
-            f"{path} does not contain exact selected cohort; "
-            f"missing={missing[:10]} extra={extra[:10]}"
-        )
-    for row in selected.values():
-        only_sample(row)
-    return selected
 
 
 def _contract_values(rows: dict[int, dict[str, Any]]) -> dict[str, list[Any]]:
@@ -862,10 +764,7 @@ def main() -> None:
         require_distinct_adapters=args.require_distinct_adapters,
         include_per_example=args.include_per_example,
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    write_report(args.output, result)
     print(
         json.dumps(
             {

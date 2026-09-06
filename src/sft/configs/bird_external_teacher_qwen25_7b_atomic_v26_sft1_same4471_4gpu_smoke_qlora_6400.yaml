@@ -1,0 +1,54 @@
+# Two-step, four-GPU longest-record smoke for the Qwen2.5-7B-Instruct
+# control trained on the Qwen3-8B Atomic v26 SFT1 data.
+
+### model
+model_name_or_path: /home/dengyan/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: bird_external_teacher_qwen3_8b_atomic_v26_sft1_longest_smoke
+dataset_dir: /home/dengyan/tabular_rl_outputs/data/qwen3_8b_atomic_v26_sft1_20260806
+template: qwen
+cutoff_len: 6400
+mask_history: true
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 4
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/checkpoints/qwen2.5-7b-bird-atomic-v26-sft1-same4471-6400-qlora-4gpu-smoke-20260904
+logging_steps: 1
+save_strategy: steps
+save_steps: 2
+save_total_limit: 1
+eval_strategy: "no"
+report_to: none
+plot_loss: false
+overwrite_output_dir: false
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+learning_rate: 1.0e-4
+num_train_epochs: 1.0
+max_steps: 2
+optim: paged_adamw_8bit
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+ddp_find_unused_parameters: false
+ddp_timeout: 180000000
+seed: 42
+data_seed: 42

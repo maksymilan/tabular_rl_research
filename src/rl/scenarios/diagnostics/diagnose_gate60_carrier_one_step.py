@@ -17,7 +17,8 @@ from typing import Any
 
 import torch
 
-from rl.scenarios.diagnostics.diagnose_gate60_gradient_conflict import GradientScorer, build_rows, load_jsonl
+from rl.diagnostics.gradient import GradientScorer, build_rows
+from rl.diagnostics.records import load_jsonl
 
 
 def scores(scorer: GradientScorer, rows: list[dict[str, Any]]) -> dict[str, list[float]]:

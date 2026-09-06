@@ -3,33 +3,31 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from rl.diagnostics.io import read_jsonl as _diagnostic_read_jsonl
+from rl.diagnostics.io import sha256_file as _diagnostic_sha256_file
+from rl.diagnostics.validation import task_id as _diagnostic_task_id
+
 from sqlglot import exp, parse_one
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _diagnostic_sha256_file(path)
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [dict(row) for row in _diagnostic_read_jsonl(path)]
 
 
 def task_id(row: dict[str, Any]) -> str:
-    return str(
-        row.get("example_id")
-        or row.get("instance_id")
-        or f"bird_train_{int(row['example_index']):05d}"
-    )
+    try:
+        return _diagnostic_task_id(row, fields=("example_id", "instance_id"))
+    except ValueError:
+        return f"bird_train_{int(row['example_index']):05d}"
 
 
 def sql_shape(sql: str) -> tuple[str, dict[str, int]]:
@@ -151,4 +149,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

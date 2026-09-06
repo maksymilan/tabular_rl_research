@@ -23,13 +23,15 @@ None of these labels says that a dev item may be used for training.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import statistics
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+from rl.diagnostics.io import read_jsonl as _diagnostic_read_jsonl
+from rl.diagnostics.io import sha256_file as _diagnostic_sha256_file
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -54,18 +56,13 @@ EXPECTED_DEV_INCORRECT = 696
 
 
 def read_jsonl(path: Path) -> Iterable[dict[str, Any]]:
-    with path.open(encoding="utf-8") as source:
-        for line in source:
-            if line.strip():
-                yield json.loads(line)
+    """Compatibility generator backed by the shared diagnostics parser."""
+    yield from (dict(row) for row in _diagnostic_read_jsonl(path))
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    """Compatibility export backed by :mod:`rl.diagnostics.io`."""
+    return _diagnostic_sha256_file(path)
 
 
 def _rate(numerator: int, denominator: int) -> float | None:
