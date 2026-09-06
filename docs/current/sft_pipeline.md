@@ -1,6 +1,6 @@
 # version26 SFT 管线
 
-更新时间：2026-09-03
+更新时间：2026-09-05
 
 SFT 只服务于 Atomic version26 主线，使用与评测/RL 完全相同的 prompt、carrier、Harness 和
 action schema。新的工具 scheme 或历史 projection 数据不得混入。
@@ -22,6 +22,25 @@ action schema。新的工具 scheme 或历史 projection 数据不得混入。
 - training：`src/sft/train_qwen3_8b_atomic_sft1_newgnn.sh`
 - config：`src/sft/configs/bird_external_teacher_qwen3_8b_sft1_qlora_6400.yaml`
 - matched evaluator：`reproductions/trust_sql/qwen3_8b_atomic_sft1/`
+
+## Qwen2.5-7B 四卡模型族对照（已完成）
+
+用户于 2026-09-04 明确要求在 NewGNN 启动 `Qwen/Qwen2.5-7B-Instruct` 四卡 SFT，并复用
+上述 Qwen3-8B SFT1 的同一 4,471-record model-visible training view。该对照保持
+version26 prompt/carrier/target 内容、QLoRA 超参数、global batch 16、两轮和 560 steps；
+模型及 tokenizer/chat template 必然改为 Qwen2.5 revision
+`a09a35458c702b33eeacc393d103063234e8bc28` 与 `qwen`。
+
+- 数据 SHA-256：`c19742ec55d99980075e51a52e79285e4322f89a1d1991dea592748c279e9a14`
+- Qwen2.5 token gate：4,471/4,471 full-prefix 保留，零 target 截断，最大 5,742/6,400 tokens
+- 四卡 smoke：2/2 steps 通过，无 OOM/NCCL error
+- formal run：`qwen25_7b_atomic_v26_sft1_same4471_4gpu_full_20260904_203529`，exit 0，560/560 steps，最终 train loss `0.5573`
+- final adapter SHA-256：`4ea1db0b17338e1c14c72af2254ddf9c3ca9241e57105080416f789a2156ac87`
+- launcher：`src/sft/train_qwen25_7b_atomic_sft1_4gpu_newgnn.sh`
+- config：`src/sft/configs/bird_external_teacher_qwen25_7b_atomic_v26_sft1_same4471_4gpu_qlora_6400.yaml`
+
+这是显式模型族对照，不替换 Qwen3 SFT anchor，不进入当前 RL 起点；完成结果与 matched eval
+必须单独报告。
 
 ## 新数据规则
 

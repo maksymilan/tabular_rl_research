@@ -1,6 +1,6 @@
 # Atomic version26 工具协议
 
-更新时间：2026-09-03
+更新时间：2026-09-06
 
 这是训练、评测和 RL 唯一采用的 model-visible protocol。完整 Harness 实现以代码和冻结
 runtime 为准；本页只保留当前契约，不再列举历史版本号。
@@ -10,6 +10,7 @@ runtime 为准；本页只保留当前契约，不再列举历史版本号。
 - protocol：`version26`
 - runtime export commit：`4cd47c957fc6ae791e76a10594c8cd22f4d3b6de`
 - protocol hash：`4da19387399bd3a5`
+- tool-scheme registry：`tool-scheme-registry-v13-atomic-only`
 - carrier：`think-json-v1`
 - student prompt SHA-256：`848598074e653648d52b58dfa1a54dd777beabae16cb91d83c4ba1a54b5d7316`
 - history：rolling legal history 最近 4 轮，附当前完整 Harness resident state
@@ -52,6 +53,14 @@ arguments。tool call 之后模型只能基于 Harness 返回的 observation/err
 runtime tree hash、model revision、carrier、history、cohort 和 scorer。Gold SQL 只允许留在
 Harness 内部用于 denotation/兼容检查，禁止进入 provider request、student context、SFT target
 或 reward。
+
+## Harness 执行边界
+
+Harness 只执行当前 resident state 中可验证的 table、column、relation 和 artifact 引用，
+并产生 SQLite denotation、structured observation/error、provenance 和 exact result artifact。
+terminal 只能引用这些 Harness-owned 事实；模型 reasoning、gold SQL、gold result 和后续轨迹
+不能覆盖或补充执行事实。每个 error 都进入 shared action budget，并区分 transport failure
+与 semantic argument error。
 
 ## 当前不支持的入口
 

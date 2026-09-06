@@ -48,6 +48,6 @@ McNemar 或 promotion 结论。candidate-only 结果只能作进度记录，不�
 
 ## 当前状态
 
-2026-09-03 A100 只有 14-record/1-update live gate，尚无可交付的 700-record RL checkpoint；
+A100 update-40 历史 run 已同步，checkpoint-40 可审计，随后 step49 因 OOM 退出；新约500题 RL checkpoint 尚未完成；
 因此当前 handoff 只能作为流程入口，不能提前启动“正式 RL 后评测”。KL 稳定性对照仍见
 `decision_register.md`。

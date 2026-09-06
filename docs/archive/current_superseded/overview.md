@@ -17,10 +17,10 @@ credit target.
 
 The current production-training path is not the union of every tool experiment. It is the frozen
 Qwen3-8B Atomic version26 SFT1 contract whose checkpoint-560 reached 54.63% on matched BIRD-dev
-greedy evaluation as a small-sample RL-feasibility model, followed by the A100 two-trainer-card
-FSDP RL route from the fixed cumulative-SFT checkpoint-6380. The current final RL scheme is
+greedy evaluation as a small-sample RL-feasibility model, followed by the A100 single-card replicated trainer plus independent vLLM
+RL route from the fixed cumulative-SFT checkpoint-6380. The current final RL scheme is
 four-level result reward with SAAM asymmetric-error credit and span-balanced full-response loss;
-its formal 700-record gate is still running. The live A100 manifest starts from cumulative SFT
+its formal 约500题 gate is still running. The live A100 manifest starts from cumulative SFT
 checkpoint-6380, which must not be silently conflated with checkpoint-560; see
 `decision_register.md`. All stages keep protocol, prompt, `think-json-v1` carrier, history
 renderer, Harness, and scorer fixed. Official DeepSeek requests are an external-teacher/data-

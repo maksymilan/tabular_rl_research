@@ -1,6 +1,6 @@
 # 因果数据生成契约
 
-更新时间：2026-09-03
+更新时间：2026-09-06
 
 所有新 SFT/评测诊断数据必须由真实的 model↔Harness loop 产生。不得从 gold SQL 编译完整
 trajectory，也不得用后续步骤改写早期 reasoning、observation 或 action。
@@ -30,7 +30,7 @@ request、student prompt、SFT target 或 reward 中。
 ## 当前数据范围
 
 - 冻结 SFT1：fixed-1000 来源中 678 causal episodes / 4,471 targets。
-- RL cohort：700 records（600 mixed + 100 manual homogeneous），用于 version26
+- RL cohort：目标约500题；每题 K=8 且正确轨迹数2–6；只使用已完成筛选的RL数据，用于 version26
   four-level + SAAM formal candidate；cohort manifest 和 manual audit 必须先通过
   `src/rl/diagnostics/audit_qwen3_v26_saam700.py`。
 - 新 teacher generation 当前暂停。恢复时只用官方 DeepSeek
@@ -40,7 +40,7 @@ request、student prompt、SFT target 或 reward 中。
 
 - SFT：`src/sft/prepare_qwen3_atomic_sft1_newgnn.sh`
 - RL cohort preflight：`src/rl/diagnostics/audit_qwen3_v26_saam700.py`
-- 正式 RL：`src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_a100.sh`
+- 正式 RL：`src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
 
 历史 SFT2、projection/rewrite/delete、checkpoint-relalg 和其他工具版本均为 archive/reports
 中的诊断，不得作为当前数据扩增路径。

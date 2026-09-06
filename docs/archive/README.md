@@ -8,4 +8,6 @@ under this directory is a source of truth for new data generation, training, or 
 - `legacy_tool_design/`: early memory/context tools and hand-authored example trajectories.
 - `plans/`: superseded experiment and data-generation plans.
 - `migrations/`: completed infrastructure migration notes.
+- `current_superseded/`: former `docs/current/` pages merged into the current canonical set.
+- `figures/`: unreferenced historical diagram renderings retained for audit.
 - `project_log.md`: the pre-cleanup full chronological `AGENTS.md` memory.

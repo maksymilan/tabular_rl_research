@@ -1,7 +1,6 @@
 # Relation Derivation Contract
 
-Status: active model-visible metadata contract introduced in `version24` and unchanged in the
-current `version25` prompt-role split.
+Status: active model-visible metadata contract for the current Atomic `version26` runtime.
 
 Source of truth: `src/harness/relation_derivation/`.
 

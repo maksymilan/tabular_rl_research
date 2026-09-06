@@ -1,9 +1,9 @@
 # version26 matched evaluation contract
 
-更新时间：2026-09-03
+更新时间：2026-09-06
 
 评测只验证当前 Atomic version26 模型身份；历史 scheme 的结果不能写入当前主线结论。
-训练完成后的统一衔接见 [`evaluation_handoff.md`](evaluation_handoff.md)。
+训练完成后的统一衔接规则也在本页末尾，避免维护平行 handoff 文档。
 
 ## 固定评测身份
 
@@ -34,12 +34,19 @@ baseline；checkpoint-6380 必须按同一 matched contract 重新评测。
 
 ## 资源位置
 
-- RL 主实验：`a100`，两卡 FSDP trainer + 一卡 vLLM；评测完成前不要在其上启动第二套 evaluator。
+- RL 主实验：`a100`，一张 A100 做单进程 replicated trainer，另一张做 online vLLM；评测完成前不要在其上启动第二套 evaluator。
 - matched evaluation：优先 `table_rl` 或 `NewGNN`，GPU/port 由 handoff 脚本显式绑定并记录。
 - evaluator：`reproductions/trust_sql/qwen3_8b_atomic_sft1/`
 - handoff：`src/rl/evaluation/run_v26_matched_eval_handoff.sh`
 - baseline cohort：`data/eval_inputs/bird_train_baseline300_v1.jsonl` 仅用于 train-side
   diagnostics；BIRD-dev full eval 使用其独立固定题集，二者不可混称。
+
+## 训练后 handoff
+
+训练结束后由 launcher 先完成 manifest、implementation lock、precision audit、checkpoint
+和 source/runtime identity 检查，再在 `table_rl` 或 `NewGNN` 选择空闲 GPU 执行 matched greedy
+evaluation。candidate 与 baseline 必须使用相同题号、数据库快照、prompt、carrier、decode
+和 scorer；任一身份、覆盖率、API/断线污染或 fresh replay 检查失败即停止并保留失败记录。
 
 ## 结果解释
 

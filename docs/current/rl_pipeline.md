@@ -1,9 +1,9 @@
 # Atomic version26 RL 运行契约
 
-更新时间：2026-09-03
+更新时间：2026-09-06
 
 当前只保留一条 RL 方案：**result-only four-level reward + SAAM asymmetric-error credit +
-reason/tool 加权 full-response policy loss**。它是最终执行方案；700 条正式运行和 matched
+reason/tool 加权 full-response policy loss**。它是最终执行方案；新 cohort 正式运行和 matched
 promotion 完成前，不把它写成已验证的 accuracy 提升。
 
 ## 固定身份
@@ -47,15 +47,15 @@ contract 处理，不把模型文字解释当作额外 reward 事实。
 policy reduction 为 `trajectory_token_mean`；完整 response 使用 reason/tool 各 0.5 的
 `span_balance_alpha=0.5` 加权梯度。不启用 tool-only、PCGrad 或 rank loss。当前正式 arm 的
 KL 为 `kl_beta=0`；后续必须用独立匹配 KL arm 验证是否带来增益。该 arm 只能改变
-`kl_beta`，固定 `checkpoint-6380`、700 条 cohort、decode/runtime、GPU 拓扑、optimizer
+`kl_beta`，固定 `checkpoint-6380`、screened cohort、decode/runtime、GPU 拓扑、optimizer
 updates 和评测口径，并写入独立 output root。系数/调度在启动前预注册，结果出来后不得回挑。
 
 ## 正式预算
 
 | 参数 | 固定值 |
 |---|---:|
-| cohort | 700 records = 600 mixed + 100 manual homogeneous |
-| prompts/update | 14 |
+| cohort | 目标约500题；每题K=8且正确数2–6；只使用已筛选RL数据 |
+| prompts/update | 30 |
 | rollouts/prompt | K=8 |
 | optimizer updates | 200（四轮覆盖） |
 | optimizer | AdamW，LR `4e-7`，weight decay `0.1`，clip `0.2` |
@@ -63,31 +63,43 @@ updates 和评测口径，并写入独立 output root。系数/调度在启动�
 | agent limits | max steps 30，history 4，temperature 0.8，top-p 1 |
 | actor | Qwen3-8B full trainable |
 
-配置：`src/rl/configs/experiments/qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700.yaml`。
+配置：`src/rl/configs/experiments/qwen3_8b_atomic_v26_saam_screened500_single_gpu.yaml`。
 
 ## A100 运行拓扑
 
-- 两张 A100 做 FSDP full-shard BF16 actor trainer（`world_size=2`）；这是用户确认的双卡
-  训练。
-- 第三张 A100 起 online vLLM；trainer GPU 与 vLLM GPU 必须不同。
-- 正式动态 transition packing 上限：`max_rows=8`、`token_budget=32768`。实际 GPU id、
-  master/vLLM port 和 runtime path 由 launcher 写入 manifest，不在文档中永久绑定。
+- 一张 A100 做 replicated BF16 actor trainer（`world_size=1`）。
+- 另一张不同的 A100 起 online vLLM；两张卡只能从 GPU 0–3 中选择。
+- 正式动态 transition packing 上限：先以 `max_rows=4`、`token_budget=16384` 完成单卡 live
+  gate；gate 通过后才可使用 `max_rows=8`、`token_budget=32768` 的正式上限。实际 GPU id、
+  master/vLLM port 和 runtime path 由 launcher 写入 manifest，不在文档中永久绑定。trainer
+  为单进程 `world_size=1`，不初始化 NCCL；actor 基座保持 BF16，AdamW 状态使用 FP32。显存不足时
+  只能显式切换 `OPTIMIZER_NAME=paged_adamw_8bit`，并在独立 manifest 中标注为降级路径。
 - canonical launcher：
-  `src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_a100.sh`
+  `src/rl/experiments/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
 
 launcher 必须 fail-closed：preflight cohort/config/adapter，检查目标 GPU/端口，训练完成后
 校验 run manifest、implementation lock、precision audit、checkpoint 和 replay/audit。
 
+## 3090 降级拓扑
+
+如果 `a100` 不可用，目标是在 `table_rl` 或 `NewGNN` 以相同协议运行单卡 replicated trainer，并
+用另一张独立 3090 运行 online vLLM。3090 路径必须使用独立 launcher、output root 和 manifest；默认从
+`max_rows=1`、`token_budget=8192` 起步，显存不足时使用显式的 4-bit base 或
+`OPTIMIZER_NAME=paged_adamw_8bit`，并记录降级项。它保持相同 reward、credit、cohort、update
+和 matched evaluation 口径，不得与 A100 结果直接合并。无法同时获得两张空闲 3090 时，
+launcher 必须 fail-closed。当前 A100 launcher 不自动接受 3090；3090 正式 launcher 通过
+同等 preflight 和 live gate 后才能启动。
+
 ## 准入和评测
 
-1. 先完成 14-record live gate，确认 FSDP、vLLM、权重同步和 transition loss 无 OOM/NCCL
-   错误。
-2. 再完成 700-record/200-update formal run；输出必须完整且可 fresh replay。
+1. 先在 A100 的 GPU 0–3（或 3090 服务器的实际空闲 GPU 对）完成 1-update、30题/update live
+   gate，确认 replicated trainer、vLLM、权重同步和 transition loss 无 OOM/NCCL 错误。
+2. 再完成约500题/200-update formal run；输出必须完整且可 fresh replay。
 3. 训练后在 `table_rl` 或 `NewGNN` 做同协议 matched candidate-vs-baseline greedy eval，
    题号覆盖、API error、runtime/prompt/checkpoint identity 全部通过才可比较。
 4. 只有 matched gate 通过后才能决定是否 promotion；candidate-only 结果不能当作提升。
 
-评测衔接见 `evaluation_handoff.md`。KL 对照要求和待登记的系数/调度见
+评测使用 `evaluation.md` 的统一 handoff 规则。KL 对照要求和待登记的系数/调度见
 `decision_register.md`；在对照完成前不对 KL 的收益或损失下结论。
 
 ## 明确不采用

@@ -1,0 +1,264 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1200" viewBox="0 0 1920 1200">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7.2" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L8,4 L0,8 z" fill="#475569"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.13"/>
+    </filter>
+    <style>
+      text { font-family: "Times New Roman", Times, serif; fill: #172033; }
+      .title { font-size: 34px; font-weight: 700; }
+      .subtitle { font-size: 17px; fill: #475569; }
+      .section { font-size: 20px; font-weight: 700; fill: #0f172a; }
+      .box-title { font-size: 18px; font-weight: 700; fill: #0f172a; }
+      .body { font-size: 15px; }
+      .small { font-size: 13px; }
+      .tiny { font-size: 11px; }
+      .action { font-size: 14px; font-weight: 700; }
+      .action-detail { font-size: 12px; }
+      .formula { font-size: 16px; font-style: italic; fill: #0f172a; }
+      .label { font-size: 13px; font-weight: 700; }
+      .stroke { stroke: #334155; stroke-width: 1.6; }
+      .arrow { stroke: #475569; stroke-width: 1.35; fill: none; marker-end: url(#arrow); }
+      .dashed { stroke-dasharray: 7 5; }
+    </style>
+  </defs>
+
+  <rect width="1920" height="1200" fill="#f8fafc"/>
+  <rect x="28" y="24" width="1864" height="1152" rx="18" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+
+  <text x="60" y="70" class="title">SAAM-Asymmetric GRPO for Atomic Tool-Use RL</text>
+  <text x="60" y="99" class="subtitle">Qwen3-8B · Atomic version26 · result-only terminal supervision · train-only BIRD-train · Gold SQL never enters the actor</text>
+  <rect x="1528" y="48" width="332" height="46" rx="9" fill="#eef2ff" stroke="#6366f1" stroke-width="1.3"/>
+  <text x="1545" y="69" class="label" fill="#3730a3">Research claim under test</text>
+  <text x="1545" y="87" class="small" fill="#3730a3">remove contradictory credit, keep vanilla elsewhere</text>
+
+  <!-- Top pipeline -->
+  <text x="60" y="140" class="section">A. Causal rollout and terminal GRPO signal</text>
+
+  <g filter="url(#shadow)">
+    <rect x="60" y="158" width="280" height="180" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <text x="80" y="188" class="box-title">1 · Rollout policy</text>
+    <text x="80" y="216" class="body">Frozen SFT1 checkpoint-560</text>
+    <text x="80" y="239" class="body">30 prompts/update × K = 8</text>
+    <text x="80" y="262" class="body">12 optimizer updates</text>
+    <text x="80" y="289" class="small">Sampling: temperature 0.8, top-p 1</text>
+    <text x="80" y="310" class="small">Qwen3 thinking enabled</text>
+  </g>
+
+  <path d="M340 248 L375 248" class="arrow"/>
+
+  <g filter="url(#shadow)">
+    <rect x="375" y="158" width="315" height="180" rx="12" fill="#ecfeff" stroke="#0891b2" stroke-width="2"/>
+    <text x="395" y="188" class="box-title">2 · Causal Harness loop</text>
+    <text x="395" y="216" class="formula">s<tspan baseline-shift="sub" font-size="12">t</tspan>  →  a<tspan baseline-shift="sub" font-size="12">t</tspan> = (tool, complete arguments)</text>
+    <text x="395" y="242" class="body">1. model writes &lt;think&gt;…&lt;/think&gt;</text>
+    <text x="395" y="264" class="body">2. model emits one JSON tool action</text>
+    <text x="395" y="286" class="body">3. Harness executes legal call</text>
+    <text x="395" y="308" class="body">4. observation / error becomes next state</text>
+  </g>
+
+  <path d="M690 248 L725 248" class="arrow"/>
+
+  <g filter="url(#shadow)">
+    <rect x="725" y="158" width="300" height="180" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+    <text x="745" y="188" class="box-title">3 · Terminal outcome</text>
+    <text x="745" y="218" class="formula">R<tspan baseline-shift="sub" font-size="12">i</tspan> ∈ {0, 1}  (bird-set denotation)</text>
+    <text x="745" y="247" class="body">Correct terminal answer: R = 1</text>
+    <text x="745" y="271" class="body">Wrong / illegal termination: R = 0</text>
+    <text x="745" y="300" class="small">Gold SQL is read only by the Harness</text>
+    <text x="745" y="320" class="small">for compatibility and final denotation checks.</text>
+  </g>
+
+  <path d="M1025 248 L1060 248" class="arrow"/>
+
+  <g filter="url(#shadow)">
+    <rect x="1060" y="158" width="345" height="180" rx="12" fill="#f5f3ff" stroke="#7c3aed" stroke-width="2"/>
+    <text x="1080" y="188" class="box-title">4 · Group-standardized GRPO</text>
+    <text x="1080" y="217" class="formula">μ<tspan baseline-shift="sub" font-size="12">g</tspan> = mean(R<tspan baseline-shift="sub" font-size="12">j</tspan>),   σ<tspan baseline-shift="sub" font-size="12">g</tspan> = std(R<tspan baseline-shift="sub" font-size="12">j</tspan>)</text>
+    <text x="1080" y="246" class="formula">A<tspan baseline-shift="sub" font-size="12">i</tspan> = (R<tspan baseline-shift="sub" font-size="12">i</tspan> − μ<tspan baseline-shift="sub" font-size="12">g</tspan>) / (σ<tspan baseline-shift="sub" font-size="12">g</tspan> + ε)</text>
+    <text x="1080" y="278" class="body">same-outcome K=8 group → A = 0</text>
+    <text x="1080" y="305" class="small">No local Q(s,a), no hand-written tool score.</text>
+  </g>
+
+  <path d="M1405 248 L1440 248" class="arrow"/>
+
+  <g filter="url(#shadow)">
+    <rect x="1440" y="158" width="420" height="180" rx="12" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
+    <text x="1460" y="188" class="box-title">5 · Causal transition updates</text>
+    <text x="1460" y="218" class="formula">u<tspan baseline-shift="sub" font-size="12">i,t</tspan> = (s<tspan baseline-shift="sub" font-size="12">i,t</tspan>, a<tspan baseline-shift="sub" font-size="12">i,t</tspan>, A<tspan baseline-shift="sub" font-size="12">i</tspan>)</text>
+    <text x="1460" y="245" class="body">one update for every authored tool turn</text>
+    <text x="1460" y="271" class="formula">A<tspan baseline-shift="sub" font-size="12">i,t</tspan><tspan baseline-shift="super" font-size="12">eff</tspan> = Ã<tspan baseline-shift="sub" font-size="12">i,t</tspan> · w<tspan baseline-shift="sub" font-size="12">i,t</tspan> · (N<tspan baseline-shift="sub" font-size="12">tr</tspan>/N<tspan baseline-shift="sub" font-size="12">traj</tspan>)</text>
+    <text x="1460" y="299" class="small">current reduction: trajectory_token_mean</text>
+    <text x="1460" y="320" class="small">original normalization counts are retained</text>
+  </g>
+
+  <!-- trajectory example -->
+  <text x="60" y="380" class="section">B. What SAAM sees inside one question group</text>
+  <g filter="url(#shadow)">
+    <rect x="60" y="400" width="860" height="338" rx="12" fill="#ffffff" stroke="#94a3b8" stroke-width="1.8"/>
+    <text x="82" y="429" class="box-title">Actual Gate60 batch · policy step 0 · BIRD-train #0 · 7 correct / 1 wrong</text>
+    <text x="82" y="451" class="small">Question: Who is the director of the movie “Sex, Drink and Bloodshed”?</text>
+    <text x="82" y="470" class="tiny" fill="#64748b">Structured calls are copied from rollouts; model reasoning and long terminal reason strings are omitted only for space.</text>
+
+    <text x="82" y="496" class="label" fill="#15803d">τ⁺ · rl_0_sample_1 · correct · R = 1 · Aᵢ &gt; 0</text>
+    <rect x="82" y="505" width="205" height="61" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="94" y="526" class="action">t0 · describe_table</text>
+    <text x="94" y="545" class="action-detail">tables=[“movies”]</text>
+    <text x="94" y="561" class="action-detail">observation: 226,087 rows</text>
+    <path d="M287 536 L304 536" class="arrow"/>
+    <rect x="304" y="505" width="338" height="61" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="316" y="526" class="action">t1 · condition_filter(table=“movies”)</text>
+    <text x="316" y="545" class="action-detail">movie_title = “Sex, Drink and Bloodshed”</text>
+    <text x="316" y="561" class="action-detail">return=[“director_name”] → filter_001 (1×1)</text>
+    <path d="M642 536 L659 536" class="arrow"/>
+    <rect x="659" y="505" width="209" height="61" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="671" y="526" class="action">t2 · answer_from_context</text>
+    <text x="671" y="545" class="action-detail">evidence=filter_001</text>
+    <text x="671" y="561" class="action-detail">bird-set: correct (1×1)</text>
+    <text x="82" y="586" class="action-detail" fill="#15803d">The shared t0 action remains rewarded on the correct trajectory.</text>
+
+    <text x="82" y="615" class="label" fill="#b91c1c">τ⁻ · rl_0_sample_5 · wrong_answer · R = 0 · Aᵢ &lt; 0</text>
+    <rect x="82" y="625" width="165" height="70" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.4"/>
+    <text x="93" y="647" class="action">t0 · describe_table</text>
+    <text x="93" y="666" class="action-detail">tables=[“movies”]</text>
+    <text x="93" y="685" class="action-detail">shared wrong → Ã = 0</text>
+    <path d="M247 660 L263 660" class="arrow"/>
+    <rect x="263" y="625" width="244" height="70" rx="8" fill="#fee2e2" stroke="#b91c1c" stroke-width="1.5"/>
+    <text x="274" y="647" class="action">t1 · condition_filter</text>
+    <text x="274" y="666" class="action-detail">same title predicate; return 3 cols:</text>
+    <text x="274" y="685" class="action-detail">title, director_id, director_name → 1×3</text>
+    <path d="M507 660 L523 660" class="arrow"/>
+    <rect x="523" y="625" width="150" height="70" rx="8" fill="#fee2e2" stroke="#b91c1c" stroke-width="1.5"/>
+    <text x="534" y="647" class="action">t2 · read_subtable</text>
+    <text x="534" y="666" class="action-detail">table=filter_001</text>
+    <text x="534" y="685" class="action-detail">limit=1</text>
+    <path d="M673 660 L689 660" class="arrow"/>
+    <rect x="689" y="625" width="179" height="70" rx="8" fill="#fee2e2" stroke="#b91c1c" stroke-width="1.5"/>
+    <text x="700" y="647" class="action">t3 · answer_from_context</text>
+    <text x="700" y="666" class="action-detail">evidence=filter_001</text>
+    <text x="700" y="685" class="action-detail">wrong output shape (1×3)</text>
+    <text x="82" y="720" class="action-detail" fill="#475569">Only three update meanings are used: green = reward, red = penalty, white = zero.</text>
+  </g>
+
+  <!-- identity/mask -->
+  <g filter="url(#shadow)">
+    <rect x="950" y="400" width="430" height="338" rx="12" fill="#f8fafc" stroke="#475569" stroke-width="1.8"/>
+    <text x="972" y="431" class="box-title">Lineage-aware ambiguity test</text>
+    <text x="972" y="462" class="formula">key = (question, exact env prefix, tool + full args)</text>
+    <text x="972" y="492" class="body">State contains Harness-owned:</text>
+    <text x="990" y="515" class="small">• previous authored actions and feedback</text>
+    <text x="990" y="536" class="small">• structured observations / errors</text>
+    <text x="990" y="557" class="small">• recursive relation lineage</text>
+    <text x="972" y="589" class="body">State excludes:</text>
+    <text x="990" y="612" class="small">• model-authored reasoning as facts</text>
+    <text x="990" y="633" class="small">• Gold SQL / Gold path</text>
+    <rect x="972" y="657" width="386" height="58" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.3"/>
+    <text x="988" y="680" class="formula">M(s,a) = 1{ same key appears with R=0 and R=1 }</text>
+    <text x="988" y="701" class="small" fill="#4338ca">Only this locally contradictory credit is treated specially.</text>
+  </g>
+
+  <!-- asymmetric transform -->
+  <g filter="url(#shadow)">
+    <rect x="1410" y="400" width="450" height="338" rx="12" fill="#ffffff" stroke="#c2410c" stroke-width="1.8"/>
+    <text x="1432" y="431" class="box-title">6 · Action-type routing (SAAM)</text>
+    <text x="1432" y="451" class="small">Each row ends in exactly one of three update signs.</text>
+    <rect x="1432" y="463" width="406" height="34" rx="7" fill="#fee2e2" stroke="#b91c1c" stroke-width="1.3"/>
+    <text x="1446" y="485" class="body">deterministic Harness error</text>
+    <text x="1640" y="485" class="formula">\widetilde A=-\max(|A_i|,\lambda_{error})</text>
+    <rect x="1432" y="503" width="406" height="34" rx="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.3"/>
+    <text x="1446" y="525" class="body">ambiguous + correct</text>
+    <text x="1710" y="525" class="formula">\widetilde A=A_i&gt;0</text>
+    <rect x="1432" y="543" width="406" height="34" rx="7" fill="#ffffff" stroke="#64748b" stroke-width="1.3"/>
+    <text x="1446" y="565" class="body">ambiguous + wrong</text>
+    <text x="1710" y="565" class="formula">\widetilde A=0</text>
+    <rect x="1432" y="583" width="406" height="34" rx="7" fill="#dcfce7" stroke="#16a34a" stroke-width="1.3"/>
+    <text x="1446" y="605" class="body">unmatched + correct</text>
+    <text x="1710" y="605" class="formula">\widetilde A=A_i&gt;0</text>
+    <rect x="1432" y="623" width="406" height="34" rx="7" fill="#fee2e2" stroke="#b91c1c" stroke-width="1.3"/>
+    <text x="1446" y="645" class="body">unmatched + wrong</text>
+    <text x="1710" y="645" class="formula">\widetilde A=A_i&lt;0</text>
+    <rect x="1432" y="663" width="406" height="34" rx="7" fill="#ffffff" stroke="#64748b" stroke-width="1.3"/>
+    <text x="1446" y="685" class="body">infrastructure timeout</text>
+    <text x="1710" y="685" class="formula">\widetilde A=0</text>
+    <text x="1432" y="722" class="small" fill="#9a3412">No fourth color and no post-routing renormalization.</text>
+  </g>
+
+  <!-- Lower objective -->
+  <text x="60" y="785" class="section">C. Tokenwise clipped update, diagnostics, and evaluation</text>
+
+  <g filter="url(#shadow)">
+    <rect x="60" y="805" width="510" height="292" rx="12" fill="#f8fafc" stroke="#0f766e" stroke-width="2"/>
+    <text x="82" y="836" class="box-title">7 · Clipped policy objective</text>
+    <text x="82" y="869" class="formula">r<tspan baseline-shift="sub" font-size="12">i,t,k</tspan>(θ) = exp(log π<tspan baseline-shift="sub" font-size="12">θ</tspan> − log π<tspan baseline-shift="sub" font-size="12">old</tspan>)</text>
+    <text x="82" y="901" class="formula">L<tspan baseline-shift="sub" font-size="12">π</tspan> = −1/N Σ m<tspan baseline-shift="sub" font-size="12">i,t,k</tspan> · min( rÃ<tspan baseline-shift="sub" font-size="12">eff</tspan>,</text>
+    <text x="113" y="925" class="formula">clip(r, 1−ε, 1+ε)Ã<tspan baseline-shift="sub" font-size="12">eff</tspan> )</text>
+    <text x="82" y="958" class="formula">w<tspan baseline-shift="sub" font-size="12">i,t</tspan> = |response<tspan baseline-shift="sub" font-size="12">i,t</tspan>| / |response<tspan baseline-shift="sub" font-size="12">i</tspan>|</text>
+    <text x="82" y="990" class="body">ε = 0.2 · KL β = 0 · all response tokens trained</text>
+    <text x="82" y="1015" class="body">trajectory_token_mean balances each trajectory by tokens</text>
+    <text x="82" y="1043" class="small">The SAAM coefficient changes only Ã; it does not change</text>
+    <text x="82" y="1062" class="small">the causal context, old-policy log-probs, or clipping rule.</text>
+  </g>
+
+  <path d="M570 951 L620 951" class="arrow"/>
+
+  <g filter="url(#shadow)">
+    <rect x="620" y="805" width="300" height="292" rx="12" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <text x="642" y="836" class="box-title">8 · Actual update</text>
+    <text x="642" y="872" class="body">Backpropagate full mixed loss</text>
+    <text x="642" y="900" class="formula">g<tspan baseline-shift="sub" font-size="12">actual</tspan> = ∇θ L<tspan baseline-shift="sub" font-size="12">π</tspan></text>
+    <text x="642" y="935" class="body">QLoRA all-linear adapter</text>
+    <text x="642" y="961" class="body">AdamW · learning rate 8×10⁻⁷</text>
+    <text x="642" y="987" class="body">one optimizer step / update</text>
+    <rect x="642" y="1012" width="252" height="58" rx="8" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="657" y="1036" class="small">The restored actual gradient is</text>
+    <text x="657" y="1056" class="small">the only gradient sent to optimizer.step()</text>
+  </g>
+
+  <path d="M920 951 L968 951" class="arrow"/>
+
+  <g filter="url(#shadow)">
+    <rect x="968" y="805" width="420" height="292" rx="12" fill="#f5f3ff" stroke="#7c3aed" stroke-width="2"/>
+    <text x="990" y="836" class="box-title">9 · Reason / tool gradient diagnostics</text>
+    <text x="990" y="868" class="body">Capture gactual before clipping</text>
+    <text x="990" y="893" class="body">Sample ≤ 256 transitions for probes</text>
+    <text x="990" y="918" class="body">Run two counterfactual passes:</text>
+    <text x="1008" y="943" class="formula">g<tspan baseline-shift="sub" font-size="12">reason</tspan> = ∇θ Lπ with reason-token mask</text>
+    <text x="1008" y="968" class="formula">g<tspan baseline-shift="sub" font-size="12">tool</tspan>   = ∇θ Lπ with tool-token mask</text>
+    <text x="990" y="998" class="formula">cos(greason, gtool), cos(greason, gactual),</text>
+    <text x="990" y="1021" class="formula">cos(gtool, gactual), ‖gspan‖/‖gactual‖</text>
+    <text x="990" y="1050" class="small">Record schema v3; CPU summary/sketch only.</text>
+    <text x="990" y="1071" class="small" fill="#5b21b6">Restore gactual; probes never alter the update.</text>
+  </g>
+
+  <path d="M1388 951 L1435 951" class="arrow"/>
+
+  <g filter="url(#shadow)">
+    <rect x="1435" y="805" width="425" height="292" rx="12" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+    <text x="1457" y="836" class="box-title">10 · Final evaluation and decision</text>
+    <text x="1457" y="870" class="body">After 12 updates, run fresh greedy eval:</text>
+    <text x="1457" y="895" class="body">BIRD-dev1534 · n = 1 · temperature = 0</text>
+    <text x="1457" y="927" class="body">Exact example-index pairing:</text>
+    <text x="1475" y="951" class="small">SAAM adapter vs frozen SFT1 checkpoint-560</text>
+    <text x="1457" y="983" class="body">Report: correct / 1534 · legal rate</text>
+    <text x="1457" y="1008" class="body">paired wins, regressions, and confidence</text>
+    <rect x="1457" y="1028" width="381" height="43" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+    <text x="1472" y="1054" class="small" fill="#166534">dev1534 is evaluation-only; never used in training.</text>
+  </g>
+
+  <!-- arrows showing actual order and diagnostic branch -->
+  <path d="M770 805 L770 758 L830 758 L830 738" class="arrow dashed"/>
+  <text x="686" y="751" class="tiny" fill="#475569">diagnostic branch after backward</text>
+  <path d="M920 1097 L920 1122 L1600 1122 L1600 1097" class="arrow dashed"/>
+  <text x="1095" y="1144" class="tiny" fill="#475569">restore actual gradient → optimizer.step() → next rollout/update</text>
+
+  <!-- legend -->
+  <g>
+    <text x="60" y="1139" class="label">Legend</text>
+    <rect x="114" y="1123" width="20" height="20" rx="4" fill="#dcfce7" stroke="#16a34a"/><text x="142" y="1138" class="small">reward: Ã &gt; 0</text>
+    <rect x="280" y="1123" width="20" height="20" rx="4" fill="#fee2e2" stroke="#b91c1c"/><text x="308" y="1138" class="small">penalty: Ã &lt; 0</text>
+    <rect x="462" y="1123" width="20" height="20" rx="4" fill="#ffffff" stroke="#64748b"/><text x="490" y="1138" class="small">zero update: Ã = 0</text>
+    <text x="760" y="1138" class="small" fill="#475569">All text: Times New Roman · equations: LaTeX + newtxmath</text>
+  </g>
+</svg>

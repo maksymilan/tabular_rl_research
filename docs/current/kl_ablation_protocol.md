@@ -6,9 +6,10 @@
 ## 预注册约束
 
 - 起点：同一 cumulative SFT `checkpoint-6380`，加载同一 frozen PEFT reference。
-- 数据：同一 700 条最终 cohort、同一题目顺序和 K=8 rollout 结构。
+- 数据：同一 screened cohort（目标约500题）、同一题目顺序和 K=8 rollout 结构。
 - 运行：同一 Atomic version26 runtime/prompt/carrier、Qwen3 revision、decode 参数、
-  max steps/token budget、optimizer、200 updates、FSDP world size=2 和 online vLLM 拓扑。
+  max steps/token budget、optimizer、200 updates、单卡 replicated trainer（world size=1）和
+  online vLLM 拓扑。
 - 唯一自变量：`optimizer.kl_beta`；KL arm 使用独立 output root 和独立 manifest。
 - 结果：在 `table_rl` 或 `NewGNN` 用同一 matched greedy evaluator 比较 BIRD `bird-set`、
   legal termination、Harness error、token/step 成本和训练稳定性；必须通过 fresh replay、

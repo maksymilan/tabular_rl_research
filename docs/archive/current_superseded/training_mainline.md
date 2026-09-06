@@ -1,4 +1,4 @@
-# 训练主线：Atomic version26 SFT → A100 双卡 RL
+# 训练主线：Atomic version26 SFT → A100 单卡 replicated RL
 
 更新时间：2026-09-03
 
@@ -9,7 +9,7 @@
 ```text
 version26 causal SFT
   → 同协议 BIRD-dev greedy matched evaluation
-  → A100 两卡 FSDP trainer + 一卡 online vLLM RL
+  → A100 单卡 replicated trainer + 一卡 online vLLM RL
   → table_rl/NewGNN matched evaluation 与 replay/行为审计
 ```
 
@@ -46,11 +46,10 @@ SFT 入口：
 ## RL 接续
 
 当前唯一执行方案是 `saam-asymmetric-error` + four-level result reward + reason/tool 各
-0.5 的加权 full response，完整参数见 [`rl_pipeline.md`](rl_pipeline.md)。A100 正式资源是两张卡做
-FSDP trainer ranks（world size=2），另用一张卡起 vLLM；`table_rl` 和 `NewGNN` 不运行主
+0.5 的加权 full response，完整参数见 [`rl_pipeline.md`](rl_pipeline.md)。A100 正式资源是一张卡做 replicated trainer（world size=1），另一张卡起 vLLM，且只允许 GPU 0–3；`table_rl` 和 `NewGNN` 不运行主
 RL optimizer。
 
-2026-09-03 的 A100 run 仅完成 14 records/1 update live gate。700-record formal run、
+A100 update-40 历史运行已完成 checkpoint-40，随后 step49 因 OOM 退出。约500题 formal run、
 matched candidate-vs-baseline eval 和 promotion gate 尚未完成，任何报告都必须标注这一状态。
 
 ## 数据准入
