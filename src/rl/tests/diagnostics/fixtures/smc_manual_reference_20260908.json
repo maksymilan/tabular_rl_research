@@ -1,0 +1,287 @@
+{
+  "schema_version": "smc-manual-reference-v1",
+  "source_rollouts_sha256": "2615a9203ab8788d89a8d3d50ec8a7b183e57242b00f13d64fbf325afe70efa1",
+  "source_audit_sha256": "94d0973f89a1a3f191b827dfe265b30d0d8c59dfa38a1f985dc0bc2c416ffd05",
+  "annotation_provenance": "Transcribed from the prior Codex manual trajectory audit; not independently human-labelled and not a held-out semantic benchmark.",
+  "reference_report": "docs/reports/rl/SMC_SELECTED_NEGATIVE_TRAJECTORY_AUDIT_20260908_ZH.md",
+  "usage": "Scoring after inference only. Never an input to the classifier or reward.",
+  "site_definition": "Zero-based observed decision difference, not a certified harmful action. Grain ambiguity sites may be semantically reasonable.",
+  "rows": [
+    {
+      "example_index": 124,
+      "policy_global_step": 1,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": [
+        2
+      ]
+    },
+    {
+      "example_index": 124,
+      "policy_global_step": 3,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": [
+        2
+      ]
+    },
+    {
+      "example_index": 548,
+      "policy_global_step": 3,
+      "manual_category": "incomplete",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 590,
+      "policy_global_step": 1,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": [
+        3
+      ]
+    },
+    {
+      "example_index": 805,
+      "policy_global_step": 3,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 869,
+      "policy_global_step": 0,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 869,
+      "policy_global_step": 2,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 1464,
+      "policy_global_step": 0,
+      "manual_category": "incomplete",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 1464,
+      "policy_global_step": 2,
+      "manual_category": "type_or_data_ambiguity",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 1692,
+      "policy_global_step": 1,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": [
+        6
+      ]
+    },
+    {
+      "example_index": 1692,
+      "policy_global_step": 3,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": [
+        5
+      ]
+    },
+    {
+      "example_index": 1743,
+      "policy_global_step": 0,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 2005,
+      "policy_global_step": 0,
+      "manual_category": "incomplete",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 2130,
+      "policy_global_step": 0,
+      "manual_category": "contract_conflict",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 2222,
+      "policy_global_step": 0,
+      "manual_category": "tie_ambiguity",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 2339,
+      "policy_global_step": 1,
+      "manual_category": "contract_conflict",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 2386,
+      "policy_global_step": 1,
+      "manual_category": "tie_ambiguity",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 2386,
+      "policy_global_step": 2,
+      "manual_category": "tie_ambiguity",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 2747,
+      "policy_global_step": 0,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 2747,
+      "policy_global_step": 3,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3016,
+      "policy_global_step": 0,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3016,
+      "policy_global_step": 3,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3287,
+      "policy_global_step": 1,
+      "manual_category": "representation_mapping",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3287,
+      "policy_global_step": 2,
+      "manual_category": "representation_mapping",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3533,
+      "policy_global_step": 1,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3554,
+      "policy_global_step": 0,
+      "manual_category": "incomplete",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3554,
+      "policy_global_step": 2,
+      "manual_category": "incomplete",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3642,
+      "policy_global_step": 3,
+      "manual_category": "incomplete",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3718,
+      "policy_global_step": 1,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3718,
+      "policy_global_step": 3,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3989,
+      "policy_global_step": 0,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 3989,
+      "policy_global_step": 2,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 4004,
+      "policy_global_step": 1,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 4004,
+      "policy_global_step": 2,
+      "manual_category": "tie_ambiguity",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 4286,
+      "policy_global_step": 1,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 4286,
+      "policy_global_step": 3,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 4560,
+      "policy_global_step": 2,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": [
+        5
+      ]
+    },
+    {
+      "example_index": 5308,
+      "policy_global_step": 0,
+      "manual_category": "execution_semantic_corruption",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 5394,
+      "policy_global_step": 2,
+      "manual_category": "format",
+      "difference_turn_indices": null
+    },
+    {
+      "example_index": 6170,
+      "policy_global_step": 0,
+      "manual_category": "semantic_error",
+      "difference_turn_indices": [
+        3
+      ]
+    },
+    {
+      "example_index": 6223,
+      "policy_global_step": 0,
+      "manual_category": "grain_ambiguity",
+      "difference_turn_indices": [
+        2
+      ]
+    },
+    {
+      "example_index": 6223,
+      "policy_global_step": 3,
+      "manual_category": "grain_ambiguity",
+      "difference_turn_indices": [
+        2
+      ]
+    },
+    {
+      "example_index": 6567,
+      "policy_global_step": 2,
+      "manual_category": "incomplete",
+      "difference_turn_indices": null
+    }
+  ]
+}

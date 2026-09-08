@@ -129,6 +129,12 @@ register，再写代码。
 
 ## 变更和安全纪律
 
+### 项目时序记录（强制）
+
+- 根目录 `project_records/` 是简洁的项目时序索引；`experiments.md` 记录每个 RL 想法对应的配置、实验状态、评测和核心结论，`decisions.md` 记录新的 RL 想法、实验设计与取舍。
+- 后续任何讨论形成可执行方案、配置变更、实验启动/结束/中止或结果结论时，必须在同一提交中更新相应记录，并链接配置、manifest 或报告；进行中、诊断和中止必须明确标注。
+- 记录只写核心信息，详细证据仍以 `docs/current/`、`docs/reports/` 和 manifest 为准。`docs/current/decision_register.md` 继续作为当前方案详细门禁的 SSOT，不得与时序索引冲突。
+
 - 当前文档以 `docs/current/` 为准；任何状态变化同步更新
   `final_project_contract.md`、`decision_register.md` 和对应 manifest/report。
 - 旧工具 scheme 代码和实验入口按用户决定迁入 `archive/`，先不删除；迁移时必须保留原始

@@ -99,6 +99,22 @@ def read_jsonl(
     )
 
 
+def iter_jsonl(
+    path: Path, *, require_object: bool = True, allow_blank: bool = True
+) -> Iterable[Any]:
+    """Stream large immutable JSONL snapshots with strict line-aware validation."""
+
+    with path.open("rb") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                if not allow_blank:
+                    raise ValueError(f"{path}:{line_number}: blank JSONL row")
+                continue
+            yield parse_json_bytes(
+                line, source=f"{path}:{line_number}", require_object=require_object
+            )
+
+
 def canonical_json(value: Any, *, indent: int | None = None) -> str:
     """Encode JSON with the repository's deterministic defaults."""
 
@@ -245,6 +261,7 @@ __all__ = [
     "canonical_json",
     "canonical_json_bytes",
     "canonical_jsonl_bytes",
+    "iter_jsonl",
     "parse_json_bytes",
     "parse_jsonl_bytes",
     "read_json",

@@ -944,7 +944,9 @@ class RLExperimentConfig:
             "prompts_per_update": int(rollout.get("prompts_per_update", 1)),
             "group_size": int(rollout["group_size"]),
             "max_agent_steps": int(rollout.get("max_agent_steps", 30)),
-            "max_new_tokens": int(rollout.get("max_new_tokens", 1024)),
+            # New configs default to 4096 per turn. Historical configs keep
+            # their explicit recorded value for reproducibility.
+            "max_new_tokens": int(rollout.get("max_new_tokens", 4096)),
             "max_context_tokens": int(rollout.get("max_context_tokens", 8192)),
             "history_turns": int(rollout.get("history_turns", 4)),
             "temperature": float(rollout.get("temperature", 0.7)),

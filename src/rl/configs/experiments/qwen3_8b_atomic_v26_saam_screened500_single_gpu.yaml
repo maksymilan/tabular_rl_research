@@ -7,7 +7,7 @@ result_reward_profile: four-level
 # manifest compatibility; new mechanisms should be declared here.
 mechanism:
   reward_mode: result-only
-  result_advantage_profile: stored
+  result_advantage_profile: correctness-primary-clean-secondary
   clean_advantage_weight: 0.25
   policy_reduction: trajectory_token_mean
   credit_assignment: saam-asymmetric-error
@@ -71,7 +71,9 @@ rollout:
   prompts_per_update: 30
   group_size: 8
   max_agent_steps: 30
-  max_new_tokens: 2048
+  # Current/new rollout default: the previous 2048 budget caused 14.32% of
+  # the A100 audit rollouts to hit the per-turn generation limit.
+  max_new_tokens: 4096
   max_context_tokens: 16384
   history_turns: 4
   temperature: 0.8

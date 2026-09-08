@@ -1,8 +1,9 @@
 # Atomic version26 RL 运行契约
 
-更新时间：2026-09-06
+更新时间：2026-09-08
 
-当前只保留一条 RL 方案：**result-only four-level reward + SAAM asymmetric-error credit +
+当前只保留一条 RL 方案：**result-only four-level reward + correctness-primary-clean-secondary
+advantage + SAAM asymmetric-error credit +
 reason/tool 加权 full-response policy loss**。它是最终执行方案；新 cohort 正式运行和 matched
 promotion 完成前，不把它写成已验证的 accuracy 提升。
 
@@ -15,7 +16,7 @@ promotion 完成前，不把它写成已验证的 accuracy 提升。
 - model：Qwen3-8B revision `b968826d9c46dd6066d109eabc6255188de91218`
 - initial adapter：cumulative SFT `checkpoint-6380`（`checkpoint-560` 仅为小样本 RL 可行性验证）
 - action carrier：`think-json-v1`
-- causal history：recent 4 legal turns；max 30 agent steps；max 2,048 new tokens
+- causal history：recent 4 legal turns；max 30 agent steps；max 4,096 new tokens per turn
 
 ## Reward
 
@@ -32,6 +33,11 @@ timeout 属于有结构化 Harness error 的 policy action；即使后续恢复�
 
 实现：`src/rl/runtime/terminal_reward.py` 的 `four-level` profile。timeout 按当前 transition
 contract 处理，不把模型文字解释当作额外 reward 事实。
+
+组内 advantage 不直接标准化四等级数值。使用 `correctness-primary-clean-secondary`，
+`clean_advantage_weight=0.25`：正确/错误决定符号；无 Harness error 与有 error 只使用有界
+倍率调节幅度。全对和全错组仍为零 advantage。terminal four-level reward 仍完整记录，
+但不直接作为组内 advantage 的符号来源。
 
 ## SAAM asymmetric-error credit
 
@@ -60,7 +66,7 @@ updates 和评测口径，并写入独立 output root。系数/调度在启动�
 | optimizer updates | 200（四轮覆盖） |
 | optimizer | AdamW，LR `4e-7`，weight decay `0.1`，clip `0.2` |
 | PPO iterations | 1 |
-| agent limits | max steps 30，history 4，temperature 0.8，top-p 1 |
+| agent limits | max steps 30，history 4，`max_new_tokens=4096`/turn，temperature 0.8，top-p 1 |
 | actor | Qwen3-8B full trainable |
 
 配置：`src/rl/configs/experiments/qwen3_8b_atomic_v26_saam_screened500_single_gpu.yaml`。
@@ -92,12 +98,15 @@ launcher 必须 fail-closed。当前 A100 launcher 不自动接受 3090；3090 �
 
 ## 准入和评测
 
-1. 先在 A100 的 GPU 0–3（或 3090 服务器的实际空闲 GPU 对）完成 1-update、30题/update live
+1. 正式实验启动前，先向用户列出完整配置和身份清单，至少包括配置及哈希、模型/checkpoint、
+   cohort及哈希、protocol/prompt/runtime、reward/credit、rollout预算、optimizer、GPU拓扑、
+   输出目录和评测计划；只有用户明确确认后才能启动。
+2. 先在 A100 的 GPU 0–3（或 3090 服务器的实际空闲 GPU 对）完成 1-update、30题/update live
    gate，确认 replicated trainer、vLLM、权重同步和 transition loss 无 OOM/NCCL 错误。
-2. 再完成约500题/200-update formal run；输出必须完整且可 fresh replay。
-3. 训练后在 `table_rl` 或 `NewGNN` 做同协议 matched candidate-vs-baseline greedy eval，
+3. 再完成约500题/200-update formal run；输出必须完整且可 fresh replay。
+4. 训练后在 `table_rl` 或 `NewGNN` 做同协议 matched candidate-vs-baseline greedy eval，
    题号覆盖、API error、runtime/prompt/checkpoint identity 全部通过才可比较。
-4. 只有 matched gate 通过后才能决定是否 promotion；candidate-only 结果不能当作提升。
+5. 只有 matched gate 通过后才能决定是否 promotion；candidate-only 结果不能当作提升。
 
 评测使用 `evaluation.md` 的统一 handoff 规则。KL 对照要求和待登记的系数/调度见
 `decision_register.md`；在对照完成前不对 KL 的收益或损失下结论。

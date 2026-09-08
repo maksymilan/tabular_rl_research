@@ -272,6 +272,19 @@ class TransitionBatchTest(unittest.TestCase):
         self.assertLess(values[2], 0.0)
         self.assertLess(values[3], 0.0)
 
+    def test_correctness_primary_treats_generation_length_as_error(self):
+        correct = _episode("correct", 1.5, [0.0], example_index=8)
+        wrong_clean = _episode("wrong-clean", -0.5, [0.0], example_index=8)
+        wrong_truncated = _episode("wrong-truncated", -1.0, [0.0], example_index=8)
+        wrong_truncated.sample.audit_record["failure_type"] = "generation_length"
+        values = correctness_primary_clean_secondary_advantages(
+            [correct, wrong_clean, wrong_truncated],
+            clean_weight=0.25,
+        )
+        self.assertLess(values[1], 0.0)
+        self.assertLess(values[2], 0.0)
+        self.assertGreater(abs(values[2]), abs(values[1]))
+
     def test_class_conditional_routing_preserves_correct_efficiency_signal(self):
         correct_clean = _episode("correct-clean", 1.5, [0.0], example_index=7)
         correct_error = _episode("correct-error", 1.0, [0.0], example_index=7)

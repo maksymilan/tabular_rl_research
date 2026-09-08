@@ -1,6 +1,10 @@
 # 当前项目最终契约
 
-更新时间：2026-09-05（Asia/Shanghai）
+## 项目记录要求
+
+项目级时序索引位于根目录 [`project_records/`](../../project_records/)。任何新的 RL 讨论形成可执行想法、配置变更、实验启动/结束/中止或结果结论时，必须同步更新其中的实验记录或决策记录，并链接配置、immutable manifest 或报告。记录保持简洁；详细门禁和当前方案仍以本文件、`decision_register.md` 及 run manifest 为准。进行中、诊断和中止不得表述为已验证提升。
+
+更新时间：2026-09-08（Asia/Shanghai）
 
 这是项目当前唯一的收敛说明。`docs/current/` 中其他文档只补充这里定义的契约；历史分支、
 失败诊断和旧 checkpoint 仍可审计，但不再是新实验入口。
@@ -57,6 +61,7 @@ SFT anchor，也不得作为当前 RL 起点；完成结果和 matched evaluatio
   - correct + Harness error：`+1.0`
   - incorrect + no Harness error：`-0.5`
   - incorrect + Harness error：`-1.0`
+- advantage adapter：`correctness-primary-clean-secondary`，`clean_advantage_weight=0.25`。K=8 组内正确性决定 advantage 符号；clean/error 只按有界倍率调节幅度。terminal `four-level` 数值仍完整记录，但不直接作为组内 advantage 的符号来源。
 - `saam-asymmetric-error` credit：共享 `(state, full action)` 在正确轨迹保留正优势、在
   错误轨迹置零；局部错误 action 使用 `-max(|A|, 1.0)`；timeout 视为 policy error，
   timeout action 同样使用局部负向惩罚。
@@ -76,6 +81,39 @@ SFT anchor，也不得作为当前 RL 起点；完成结果和 matched evaluatio
 
 - `src/rl/configs/experiments/qwen3_8b_atomic_v26_saam_screened500_single_gpu.yaml`
 - `src/rl/scenarios/rl_main/run_qwen3_8b_atomic_v26_saam_fourlevel_spanbalanced_700_single_gpu_a100.sh`
+
+用户于 2026-09-06 另外注册三项仅用于审计/对照的 version26 降级 RL，不属于正式 RL 主线：
+原版 SMC 在原始 `saam_gate60` cohort 上的概率选择审计；原版 SAAM+four-level+
+span-balanced 在新版 `smc_balanced60` 60 题 cohort 上的批次方差对照；以及在前两项审计
+后预注册的 SMC 优化诊断版本。三项均从 `checkpoint-6380` 启动，使用独立 output root，完成
+后在 NewGNN 做 matched greedy 评测；它们不得改变正式主线 config、cohort 或 admission，
+也不得在没有 decision register 更新和匹配评测的情况下宣称 accuracy promotion。
+
+2026-09-08 用户批准追加 alpha=0.25 诊断：table_rl 相同新版60题、30题/update、K=8、
+4 updates，从 checkpoint-6380 启动；训练完成后同机双卡评测 BIRD-dev1534 并释放 vLLM。
+该对照固定上一轮 alpha=0.5 的远端训练实现及实际运行参数，只改变 span 权重，正式主线
+仍保持 alpha=0.5。详情和实验身份见 `decision_register.md` 及
+`docs/reports/rl/SAAM_ALPHA025_TABLE_RL_20260908.md`。
+
+2026-09-07 审计修正：旧诊断 runtime 的 SMC 概率日志缓存按题组错误重置，导致历史 audit3
+和原始 cohort 重跑每个 update 只落盘 1 个题组，而不是应有的 30 个。该问题不改变 SMC
+优势选择逻辑，但历史 4 行日志不能作为完整概率证据；修复后必须通过 30 题组/update 的
+覆盖率检查，并重新运行需要完整概率比较的 SMC 审计。
+
+2026-09-07 修复后的原始 cohort 重跑已完成 120 组、960 个候选的概率字段与 rollout 身份/
+选择一致性检查，完整概率审计门禁已通过；训练进程仍需完成最后 checkpoint 保存和资源释放。
+SAAM 新版60题训练已完成，NewGNN 评测继续；资源释放后下一训练为新版 cohort 的完整 SMC
+审计补跑，不等待评测。
+中间结果及分母见 `docs/reports/rl/SCM_AUDIT_PROGRESS_20260907_ZH.md`，不构成效果准入。
+
+2026-09-07 注册 Harness-conditioned SMDP/IQL 可行性诊断：第一阶段仅从完整 Atomic v26
+rollout 构造 semantic-step transition 并审计数据是否包含同一精确 model-visible state
+下的 action/outcome variation；transition 只保留 policy 可见 state、typed action 和
+Harness four-level terminal reward，gold/ref 字段 fail-closed。IQL 的 `Q` 和 expectile `V`
+是候选 critic，不是独立 reward model；在可识别性门禁通过前不训练 actor、不替换 SAAM/GRPO，
+所有产物必须标记 `diagnostic_only`。实现与入口见
+`src/rl/frameworks/trl/{mdp_critic,iql}.py` 和
+`src/rl/scenarios/diagnostics/audit_harness_smdp_iql.py`。
 
 A100 已有的 update-40 运行从 `checkpoint-6380` 启动，`global_step=40` 可审计，随后在
 step49 因 OOM 退出；该运行使用 700 题、每 update 14 题，因此只作为历史诊断。同步盘点见
@@ -102,6 +140,12 @@ manifest 和 matched evaluation，不与 A100 结果直接合并。当前 A100 l
 fail-closed。
 
 ## 5. 当前状态和停止线
+
+- 2026-09-08：按用户要求先对 a100/table_rl 既有 K=8 rollout 做大样本静态审计。
+  `distance_credit` 为未通过语义准入的诊断原型，不能接入 reward/actor 或自动筛题。
+  统计与人工复核必须分开，跨 run 必须处理题号重编号，按题隔离未读保留集；不改变
+  正式 SAAM/four-level/span-balanced 方案。报告见
+  `docs/reports/rl/ROLLOUT_CORPUS_SEMANTIC_AUDIT_20260908_ZH.md`。
 
 - 外部 DeepSeek 生成暂停；恢复前不发新 teacher batch。
 - 新数据必须真实 model↔Harness 因果生成、fresh replay、结构和 no-leak 全部通过。

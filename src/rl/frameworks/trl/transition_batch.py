@@ -195,6 +195,12 @@ def standardized_group_advantages(
 
 def _episode_has_harness_error(episode: PolicyEpisode) -> bool:
     audit = episode.sample.audit_record
+    # Keep the cleanliness bit aligned with runtime.rollout_scoring.  A length
+    # truncation can have no Harness error event because no legal action was
+    # emitted, but it is still a policy-visible failure in the four-level
+    # result contract.
+    if audit.get("failure_type") in {"generation_length", "timeout_error"}:
+        return True
     if audit.get("errors") or audit.get("error_events"):
         return True
     return any(

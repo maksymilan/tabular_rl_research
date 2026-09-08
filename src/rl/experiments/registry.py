@@ -41,6 +41,7 @@ def validate_active_contract() -> dict[str, Any]:
     expected = {
         "reward_mode": "result-only",
         "result_reward_profile": "four-level",
+        "result_advantage_profile": "correctness-primary-clean-secondary",
         "credit_assignment": "saam-asymmetric-error",
         "policy_reduction": "trajectory_token_mean",
         "group_size": 8,
