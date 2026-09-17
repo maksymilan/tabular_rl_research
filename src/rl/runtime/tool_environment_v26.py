@@ -34,7 +34,27 @@ TOOL_EXECUTION_TIMEOUT_SECONDS = 10.0
 # trainer's `--carrier-repair` flag (recorded in the run manifest) or CARRIER_REPAIR=1.  The
 # repair never changes tool/argument semantics (repaired text is re-parsed strictly) and is
 # recorded per turn as `carrier_repair`.
+#
+# The repair lives in the protocol module, so it exists only when the active version26
+# runtime carries `parse_assistant_strict_with_repair`.  The pinned frozen runtime
+# (commit 4cd47c95...) does not, therefore the default path here stays on the plain
+# `parse_assistant_strict` call; requesting repair against a runtime without the API
+# fails closed instead of silently degrading into per-step execution errors.
 _CARRIER_REPAIR_ENABLED = os.environ.get("CARRIER_REPAIR", "0").strip() == "1"
+
+
+def carrier_repair_supported() -> bool:
+    """Whether the active protocol runtime implements the repair-capable parser."""
+
+    return hasattr(v26_protocol, "parse_assistant_strict_with_repair")
+
+
+def require_carrier_repair_support() -> None:
+    if not carrier_repair_supported():
+        raise RuntimeError(
+            "carrier repair was requested but the active version26 protocol runtime does "
+            f"not implement parse_assistant_strict_with_repair: {v26_protocol.__file__}"
+        )
 
 
 def carrier_repair_enabled() -> bool:
@@ -43,6 +63,9 @@ def carrier_repair_enabled() -> bool:
 
 def set_carrier_repair_enabled(value: bool) -> None:
     global _CARRIER_REPAIR_ENABLED
+    if value:
+        # Validate before mutating so a refused opt-in leaves the flag off.
+        require_carrier_repair_support()
     _CARRIER_REPAIR_ENABLED = bool(value)
 
 if v26_protocol.PROTOCOL_VERSION != "version26":
@@ -158,6 +181,9 @@ class ToolUseEnv:
         if error_feedback_version not in (LEGACY_FEEDBACK_VERSION, FEEDBACK_VERSION):
             raise ValueError(f"unknown error feedback version: {error_feedback_version}")
         self.error_feedback_version = error_feedback_version
+        if carrier_repair_enabled():
+            # Fail before the episode starts rather than scoring every turn as an error.
+            require_carrier_repair_support()
         if denotation_comparison != "bird-set":
             raise ValueError("version26 RL requires denotation_comparison='bird-set'")
         if tool_execution_timeout_seconds <= 0:
@@ -285,12 +311,17 @@ class ToolUseEnv:
         self.messages.append({"role": "assistant", "content": text})
 
         try:
-            think, tool, arguments, carrier_repair = (
-                v26_protocol.parse_assistant_strict_with_repair(
-                    text,
-                    allow_repair=carrier_repair_enabled(),
+            if carrier_repair_enabled():
+                think, tool, arguments, carrier_repair = (
+                    v26_protocol.parse_assistant_strict_with_repair(
+                        text,
+                        allow_repair=True,
+                    )
                 )
-            )
+            else:
+                # Strict v26 carrier, byte-identical to the pinned runtime behaviour.
+                think, tool, arguments = v26_protocol.parse_assistant_strict(text)
+                carrier_repair = None
             turn["parsed"] = {
                 "think": think,
                 "tool": tool,
