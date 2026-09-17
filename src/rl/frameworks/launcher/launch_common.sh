@@ -60,6 +60,10 @@ wait_for_health() {
 
 install_process_cleanup_trap() {
   local run_root=$1
+  # Bash functions do not close over locals after this installer returns. Keep
+  # the run root in a shell-global so the EXIT trap can still record failures
+  # after a child trainer exits (including an OOM).
+  RL_CLEANUP_RUN_ROOT=$run_root
   # Callers set trainer_pgid/vllm_pgid in the same shell. The trap is shared so
   # every launcher terminates both process groups and records failure uniformly.
   _rl_cleanup() {
@@ -67,8 +71,10 @@ install_process_cleanup_trap() {
     trap - EXIT INT TERM
     stop_group "${trainer_pgid:-}"
     stop_group "${vllm_pgid:-}"
-    [[ "$code" -eq 0 ]] || set_status "$run_root" failed "exit=$code"
+    [[ "$code" -eq 0 ]] || set_status "$RL_CLEANUP_RUN_ROOT" failed "exit=$code"
     exit "$code"
   }
-  trap _rl_cleanup EXIT INT TERM
+  trap _rl_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 }

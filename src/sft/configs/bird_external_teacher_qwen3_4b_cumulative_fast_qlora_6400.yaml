@@ -1,0 +1,55 @@
+# Throughput-tuned table_rl variant of the checkpoint-6380-aligned Qwen3-4B run.
+# Per-device batch 2 x two GPUs x accumulation 4 preserves effective global batch 16.
+
+### model
+model_name_or_path: /home/dengyan/models/Qwen3-4B-TrustSQL-baseline
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+enable_liger_kernel: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: qwen3_atomic_v26_sft1_plus_low_think_purebird2000_plus_birdspider_augmented_6400_training_view_20260827
+dataset_dir: /home/dengyan/tabular_rl_outputs/data/qwen3_atomic_v26_sft1_plus_low_think_purebird2000_plus_birdspider_augmented_20260827
+template: qwen3
+enable_thinking: true
+preserve_thinking: false
+cutoff_len: 6400
+mask_history: true
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 4
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/checkpoints/qwen3-4b-atomic-v26-cumulative-fresh4ep-table-rl-fast-batch2
+logging_steps: 2
+save_strategy: epoch
+save_total_limit: 4
+eval_strategy: "no"
+report_to: none
+plot_loss: true
+overwrite_output_dir: false
+
+### train
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 4
+learning_rate: 1.0e-4
+num_train_epochs: 4.0
+optim: paged_adamw_8bit
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+ddp_find_unused_parameters: false
+ddp_timeout: 180000000
+seed: 42
+data_seed: 42

@@ -45,3 +45,12 @@ def test_trajectory_credit_is_a_noop_and_does_not_mutate_updates():
     assert result == updates
     assert result is not updates
     assert audit is None
+
+
+def test_advantage_magnitude_cap_is_symmetric_after_reduction():
+    mechanism = RLMechanism(credit_assignment="trajectory", advantage_magnitude_cap=1.0)
+    assert mechanism.effective_advantages(
+        [_update(3.0), _update(-2.0, "u"), _update(0.25, "v")],
+        transition_count=3,
+        trajectory_count=3,
+    ) == [1.0, -1.0, 0.25]

@@ -26,6 +26,7 @@ else:
     _TRL_IMPORT_ERROR = None
 
 from rl.frameworks.trl.transition_batch import (
+    TransitionUpdate,
     build_transition_microbatch_ranges,
     retain_policy_contributing_updates,
 )
@@ -133,12 +134,14 @@ class TransitionGRPOTrainer(GRPOTrainer):
         result_advantage_profile: str = "stored",
         clean_advantage_weight: float = 0.25,
         span_balance_alpha: float | None = None,
+        span_routing: str = "uniform",
         record_gradient_conflicts: bool = False,
         gradient_conflict_dir: Path | None = None,
         gradient_conflict_save_vectors: bool = False,
         gradient_conflict_max_transitions: int = 0,
         gradient_conflict_carrier_only: bool = False,
         reference_adapter_name: str | None = None,
+        old_policy_logprob_source: str = "actor",
         mechanism: RLMechanism | None = None,
         transition_micro_batch_size: int = 2,
         transition_micro_batch_tokens: int = 0,
@@ -152,6 +155,10 @@ class TransitionGRPOTrainer(GRPOTrainer):
             raise ValueError("transition_micro_batch_size must be positive")
         if transition_micro_batch_tokens < 0:
             raise ValueError("transition_micro_batch_tokens must be non-negative")
+        if old_policy_logprob_source not in {"actor", "sampling"}:
+            raise ValueError(
+                "old_policy_logprob_source must be 'actor' or 'sampling'"
+            )
         if gradient_conflict_max_transitions < 0:
             raise ValueError("gradient_conflict_max_transitions must be non-negative")
         if trainable_part not in {"all", "tool_only"}:
@@ -179,16 +186,25 @@ class TransitionGRPOTrainer(GRPOTrainer):
         if credit_assignment in {
             "saam-asymmetric-error",
             "saam-asymmetric-error-no-mask",
+            "saam-first-error-capped",
+            "saam-later-error-half",
+            "saam-later-error-quarter",
         } and reward_mode != "result-only":
             raise ValueError(f"{credit_assignment} requires result-only terminal rewards")
         if credit_assignment in {
             "saam-asymmetric-error",
             "saam-asymmetric-error-no-mask",
+            "saam-first-error-capped",
+            "saam-later-error-half",
+            "saam-later-error-quarter",
         } and train_turns != "all":
             raise ValueError(f"{credit_assignment} requires all causal turns")
         if credit_assignment in {
             "saam-asymmetric-error",
             "saam-asymmetric-error-no-mask",
+            "saam-first-error-capped",
+            "saam-later-error-half",
+            "saam-later-error-quarter",
         } and rank_loss_coefficient != 0.0:
             raise ValueError(
                 f"{credit_assignment} does not mix a trajectory ranking loss"
@@ -218,6 +234,8 @@ class TransitionGRPOTrainer(GRPOTrainer):
                 raise ValueError(
                     "span_balance_alpha is only defined for the full response carrier"
                 )
+        if span_routing not in {"uniform", "legal_reason_only_hybrid"}:
+            raise ValueError(f"unsupported span_routing: {span_routing}")
         if record_gradient_conflicts and rank_loss_coefficient != 0.0:
             raise ValueError("gradient conflict recording currently requires rank loss=0")
         if rank_beta <= 0:
@@ -263,6 +281,8 @@ class TransitionGRPOTrainer(GRPOTrainer):
             policy_reduction=policy_reduction,
             credit_assignment=credit_assignment,
             error_penalty=error_penalty,
+            span_balance_alpha=span_balance_alpha,
+            span_routing=span_routing,
         )
         self.transition_reward_mode = self.mechanism.reward_mode
         if trainer_sharding not in {"replicated", "fsdp"}:
@@ -288,6 +308,11 @@ class TransitionGRPOTrainer(GRPOTrainer):
             if self.mechanism.span_balance_alpha is None
             else float(self.mechanism.span_balance_alpha)
         )
+        self.span_routing = self.mechanism.span_routing
+        if self.span_routing not in {"uniform", "legal_reason_only_hybrid"}:
+            raise ValueError(f"unsupported mechanism.span_routing: {self.span_routing}")
+        if self.span_routing == "legal_reason_only_hybrid" and trainable_part != "all":
+            raise ValueError("hybrid span routing requires the full response carrier")
         self.record_gradient_conflicts = bool(record_gradient_conflicts)
         self.gradient_conflict_dir = gradient_conflict_dir
         self.gradient_conflict_save_vectors = bool(gradient_conflict_save_vectors)
@@ -295,6 +320,7 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self.gradient_conflict_carrier_only = bool(gradient_conflict_carrier_only)
         self.gradient_conflict_recorder = None
         self.reference_adapter_name = reference_adapter_name
+        self.old_policy_logprob_source = old_policy_logprob_source
         self.transition_micro_batch_size = int(transition_micro_batch_size)
         self.transition_micro_batch_tokens = int(transition_micro_batch_tokens)
         # Delaying FSDP gradient synchronization until the last transition
@@ -373,6 +399,8 @@ class TransitionGRPOTrainer(GRPOTrainer):
     def _span_balanced_mask(
         self,
         response_ids,
+        *,
+        reason_only: bool = False,
     ) -> tuple[float, ...]:
         """Return a per-token mask whose two spans receive fixed total mass.
 
@@ -384,8 +412,7 @@ class TransitionGRPOTrainer(GRPOTrainer):
         diagnostic does not silently drop a sampled transition.
         """
 
-        alpha = self.span_balance_alpha
-        if alpha is None:
+        if self.span_balance_alpha is None and not reason_only:
             return tuple(1.0 for _ in response_ids)
         try:
             raw_tool_mask = tool_token_loss_mask(
@@ -398,12 +425,33 @@ class TransitionGRPOTrainer(GRPOTrainer):
         reason_count = len(raw_tool_mask) - tool_count
         if tool_count < 1 or reason_count < 1:
             return tuple(1.0 for _ in response_ids)
+        if reason_only:
+            return tuple(0.0 if active else 1.0 for active in raw_tool_mask)
+        alpha = self.span_balance_alpha
+        if alpha is None:
+            return tuple(1.0 for _ in response_ids)
         reason_weight = (1.0 - alpha) / reason_count
         tool_weight = alpha / tool_count
         return tuple(
             tool_weight if active else reason_weight
             for active in raw_tool_mask
         )
+
+    def _loss_mask_for_update(self, update: TransitionUpdate) -> tuple[float, ...]:
+        """Choose the response carrier without changing the transition advantage.
+
+        The hybrid arm treats a legal turn as a reasoning signal and a turn
+        carrying a Harness/protocol error as a mixed reasoning/tool signal.
+        A missing or malformed span boundary falls back to the ordinary full
+        response objective in ``_span_balanced_mask``.
+        """
+
+        if self.span_routing == "legal_reason_only_hybrid":
+            if update.turn_has_harness_error is None:
+                raise ValueError("hybrid span routing requires a per-turn Harness outcome")
+            if not update.turn_has_harness_error:
+                return self._span_balanced_mask(update.response_ids, reason_only=True)
+        return self._span_balanced_mask(update.response_ids)
 
     def _counterfactual_policy_gradient(
         self,
@@ -1507,6 +1555,25 @@ class TransitionGRPOTrainer(GRPOTrainer):
         preparation_started = time.perf_counter()
         episodes = self.rollout_collector.collect(inputs, self)
         collect_finished = time.perf_counter()
+        adaptive_stats = getattr(self.rollout_collector, "last_adaptive_stats", None) or {}
+        if adaptive_stats.get("max_group_size"):
+            # Adaptive-K is an environment-side signal-density intervention; the
+            # metrics below are the pre-registered evidence for whether it
+            # actually converted zero-signal groups into GRPO contrast.
+            for name in (
+                "rounds",
+                "extended_prompts",
+                "extra_episodes",
+                "activated_groups",
+                "remaining_zero_signal_at_cap",
+            ):
+                self._metrics[mode][f"adaptive_k/{name}"].append(
+                    float(adaptive_stats.get(name, 0))
+                )
+            for size, count in (adaptive_stats.get("final_group_size_histogram") or {}).items():
+                self._metrics[mode][f"adaptive_k/final_group_size_{size}"].append(
+                    float(count)
+                )
         updates = self.mechanism.build_updates(
             episodes,
             train_turns=self.transition_train_turns,
@@ -1578,6 +1645,9 @@ class TransitionGRPOTrainer(GRPOTrainer):
         elif self.credit_assignment in {
             "saam-asymmetric-error",
             "saam-asymmetric-error-no-mask",
+            "saam-first-error-capped",
+            "saam-later-error-half",
+            "saam-later-error-quarter",
         }:
             vanilla_effective_advantages = self.mechanism.effective_advantages(
                 updates, transition_count=original_transition_count,
@@ -1645,7 +1715,7 @@ class TransitionGRPOTrainer(GRPOTrainer):
                     "span balancing cannot be combined with the tool-only carrier"
                 )
             tool_loss_masks = [
-                self._span_balanced_mask(update.response_ids)
+                self._loss_mask_for_update(update)
                 for update in updates
             ]
             # Span balancing returns fractional per-token weights.  Keep the
@@ -1866,35 +1936,47 @@ class TransitionGRPOTrainer(GRPOTrainer):
         # ``summon_full_params`` cannot attach its parameter hooks to.  Keep
         # the compatible no-grad path; it still removes the autograd graph and
         # permits the optional full-param gather to be tested independently.
-        with torch.no_grad(), self._inference_full_params_context(self.model):
-            old_per_token_logps = self._transition_token_logps_compact(
-                self.model,
-                forward_inputs,
-                microbatch_plan=microbatch_plan,
-            )
+        if self.old_policy_logprob_source == "sampling":
+            # This is an explicit speed/algorithm tradeoff: using vLLM's own
+            # sampling scores makes the importance ratio exactly one.  Keep it
+            # opt-in because the formal actor-vs-vLLM correction is otherwise
+            # part of the baseline objective.
             if self.beta != 0.0:
-                unwrapped = self.accelerator.unwrap_model(self.model)
-                if not is_peft_model(unwrapped):
-                    raise RuntimeError(
-                        "the configured frozen KL reference is not a PEFT model"
-                    )
-                if self.reference_adapter_name not in unwrapped.peft_config:
-                    raise RuntimeError(
-                        "the configured frozen KL reference disappeared before scoring: "
-                        f"{self.reference_adapter_name}"
-                    )
-                adapter_context = use_frozen_reference_adapter(
-                    unwrapped,
-                    self.reference_adapter_name,
+                raise RuntimeError(
+                    "sampling old-policy scores cannot be combined with KL"
                 )
-                with adapter_context:
-                    ref_per_token_logps = self._transition_token_logps_compact(
-                        self.model,
-                        forward_inputs,
-                        microbatch_plan=microbatch_plan,
+            old_per_token_logps = sampling_per_token_logps
+            ref_per_token_logps = None
+        else:
+            with torch.no_grad(), self._inference_full_params_context(self.model):
+                old_per_token_logps = self._transition_token_logps_compact(
+                    self.model,
+                    forward_inputs,
+                    microbatch_plan=microbatch_plan,
+                )
+                if self.beta != 0.0:
+                    unwrapped = self.accelerator.unwrap_model(self.model)
+                    if not is_peft_model(unwrapped):
+                        raise RuntimeError(
+                            "the configured frozen KL reference is not a PEFT model"
+                        )
+                    if self.reference_adapter_name not in unwrapped.peft_config:
+                        raise RuntimeError(
+                            "the configured frozen KL reference disappeared before scoring: "
+                            f"{self.reference_adapter_name}"
+                        )
+                    adapter_context = use_frozen_reference_adapter(
+                        unwrapped,
+                        self.reference_adapter_name,
                     )
-            else:
-                ref_per_token_logps = None
+                    with adapter_context:
+                        ref_per_token_logps = self._transition_token_logps_compact(
+                            self.model,
+                            forward_inputs,
+                            microbatch_plan=microbatch_plan,
+                        )
+                else:
+                    ref_per_token_logps = None
         old_policy_finished = time.perf_counter()
 
         importance_sampling_ratio = self._importance_sampling_ratio(
@@ -1999,6 +2081,12 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self._metrics[mode]["saam/correct_error_positive_flips"].append(
             float(saam_audit.correct_error_positive_flips if saam_audit else 0)
         )
+        self._metrics[mode]["saam/capped_error_transitions"].append(
+            float(saam_audit.capped_error_transitions if saam_audit else 0)
+        )
+        self._metrics[mode]["saam/capped_correct_error_transitions"].append(
+            float(saam_audit.capped_correct_error_transitions if saam_audit else 0)
+        )
         self._metrics[mode]["rollout/trainable_token_fraction"].append(
             float(
                 completion_loss_mask.sum()
@@ -2035,6 +2123,16 @@ class TransitionGRPOTrainer(GRPOTrainer):
         self._metrics[mode]["rollout/tool_mask_skipped_transitions"].append(
             float(skipped_tool_mask_transitions)
         )
+        if self.span_routing == "legal_reason_only_hybrid" and tool_loss_masks is not None:
+            routed_counts = {"legal_reason_only": 0, "error_balanced": 0, "full_response_fallback": 0}
+            for update, mask in zip(updates, tool_loss_masks, strict=True):
+                if all(weight == 1.0 for weight in mask):
+                    key = "full_response_fallback"
+                else:
+                    key = "error_balanced" if update.turn_has_harness_error else "legal_reason_only"
+                routed_counts[key] += 1
+            for key, count in routed_counts.items():
+                self._metrics[mode][f"span_routing/{key}_transitions"].append(float(count))
         self._metrics[mode]["rollout/rank_tool_mask_skipped_transitions"].append(
             float(skipped_rank_tool_masks)
         )
@@ -2049,6 +2147,9 @@ class TransitionGRPOTrainer(GRPOTrainer):
         )
         self._metrics[mode]["rollout/old_policy_forward_seconds"].append(
             old_policy_finished - old_policy_started
+        )
+        self._metrics[mode]["rollout/old_policy_sampling_reused"].append(
+            float(self.old_policy_logprob_source == "sampling")
         )
         for name, value in importance_diagnostics.items():
             self._metrics[mode][f"sampling/vllm_importance/{name}"].append(value)

@@ -6,6 +6,19 @@ set -Eeuo pipefail
 # The cleanup trap signals only the process groups created by this script.
 
 PYTHON_BIN=${PYTHON_BIN:-/home/dengyan/miniconda3/envs/trl-table/bin/python}
+# Triton's runtime CUDA driver shim (``cuda_utils.c``) is compiled and linked with ``-lcuda``;
+# the driver package ships only ``libcuda.so.1``, so without a linker-visible ``libcuda.so``
+# the shim build fails (gcc CalledProcessError) and any previously cached shim is reported as
+# "Bytes object is corrupted, checksum does not match". The training launcher sets this through
+# start_vllm_server.sh; the evaluation path must set it too or every vLLM engine core dies at
+# startup. Derive it from the python env unless the caller overrides it.
+PYTHON_ENV=${PYTHON_ENV:-$(dirname "$(dirname "$PYTHON_BIN")")}
+TRITON_LIBCUDA_PATH=${TRITON_LIBCUDA_PATH:-"$PYTHON_ENV/var/triton-libcuda"}
+export TRITON_LIBCUDA_PATH
+if [[ ! -e "$TRITON_LIBCUDA_PATH/libcuda.so" ]]; then
+  echo "ERROR: missing triton libcuda shim under $TRITON_LIBCUDA_PATH" >&2
+  exit 2
+fi
 RUNTIME=${RUNTIME:-/home/dengyan/tabular_rl_outputs/runtime/version26-4cd47c957fc6ae791e76a10594c8cd22f4d3b6de}
 MODEL=${MODEL:-/home/dengyan/models/Qwen3-8B-TrustSQL-baseline}
 SOURCE_INPUT=${SOURCE_INPUT:-/home/dengyan/tabular_rl_project/data/eval_inputs/bird_dev_20240627.jsonl}
@@ -18,6 +31,17 @@ GPU0=${GPU0:-0}
 GPU1=${GPU1:-1}
 PORT0=${PORT0:-18270}
 PORT1=${PORT1:-18271}
+MAX_TOKENS=${MAX_TOKENS:-2048}
+ERROR_FEEDBACK_VERSION=${ERROR_FEEDBACK_VERSION:-legacy}
+VLLM_MAX_MODEL_LEN=${VLLM_MAX_MODEL_LEN:-16384}
+VLLM_BATCH_TOKENS=${VLLM_BATCH_TOKENS:-16384}
+VLLM_MEMORY_UTILIZATION=${VLLM_MEMORY_UTILIZATION:-0.90}
+VLLM_MAX_NUM_SEQS=${VLLM_MAX_NUM_SEQS:-24}
+VLLM_ENFORCE_EAGER=${VLLM_ENFORCE_EAGER:-0}
+VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT:-$RUN_DIR/vllm_cache}
+TORCHINDUCTOR_CACHE_ROOT=${TORCHINDUCTOR_CACHE_ROOT:-$RUN_DIR/torchinductor_cache}
+VLLM_START_SEQUENTIALLY=${VLLM_START_SEQUENTIALLY:-0}
+EVAL_WORKERS=${EVAL_WORKERS:-24}
 
 WRAPPER=${WRAPPER:-$RUN_DIR/controller/formal_v26_rollout_passk.py}
 SHARDER=${SHARDER:-$RUN_DIR/controller/make_eval_shards.py}
@@ -152,6 +176,8 @@ check_port_free "$PORT1"
 [[ "$PORT0" != "$PORT1" ]] || die "PORT0 and PORT1 must be distinct"
 
 mkdir -p "$RUN_DIR/input" "$RUN_DIR/shards" "$RUN_DIR/logs" "$RUN_DIR/results" "$RUN_DIR/controller"
+mkdir -p "$VLLM_CACHE_ROOT/gpu0" "$VLLM_CACHE_ROOT/gpu1" \
+  "$TORCHINDUCTOR_CACHE_ROOT/gpu0" "$TORCHINDUCTOR_CACHE_ROOT/gpu1"
 
 "$PYTHON_BIN" - "$SOURCE_INPUT" "$RUN_DIR/input/bird_dev_20240627.table_rl.jsonl" "$DATABASE_ROOT" <<'PY'
 import hashlib
@@ -195,10 +221,12 @@ cat > "$RUN_DIR/evaluation_config.json" <<EOF
   "shard_policy": "example_index_even_to_gpu0_odd_to_gpu1",
   "gpus": {"gpu0": ${GPU0}, "gpu1": ${GPU1}},
   "ports": {"gpu0": ${PORT0}, "gpu1": ${PORT1}},
-  "decode": {"temperature": 0.0, "top_p": 1.0, "max_tokens": 2048, "max_steps": 30, "n_samples": 1},
+  "decode": {"temperature": 0.0, "top_p": 1.0, "max_tokens": ${MAX_TOKENS}, "max_steps": 30, "n_samples": 1},
   "protocol_version": "version26",
   "protocol_hash": "4da19387399bd3a5",
   "runtime": "${RUNTIME}",
+  "error_feedback_version": "${ERROR_FEEDBACK_VERSION}",
+  "vllm": {"enforce_eager": ${VLLM_ENFORCE_EAGER}, "cache_root": "${VLLM_CACHE_ROOT}"},
   "started_at_utc": "${STARTED_AT}"
 }
 EOF
@@ -206,40 +234,54 @@ EOF
 SERVING0=qwen3-v26-checkpoint${CHECKPOINT_GLOBAL_STEP}-gpu0
 SERVING1=qwen3-v26-checkpoint${CHECKPOINT_GLOBAL_STEP}-gpu1
 
-setsid env CUDA_VISIBLE_DEVICES="$GPU0" HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false \
-  NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
-  "$PYTHON_BIN" -m vllm.entrypoints.openai.api_server \
-  --model "$MODEL" --tokenizer "$MODEL" --served-model-name "$SERVING0" \
-  --host 127.0.0.1 --port "$PORT0" --dtype bfloat16 --tensor-parallel-size 1 \
-  --max-model-len 16384 --max-num-batched-tokens 16384 --max-num-seqs 24 \
-  --gpu-memory-utilization 0.90 --generation-config vllm --enable-lora \
-  --lora-modules "$SERVING0=$ADAPTER" --max-lora-rank 64 \
-  > "$RUN_DIR/logs/vllm_gpu0.log" 2>&1 < /dev/null &
-VLLM_PIDS+=("$!")
+VLLM_COMMON_ARGS=(
+  --max-model-len "$VLLM_MAX_MODEL_LEN"
+  --max-num-batched-tokens "$VLLM_BATCH_TOKENS"
+  --max-num-seqs "$VLLM_MAX_NUM_SEQS"
+  --gpu-memory-utilization "$VLLM_MEMORY_UTILIZATION"
+  --generation-config vllm
+  --enable-lora
+)
+if [[ "$VLLM_ENFORCE_EAGER" == "1" ]]; then
+  VLLM_COMMON_ARGS+=(--enforce-eager)
+fi
 
-setsid env CUDA_VISIBLE_DEVICES="$GPU1" HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false \
-  NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
-  "$PYTHON_BIN" -m vllm.entrypoints.openai.api_server \
-  --model "$MODEL" --tokenizer "$MODEL" --served-model-name "$SERVING1" \
-  --host 127.0.0.1 --port "$PORT1" --dtype bfloat16 --tensor-parallel-size 1 \
-  --max-model-len 16384 --max-num-batched-tokens 16384 --max-num-seqs 24 \
-  --gpu-memory-utilization 0.90 --generation-config vllm --enable-lora \
-  --lora-modules "$SERVING1=$ADAPTER" --max-lora-rank 64 \
-  > "$RUN_DIR/logs/vllm_gpu1.log" 2>&1 < /dev/null &
-VLLM_PIDS+=("$!")
+start_vllm() {
+  local gpu=$1 port=$2 serving=$3 log_file=$4 cache_dir=$5 inductor_dir=$6
+  setsid env CUDA_VISIBLE_DEVICES="$gpu" VLLM_CACHE_ROOT="$cache_dir" \
+    TORCHINDUCTOR_CACHE_DIR="$inductor_dir" \
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false \
+    NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
+    "$PYTHON_BIN" -m vllm.entrypoints.openai.api_server \
+    --model "$MODEL" --tokenizer "$MODEL" --served-model-name "${serving}-base" \
+    --host 127.0.0.1 --port "$port" --dtype bfloat16 --tensor-parallel-size 1 \
+    "${VLLM_COMMON_ARGS[@]}" \
+    --lora-modules "$serving=$ADAPTER" --max-lora-rank 64 \
+    > "$log_file" 2>&1 < /dev/null &
+  VLLM_PIDS+=("$!")
+}
+
+start_vllm "$GPU0" "$PORT0" "$SERVING0" "$RUN_DIR/logs/vllm_gpu0.log" \
+  "$VLLM_CACHE_ROOT/gpu0" "$TORCHINDUCTOR_CACHE_ROOT/gpu0"
+if [[ "$VLLM_START_SEQUENTIALLY" == "1" ]]; then
+  wait_ready "${VLLM_PIDS[0]}" "$PORT0" "${SERVING0}-base"
+fi
+start_vllm "$GPU1" "$PORT1" "$SERVING1" "$RUN_DIR/logs/vllm_gpu1.log" \
+  "$VLLM_CACHE_ROOT/gpu1" "$TORCHINDUCTOR_CACHE_ROOT/gpu1"
 
 printf '%s\n' "${VLLM_PIDS[@]}" > "$RUN_DIR/vllm_pids.txt"
-wait_ready "${VLLM_PIDS[0]}" "$PORT0" "$SERVING0"
-wait_ready "${VLLM_PIDS[1]}" "$PORT1" "$SERVING1"
+wait_ready "${VLLM_PIDS[0]}" "$PORT0" "${SERVING0}-base"
+wait_ready "${VLLM_PIDS[1]}" "$PORT1" "${SERVING1}-base"
 
 setsid env PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 EVAL_ENABLE_THINKING=1 \
+  ERROR_FEEDBACK_VERSION="$ERROR_FEEDBACK_VERSION" \
   TABLE_AGENT_PROTOCOL_RUNTIME_ROOT="$RUNTIME" FORMAL_TOOL_EXECUTION_TIMEOUT_SECONDS=10 \
   NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
   "$PYTHON_BIN" -u "$WRAPPER" \
   --base-url "http://127.0.0.1:${PORT0}/v1" --model "$SERVING0" \
   --examples-json "$RUN_DIR/shards/gpu0.jsonl" --allow-eval-tasks --n 767 --n-samples 1 --pass-k 1 \
-  --workers 24 --sample-workers 1 --first-sample-workers 0 --max-inflight-requests 24 \
-  --max-steps 30 --max-tokens 2048 --temperature 0 --top-p 1 --api-retries 3 \
+  --workers "$EVAL_WORKERS" --sample-workers 1 --first-sample-workers 0 --max-inflight-requests "$EVAL_WORKERS" \
+  --max-steps 30 --max-tokens "$MAX_TOKENS" --temperature 0 --top-p 1 --api-retries 3 \
   --few-shot 0 --sample-detail full --summary-every 10 \
   --context-mode rolling-legal-history --history-turns 4 --rolling-prompt-variant full \
   --rolling-observation-style resident --denotation-comparison bird-set \
@@ -247,13 +289,14 @@ setsid env PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 EVAL_ENABLE_THINKING=1 \
   > "$RUN_DIR/logs/eval_gpu0.log" 2>&1 &
 EVAL_PIDS+=("$!")
 setsid env PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 EVAL_ENABLE_THINKING=1 \
+  ERROR_FEEDBACK_VERSION="$ERROR_FEEDBACK_VERSION" \
   TABLE_AGENT_PROTOCOL_RUNTIME_ROOT="$RUNTIME" FORMAL_TOOL_EXECUTION_TIMEOUT_SECONDS=10 \
   NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
   "$PYTHON_BIN" -u "$WRAPPER" \
   --base-url "http://127.0.0.1:${PORT1}/v1" --model "$SERVING1" \
   --examples-json "$RUN_DIR/shards/gpu1.jsonl" --allow-eval-tasks --n 767 --n-samples 1 --pass-k 1 \
-  --workers 24 --sample-workers 1 --first-sample-workers 0 --max-inflight-requests 24 \
-  --max-steps 30 --max-tokens 2048 --temperature 0 --top-p 1 --api-retries 3 \
+  --workers "$EVAL_WORKERS" --sample-workers 1 --first-sample-workers 0 --max-inflight-requests "$EVAL_WORKERS" \
+  --max-steps 30 --max-tokens "$MAX_TOKENS" --temperature 0 --top-p 1 --api-retries 3 \
   --few-shot 0 --sample-detail full --summary-every 10 \
   --context-mode rolling-legal-history --history-turns 4 --rolling-prompt-variant full \
   --rolling-observation-style resident --denotation-comparison bird-set \

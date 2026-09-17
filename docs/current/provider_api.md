@@ -18,5 +18,10 @@ Harness 执行工具并返回因果反馈；隐藏 gold SQL 只用于 Harness �
 DeepSeek FIM `/beta/completions` 不属于当前工具调用链，除非另行建立独立、命名明确的代码
 补全功能，不得替代 Chat Completions。
 
+2026-09-09 用户明确授权的 `teacher-process-credit-v1` 是独立的事后轨迹审计例外：
+可读取完整的既有model-visible action/observation序列及终局correct标志，用于离散过程
+分类，不产生SFT action/target，不反填因果轨迹。Gold SQL/result仍禁止进入请求；教师
+不能输出连续reward，只输出规则规定的类别。首轮上限16次请求，外部数据生成仍暂停。
+
 每次官方请求记录模型身份、prompt/tool-schema hash、请求控制、token 上限和结果目录；凭据
 本身永不记录。历史 provider 元数据仅用于审计，不授权恢复旧 scheme。

@@ -2,6 +2,9 @@
 
 更新时间：2026-09-08
 
+启动前同时读取[`rl_performance.md`](rl_performance.md)：区分CUDA Graph执行优化与
+sampling-score算法ablation，检查8B launcher覆盖、checkpointing和实际runtime身份。
+
 当前只保留一条 RL 方案：**result-only four-level reward + correctness-primary-clean-secondary
 advantage + SAAM asymmetric-error credit +
 reason/tool 加权 full-response policy loss**。它是最终执行方案；新 cohort 正式运行和 matched
@@ -116,3 +119,63 @@ launcher 必须 fail-closed。当前 A100 launcher 不自动接受 3090；3090 �
 binary-only、execution-ladder、tool-only/fixed-span reward、PCGrad、rank loss、checkpoint-
 relalg、Atomic v24/v39/v51/v54、Direct/Hybrid/iterative-SQL 和 projection/rewrite/delete
 均为历史诊断；保留用于审计，但不得进入当前 RL config、cohort 或 output root。
+
+## 流水线与评测启动检查清单（2026-09-17 事故后新增，启动前必读）
+
+2026-09-17 的"训练成功但评测全灭"事故由三个原因叠加造成（详见
+`project_records/experiments.md` 与 `decisions.md`）。以下条目是**下次启动前必须逐条核对**的清单，
+不是历史记录。
+
+### A. 多阶段无人值守流水线（训练 → 评测）
+
+1. **`PYTHONPATH` 必须显式导出**：任何调用
+   `formal_v26_rollout_passk.py` / `make_eval_shards.py` / `merge_eval_shards.py` 的脚本都要
+   `export PYTHONPATH=<project>/src`。缺失时 controller 在启动第一秒就
+   `ModuleNotFoundError: No module named 'rl'`（本次两次评测因此秒退，训练白跑一晚）。
+2. **阶段失败不得吞掉后续阶段**：后置阶段（如已完成臂的评测）必须在前置阶段失败时仍然执行；
+   用 `set +e; ...; rc=$?; set -e` 显式接管返回码，禁止依赖 `set -e` 让整条链中止。
+3. **阶段之间等待 GPU 空闲**：训练 launcher 释放显存有延迟，评测 launcher 是 fail-closed
+   （>512 MiB 或有 compute 进程即退出）。加 30 分钟上限的轮询等待。
+4. **输出目录必须全新**：评测 launcher 遇到已存在目录直接
+   `ERROR: results directory already exists; resume is forbidden`（rc=2）。每次重试换新后缀，
+   不要复用失败目录，否则会伪装成"又失败了一次"。
+5. **端口先检查再启动**，两个 shard server 端口必须不同且空闲；训练与评测端口段分开。
+6. **不要用会匹配到自身命令行的 `pkill -f <pattern>`**（会把 ssh 远端 shell 一起杀掉）；
+   用 `pkill -f '[v]llm...'` 或按 PID。
+7. pipeline status/log 放在固定目录，脚本自身把输出追加进 log；每一步写 `stageX_*` 状态，
+   便于隔夜后定位"卡在哪一步"。
+8. 启动前用 `bash src/rl/scenarios/diagnostics/preflight_eval_environment.sh <project_src> <gpu0> <gpu1>`
+   做一次环境预检（见 C）。
+
+### B. 评测用 vLLM 启动（table_rl / NewGNN 通用）
+
+1. **必须导出 `TRITON_LIBCUDA_PATH=$PYTHON_ENV/var/triton-libcuda`**（评测 launcher 现已内置
+   推导与存在性检查）。缺失时会出现两个签名，**它们是同一个原因**：
+   - `RuntimeError: Bytes object is corrupted, checksum does not match`（triton 复用坏掉的
+     shim 缓存）；
+   - `CalledProcessError: ['/usr/bin/gcc','/tmp/.../cuda_utils.c',...,'-lcuda',...]`
+     （重建 shim 时 `-lcuda` 链接失败；驱动目录只有 `libcuda.so.1`，没有链接可见 `libcuda.so`）。
+   反证：同环境 `torch.compile` 与 `triton_backend()` 正常；设上该变量后 vLLM 能
+   `Capturing CUDA graphs` 并 `Application startup complete`。
+2. **不要用 `--enforce-eager` 绕过**：`evaluation_config.json` 会记录 `vllm.enforce_eager`，
+   与 baseline（0）不一致，评测不再 matched。它只能作为一次性诊断手段。
+3. 启动成功的判据是 `logs/vllm_gpu{0,1}.log` 出现 **`Application startup complete`** 且 worker
+   日志出现 "loaded N examples from .../shards/gpuX.jsonl"；`vllm_pids.txt` 存在**不算**成功。
+4. 失败会留下 `owned_process_cleanup.json` 与残留进程；重试前确认无残留 vLLM/eval 进程、
+   显存已回到 ≤512 MiB。
+5. 每次评测必须核对身份：`error_feedback_version=actionable-error-v1`、输入 SHA（BIRD-dev
+   `8bf5a8bf…`）、runtime 树 SHA、protocol/prompt、`temperature=0`、`max_tokens=2048`、
+   `max_steps=30`、2 卡 even/odd 分片、24 workers。
+6. 新机/新快照首次评测前，先确认该 project 快照里的评测 launcher 已包含本次修复
+   （`grep -c TRITON_LIBCUDA_PATH .../run_qwen3_8b_v26_checkpoint_dataparallel_table_rl.sh` ≥ 1）。
+
+### C. 一条命令的预检
+
+```bash
+bash src/rl/scenarios/diagnostics/preflight_eval_environment.sh \
+  /home/dengyan/tabular_rl_outputs/<run>/project/src 0 1
+```
+
+它会检查：python 环境与 triton shim 存在、`triton_backend()` 可用、`import rl` 可用（带
+`PYTHONPATH`）、目标 GPU 是否空闲（≤512 MiB 且无 compute 进程）、给定端口是否空闲。任一项失败
+即非零退出。

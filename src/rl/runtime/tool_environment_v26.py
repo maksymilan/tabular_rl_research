@@ -7,6 +7,7 @@ runtime.  It must not grow compatibility branches for later atomic protocols.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -19,10 +20,30 @@ import protocol as v26_protocol
 import rollout as v26_rollout
 from executor import Harness
 from tool_modules.registry import ATOMIC_TOOL_SCHEME, build_atomic_tool_scheme
+from rl.runtime.error_feedback import (
+    FEEDBACK_VERSION, LEGACY_FEEDBACK_VERSION, error_feedback_payload, merge_error_feedback,
+    attach_strict_rejected_action,
+)
 
 
 ENVIRONMENT_IMPLEMENTATION = "atomic-v26-isolated-v1"
 TOOL_EXECUTION_TIMEOUT_SECONDS = 10.0
+# Runtime-only transport repair for carrier-shaped slips (unclosed <think>, markdown fence,
+# extra prose around the action object).  OFF by default so every historical arm and every
+# matched evaluation keeps the strict v26 carrier semantics; an arm opts in through the
+# trainer's `--carrier-repair` flag (recorded in the run manifest) or CARRIER_REPAIR=1.  The
+# repair never changes tool/argument semantics (repaired text is re-parsed strictly) and is
+# recorded per turn as `carrier_repair`.
+_CARRIER_REPAIR_ENABLED = os.environ.get("CARRIER_REPAIR", "0").strip() == "1"
+
+
+def carrier_repair_enabled() -> bool:
+    return _CARRIER_REPAIR_ENABLED
+
+
+def set_carrier_repair_enabled(value: bool) -> None:
+    global _CARRIER_REPAIR_ENABLED
+    _CARRIER_REPAIR_ENABLED = bool(value)
 
 if v26_protocol.PROTOCOL_VERSION != "version26":
     raise ImportError(
@@ -132,7 +153,11 @@ class ToolUseEnv:
         compact_observations: bool = True,
         denotation_comparison: str = "bird-set",
         tool_execution_timeout_seconds: float = TOOL_EXECUTION_TIMEOUT_SECONDS,
+        error_feedback_version: str = LEGACY_FEEDBACK_VERSION,
     ):
+        if error_feedback_version not in (LEGACY_FEEDBACK_VERSION, FEEDBACK_VERSION):
+            raise ValueError(f"unknown error feedback version: {error_feedback_version}")
+        self.error_feedback_version = error_feedback_version
         if denotation_comparison != "bird-set":
             raise ValueError("version26 RL requires denotation_comparison='bird-set'")
         if tool_execution_timeout_seconds <= 0:
@@ -213,6 +238,7 @@ class ToolUseEnv:
         return {
             **self.scheme.manifest_fields(),
             "environment_implementation": ENVIRONMENT_IMPLEMENTATION,
+            "error_feedback_version": self.error_feedback_version,
             "example_index": self.example_index,
             "db_id": self.example["db_id"],
             "question": self.example["question"],
@@ -259,12 +285,22 @@ class ToolUseEnv:
         self.messages.append({"role": "assistant", "content": text})
 
         try:
-            think, tool, arguments = v26_protocol.parse_assistant_strict(text)
+            think, tool, arguments, carrier_repair = (
+                v26_protocol.parse_assistant_strict_with_repair(
+                    text,
+                    allow_repair=carrier_repair_enabled(),
+                )
+            )
             turn["parsed"] = {
                 "think": think,
                 "tool": tool,
                 "arguments": arguments,
             }
+            if carrier_repair:
+                # Transport-level repair (unclosed think / code fence / extra prose).  Kept
+                # hidden from the model on purpose; the flag exists so audits can count how
+                # much of the corpus was repaired instead of being scored as protocol errors.
+                turn["carrier_repair"] = carrier_repair
             with bounded_harness_execution(
                 self.harness,
                 self.tool_execution_timeout_seconds,
@@ -352,6 +388,13 @@ class ToolUseEnv:
             self.turns.append(turn)
             observation = v26_protocol.tool_error_message(step_id, error_type, error)
             self.last_error = json.loads(observation)
+            if self.error_feedback_version == FEEDBACK_VERSION:
+                attach_strict_rejected_action(exc, text, v26_protocol)
+                self.last_error = merge_error_feedback(self.last_error, error_feedback_payload(
+                    exc, parsed=parsed, state=state_before, history=self.ctx.get("history", {}),
+                ))
+                observation = json.dumps(self.last_error, ensure_ascii=False, separators=(",", ":"))
+                event["model_visible_feedback"] = deepcopy(self.last_error)
             if error_type == "nonrecoverable_execution_error":
                 self.done = True
                 self.failure_type = error_type

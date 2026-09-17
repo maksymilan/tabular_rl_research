@@ -1,0 +1,68 @@
+# RFT (on-policy self-training) stage on the C-tier boundary cohort.
+#
+# Continues the frozen cumulative SFT adapter ``checkpoint-6380`` on verified episodes that the
+# 8B checkpoint-6380 sampled itself during the 3000-question K=8 screen.  The two stage parameters
+# that differ from the cumulative SFT schedule are declared here and must not be read as a
+# continuation of it:
+#   * ``cutoff_len: 12288`` - prefix-complete admission at 6400 dropped ~half of the episodes;
+#     the exact LLaMA-Factory token audit at 12288 keeps 2361/2397 records and 287/289 episodes.
+#   * ``learning_rate: 2.0e-5`` - the adapter already carries the cumulative SFT optimum, so the
+#     1.0e-4 schedule used to build it would overwrite instead of refine.
+
+### model
+model_name_or_path: /home/dengyan/models/Qwen3-8B-TrustSQL-baseline
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+enable_liger_kernel: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+adapter_name_or_path: /home/dengyan/tabular_rl_outputs/checkpoints/checkpoint-6380
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: qwen3_atomic_v26_rft_c_tier_12288_20260917
+dataset_dir: /home/dengyan/tabular_rl_outputs/data/qwen3_v26_rft_20260917
+template: qwen3
+enable_thinking: true
+preserve_thinking: false
+cutoff_len: 12288
+mask_history: true
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 4
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/checkpoints/qwen3-8b-atomic-v26-rft-c-tier-12288-20260917
+logging_steps: 2
+save_strategy: epoch
+save_total_limit: 4
+eval_strategy: "no"
+report_to: none
+plot_loss: true
+overwrite_output_dir: false
+
+### train
+# Measured on table_rl 2x3090 at cutoff 12288: per-device 2 / accum 4 keeps the same effective
+# batch of 16 but runs at 87-100 s/step against 65-67 s/step for per-device 1 / accum 8, because
+# variable-length records pad to the longest sequence in the micro-batch.  Keep the narrower
+# micro-batch despite the unused VRAM headroom (13.9 GB of 24 GB).
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 2.0e-5
+num_train_epochs: 4.0
+optim: paged_adamw_8bit
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+ddp_find_unused_parameters: false
+ddp_timeout: 180000000
+seed: 42
+data_seed: 42

@@ -8,6 +8,7 @@ from .passk import (
     select_records,
 )
 from .pilot import legal_rate, pilot_bucket, select_pilot
+from .screened_pool import build_pool
 
 __all__ = [
     "has_infrastructure_failure",
@@ -18,4 +19,5 @@ __all__ = [
     "legal_rate",
     "pilot_bucket",
     "select_pilot",
+    "build_pool",
 ]

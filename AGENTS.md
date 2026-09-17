@@ -37,7 +37,10 @@ Harness 事实的 dense process credit；模型自写 reasoning 和任何 gold p
   timeout action 同样走局部负向惩罚。policy reduction 为 `trajectory_token_mean`，reason
   和 tool span 各 0.5 的加权梯度（`span_balance_alpha=0.5`），不启用 PCGrad、tool-only
   或固定 span reward。
-- 规模：目标约 500 道题；每题 K=8 且正确轨迹数 2–6，每 update 30 题，200 optimizer updates；
+- 规模：目标约 500 道题；每题 K=8 且正确轨迹数 **1–6**（2026-09-16 起，取代原 2–6），
+  每 update 30 题，200 optimizer updates；候选池统一入口为
+  `data/inventory/rl_training_candidates_1to6_current.json`，区间外观察保留在
+  `retained_non_candidate_observations.jsonl`，只作记录不作训练。
   AdamW、LR `4e-7`、weight decay
   `0.1`、clip `0.2`。
 - 实现：A100 上 replicated BF16 actor，**一张卡承担 trainer（world size=1）**，
@@ -76,6 +79,18 @@ projection/rewrite/delete、tool-only/fixed-span/PCGrad 均为冻结诊断，不
 GPU 编号、端口和路径由 launcher 动态选择空闲资源后写入 run manifest；不能根据一次
 `nvidia-smi` 快照假设空闲，也不能停止其他用户进程。详见
 `docs/current/server_resources.md`。
+
+## RL 性能优化：启动前必读
+
+- 新建或恢复任何RL实验前，先读[`docs/current/rl_performance.md`](docs/current/rl_performance.md)，
+  逐项核对实际launcher、环境变量和隔离runtime，不能仅看共享脚本默认值。
+- CUDA Graph已在4B单组验证；共享server和本地8B launcher默认`VLLM_ENFORCE_EAGER=0`。
+  8B目前仅在table_rl双3090完成单组性能诊断，A100本轮因被占用未测；不能承诺沿用4B
+  耗时差异，也不能改写在途运行。
+- replicated BF16/4-bit默认保留gradient checkpointing；关闭在4B/3090上已OOM。
+  SDPA未验证出稳定收益，增大packing曾变慢，不得仅凭空闲显存调大batch。
+- `old-policy-logprob-source=actor`为正式默认；`sampling`会改变old-policy及重要性校正，
+  只能作为独立ablation，当前与非零KL不兼容，不能当作无损通用优化直接启用。
 
 ## 当前代码入口
 
@@ -126,6 +141,12 @@ register，再写代码。
 启动任何实验前先做 preflight，确认 protocol/prompt/model/checkpoint/cohort 哈希和输出目录；
 训练必须生成 immutable manifest、implementation lock、precision audit 和 fresh replay/audit
 证据。变更代码后运行与改动相关的单元测试和 `git diff --check`。
+
+无人值守流水线（训练→评测）与 checkpoint matched 评测在启动前必须逐条核对
+`docs/current/rl_pipeline.md` 的"流水线与评测启动检查清单"：评测 controller 必须带
+`PYTHONPATH=<project>/src`，vLLM 必须带 `TRITON_LIBCUDA_PATH`，输出目录必须全新（评测 launcher 对已
+存在目录 fail-closed），阶段之间要等 GPU 空闲。预检脚本
+`src/rl/scenarios/diagnostics/preflight_eval_environment.sh`。
 
 ## 变更和安全纪律
 

@@ -36,7 +36,25 @@ from protocol import (  # noqa: E402
     teacher_system_prompt,
     tool_schema_hash,
 )
-from generate_teacher_rollouts import add_usage, chat_with_retries  # noqa: E402
+
+
+def teacher_transport() -> tuple[Any, Any]:
+    """Resolve the retired teacher HTTP transport lazily.
+
+    ``generate_teacher_rollouts`` moved to ``archive/code/legacy_compatibility`` when external
+    generation was paused, and the repository contract forbids current-path modules from
+    importing archived code implicitly.  Replay, SFT-view construction and this module's
+    ``main`` argument surface must therefore stay importable without it.  The teacher episode
+    loop fails loudly instead of silently degrading when the transport is absent.
+    """
+    try:
+        from generate_teacher_rollouts import add_usage, chat_with_retries  # noqa: E402
+    except ModuleNotFoundError as exc:  # pragma: no cover - depends on deployment layout
+        raise RuntimeError(
+            "external teacher transport unavailable: generate_teacher_rollouts is archived; "
+            "add archive/code/legacy_compatibility to sys.path to run teacher episodes"
+        ) from exc
+    return add_usage, chat_with_retries
 
 DEFAULT_SELECTION = ROOT / "data" / "eval_inputs" / "bird_train_sft1_pilot30.jsonl"
 DEFAULT_ALL = ROOT / "data" / "trajectories" / "bird_sft1_teacher_pilot30_all.jsonl"
@@ -242,6 +260,7 @@ def run_episode(
                     reasoning_content = saved_first_turn.get("reasoning_content", "")
                     turn["reused_first_model_output"] = True
                 else:
+                    add_usage, chat_with_retries = teacher_transport()
                     text, call_usage, reasoning_content = chat_with_retries(
                         base_url=base_url,
                         api_key=api_key,

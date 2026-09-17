@@ -510,14 +510,11 @@ def verify_model(contract: dict[str, Any], model: Path) -> dict[str, Any]:
     identity_files = expected_identity.get("files_sha256") or {}
     expected_filenames = {
         "config.json", "generation_config.json", "merges.txt",
-        "model-00001-of-00005.safetensors",
-        "model-00002-of-00005.safetensors",
-        "model-00003-of-00005.safetensors",
-        "model-00004-of-00005.safetensors",
-        "model-00005-of-00005.safetensors",
         "model.safetensors.index.json", "tokenizer.json",
         "tokenizer_config.json", "vocab.json",
-    }
+    } | set(expected["shards_sha256"])
+    index = load_object(model / "model.safetensors.index.json")
+    require_equal(set(index["weight_map"].values()), set(expected["shards_sha256"]), "model shard coverage")
     require_equal(set(identity_files), expected_filenames, "base model identity files")
     observed_files = {
         name: sha256_file(model / name) for name in sorted(identity_files)

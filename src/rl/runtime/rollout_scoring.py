@@ -152,9 +152,18 @@ def score_completed_rollout(
     # response ids in ``turns``; the latter retains the attempted action and causal
     # prefix.  OOM and context overflow remain untrainable runtime failures.
     penalize_policy_failures = (
-        reward_mode == "result-only" and result_reward_profile == "four-level"
+        reward_mode == "result-only"
+        and result_reward_profile in {
+            "four-level",
+            "three-level-clean-weighted",
+            "signed-binary",
+        }
     )
-    if penalize_policy_failures:
+    if penalize_policy_failures and result_reward_profile == "signed-binary":
+        # The signed diagnostic retains tool timeout actions, but does not
+        # expand the historical binary control to length-truncated carriers.
+        process_update = record["failure_type"] not in NONSEMANTIC_GENERATION_FAILURES
+    elif penalize_policy_failures:
         process_update = record["failure_type"] not in UNTRAINABLE_RUNTIME_FAILURES
     else:
         process_update = (

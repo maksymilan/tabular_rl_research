@@ -78,6 +78,39 @@ class SAAMExperimentConfigTest(unittest.TestCase):
         self.assertTrue(defaults["record_gradient_conflicts"])
         self.assertFalse(defaults["gradient_conflict_save_vectors"])
 
+    def test_later_error_half_is_an_explicit_result_only_credit_arm(self):
+        payload = copy.deepcopy(self.payload)
+        payload["credit_assignment"] = "saam-later-error-half"
+        config = self._load(payload)
+        self.assertEqual(
+            config.argparse_defaults(ROOT)["credit_assignment"],
+            "saam-later-error-half",
+        )
+
+    def test_later_error_quarter_is_an_explicit_result_only_credit_arm(self):
+        payload = copy.deepcopy(self.payload)
+        payload["credit_assignment"] = "saam-later-error-quarter"
+        config = self._load(payload)
+        self.assertEqual(
+            config.argparse_defaults(ROOT)["credit_assignment"],
+            "saam-later-error-quarter",
+        )
+
+    def test_advantage_magnitude_cap_maps_to_trainer_defaults(self):
+        payload = copy.deepcopy(self.payload)
+        payload["mechanism"] = {
+            "credit_assignment": "saam-asymmetric-error",
+            "advantage_magnitude_cap": 1.0,
+        }
+        config = self._load(payload)
+        self.assertEqual(config.argparse_defaults(ROOT)["advantage_magnitude_cap"], 1.0)
+
+    def test_advantage_magnitude_cap_rejects_nonpositive_values(self):
+        payload = copy.deepcopy(self.payload)
+        payload["mechanism"] = {"advantage_magnitude_cap": 0.0}
+        with self.assertRaises(ValueError):
+            self._load(payload)
+
     def test_asymmetric_rejects_nonpositive_penalty(self):
         payload = copy.deepcopy(self.payload)
         payload["credit_assignment"] = "saam-asymmetric-error"

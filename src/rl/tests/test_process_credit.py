@@ -241,6 +241,40 @@ class ProcessRewardTests(unittest.TestCase):
             -1.0,
         )
 
+    def test_three_level_clean_weighted_profile(self):
+        self.assertEqual(
+            terminal_result_reward(
+                True,
+                profile="three-level-clean-weighted",
+                has_errors=False,
+            ),
+            1.25,
+        )
+        self.assertEqual(
+            terminal_result_reward(
+                True,
+                profile="three-level-clean-weighted",
+                has_errors=True,
+            ),
+            0.75,
+        )
+        self.assertEqual(
+            terminal_result_reward(
+                False,
+                profile="three-level-clean-weighted",
+                has_errors=False,
+            ),
+            -1.0,
+        )
+        self.assertEqual(
+            terminal_result_reward(
+                False,
+                profile="three-level-clean-weighted",
+                has_errors=True,
+            ),
+            -1.0,
+        )
+
     def test_target_row_units_use_bird_raw_cell_equality(self):
         self.assertNotEqual(normalized_row_unit(["1"]), normalized_row_unit([1]))
         self.assertEqual(normalized_row_unit([1]), normalized_row_unit([1.0]))

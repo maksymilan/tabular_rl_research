@@ -22,6 +22,26 @@ from rl.objectives.process_credit import ProcessRewardConfig
 QWEN3_8B_BASE_MODEL_AGGREGATE_SHA256 = (
     "85bd3b7d908acb3a9b9c7ec57b98d6b9e3b2fb427685ae808d1c43173279cecc"
 )
+QWEN3_4B_BASE_MODEL_AGGREGATE_SHA256 = (
+    "3486e3fdf48c60c8432a57f6af53d74f817ab5b99678c0bafc2d66f9970e2ee3"
+)
+
+
+def test_later_error_half_config_changes_only_registered_credit_identity() -> None:
+    from copy import deepcopy
+    config_root = ROOT / "src/rl/configs/experiments"
+    base = RLExperimentConfig.load(config_root / "qwen3_4b_atomic_v26_first_error_capped_saam60_table_rl.yaml")
+    half = RLExperimentConfig.load(config_root / "qwen3_4b_atomic_v26_later_error_half_saam60_table_rl.yaml")
+    payload = deepcopy(half.payload)
+    payload["experiment_name"] = base.payload["experiment_name"]
+    payload["credit_assignment"] = base.payload["credit_assignment"]
+    payload["mechanism"]["credit_assignment"] = base.payload["mechanism"]["credit_assignment"]
+    assert payload == base.payload
+    defaults = half.argparse_defaults(ROOT)
+    assert defaults["credit_assignment"] == "saam-later-error-half"
+    assert defaults["optimizer_steps"] == 4
+    assert defaults["kl_beta"] == 0.0
+    assert defaults["result_reward_profile"] == "binary"
 
 
 def test_result_only_matrix_config_maps_to_exact_control_defaults() -> None:
@@ -117,6 +137,37 @@ def test_base_model_identity_rejects_partial_or_self_inconsistent_contracts() ->
     inconsistent["aggregate_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="canonical file records"):
         validate_base_model_identity_contract(inconsistent)
+
+
+def test_qwen3_4b_config_pins_a_complete_three_shard_base_model() -> None:
+    config = RLExperimentConfig.load(
+        ROOT
+        / "src/rl/configs/experiments/"
+        "qwen3_4b_atomic_v26_signed_vanilla_grpo_c2to6_balanced60_table_rl.yaml"
+    )
+    identity = config.argparse_defaults(ROOT)["expected_base_model_identity"]
+
+    assert identity["aggregate_sha256"] == QWEN3_4B_BASE_MODEL_AGGREGATE_SHA256
+    assert len(identity["files_sha256"]) == 10
+    assert sum(name.endswith(".safetensors") for name in identity["files_sha256"]) == 3
+    assert (
+        base_model_aggregate_sha256(identity["files_sha256"])
+        == QWEN3_4B_BASE_MODEL_AGGREGATE_SHA256
+    )
+
+
+def test_base_model_identity_rejects_incomplete_numbered_shards() -> None:
+    config = RLExperimentConfig.load(
+        ROOT
+        / "src/rl/configs/experiments/"
+        "qwen3_4b_atomic_v26_signed_vanilla_grpo_c2to6_balanced60_table_rl.yaml"
+    )
+    identity = config.argparse_defaults(ROOT)["expected_base_model_identity"]
+    incomplete = json.loads(json.dumps(identity))
+    incomplete["files_sha256"].pop("model-00002-of-00003.safetensors")
+
+    with pytest.raises(ValueError, match="complete numbered weight-shard set"):
+        validate_base_model_identity_contract(incomplete)
 
 
 @pytest.mark.parametrize(

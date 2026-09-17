@@ -1,0 +1,33 @@
+{
+  "schema_version": "rl-oom-recovery-plan-v1",
+  "created_at": "2026-09-12T15:40:00+08:00",
+  "status": "prepared",
+  "parent_run": "/home/dengyan/tabular_rl_outputs/rl_runtime_qwen3_4b_saam_threelevel_spanbalanced60_table_rl_20260912",
+  "resume_checkpoint": null,
+  "reason_for_full_restart": "the first optimizer update failed before any checkpoint was committed",
+  "failure": {
+    "stage": "old_policy_scoring",
+    "operator": "eager_attention_softmax",
+    "allocation_gib": 9.29,
+    "first_batch_rollout_rows": 240,
+    "first_batch_trainable_trajectories": 240,
+    "first_batch_transitions": 1988,
+    "retokenized_max_transition_tokens": 13212,
+    "max_transition_trajectory_id": "rl_3619_sample_2",
+    "max_transition_correct": true
+  },
+  "recovery_change": {
+    "trainer_attention_implementation_before": "eager",
+    "trainer_attention_implementation_after": "sdpa",
+    "mathematical_objective_changed": false,
+    "rollout_settings_changed": false,
+    "reward_or_credit_changed": false,
+    "generation_length_admission": "unchanged and intentionally trainable for three-level-clean-weighted",
+    "max_new_tokens": 2048,
+    "max_context_tokens": 16384,
+    "transition_micro_batch_size": 1,
+    "transition_micro_batch_tokens": 4096,
+    "gradient_checkpointing": true,
+    "replicated_base_storage": "4bit"
+  }
+}

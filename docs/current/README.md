@@ -14,6 +14,7 @@ compatibility stub；需要重放历史结果时必须显式使用 archive 中�
 - [`decision_register.md`](decision_register.md)：已确认事项与需要用户拍板的未决项。
 - [`server_resources.md`](server_resources.md)：`a100`、`table_rl`、`NewGNN` 的硬件和职责。
 - [`rl_pipeline.md`](rl_pipeline.md)：four-level reward、SAAM credit、A100 单卡 replicated RL 运行契约。
+- [`rl_performance.md`](rl_performance.md)：RL启动前必读的性能优化记录、4B/8B适用边界及实际参数覆盖检查。
 - [`kl_ablation_protocol.md`](kl_ablation_protocol.md)：后续 KL 增益验证的匹配和审计约束。
 
 ## 实现参考

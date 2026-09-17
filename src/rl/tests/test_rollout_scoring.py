@@ -4,6 +4,8 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
+import pytest
+
 
 SRC_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SRC_DIR))
@@ -69,6 +71,43 @@ def _record(
         "error_events": error_events or [],
         "turns": turns or [],
     }
+
+
+@pytest.mark.parametrize("correct", [False, True])
+@pytest.mark.parametrize("timeout", [False, True])
+def test_signed_binary_result_and_timeout_admission(correct, timeout):
+    record = _record(correct=correct, legal=correct, error_events=(
+        [{"error_type": "timeout_error"}] if timeout else []
+    ))
+    sample = _score(record, result_reward_profile="signed-binary")
+    assert sample.reward == (1.0 if correct else -1.0)
+    assert sample.process_update
+    assert sample.audit_record["result_reward"]["policy_failure_penalty_enabled"]
+
+
+@pytest.mark.parametrize("failure", ["generation_length", "generation_oom", "context_overflow"])
+def test_signed_binary_keeps_runtime_and_truncation_exclusions(failure):
+    sample = _score(_record(failure_type=failure), result_reward_profile="signed-binary")
+    assert not sample.process_update
+    assert sample.reward == 0.0
+
+
+@pytest.mark.parametrize(
+    ("correct", "has_errors", "expected"),
+    [(True, False, 1.25), (True, True, 0.75), (False, False, -1.0), (False, True, -1.0)],
+)
+def test_three_level_clean_weighted_uses_harness_error_evidence(correct, has_errors, expected):
+    sample = _score(
+        _record(
+            correct=correct,
+            legal=correct,
+            error_events=[{"error_type": "execution_error"}] if has_errors else [],
+        ),
+        result_reward_profile="three-level-clean-weighted",
+    )
+    assert sample.reward == expected
+    assert sample.process_update
+    assert sample.audit_record["result_reward"]["policy_failure_penalty_enabled"]
 
 
 def test_context_overflow_is_excluded_from_policy_optimization() -> None:

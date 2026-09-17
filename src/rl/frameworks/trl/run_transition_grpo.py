@@ -74,6 +74,9 @@ import protocol as protocol_runtime  # noqa: E402
 import rollout as evaluator_runtime  # noqa: E402
 import executor as executor_runtime  # noqa: E402
 from tool_modules import registry as tool_schemes_runtime  # noqa: E402
+from rl.runtime import tool_environment_v26 as tool_environment_runtime  # noqa: E402
+from rl.runtime.terminal_reward import RESULT_REWARD_PROFILES  # noqa: E402
+from rl.frameworks.trl.serving_contract import probe_trl_server  # noqa: E402
 
 import bitsandbytes as bnb
 import torch
@@ -89,6 +92,9 @@ from trl import GRPOConfig
 
 
 IMPLEMENTATION_SOURCE_FILES = (
+    "src/rl/frameworks/launcher/run_trl_gpu_pair.sh",
+    "src/rl/frameworks/launcher/launch_common.sh",
+    "src/rl/frameworks/trl/serving_contract.py",
     "src/rl/runtime/counterfactual_suite.py",
     "src/rl/configuration/experiment_config.py",
     "src/rl/runtime/reference_result_filter.py",
@@ -104,6 +110,7 @@ IMPLEMENTATION_SOURCE_FILES = (
     "src/rl/frameworks/trl/start_vllm_server.sh",
     "src/rl/frameworks/trl/transition_grpo.py",
     "src/rl/frameworks/trl/transition_batch.py",
+    "src/rl/frameworks/trl/mechanism.py",
     "src/rl/frameworks/trl/state_action_ambiguity.py",
     "src/rl/frameworks/trl/gradient_conflict.py",
     "src/rl/frameworks/trl/rollout.py",
@@ -114,6 +121,7 @@ IMPLEMENTATION_SOURCE_FILES = (
     "src/rl/runtime/rollout_scoring.py",
     "src/rl/runtime/terminal_reward.py",
     "src/rl/runtime/tool_environment_v26.py",
+    "src/rl/runtime/error_feedback.py",
     "src/tool_modules/registry.py",
 )
 from rl.runtime.counterfactual_suite import (  # noqa: E402
@@ -295,11 +303,13 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
     )
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--expected-examples-sha256")
     parser.add_argument("--resume-from-checkpoint", type=Path)
     parser.add_argument("--reward-mode", choices=("result-only", "process"), default="result-only")
     parser.add_argument(
         "--result-reward-profile",
-        choices=("binary", "execution-ladder", "four-level"),
+        choices=sorted(RESULT_REWARD_PROFILES),
         default="binary",
     )
     parser.add_argument(
@@ -341,6 +351,9 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
             "saam-strict",
             "saam-asymmetric-error",
             "saam-asymmetric-error-no-mask",
+            "saam-first-error-capped",
+            "saam-later-error-half",
+            "saam-later-error-quarter",
         ),
         default="trajectory",
         help=(
@@ -349,7 +362,9 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
             "saam-asymmetric-error keeps correct shared actions, suppresses wrong "
             "shared actions, and applies local deterministic-error penalties; "
             "saam-asymmetric-error-no-mask keeps only the local error penalties "
-            "for a matched mask ablation"
+            "for a matched mask ablation; saam-later-error-half keeps the first "
+            "deterministic error full-strength and scales later deterministic "
+            "errors by 0.5; saam-later-error-quarter scales them by 0.25"
         ),
     )
     parser.add_argument(
@@ -357,6 +372,12 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
         type=float,
         default=1.0,
         help="absolute local advantage floor for deterministic Harness errors",
+    )
+    parser.add_argument(
+        "--advantage-magnitude-cap",
+        type=float,
+        default=None,
+        help="optional symmetric cap applied after credit assignment and policy reduction",
     )
     parser.add_argument(
         "--record-gradient-conflicts",
@@ -423,6 +444,24 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
     parser.add_argument("--prompts-per-update", type=int, default=1)
     parser.add_argument("--group-size", type=int, default=4)
     parser.add_argument(
+        "--adaptive-group-size-max",
+        type=int,
+        default=None,
+        help=(
+            "extend all-correct/all-wrong GRPO groups in steps of --group-size "
+            "up to this cap; unset keeps the historical fixed group size"
+        ),
+    )
+    parser.add_argument(
+        "--carrier-repair",
+        action="store_true",
+        help=(
+            "runtime-only transport repair of carrier-shaped slips (unclosed <think>, markdown "
+            "fence, extra prose around the action object); default off keeps the strict v26 "
+            "carrier. Recorded in the run manifest and per-turn as carrier_repair."
+        ),
+    )
+    parser.add_argument(
         "--transition-micro-batch-size",
         type=int,
         default=2,
@@ -450,6 +489,15 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
         help=(
             "when set with trainable-part=all, give alpha of each turn's loss "
             "to the tool span and 1-alpha to the reasoning span"
+        ),
+    )
+    parser.add_argument(
+        "--span-routing",
+        choices=("uniform", "legal_reason_only_hybrid"),
+        default="uniform",
+        help=(
+            "route legal/non-error turns to reasoning-only loss and Harness-error "
+            "turns to span-balanced loss"
         ),
     )
     parser.add_argument("--rank-loss-coefficient", type=float, default=0.0)
@@ -491,6 +539,15 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
     parser.add_argument("--clip-epsilon", type=float, default=0.2)
     parser.add_argument("--clip-epsilon-high", type=float, default=0.2)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
+    parser.add_argument(
+        "--old-policy-logprob-source",
+        choices=("actor", "sampling"),
+        default="actor",
+        help=(
+            "actor recomputes old-policy scores (formal objective); sampling "
+            "reuses vLLM scores as an explicit ratio=1 speed diagnostic"
+        ),
+    )
     parser.add_argument("--adam-beta1", type=float, default=0.9)
     parser.add_argument("--adam-beta2", type=float, default=0.999)
     parser.add_argument("--max-agent-steps", type=int, default=30)
@@ -549,6 +606,21 @@ def parse_args() -> tuple[argparse.Namespace, RLExperimentConfig | None]:
             "the same frozen-base compute as FSDP, while 4bit is the explicit "
             "low-memory fallback"
         ),
+    )
+    parser.add_argument(
+        "--gradient-checkpointing",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "enable activation checkpointing; omitted preserves the historical "
+            "default (enabled for replicated BF16/4-bit, disabled for FSDP)"
+        ),
+    )
+    parser.add_argument(
+        "--attn-implementation",
+        choices=("eager", "sdpa", "flash_attention_2"),
+        default=os.environ.get("TABLE_RL_ATTN_IMPLEMENTATION", "eager"),
+        help="Transformers attention backend; SDPA/Flash-Attention are explicit candidates",
     )
     if experiment_config is not None:
         parser.set_defaults(**experiment_config.argparse_defaults(ROOT))
@@ -664,6 +736,10 @@ def protocol_module_path_audit(runtime_root: Path | None) -> dict[str, Any]:
             tool_schemes_runtime,
             ROOT / "src" / "tool_modules" / "registry.py",
         ),
+        "tool_environment": (
+            tool_environment_runtime,
+            ROOT / "src" / "rl" / "runtime" / "tool_environment_v26.py",
+        ),
     }
     module_paths = {}
     for name, (module, expected_path) in modules.items():
@@ -675,7 +751,7 @@ def protocol_module_path_audit(runtime_root: Path | None) -> dict[str, Any]:
                 f"{actual_path} != {expected_path}"
             )
         module_paths[name] = str(actual_path)
-    expected_factory = "tool_environment_v26"
+    expected_factory = "rl.runtime.tool_environment_v26"
     if TOOL_ENVIRONMENT_FACTORY_MODULE != expected_factory:
         raise RuntimeError(
             "rollout environment does not match the imported protocol: "
@@ -793,7 +869,6 @@ def validate_fixed_pool_manifest(args: argparse.Namespace) -> dict[str, Any] | N
                 f"fixed-pool manifest {key} mismatch: {payload.get(key)!r} != {expected!r}"
             )
     runtime_scalars = {
-        "group_size": args.group_size,
         "temperature": args.temperature,
         "top_p": args.top_p,
         "max_steps": args.max_agent_steps,
@@ -933,6 +1008,26 @@ def load_counterfactual_suites(
     return manifest, suites
 
 
+def resolve_gradient_checkpointing(
+    args: argparse.Namespace,
+    *,
+    trainer_sharding: str,
+    replicated_base_storage: str,
+) -> bool:
+    """Resolve checkpointing once so model and Trainer cannot diverge.
+
+    The historical replicated BF16 and 4-bit paths enabled activation checkpointing
+    unconditionally.  Keeping that as the implicit default preserves resume
+    identity, while ``--no-gradient-checkpointing`` exposes the faster path
+    for models that have enough memory headroom.
+    """
+
+    requested = getattr(args, "gradient_checkpointing", None)
+    if requested is not None:
+        return bool(requested)
+    return trainer_sharding == "replicated"
+
+
 def load_qlora_model(
     args: argparse.Namespace,
     *,
@@ -962,6 +1057,11 @@ def load_qlora_model(
         if trainer_sharding == "replicated" and replicated_base_storage == "4bit"
         else None
     )
+    gradient_checkpointing = resolve_gradient_checkpointing(
+        args,
+        trainer_sharding=trainer_sharding,
+        replicated_base_storage=replicated_base_storage,
+    )
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_path,
         trust_remote_code=True,
@@ -979,6 +1079,7 @@ def load_qlora_model(
         "device_map": {"": local_rank},
         "trust_remote_code": True,
         "low_cpu_mem_usage": True,
+        "attn_implementation": args.attn_implementation,
     }
     if quantization is not None:
         model_kwargs["quantization_config"] = quantization
@@ -992,7 +1093,7 @@ def load_qlora_model(
     if trainer_sharding == "replicated" and replicated_base_storage == "4bit":
         base_model = prepare_model_for_kbit_training(
             base_model,
-            use_gradient_checkpointing=True,
+            use_gradient_checkpointing=gradient_checkpointing,
         )
     # PEFT 0.19 unconditionally imports EmbeddingParallel while loading an
     # adapter, but Transformers 4.57.6 does not export that class.  We do not
@@ -1040,25 +1141,48 @@ def load_qlora_model(
         precision_audit = trainable_parameter_precision_audit(model)
     else:
         precision_audit = promote_trainable_parameters_to_fp32(model)
-    if trainer_sharding == "replicated":
+    if trainer_sharding == "replicated" and gradient_checkpointing:
         model.gradient_checkpointing_enable()
+    elif trainer_sharding == "replicated" and hasattr(model, "gradient_checkpointing_disable"):
+        model.gradient_checkpointing_disable()
     return model, tokenizer, precision_audit, reference_adapter_audit
 
 
 def main() -> None:
     args, experiment_config = parse_args()
-    world_size, rank, _ = _init_distributed()
+    world_size, rank, _ = (
+        _distributed_env() if args.preflight_only else _init_distributed()
+    )
     if args.trainer_sharding == "fsdp" and world_size < 2:
         raise SystemExit("FSDP trainer sharding requires at least two trainer ranks")
     if args.trainer_sharding == "fsdp" and args.fsdp_base_storage != "bf16":
         raise SystemExit(
             "FSDP trainer sharding currently requires --fsdp-base-storage bf16"
         )
-    require_clean_output(args.output_dir, args.resume_from_checkpoint)
+    if not args.preflight_only:
+        require_clean_output(args.output_dir, args.resume_from_checkpoint)
+    if args.expected_examples_sha256 is not None and (
+        sha256_file(args.examples_json) != args.expected_examples_sha256
+    ):
+        raise SystemExit("training cohort SHA-256 differs from the frozen experiment")
     if args.prompts_per_update < 1 or args.group_size < 2:
         raise SystemExit("prompts-per-update must be positive and group-size must be at least 2")
+    if args.adaptive_group_size_max is not None:
+        if args.adaptive_group_size_max < args.group_size:
+            raise SystemExit(
+                "adaptive-group-size-max must be >= group-size when set"
+            )
+        if args.adaptive_group_size_max % args.group_size != 0:
+            raise SystemExit(
+                "adaptive-group-size-max must be a multiple of group-size"
+            )
+    # Runtime-only transport repair is opt-in per arm and must be visible in the manifest;
+    # default off keeps the pinned version26 carrier semantics for every historical arm.
+    tool_environment_runtime.set_carrier_repair_enabled(bool(args.carrier_repair))
     if args.ppo_iterations < 1:
         raise SystemExit("ppo-iterations must be positive")
+    if args.old_policy_logprob_source == "sampling" and args.kl_beta != 0.0:
+        raise SystemExit("sampling old-policy scores require --kl-beta 0")
     if args.gradient_accumulation_steps < 1:
         raise SystemExit("gradient-accumulation-steps must be positive")
     if args.transition_micro_batch_tokens < 0:
@@ -1098,6 +1222,9 @@ def main() -> None:
         "saam-strict",
         "saam-asymmetric-error",
         "saam-asymmetric-error-no-mask",
+        "saam-first-error-capped",
+        "saam-later-error-half",
+        "saam-later-error-quarter",
     }:
         credit_name = args.credit_assignment
         if args.reward_mode != "result-only":
@@ -1107,12 +1234,17 @@ def main() -> None:
         if credit_name in {
             "saam-asymmetric-error",
             "saam-asymmetric-error-no-mask",
+            "saam-first-error-capped",
+            "saam-later-error-half",
+            "saam-later-error-quarter",
         } and args.result_reward_profile not in {
             "binary",
+            "signed-binary",
             "four-level",
+            "three-level-clean-weighted",
         }:
             raise SystemExit(
-                f"{credit_name} requires binary or four-level terminal rewards"
+                f"{credit_name} requires binary, signed-binary, four-level or three-level-clean-weighted terminal rewards"
             )
         if args.train_turns != "all":
             raise SystemExit(f"{credit_name} requires --train-turns all")
@@ -1129,6 +1261,9 @@ def main() -> None:
             "saam-asymmetric-error",
             "saam-asymmetric-error-no-mask",
             "trajectory",
+            "saam-first-error-capped",
+            "saam-later-error-half",
+            "saam-later-error-quarter",
         }:
             raise SystemExit(
                 "non-stored result advantage profiles require "
@@ -1138,6 +1273,11 @@ def main() -> None:
         raise SystemExit("clean-advantage-weight must be finite and in [0, 1)")
     if not math.isfinite(args.error_penalty) or args.error_penalty <= 0.0:
         raise SystemExit("error-penalty must be finite and positive")
+    if args.advantage_magnitude_cap is not None and (
+        not math.isfinite(args.advantage_magnitude_cap)
+        or args.advantage_magnitude_cap <= 0.0
+    ):
+        raise SystemExit("advantage-magnitude-cap must be finite and positive")
     if args.record_gradient_conflicts:
         if args.rank_loss_coefficient != 0.0:
             raise SystemExit("gradient conflict recording cannot mix a rank loss")
@@ -1298,6 +1438,10 @@ def main() -> None:
         else None
     )
     runtime_module_audit = protocol_module_path_audit(parsed_runtime_root)
+    serving_capability_audit = (
+        probe_trl_server(args.vllm_host, args.vllm_port)
+        if args.fixed_rollout_pool is None and not args.preflight_only else None
+    )
     base_model_identity = None
     if args.expected_base_model_identity is not None:
         try:
@@ -1401,11 +1545,44 @@ def main() -> None:
         top_p=args.top_p,
         top_k=args.top_k,
         enable_thinking=args.enable_thinking,
+        adaptive_group_size_max=args.adaptive_group_size_max,
     )
 
     per_device_batch = args.prompts_per_update * args.group_size
+    if args.preflight_only:
+        print(json.dumps({
+            "schema_version": "trl-transition-preflight-v1",
+            "gpu_execution_verified": False,
+            "records": len(records),
+            "examples_json_sha256": sha256_file(args.examples_json),
+            "experiment_config_sha256": sha256_file(args.experiment_config),
+            "runtime_identity_audit": runtime_identity_audit,
+            "runtime_module_audit": runtime_module_audit,
+            "base_model_identity": base_model_identity,
+            "implementation_source_sha256": implementation_source_sha256(),
+            "rollout_settings": rollout_settings.__dict__,
+            "result_reward_profile": args.result_reward_profile,
+            "span_routing": args.span_routing,
+            "span_balance_alpha": args.span_balance_alpha,
+            "advantage_magnitude_cap": args.advantage_magnitude_cap,
+            "optimizer_steps": args.optimizer_steps,
+            "gradient_checkpointing": resolve_gradient_checkpointing(
+                args,
+                trainer_sharding=args.trainer_sharding,
+                replicated_base_storage=args.replicated_base_storage,
+            ),
+            "attn_implementation": args.attn_implementation,
+            "old_policy_logprob_source": args.old_policy_logprob_source,
+            "output_dir": str(args.output_dir),
+        }, sort_keys=True))
+        return
     fsdp_activation_checkpointing = (
         os.environ.get("RL_FSDP_ACTIVATION_CHECKPOINTING", "1") == "1"
+    )
+    gradient_checkpointing = resolve_gradient_checkpointing(
+        args,
+        trainer_sharding=args.trainer_sharding,
+        replicated_base_storage=args.replicated_base_storage,
     )
     training_args_kwargs = dict(
         output_dir=str(args.output_dir),
@@ -1425,7 +1602,7 @@ def main() -> None:
         # already loads the base and adapter in BF16; leave the Trainer AMP
         # switch off so it does not create a second full-precision flat copy.
         bf16=args.trainer_sharding != "fsdp",
-        gradient_checkpointing=args.trainer_sharding != "fsdp",
+        gradient_checkpointing=gradient_checkpointing,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         disable_dropout=True,
         max_completion_length=args.max_new_tokens,
@@ -1542,7 +1719,9 @@ def main() -> None:
             policy_reduction=args.policy_reduction,
             credit_assignment=args.credit_assignment,
             error_penalty=args.error_penalty,
+            advantage_magnitude_cap=args.advantage_magnitude_cap,
             span_balance_alpha=args.span_balance_alpha,
+            span_routing=args.span_routing,
             kl_beta=args.kl_beta,
         ),
         train_turns=args.train_turns,
@@ -1561,6 +1740,7 @@ def main() -> None:
         result_advantage_profile=args.result_advantage_profile,
         clean_advantage_weight=args.clean_advantage_weight,
         span_balance_alpha=args.span_balance_alpha,
+        span_routing=args.span_routing,
         record_gradient_conflicts=args.record_gradient_conflicts,
         gradient_conflict_dir=args.output_dir / "gradient_conflicts",
         gradient_conflict_save_vectors=args.gradient_conflict_save_vectors,
@@ -1569,6 +1749,7 @@ def main() -> None:
         reference_adapter_name=(
             FROZEN_REFERENCE_ADAPTER_NAME if args.kl_beta != 0.0 else None
         ),
+        old_policy_logprob_source=args.old_policy_logprob_source,
         transition_micro_batch_size=args.transition_micro_batch_size,
         transition_micro_batch_tokens=args.transition_micro_batch_tokens,
         callbacks=[
@@ -1624,6 +1805,8 @@ def main() -> None:
         "replicated_execution_options": {
             "base_storage": args.replicated_base_storage,
             "single_process": world_size == 1,
+            "gradient_checkpointing": gradient_checkpointing,
+            "attn_implementation": args.attn_implementation,
         },
         "fsdp_execution_options": {
             "microbatch_no_sync": bool(
@@ -1717,6 +1900,7 @@ def main() -> None:
         "policy_reduction": args.policy_reduction,
         "credit_assignment": args.credit_assignment,
         "error_penalty": args.error_penalty,
+        "advantage_magnitude_cap": args.advantage_magnitude_cap,
         "gradient_conflict_logging": {
             "enabled": bool(args.record_gradient_conflicts),
             "schema_version": "gradient-conflict-record-v3"
@@ -1736,6 +1920,8 @@ def main() -> None:
         "expected_records": args.expected_records,
         "example_index_filter": args.example_index,
         "group_size": args.group_size,
+        "adaptive_group_size_max": args.adaptive_group_size_max,
+        "carrier_repair": bool(args.carrier_repair),
         "prompts_per_update": args.prompts_per_update,
         "optimizer_steps": args.optimizer_steps,
         "save_steps": args.save_steps,
@@ -1748,6 +1934,7 @@ def main() -> None:
         "train_turns": args.train_turns,
         "trainable_part": args.trainable_part,
         "span_balance_alpha": args.span_balance_alpha,
+        "span_routing": args.span_routing,
         "policy_loss_coefficient": args.policy_loss_coefficient,
         "rank_loss_coefficient": args.rank_loss_coefficient,
         "rank_beta": args.rank_beta,
@@ -1756,6 +1943,9 @@ def main() -> None:
         "rank_score_reduction": args.rank_score_reduction,
         "rank_update_scope": args.rank_update_scope,
         "optimizer_name": args.optimizer_name,
+        "gradient_checkpointing": gradient_checkpointing,
+        "attn_implementation": args.attn_implementation,
+        "old_policy_logprob_source": args.old_policy_logprob_source,
         "learning_rate": args.learning_rate,
         "lr_scheduler_type": args.lr_scheduler_type,
         "warmup_ratio": args.warmup_ratio,
@@ -1766,6 +1956,10 @@ def main() -> None:
         "adam_beta1": args.adam_beta1,
         "adam_beta2": args.adam_beta2,
         "vllm_mode": "server",
+        "vllm_max_num_batched_tokens": os.environ.get(
+            "VLLM_MAX_NUM_BATCHED_TOKENS"
+        ),
+        "serving_capability_audit": serving_capability_audit,
         "vllm_importance_sampling_mode": "token_truncate",
         "vllm_importance_sampling_cap": 3.0,
         "temperature": args.temperature,

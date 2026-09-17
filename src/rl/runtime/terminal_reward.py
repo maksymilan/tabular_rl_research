@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 
-RESULT_REWARD_PROFILES = {"binary", "execution-ladder", "four-level"}
+RESULT_REWARD_PROFILES = {
+    "binary",
+    "signed-binary",
+    "execution-ladder",
+    "four-level",
+    "three-level-clean-weighted",
+}
 
 
 def terminal_result_reward(
@@ -28,13 +34,21 @@ def terminal_result_reward(
     is not inferred from model-authored reasoning prose.  In the final SAAM
     asymmetric-error route, a timeout is also a policy-visible penalty action at
     the timed-out transition, even when a later recovery reaches a correct answer.
+
+    ``three-level-clean-weighted`` is a diagnostic profile: a correct clean
+    trajectory receives 1.25, a correct trajectory with any structured Harness
+    error receives 0.75, and every incorrect trajectory receives -1.0.
     """
     if profile not in RESULT_REWARD_PROFILES:
         raise ValueError(f"unsupported result reward profile: {profile}")
+    if profile == "signed-binary":
+        return 1.0 if bool(correct) else -1.0
     if profile == "four-level":
         return (1.0 if bool(has_errors) else 1.5) if bool(correct) else (
             -1.0 if bool(has_errors) else -0.5
         )
+    if profile == "three-level-clean-weighted":
+        return (0.75 if bool(has_errors) else 1.25) if bool(correct) else -1.0
     if bool(correct):
         return 1.0
     if profile == "execution-ladder" and bool(executable):

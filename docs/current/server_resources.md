@@ -1,6 +1,6 @@
 # 服务器资源与职责
 
-更新时间：2026-09-04（Asia/Shanghai）
+更新时间：2026-09-14（Asia/Shanghai）
 
 本页是服务器分工的唯一当前记录。A100 对本项目只开放 GPU 0–3；GPU 4–7 即使空闲也不得使用。SSH alias 来自本机 SSH 配置；不在仓库记录密码、key 或
 其他凭据。
@@ -39,6 +39,29 @@ AdamW；所有降级参数写入 manifest，不能混入 A100 结果。
 
 不要停止 A100 上与本项目无关的进程；启动前必须由 launcher 检查目标 GPU 和端口，失败就
 停止，不要抢占或复用他人任务。
+
+## Codex 远端连接边界
+
+用户已授权项目所需的远端只读检查，以及 `dengyan` 自有目录内的必要写入；已有授权无需反复
+口头确认，但实际执行仍遵循工具审批。进程变更前须核对 PID/GPU 归属，不影响其他用户。
+
+2026-09-14 09:55（Asia/Shanghai）已验证恢复：同一条
+`ssh -o ConnectTimeout=8 -o BatchMode=yes table_rl 'hostname; id -un; date -Is'`
+在普通 `exec_command` 下立即返回 exit 255 / `Operation not permitted`；设置
+`sandbox_permissions="require_escalated"` 并通过自动审批后返回 exit 0，远端为
+`dell-PowerEdge-T640`、用户 `dengyan`。随后同一路径成功读取完整评测文件和进程状态。
+
+- 区分两类旧失败：普通执行在连接阶段被本地限制；提权申请曾返回自动审批超时，命令未执行。
+  本次修复的关键是提权审批实际通过，未修改服务器、SSH key、端口或 SSH 配置。
+- 已知普通沙盒 SSH 受限时，直接通过 `exec_command` 的 `require_escalated` 流程申请执行，
+  说明具体目标和操作，必要时提供与真实命令前缀匹配的窄 `prefix_rule`。仅平台实际批准的
+  范围可以复用；单次成功不代表所有 SSH 命令永久免审。
+- 自动审批超时时按工具返回规则有限重试，并如实报告“审批未完成”；不要循环重试普通
+  沙盒 SSH，也不要重复要求用户口头授权。不得改用桌面终端、代理或其他通道绕过未通过的审批。
+- 早晨可连而之后失败的更底层原因、审批为何超时尚未查明。此前关于网络命名空间变化、
+  连接频率限制、必须重启任务的解释均无证据，不作为项目事实或处理前提。
+
+权限流程参考 [OpenAI 官方文档](https://learn.chatgpt.com/docs/agent-approvals-security#common-sandbox-and-approval-combinations)。
 
 ## table_rl / NewGNN 约定
 

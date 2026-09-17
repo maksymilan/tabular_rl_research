@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from rl.runtime.terminal_reward import RESULT_REWARD_PROFILES
 
 
 SCHEMA_VERSION = "table-agent-rl-experiment-v1"
@@ -20,7 +23,6 @@ REWARD_TYPES = {
     "process_no_normalize",
 }
 TRAINABLE_PARTS = {"all", "tool_only"}
-RESULT_REWARD_PROFILES = {"binary", "execution-ladder", "four-level"}
 RESULT_ADVANTAGE_PROFILES = {
     "stored",
     "correctness-primary-clean-secondary",
@@ -32,7 +34,14 @@ POLICY_REDUCTIONS = {
     "trajectory_mean",
     "trajectory_token_mean",
 }
-CREDIT_ASSIGNMENTS = {"trajectory", "saam-strict", "saam-asymmetric-error"}
+CREDIT_ASSIGNMENTS = {
+    "trajectory",
+    "saam-strict",
+    "saam-asymmetric-error",
+    "saam-first-error-capped",
+    "saam-later-error-half",
+    "saam-later-error-quarter",
+}
 RUNTIME_CONTRACT_KEYS = {
     "runtime_root",
     "runtime_content_tree_sha256",
@@ -62,6 +71,18 @@ QWEN3_8B_BASE_MODEL_FILES = (
     "tokenizer.json",
     "tokenizer_config.json",
     "vocab.json",
+)
+QWEN3_BASE_MODEL_COMMON_FILES = {
+    "config.json",
+    "generation_config.json",
+    "merges.txt",
+    "model.safetensors.index.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+}
+QWEN3_BASE_MODEL_SHARD_PATTERN = re.compile(
+    r"model-(?P<index>[0-9]{5})-of-(?P<total>[0-9]{5})\.safetensors"
 )
 RANK_SCORE_TOKENS = {"all", "tool_only"}
 RANK_SCORE_SCOPES = {"full_trajectory", "conservative_legal", "dense_outcome"}
@@ -108,7 +129,7 @@ def validate_base_model_identity_contract(
     *,
     field: str = "base_model_identity",
 ) -> dict[str, Any]:
-    """Validate and normalize the exact Qwen3-8B base-model content identity."""
+    """Validate and normalize an exact sharded Qwen3 base-model identity."""
 
     if not isinstance(value, dict):
         raise ValueError(f"{field} must be a mapping")
@@ -124,13 +145,45 @@ def validate_base_model_identity_contract(
     files = value.get("files_sha256")
     if not isinstance(files, dict):
         raise ValueError(f"{field}.files_sha256 must be a mapping")
-    required_files = set(QWEN3_8B_BASE_MODEL_FILES)
+    # The pinned identity carries the model's exact shard list.  Qwen3-8B has
+    # five weight shards while Qwen3-4B has three; both share the same seven
+    # tokenizer/config files.  Validate the declared set instead of baking the
+    # 8B shard count into every experiment config.
+    files_value = value.get("files_sha256")
+    declared_files = set(files_value) if isinstance(files_value, dict) else set()
+    shard_matches = {
+        name: QWEN3_BASE_MODEL_SHARD_PATTERN.fullmatch(name)
+        for name in declared_files
+        if name.endswith(".safetensors")
+    }
+    shard_files = {name for name, match in shard_matches.items() if match is not None}
+    shard_totals = {
+        int(match.group("total"))
+        for match in shard_matches.values()
+        if match is not None
+    }
+    shard_indices = {
+        int(match.group("index"))
+        for match in shard_matches.values()
+        if match is not None
+    }
+    valid_shards = (
+        len(shard_totals) == 1
+        and next(iter(shard_totals), 0) == len(shard_files)
+        and shard_indices == set(range(1, len(shard_files) + 1))
+    )
+    if not QWEN3_BASE_MODEL_COMMON_FILES.issubset(declared_files) or not valid_shards:
+        raise ValueError(
+            f"{field}.files_sha256 must contain exactly the 12 frozen files or the model-declared shard set; "
+            "common model files and a complete numbered weight-shard set are required"
+        )
+    required_files = QWEN3_BASE_MODEL_COMMON_FILES | shard_files
     actual_files = set(files)
     if actual_files != required_files:
         missing_files = sorted(required_files - actual_files)
         extra_files = sorted(actual_files - required_files)
         raise ValueError(
-            f"{field}.files_sha256 must contain exactly the 12 frozen files; "
+            f"{field}.files_sha256 must contain exactly the 12 frozen files or the model-declared shard set; "
             f"missing={missing_files} extra={extra_files}"
         )
     normalized_files = {
@@ -139,7 +192,7 @@ def validate_base_model_identity_contract(
             length=64,
             field=f"{field}.files_sha256[{filename!r}]",
         )
-        for filename in QWEN3_8B_BASE_MODEL_FILES
+        for filename in sorted(required_files)
     }
     aggregate = _require_lower_hex(
         value.get("aggregate_sha256"),
@@ -163,7 +216,7 @@ def verify_base_model_identity(
     model_root: Path,
     expected_identity: object,
 ) -> dict[str, Any]:
-    """Stream-hash all 12 required files and fail on any model-content drift."""
+    """Stream-hash every pinned file and fail on any model-content drift."""
 
     expected = validate_base_model_identity_contract(
         expected_identity,
@@ -171,7 +224,7 @@ def verify_base_model_identity(
     )
     model_root = model_root.resolve()
     actual_files: dict[str, str] = {}
-    for filename in QWEN3_8B_BASE_MODEL_FILES:
+    for filename in sorted(expected["files_sha256"]):
         path = model_root / filename
         if not path.is_file():
             raise ValueError(f"base model is missing required file: {path}")
@@ -417,6 +470,7 @@ class RLExperimentConfig:
                 "policy_reduction",
                 "credit_assignment",
                 "error_penalty",
+                "span_routing",
                 "record_gradient_conflicts",
                 "gradient_conflict_save_vectors",
                 "expected_records",
@@ -465,6 +519,18 @@ class RLExperimentConfig:
         error_penalty = float(payload.get("error_penalty", 1.0))
         if not math.isfinite(error_penalty) or error_penalty <= 0.0:
             raise ValueError("error_penalty must be finite and positive")
+        if payload.get("advantage_magnitude_cap") is not None:
+            cap = float(payload["advantage_magnitude_cap"])
+            if not math.isfinite(cap) or cap <= 0.0:
+                raise ValueError("advantage_magnitude_cap must be finite and positive")
+        if payload.get("span_routing", "uniform") not in {
+            "uniform",
+            "legal_reason_only_hybrid",
+        }:
+            raise ValueError(
+                "unsupported span_routing: "
+                f"{payload.get('span_routing')}"
+            )
         for field in (
             "record_gradient_conflicts",
             "gradient_conflict_save_vectors",
@@ -582,6 +648,8 @@ class RLExperimentConfig:
                 "policy_reduction",
                 "credit_assignment",
                 "error_penalty",
+                "advantage_magnitude_cap",
+                "span_routing",
                 "span_balance_alpha",
                 "kl_beta",
             },
@@ -615,14 +683,37 @@ class RLExperimentConfig:
             penalty = float(mechanism["error_penalty"])
             if not math.isfinite(penalty) or penalty <= 0.0:
                 raise ValueError("mechanism.error_penalty must be finite and positive")
+        if "advantage_magnitude_cap" in mechanism:
+            cap = float(mechanism["advantage_magnitude_cap"])
+            if not math.isfinite(cap) or cap <= 0.0:
+                raise ValueError("mechanism.advantage_magnitude_cap must be finite and positive")
         if "span_balance_alpha" in mechanism:
             alpha = float(mechanism["span_balance_alpha"])
             if not math.isfinite(alpha) or not 0.0 <= alpha <= 1.0:
                 raise ValueError("mechanism.span_balance_alpha must be in [0, 1]")
+        if mechanism.get("span_routing", "uniform") not in {
+            "uniform",
+            "legal_reason_only_hybrid",
+        }:
+            raise ValueError(
+                "unsupported mechanism.span_routing: "
+                f"{mechanism.get('span_routing')}"
+            )
         if "kl_beta" in mechanism:
             beta = float(mechanism["kl_beta"])
             if not math.isfinite(beta) or beta < 0.0:
                 raise ValueError("mechanism.kl_beta must be finite and non-negative")
+        if (
+            "span_routing" in mechanism
+            and "span_routing" in payload
+            and mechanism["span_routing"] != payload["span_routing"]
+        ):
+            raise ValueError("conflicting top-level and mechanism.span_routing")
+        if mechanism.get("span_routing", payload.get("span_routing")) == "legal_reason_only_hybrid":
+            if mechanism.get("span_balance_alpha") is None:
+                raise ValueError("hybrid span routing requires mechanism.span_balance_alpha")
+            if payload.get("trainable_part", "all") != "all":
+                raise ValueError("hybrid span routing requires the full response carrier")
         for key, value in mechanism.items():
             if key in {
                 "reward_mode", "result_advantage_profile",
@@ -669,6 +760,7 @@ class RLExperimentConfig:
             {
                 "prompts_per_update",
                 "group_size",
+                "adaptive_group_size_max",
                 "max_agent_steps",
                 "max_new_tokens",
                 "max_context_tokens",
@@ -732,9 +824,18 @@ class RLExperimentConfig:
             )
         if int(rollout.get("group_size", 0)) < 2:
             raise ValueError("rollout.group_size must be at least 2")
+        if "adaptive_group_size_max" in rollout:
+            adaptive_max = int(rollout["adaptive_group_size_max"])
+            if adaptive_max < int(rollout["group_size"]):
+                raise ValueError(
+                    "rollout.adaptive_group_size_max must be >= rollout.group_size"
+                )
         if payload.get("credit_assignment", "trajectory") in {
             "saam-strict",
             "saam-asymmetric-error",
+            "saam-first-error-capped",
+            "saam-later-error-half",
+            "saam-later-error-quarter",
         }:
             credit_name = payload.get("credit_assignment")
             if payload["reward_type"] != "result":
@@ -742,12 +843,14 @@ class RLExperimentConfig:
             profile = payload.get("result_reward_profile", "binary")
             if credit_name == "saam-strict" and profile != "binary":
                 raise ValueError("saam-strict requires binary terminal reward")
-            if credit_name == "saam-asymmetric-error" and profile not in {
+            if credit_name in {"saam-asymmetric-error", "saam-first-error-capped", "saam-later-error-half", "saam-later-error-quarter"} and profile not in {
                 "binary",
+                "signed-binary",
                 "four-level",
+                "three-level-clean-weighted",
             }:
                 raise ValueError(
-                    "saam-asymmetric-error requires binary or four-level terminal reward"
+                    f"{credit_name} requires binary, signed-binary, four-level or three-level-clean-weighted terminal reward"
                 )
             if not bool(payload.get("process_loss", True)):
                 raise ValueError(f"{credit_name} requires an enabled policy loss")
@@ -766,7 +869,7 @@ class RLExperimentConfig:
                     raise ValueError(
                         "smc-mode-concentration is an isolated trajectory-credit arm"
                     )
-            elif credit != "saam-asymmetric-error":
+            elif credit not in {"saam-asymmetric-error", "saam-first-error-capped", "saam-later-error-half", "saam-later-error-quarter"}:
                 raise ValueError(
                     "clean-secondary and class-conditional profiles require "
                     "saam-asymmetric-error"
@@ -855,6 +958,14 @@ class RLExperimentConfig:
                 "credit_assignment", self.payload.get("credit_assignment", "trajectory")
             ),
             "error_penalty": float(mechanism.get("error_penalty", self.payload.get("error_penalty", 1.0))),
+            "advantage_magnitude_cap": (
+                float(mechanism["advantage_magnitude_cap"])
+                if "advantage_magnitude_cap" in mechanism
+                else self.payload.get("advantage_magnitude_cap")
+            ),
+            "span_routing": mechanism.get(
+                "span_routing", self.payload.get("span_routing", "uniform")
+            ),
             "span_balance_alpha": (
                 float(mechanism["span_balance_alpha"])
                 if "span_balance_alpha" in mechanism
@@ -943,6 +1054,11 @@ class RLExperimentConfig:
             "adam_beta2": float(optimizer.get("adam_beta2", 0.999)),
             "prompts_per_update": int(rollout.get("prompts_per_update", 1)),
             "group_size": int(rollout["group_size"]),
+            "adaptive_group_size_max": (
+                int(rollout["adaptive_group_size_max"])
+                if "adaptive_group_size_max" in rollout
+                else None
+            ),
             "max_agent_steps": int(rollout.get("max_agent_steps", 30)),
             # New configs default to 4096 per turn. Historical configs keep
             # their explicit recorded value for reproducibility.

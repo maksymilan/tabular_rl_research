@@ -23,5 +23,6 @@ def test_screened500_config_matches_launcher_contract():
     text = CONFIG.read_text()
     assert "expected_records: 500" in text
     assert "prompts_per_update: 30" in text
+    assert "max_new_tokens: 4096" in text
     assert "protocol_version: version26" in text
     assert "protocol_hash: 4da19387399bd3a5" in text

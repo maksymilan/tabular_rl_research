@@ -265,7 +265,7 @@ print(json.dumps({
     )
     audit = json.loads(completed.stdout)
     assert audit["protocol_version"] == "version26"
-    assert audit["factory_module"] == "tool_environment_v26"
+    assert audit["factory_module"] == "rl.runtime.tool_environment_v26"
     assert audit["environment_implementation"] == "atomic-v26-isolated-v1"
     assert audit["protocol_root"] == str(runtime_root)
     assert audit["eval_root"] == str(runtime_root)
@@ -367,8 +367,9 @@ def test_implementation_lock_covers_every_eager_rl_policy_module() -> None:
     )
     locked = set(ast.literal_eval(assignment.value))
     assert {
-        "src/rl/counterfactual_suite.py",
-        "src/rl/reference_result_filter.py",
+        "src/rl/runtime/counterfactual_suite.py",
+        "src/rl/runtime/reference_result_filter.py",
+        "src/rl/frameworks/trl/serving_contract.py",
         "src/rl/frameworks/trl/fixed_rollout_pool.py",
         "src/rl/scenarios/diagnostics/prepare_vanilla_grpo_resume.py",
         "src/rl/frameworks/trl/run_atomic_transition_grpo.sh",
@@ -376,6 +377,46 @@ def test_implementation_lock_covers_every_eager_rl_policy_module() -> None:
         "src/rl/frameworks/trl/tool_loss_mask.py",
         "src/rl/frameworks/trl/trajectory_ranking.py",
     } <= locked
+
+
+def test_factory_audit_accepts_only_canonical_environment_path(tmp_path):
+    import inspect
+    from types import ModuleType
+
+    runner = ROOT / "src/rl/frameworks/trl/run_transition_grpo.py"
+    tree = ast.parse(runner.read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "protocol_module_path_audit")
+    scope = {"ROOT": tmp_path, "Path": Path, "Any": object, "inspect": inspect,
+             "TOOL_ENVIRONMENT_FACTORY_MODULE": "rl.runtime.tool_environment_v26"}
+    paths = {"protocol_runtime": "src/sft/protocol.py", "evaluator_runtime": "src/eval/rollout.py",
+             "executor_runtime": "src/harness/executor.py", "tool_schemes_runtime": "src/tool_modules/registry.py",
+             "tool_environment_runtime": "src/rl/runtime/tool_environment_v26.py"}
+    for name, path in paths.items():
+        module = ModuleType(name)
+        module.__file__ = str(tmp_path / path)
+        scope[name] = module
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(runner), "exec"), scope)
+    audit = scope["protocol_module_path_audit"](tmp_path)
+    assert audit["module_paths"]["tool_environment"] == str(tmp_path / paths["tool_environment_runtime"])
+    scope["tool_environment_runtime"].__file__ = str(tmp_path / "wrong/tool_environment_v26.py")
+    with pytest.raises(RuntimeError, match="tool_environment import escaped"):
+        scope["protocol_module_path_audit"](tmp_path)
+
+
+def test_constructor_preserves_span_alpha_and_cpu_preflight_precedes_model_load():
+    trainer_tree = ast.parse((ROOT / "src/rl/frameworks/trl/transition_grpo.py").read_text())
+    constructor = next(n for n in ast.walk(trainer_tree) if isinstance(n, ast.FunctionDef) and n.name == "__init__")
+    call = next(n for n in ast.walk(constructor) if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute) and n.func.attr == "from_legacy_args")
+    assert {"span_balance_alpha", "span_routing"} <= {k.arg for k in call.keywords}
+    runner_tree = ast.parse((ROOT / "src/rl/frameworks/trl/run_transition_grpo.py").read_text())
+    main = next(n for n in runner_tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+    preflight_return = next(n for n in main.body if isinstance(n, ast.If)
+                            and ast.unparse(n.test) == "args.preflight_only")
+    assert any(isinstance(n, ast.Return) for n in preflight_return.body)
+    model_load = next(n for n in ast.walk(main) if isinstance(n, ast.Call)
+                      and isinstance(n.func, ast.Name) and n.func.id == "load_qlora_model")
+    assert preflight_return.lineno < model_load.lineno
 
 
 def test_runner_exposes_checkpoint_retention_without_changing_grpo_objective() -> None:

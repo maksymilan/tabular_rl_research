@@ -92,6 +92,99 @@ def _parse_match(
     return think, action
 
 
+_FENCED_ACTION_RE = re.compile(
+    r"```[A-Za-z0-9_-]*\s*(?P<body>.*?)```",
+    re.DOTALL,
+)
+
+
+def _iter_balanced_json_objects(text: str) -> list[str]:
+    """Spans of top-level ``{...}`` objects, ignoring braces inside JSON strings."""
+    objects: list[str] = []
+    depth = 0
+    start: int | None = None
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                objects.append(text[start : index + 1])
+                start = None
+    return objects
+
+
+def repair_action_carrier(text: str) -> tuple[str, str] | None:
+    """Best-effort transport repair for one carrier-shaped slip.
+
+    This exists for the **runtime** only: a transport typo must not be scored as a reasoning
+    failure.  Only unambiguous slips are repaired, and the repaired text is re-parsed by the
+    strict carrier afterwards, so tool/argument semantics are unchanged:
+
+    * an unclosed ``<think>`` block (``</think>`` missing);
+    * the action object wrapped in a markdown code fence;
+    * extra prose before/after the action object.
+
+    Retired or ambiguous carriers stay hard errors: ``<tool_call>`` tags, duplicate
+    ``<think>`` blocks, an empty think block, or any text without a schema-shaped action
+    object. Returns ``(repaired_text, kind)`` or ``None`` when no repair applies.
+    """
+    if "<tool_call>" in text or "</tool_call>" in text:
+        return None
+    open_count = text.count("<think>")
+    close_count = text.count("</think>")
+    if open_count > 1 or close_count > 1 or (open_count == 0 and close_count == 1):
+        return None
+    if open_count == 1 and close_count == 0:
+        think_raw, _, rest = text.partition("<think>")[2].partition("{")
+        think = think_raw.strip()
+        rest = "{" + rest
+        kind = "unclosed_think"
+    elif open_count == 1 and close_count == 1:
+        match = re.match(r"\A\s*<think>(?P<think>.*?)</think>", text, re.DOTALL)
+        if match is None:
+            return None
+        think = match.group("think").strip()
+        rest = text[match.end() :]
+        kind = "extra_text_outside_action"
+    else:
+        return None
+    if not think:
+        return None
+    fenced = _FENCED_ACTION_RE.search(rest)
+    if fenced is not None:
+        rest = fenced.group("body")
+        kind = "code_fence"
+    for source in (rest, text):
+        for candidate in reversed(_iter_balanced_json_objects(source)):
+            try:
+                value = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(value, dict) or set(value) != {"tool", "arguments"}:
+                continue
+            if not isinstance(value.get("tool"), str) or not value["tool"]:
+                continue
+            if not isinstance(value.get("arguments"), dict):
+                continue
+            return f"<think>{think}</think>\n{candidate}", kind
+    return None
+
+
 def parse_action_carrier(text: str) -> tuple[str, dict[str, Any]]:
     """Strictly parse the only model-visible carrier accepted by active runtimes."""
     if "<tool_call>" in text or "</tool_call>" in text:

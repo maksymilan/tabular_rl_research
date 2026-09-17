@@ -93,6 +93,168 @@ def _episode(
 
 
 class StateActionAmbiguityTest(unittest.TestCase):
+    def test_first_error_cap_zeros_later_errors_and_preserves_legal_recovery(self):
+        from rl.frameworks.trl.mechanism import RLMechanism
+        episodes = [
+            _episode(name, correct=correct, turns=[
+                _audited_turn(0, None), _audited_turn(1, None),
+                _audited_turn(2, "project", {"columns": [name]}),
+            ])
+            for name, correct in [("correct", True), ("wrong", False)]
+        ]
+        updates = build_transition_updates(episodes, reward_mode="result-only")
+        mechanism = RLMechanism(credit_assignment="saam-first-error-capped")
+        credited, audit = mechanism.apply_credit(episodes, list(reversed(updates)))
+        by_key = {(u.trajectory_id, u.turn_index): u.advantage for u in credited}
+        for name in ["correct", "wrong"]:
+            self.assertLess(by_key[name, 0], 0)
+            self.assertEqual(by_key[name, 1], 0)
+        self.assertGreater(by_key["correct", 2], 0)
+        self.assertLess(by_key["wrong", 2], 0)
+        self.assertEqual(audit.credit_assignment, "saam-first-error-capped")
+        self.assertEqual(audit.capped_error_transitions, 2)
+        self.assertEqual(audit.capped_correct_error_transitions, 1)
+        self.assertEqual(audit.deterministic_error_transitions, 2)
+
+    def test_first_error_cap_keeps_timeouts_negative_outside_non_timeout_budget(self):
+        timeout = {"turn_index": 0, "error_event": {"error_type": "timeout_error"}}
+        episodes = [
+            _episode("correct", correct=True, turns=[timeout, _audited_turn(1, None), _audited_turn(2, None)]),
+            _episode("wrong", correct=False, turns=[_audited_turn(0, "project", {"columns": ["id"]})]),
+        ]
+        updates = build_transition_updates(episodes, reward_mode="result-only")
+        credited, audit = apply_asymmetric_error_credit(episodes, updates, first_error_only=True)
+        by_key = {(u.trajectory_id, u.turn_index): u.advantage for u in credited}
+        self.assertLess(by_key["correct", 0], 0)
+        self.assertLess(by_key["correct", 1], 0)
+        self.assertEqual(by_key["correct", 2], 0)
+        self.assertEqual(audit.timeout_penalized_transitions, 1)
+
+    def test_later_error_half_scales_nonadjacent_errors_on_correct_and_wrong(self):
+        from rl.frameworks.trl.mechanism import RLMechanism
+
+        turns = [
+            _audited_turn(0, "describe_table", {"tables": ["orders"]}),
+            _audited_turn(1, None),
+            _audited_turn(2, "project", {"columns": ["id"]}),
+            _audited_turn(3, None),
+        ]
+        episodes = [
+            _episode("correct", correct=True, turns=turns),
+            _episode("wrong", correct=False, turns=turns),
+        ]
+        updates = build_transition_updates(episodes, reward_mode="result-only")
+        credited, audit = RLMechanism(
+            credit_assignment="saam-later-error-half"
+        ).apply_credit(episodes, updates)
+        by_key = {(u.trajectory_id, u.turn_index): u.advantage for u in credited}
+        for trajectory_id in ("correct", "wrong"):
+            self.assertLess(by_key[trajectory_id, 1], 0.0)
+            self.assertTrue(math.isclose(by_key[trajectory_id, 3], -0.5, abs_tol=1e-6))
+        self.assertEqual(audit.credit_assignment, "saam-later-error-half")
+        self.assertEqual(audit.later_error_transitions, 2)
+        self.assertEqual(audit.later_correct_error_transitions, 1)
+        self.assertEqual(audit.capped_error_transitions, 0)
+
+    def test_later_error_half_timeout_remains_full_strength(self):
+        from rl.frameworks.trl.mechanism import RLMechanism
+
+        timeout = {
+            "turn_index": 2,
+            "parsed": {
+                "think": "brief",
+                "tool": "inspect_column",
+                "arguments": {"table": "orders", "column": "amount"},
+            },
+            "execution_error_type": "timeout_error",
+            "error_event": {"error_type": "timeout_error", "error_code": "tool_execution_timeout"},
+        }
+        turns = [
+            _audited_turn(0, "describe_table", {"tables": ["orders"]}),
+            _audited_turn(1, None),
+            timeout,
+            _audited_turn(3, None),
+        ]
+        episodes = [
+            _episode("correct", correct=True, turns=turns),
+            _episode("wrong", correct=False, turns=turns),
+        ]
+        episodes[0].sample.audit_record["result_reward"] = {"profile": "four-level"}
+        updates = build_transition_updates(episodes, reward_mode="result-only")
+        credited, audit = RLMechanism(
+            credit_assignment="saam-later-error-half"
+        ).apply_credit(episodes, updates)
+        by_key = {(u.trajectory_id, u.turn_index): u.advantage for u in credited}
+        self.assertLess(by_key["correct", 2], -0.9)
+        self.assertEqual(audit.timeout_penalized_transitions, 2)
+
+    def test_later_error_quarter_scales_nonadjacent_errors_and_names_audit(self):
+        from rl.frameworks.trl.mechanism import RLMechanism
+
+        turns = [
+            _audited_turn(0, "describe_table", {"tables": ["orders"]}),
+            _audited_turn(1, None),
+            _audited_turn(2, "project", {"columns": ["id"]}),
+            _audited_turn(3, None),
+        ]
+        episodes = [
+            _episode("correct", correct=True, turns=turns),
+            _episode("wrong", correct=False, turns=turns),
+        ]
+        updates = build_transition_updates(episodes, reward_mode="result-only")
+        credited, audit = RLMechanism(
+            credit_assignment="saam-later-error-quarter"
+        ).apply_credit(episodes, updates)
+        by_key = {(u.trajectory_id, u.turn_index): u.advantage for u in credited}
+        for trajectory_id in ("correct", "wrong"):
+            self.assertLess(by_key[trajectory_id, 1], 0.0)
+            self.assertTrue(math.isclose(by_key[trajectory_id, 3], -0.25, abs_tol=1e-6))
+        self.assertEqual(audit.credit_assignment, "saam-later-error-quarter")
+        self.assertEqual(audit.later_error_weight, 0.25)
+        self.assertEqual(audit.later_error_transitions, 2)
+        self.assertEqual(audit.capped_error_transitions, 0)
+
+    def test_later_error_half_zero_weight_matches_first_error_cap(self):
+        turns = [_audited_turn(0, None), _audited_turn(1, "project", {"columns": ["id"]}), _audited_turn(2, None)]
+        episodes = [
+            _episode("correct", correct=True, turns=turns),
+            _episode("wrong", correct=False, turns=turns),
+        ]
+        updates = build_transition_updates(episodes, reward_mode="result-only")
+        capped, _ = apply_asymmetric_error_credit(episodes, updates, first_error_only=True)
+        zero_weight, _ = apply_asymmetric_error_credit(
+            episodes, updates, first_error_only=True, later_error_weight=0.0
+        )
+        self.assertEqual(capped, zero_weight)
+
+    def test_half_credit_preserves_causal_first_error_and_normalization(self):
+        from dataclasses import replace
+        from rl.frameworks.trl.mechanism import RLMechanism
+
+        turns = [_audited_turn(0, None), _audited_turn(1, "plan"), _audited_turn(2, None)]
+        episodes = [
+            _episode("correct", correct=True, turns=turns, response_lengths=[2, 3, 7]),
+            _episode("wrong", correct=False, turns=turns, response_lengths=[5, 4, 2]),
+        ]
+        original = [replace(u, advantage=2.0 if u.trajectory_correct else -2.0)
+                    for u in build_transition_updates(episodes, reward_mode="result-only")]
+        mechanism = RLMechanism(credit_assignment="saam-later-error-half",
+                                policy_reduction="trajectory_token_mean")
+        half, audit = mechanism.apply_credit(episodes, original)
+        full, _ = apply_asymmetric_error_credit(episodes, original, first_error_only=True,
+                                                later_error_weight=1.0)
+        half_coeff = mechanism.effective_advantages(half, transition_count=6, trajectory_count=2)
+        full_coeff = mechanism.effective_advantages(full, transition_count=6, trajectory_count=2)
+        self.assertEqual(len(half), len(original))
+        for u, h, f in zip(half, half_coeff, full_coeff):
+            self.assertAlmostEqual(h, f * (0.5 if u.turn_index == 2 else 1.0))
+        self.assertEqual(audit.deterministic_error_transitions, 4)
+        self.assertEqual(audit.correct_error_positive_flips, 2)
+        # An earlier causal error remains first even when its update is absent.
+        subset = [u for u in original if u.turn_index != 0]
+        filtered, _ = mechanism.apply_credit(episodes, subset)
+        self.assertTrue(all(u.advantage == -1.0 for u in filtered if u.turn_index == 2))
+
     def test_asymmetric_credit_keeps_correct_shared_and_suppresses_wrong_shared(self):
         common = _audited_turn(
             0,

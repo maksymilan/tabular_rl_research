@@ -29,6 +29,7 @@ from action_carrier import (
     ActionCarrierError,
     parse_action_carrier,
     parse_legacy_tagged_action_carrier,
+    repair_action_carrier,
     render_action_carrier,
 )
 from prompt_contract import (
@@ -2255,6 +2256,46 @@ def parse_assistant_strict(
             adjacent_guard.mark_last("rejected")
         raise
     return think, tool, args
+
+
+def parse_assistant_strict_with_repair(
+    text: str,
+    *,
+    adjacent_guard: AdjacentActionGuard | None = None,
+    step_id: str | None = None,
+    allow_repair: bool = True,
+) -> tuple[str, str, dict, dict | None]:
+    """Runtime-only carrier parse: strict first, then one conservative transport repair.
+
+    A transport typo (unclosed ``<think>``, a markdown code fence, extra prose around the
+    action object) must not be scored as a reasoning failure. The repaired text is re-parsed
+    and re-validated by ``parse_assistant_strict``, so tool/argument semantics are unchanged;
+    the returned repair record (kind + original error code) is stored on the turn for audits.
+    SFT data generation and teacher requests keep using ``parse_assistant_strict``.
+    """
+    try:
+        think, tool, arguments = parse_assistant_strict(
+            text,
+            adjacent_guard=adjacent_guard,
+            step_id=step_id,
+        )
+        return think, tool, arguments, None
+    except ProtocolError as exc:
+        if not allow_repair:
+            raise
+        repaired = repair_action_carrier(text)
+        if repaired is None:
+            raise
+        repaired_text, kind = repaired
+        think, tool, arguments = parse_assistant_strict(
+            repaired_text,
+            adjacent_guard=adjacent_guard,
+            step_id=step_id,
+        )
+        return think, tool, arguments, {
+            "kind": kind,
+            "original_error_code": getattr(exc, "code", None),
+        }
 
 
 def parse_legacy_assistant_strict(text: str) -> tuple[str, str, dict]:

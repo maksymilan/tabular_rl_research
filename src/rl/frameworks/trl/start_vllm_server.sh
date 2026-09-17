@@ -6,8 +6,11 @@ MODEL_PATH=${MODEL_PATH:?set MODEL_PATH to the local base model}
 VLLM_HOST=${VLLM_HOST:-127.0.0.1}
 VLLM_SERVER_PORT=${VLLM_PORT:-8000}
 VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.88}
+VLLM_MAX_NUM_BATCHED_TOKENS=${VLLM_MAX_NUM_BATCHED_TOKENS:-}
 MAX_MODEL_LEN=${MAX_MODEL_LEN:-8192}
-VLLM_ENFORCE_EAGER=${VLLM_ENFORCE_EAGER:-1}
+# CUDA Graphs and fused attention are substantially faster for the batched
+# rollout workload.  Set VLLM_ENFORCE_EAGER=1 only for compatibility debugging.
+VLLM_ENFORCE_EAGER=${VLLM_ENFORCE_EAGER:-0}
 # `VLLM_PORT` is also consumed by vLLM as its distributed master port.
 # Preserve the user-facing value for the CLI, but do not leak that name.
 unset VLLM_PORT
@@ -49,6 +52,9 @@ server_args=(
 )
 if [[ "$VLLM_ENFORCE_EAGER" == "1" ]]; then
   server_args+=(--enforce_eager)
+fi
+if [[ -n "$VLLM_MAX_NUM_BATCHED_TOKENS" ]]; then
+  server_args+=(--max_num_batched_tokens "$VLLM_MAX_NUM_BATCHED_TOKENS")
 fi
 
 exec "$PYTHON_ENV/bin/trl" "${server_args[@]}"

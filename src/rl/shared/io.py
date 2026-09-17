@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -21,6 +21,21 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
             raise ValueError(f"{path}:{line_number}: expected a JSON object")
         rows.append(value)
     return rows
+
+
+def iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
+    """Yield JSONL objects without materializing multi-gigabyte artifacts."""
+    with path.open("r", encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{line_number}: invalid JSON") from exc
+            if not isinstance(value, dict):
+                raise ValueError(f"{path}:{line_number}: expected a JSON object")
+            yield value
 
 
 def sha256_bytes(data: bytes) -> str:

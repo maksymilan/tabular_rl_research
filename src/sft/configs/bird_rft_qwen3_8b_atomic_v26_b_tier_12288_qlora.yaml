@@ -1,0 +1,61 @@
+# RFT (on-policy self-training) stage on the B-tier cohort.
+#
+# Same stage parameters as the C-tier config (``cutoff_len 12288``, ``learning_rate 2e-5``,
+# frozen cumulative SFT adapter ``checkpoint-6380``), but the cohort is the band-1..6 population
+# capped at two trajectories per question: 1029 episodes / 8197 records against C's 287 / 2361.
+# Two epochs give 1024 optimizer steps, which keeps the optimization budget comparable to C's 592
+# while testing 3.6x more episodes, so C and B separate "more data" from "more optimization".
+
+### model
+model_name_or_path: /home/dengyan/models/Qwen3-8B-TrustSQL-baseline
+trust_remote_code: true
+quantization_bit: 4
+upcast_layernorm: true
+enable_liger_kernel: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+adapter_name_or_path: /home/dengyan/tabular_rl_outputs/checkpoints/checkpoint-6380
+lora_target: all
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+### dataset
+dataset: qwen3_atomic_v26_rft_b_tier_12288_20260917
+dataset_dir: /home/dengyan/tabular_rl_outputs/data/qwen3_v26_rft_20260917
+template: qwen3
+enable_thinking: true
+preserve_thinking: false
+cutoff_len: 12288
+mask_history: true
+packing: false
+overwrite_cache: true
+preprocessing_num_workers: 4
+
+### output
+output_dir: /home/dengyan/tabular_rl_outputs/checkpoints/qwen3-8b-atomic-v26-rft-b-tier-12288-20260917
+logging_steps: 2
+save_strategy: epoch
+save_total_limit: 4
+eval_strategy: "no"
+report_to: none
+plot_loss: true
+overwrite_output_dir: false
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 2.0e-5
+num_train_epochs: 2.0
+optim: paged_adamw_8bit
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+bf16: true
+gradient_checkpointing: true
+ddp_find_unused_parameters: false
+ddp_timeout: 180000000
+seed: 42
+data_seed: 42

@@ -14,6 +14,7 @@ DATASET_DIR="${DATASET_DIR:-$OUTPUT_ROOT/data/qwen3_8b_atomic_v26_sft1_20260806}
 GPU_IDS="${GPU_IDS:-5,6}"
 MAX_GPU_MEMORY_MIB="${MAX_GPU_MEMORY_MIB:-512}"
 RUN_KIND="${RUN_KIND:-smoke}"
+EXPECTED_STEPS_OVERRIDE="${EXPECTED_STEPS_OVERRIDE:-}"
 
 case "$RUN_KIND" in
   smoke)
@@ -30,11 +31,23 @@ case "$RUN_KIND" in
     EXPECTED_RECORDS=4471
     EXPECTED_STEPS=560
     ;;
+  cumulative)
+    CONFIG="${CONFIG:-$SCRIPT_DIR/configs/bird_external_teacher_qwen3_4b_cumulative_qlora_6400.yaml}"
+    DATASET_FILE="${DATASET_FILE:-$DATASET_DIR/qwen3_atomic_v26_sft1_plus_low_think_purebird2000_plus_birdspider_augmented_6400_training_view_20260827.jsonl}"
+    OUTPUT_DIR="${OUTPUT_DIR:-$OUTPUT_ROOT/checkpoints/qwen3-4b-atomic-v26-cumulative-augmented-fresh4ep-table-rl}"
+    EXPECTED_RECORDS=25513
+    EXPECTED_STEPS=6380
+    ;;
   *)
     echo "RUN_KIND must be smoke or full" >&2
     exit 2
     ;;
 esac
+
+if [[ -n "$EXPECTED_STEPS_OVERRIDE" ]]; then
+  [[ "$EXPECTED_STEPS_OVERRIDE" =~ ^[0-9]+$ ]] || { echo "EXPECTED_STEPS_OVERRIDE must be an integer" >&2; exit 2; }
+  EXPECTED_STEPS="$EXPECTED_STEPS_OVERRIDE"
+fi
 
 RUN_ID="${RUN_ID:-qwen3_4b_atomic_v26_sft1_${RUN_KIND}_$(date -u +%Y%m%d_%H%M%S)}"
 LOG_DIR="$OUTPUT_ROOT/logs"
@@ -44,7 +57,7 @@ LAUNCH_MANIFEST="$LOG_DIR/$RUN_ID.launch_manifest.json"
 STATUS_MANIFEST="$LOG_DIR/$RUN_ID.status.json"
 DATASET_MANIFEST="${DATASET_FILE%.jsonl}.manifest.json"
 DATASET_INFO="$DATASET_DIR/dataset_info.json"
-PREPARATION_MANIFEST="$DATASET_DIR/preparation_manifest.json"
+PREPARATION_MANIFEST="${PREPARATION_MANIFEST:-$DATASET_DIR/preparation_manifest.json}"
 MODEL_SPECS="$SCRIPT_DIR/qwen3_model_specs.json"
 MODEL_VERIFIER="$SCRIPT_DIR/verify_pinned_qwen3_model.py"
 
@@ -125,12 +138,17 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 cfg = yaml.safe_load(config.read_text(encoding="utf-8"))
+batch_size = int(cfg.get("per_device_train_batch_size", -1))
+grad_accumulation = int(cfg.get("gradient_accumulation_steps", -1))
+if batch_size * grad_accumulation != 8:
+    raise SystemExit("per-device batch and accumulation must preserve per-rank batch 8")
 expected_cfg = {
     "model_name_or_path": str(model), "dataset_dir": str(dataset.parent),
     "output_dir": str(output), "template": "qwen3", "enable_thinking": True,
     "preserve_thinking": False, "mask_history": True, "cutoff_len": 6400,
     "quantization_bit": 4, "enable_liger_kernel": True,
-    "per_device_train_batch_size": 1, "gradient_accumulation_steps": 8,
+    "per_device_train_batch_size": batch_size,
+    "gradient_accumulation_steps": grad_accumulation,
     "learning_rate": 1e-4, "lora_rank": 16, "lora_alpha": 32,
     "lora_dropout": 0.05,
 }
@@ -139,6 +157,8 @@ for key, value in expected_cfg.items():
         raise SystemExit(f"config drift for {key}: {cfg.get(key)!r} != {value!r}")
 if run_kind == "full" and float(cfg.get("num_train_epochs")) != 2.0:
     raise SystemExit("full run must use exactly two epochs")
+if run_kind == "cumulative" and float(cfg.get("num_train_epochs")) != 4.0:
+    raise SystemExit("cumulative run must use exactly four epochs")
 if run_kind == "smoke" and int(cfg.get("max_steps")) != 2:
     raise SystemExit("smoke run must use exactly two optimizer steps")
 

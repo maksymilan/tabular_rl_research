@@ -7,7 +7,7 @@ import json
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from protocol import PROTOCOL_VERSION
 import rollout as evaluator_runtime
@@ -26,6 +26,7 @@ from rl.runtime.tool_environment_v26 import (  # noqa: E402
 TOOL_ENVIRONMENT_FACTORY_MODULE = create_tool_use_env.__module__
 
 from rl.runtime.rollout_scoring import episode_example, score_completed_rollout
+from rl.runtime.terminal_reward import RESULT_REWARD_PROFILES
 from rl.frameworks.trl.transition_batch import PolicyEpisode, PolicyTurn
 
 if TYPE_CHECKING:
@@ -64,15 +65,12 @@ class RolloutSettings:
     repetition_penalty: float = 1.0
     enable_thinking: bool | None = None
     tool_execution_timeout_seconds: float = TOOL_EXECUTION_TIMEOUT_SECONDS
+    adaptive_group_size_max: int | None = None
 
     def validate(self) -> None:
         if self.reward_mode not in {"result-only", "process"}:
             raise ValueError(f"unsupported reward mode: {self.reward_mode}")
-        if self.result_reward_profile not in {
-            "binary",
-            "execution-ladder",
-            "four-level",
-        }:
+        if self.result_reward_profile not in RESULT_REWARD_PROFILES:
             raise ValueError(
                 f"unsupported result reward profile: {self.result_reward_profile}"
             )
@@ -86,6 +84,39 @@ class RolloutSettings:
             raise ValueError("top_p must be in (0, 1]")
         if self.tool_execution_timeout_seconds <= 0:
             raise ValueError("tool_execution_timeout_seconds must be positive")
+        if self.adaptive_group_size_max is not None:
+            if self.adaptive_group_size_max < 2:
+                raise ValueError("adaptive_group_size_max must be >= 2")
+
+
+def adaptive_extension_counts(
+    *,
+    outcomes: Mapping[int, tuple[int, int]],
+    initial_group_size: int,
+    max_group_size: int,
+) -> dict[int, int]:
+    """Extra samples to draw for prompts whose current group carries no signal.
+
+    ``outcomes`` maps an example index to ``(samples, correct)``.  A group is
+    extended while it is all-correct or all-wrong, in steps of the initial group
+    size, and never beyond ``max_group_size``.  Mixed groups are left untouched,
+    which is what turns wasted rollouts into GRPO contrast.
+    """
+    if initial_group_size < 2:
+        raise ValueError("initial_group_size must be >= 2")
+    if max_group_size < initial_group_size:
+        raise ValueError("max_group_size must be >= initial_group_size")
+    targets: dict[int, int] = {}
+    for example_index, (samples, correct) in outcomes.items():
+        if samples < initial_group_size:
+            continue
+        if correct not in (0, samples):
+            continue
+        room = max_group_size - samples
+        if room <= 0:
+            continue
+        targets[example_index] = min(initial_group_size, room)
+    return targets
 
 
 class TableAgentRolloutCollector:
@@ -112,6 +143,7 @@ class TableAgentRolloutCollector:
         self.generate_batch_override = generate_batch
         self.generate_batch_with_keys_override = generate_batch_with_keys
         self.rollout_log_path = rollout_log_path
+        self.last_adaptive_stats: dict[str, Any] = {}
 
     def _render(self, messages: list[dict[str, str]]) -> tuple[str, list[int]]:
         template_kwargs: dict[str, Any] = {
@@ -310,6 +342,100 @@ class TableAgentRolloutCollector:
                 )
 
     def collect(self, inputs: list[dict[str, Any]], trainer) -> list[PolicyEpisode]:
+        """Collect GRPO groups, extending zero-signal groups up to a fixed cap.
+
+        The first pass is exactly the historical behaviour (one episode per
+        repeated input row).  With ``adaptive_group_size_max`` set, every prompt
+        whose group is still all-correct or all-wrong is sampled again in steps
+        of the initial group size, up to the cap; mixed groups are never
+        extended.  All samples of one update come from the same synced policy, so
+        the merged group stays on-policy.
+        """
+        example_of = lambda item: int(item["environment"]["example_index"])  # noqa: E731
+        initial_sizes = Counter(example_of(item) for item in inputs)
+        initial_group_size = max(initial_sizes.values()) if initial_sizes else 0
+        representative: dict[int, dict[str, Any]] = {}
+        for item in inputs:
+            representative.setdefault(example_of(item), item)
+
+        episodes = self._collect_pass(inputs, trainer)
+        samples = Counter()
+        correct = Counter()
+        for episode in episodes:
+            example_index = int(episode.sample.audit_record["example_index"])
+            samples[example_index] += 1
+            correct[example_index] += int(bool(episode.sample.correct))
+
+        stats: dict[str, Any] = {
+            "initial_group_size": initial_group_size,
+            "max_group_size": self.settings.adaptive_group_size_max,
+            "prompts": len(samples),
+            "rounds": 0,
+            "extended_prompts": 0,
+            "extra_episodes": 0,
+            "activated_groups": 0,
+            "remaining_zero_signal_at_cap": 0,
+            "final_group_size_histogram": {},
+        }
+        max_group_size = self.settings.adaptive_group_size_max
+        if max_group_size is None or initial_group_size < 2 or max_group_size <= initial_group_size:
+            self.last_adaptive_stats = stats
+            return episodes
+
+        max_rounds = (max_group_size - initial_group_size) // initial_group_size + 1
+        while stats["rounds"] < max_rounds:
+            outcomes = {
+                example_index: (samples[example_index], correct[example_index])
+                for example_index in samples
+            }
+            targets = adaptive_extension_counts(
+                outcomes=outcomes,
+                initial_group_size=initial_group_size,
+                max_group_size=max_group_size,
+            )
+            if not targets:
+                break
+            offsets = {
+                example_index: samples[example_index] for example_index in targets
+            }
+            extra_inputs: list[dict[str, Any]] = []
+            for example_index, extra in sorted(targets.items()):
+                extra_inputs.extend([representative[example_index]] * int(extra))
+            new_episodes = self._collect_pass(
+                extra_inputs, trainer, sample_index_offsets=offsets
+            )
+            for episode in new_episodes:
+                example_index = int(episode.sample.audit_record["example_index"])
+                was_mixed = 0 < correct[example_index] < samples[example_index]
+                samples[example_index] += 1
+                correct[example_index] += int(bool(episode.sample.correct))
+                if not was_mixed and 0 < correct[example_index] < samples[example_index]:
+                    stats["activated_groups"] += 1
+            episodes.extend(new_episodes)
+            stats["rounds"] += 1
+            stats["extended_prompts"] += len(targets)
+            stats["extra_episodes"] += len(new_episodes)
+
+        histogram = Counter(samples[example_index] for example_index in samples)
+        stats["final_group_size_histogram"] = {
+            str(size): histogram[size] for size in sorted(histogram)
+        }
+        stats["remaining_zero_signal_at_cap"] = sum(
+            1
+            for example_index in samples
+            if samples[example_index] >= max_group_size
+            and correct[example_index] in (0, samples[example_index])
+        )
+        self.last_adaptive_stats = stats
+        return episodes
+
+    def _collect_pass(
+        self,
+        inputs: list[dict[str, Any]],
+        trainer,
+        *,
+        sample_index_offsets: Mapping[int, int] | None = None,
+    ) -> list[PolicyEpisode]:
         """Collect one episode per repeated GRPO input row."""
         settings = self.settings
         sample_counts: Counter[int] = Counter()
@@ -333,7 +459,9 @@ class TableAgentRolloutCollector:
                 raise ValueError("RL task record is missing its pinned system prompt")
             system_prompt = prompt_messages[0]["content"]
             example_index = int(metadata["example_index"])
-            sample_index = sample_counts[example_index]
+            sample_index = (sample_index_offsets or {}).get(example_index, 0) + sample_counts[
+                example_index
+            ]
             sample_counts[example_index] += 1
             envs.append(
                 create_tool_use_env(

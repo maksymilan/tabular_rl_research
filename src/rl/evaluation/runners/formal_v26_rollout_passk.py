@@ -22,6 +22,7 @@ from typing import Any, Callable
 EXPECTED_TIMEOUT_SECONDS = 10.0
 RUNTIME_ENV = "TABLE_AGENT_PROTOCOL_RUNTIME_ROOT"
 TIMEOUT_ENV = "FORMAL_TOOL_EXECUTION_TIMEOUT_SECONDS"
+FEEDBACK_ENV = "ERROR_FEEDBACK_VERSION"
 _MISSING = object()
 
 
@@ -87,7 +88,8 @@ def bounded_execute_tool(
     ) from interrupted
 
 
-def _load_frozen_runner():
+def import_frozen_runner():
+    """Import the pinned runner without adding execution or feedback policies."""
     runtime_value = os.environ.get(RUNTIME_ENV)
     if not runtime_value:
         raise RuntimeError(f"{RUNTIME_ENV} is required")
@@ -95,11 +97,6 @@ def _load_frozen_runner():
     runner_path = runtime / "src/eval/rollout_passk.py"
     if not runner_path.is_file():
         raise RuntimeError(f"frozen rollout runner is missing: {runner_path}")
-    timeout_value = float(os.environ.get(TIMEOUT_ENV, str(EXPECTED_TIMEOUT_SECONDS)))
-    if timeout_value != EXPECTED_TIMEOUT_SECONDS:
-        raise RuntimeError(
-            f"formal timeout is fixed at {EXPECTED_TIMEOUT_SECONDS:g}s, got {timeout_value:g}s"
-        )
     sys.path[:0] = [
         str(runtime / "src/eval"),
         str(runtime / "src/harness"),
@@ -112,6 +109,16 @@ def _load_frozen_runner():
         raise RuntimeError(
             f"rollout_passk escaped frozen runtime: {imported} != {runner_path.resolve()}"
         )
+    return frozen_runner
+
+
+def _load_frozen_runner():
+    timeout_value = float(os.environ.get(TIMEOUT_ENV, str(EXPECTED_TIMEOUT_SECONDS)))
+    if timeout_value != EXPECTED_TIMEOUT_SECONDS:
+        raise RuntimeError(
+            f"formal timeout is fixed at {EXPECTED_TIMEOUT_SECONDS:g}s, got {timeout_value:g}s"
+        )
+    frozen_runner = import_frozen_runner()
     original = frozen_runner.execute_tool
 
     def execute_with_timeout(
@@ -134,6 +141,16 @@ def _load_frozen_runner():
         )
 
     frozen_runner.execute_tool = execute_with_timeout
+    feedback_version = os.environ.get(FEEDBACK_ENV, "legacy")
+    if feedback_version != "legacy":
+        # Load only the explicit feedback adapter from the controller tree; the
+        # parser, executor, prompt and evaluator remain from the frozen runtime.
+        sys.path.append(str(Path(__file__).resolve().parents[3]))
+        from rl.runtime.error_feedback import FEEDBACK_VERSION
+        from rl.evaluation.runners.feedback_overlay import install_feedback_overlay
+        if feedback_version != FEEDBACK_VERSION:
+            raise RuntimeError(f"unknown feedback variant: {feedback_version}")
+        install_feedback_overlay(frozen_runner, sys.modules["protocol"])
     return frozen_runner
 
 
